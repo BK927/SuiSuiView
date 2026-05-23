@@ -1,16 +1,13 @@
 use super::bookmark_rows::BookmarkRow;
 use super::{path_labels, theme};
-use eframe::egui::{self, Align2, Color32, FontId, Rect, Sense};
+use eframe::egui::{self, Align2, FontId, Rect, Sense};
 use std::borrow::Cow;
-use std::time::Duration;
 
-const TITLE_HEIGHT: f32 = 54.0;
+const TITLE_HEIGHT: f32 = 58.0;
 const TEXT_HORIZONTAL_PADDING: f32 = 6.0;
 const TEXT_LINE_GAP: f32 = 3.0;
-const TEXT_MAX_CHARS: usize = 180;
-const MARQUEE_SPEED: f32 = 82.0;
-const MARQUEE_MIN_SCROLL_SECONDS: f32 = 1.2;
-const MARQUEE_END_PAUSE_SECONDS: f32 = 0.7;
+const TEXT_MAX_CHARS: usize = 240;
+const TEXT_MAX_LINES: usize = 3;
 
 pub(super) fn allocate_bookmark_title(
     ui: &mut egui::Ui,
@@ -21,12 +18,7 @@ pub(super) fn allocate_bookmark_title(
     response.on_hover_text(&row.display_name)
 }
 
-pub(super) fn paint_bookmark_title(
-    ui: &egui::Ui,
-    rect: Rect,
-    row: &BookmarkRow,
-    marquee_started_at: Option<f64>,
-) {
+pub(super) fn paint_bookmark_title(ui: &egui::Ui, rect: Rect, row: &BookmarkRow) {
     if !rect.is_positive() {
         return;
     }
@@ -34,26 +26,7 @@ pub(super) fn paint_bookmark_title(
     let painter = ui.painter_at(rect);
     let font_id = FontId::proportional(14.0);
     let text_width = (rect.width() - TEXT_HORIZONTAL_PADDING * 2.0).max(1.0);
-    let (lines, fits_two_lines) =
-        bookmark_display_lines(ui, &row.display_name, text_width, &font_id);
-
-    if let Some(started_at) = marquee_started_at.filter(|_| !fits_two_lines) {
-        if let Some(repaint_after) = draw_marquee_text(
-            ui,
-            MarqueeText {
-                clip_rect: rect,
-                pos: egui::pos2(rect.left() + TEXT_HORIZONTAL_PADDING, rect.center().y),
-                text: &row.display_name,
-                font_id,
-                color: theme::TEXT_PRIMARY,
-                width: text_width,
-                started_at,
-            },
-        ) {
-            ui.ctx().request_repaint_after(repaint_after);
-        }
-        return;
-    }
+    let lines = bookmark_display_lines(ui, &row.display_name, text_width, &font_id);
 
     let line_height = text_line_height(font_id.size);
     let total_height = line_height * lines.len().max(1) as f32;
@@ -81,11 +54,11 @@ fn bookmark_display_lines(
     display_name: &str,
     width: f32,
     font_id: &FontId,
-) -> (Vec<String>, bool) {
+) -> Vec<String> {
     let static_display = static_bookmark_display(display_name);
-    let (lines, fits) = wrap_bookmark_display(ui, &static_display, width, font_id, 2);
+    let (lines, fits) = wrap_bookmark_display(ui, &static_display, width, font_id, TEXT_MAX_LINES);
     if fits {
-        return (lines, true);
+        return lines;
     }
 
     let char_count = static_display.chars().count().min(TEXT_MAX_CHARS);
@@ -95,7 +68,8 @@ fn bookmark_display_lines(
     while low <= high {
         let mid = low + (high - low) / 2;
         let candidate = path_labels::compact_start_for_two_lines(&static_display, mid);
-        let (_, candidate_fits) = wrap_bookmark_display(ui, &candidate, width, font_id, 2);
+        let (_, candidate_fits) =
+            wrap_bookmark_display(ui, &candidate, width, font_id, TEXT_MAX_LINES);
         if candidate_fits {
             best = mid;
             low = mid + 1;
@@ -105,10 +79,7 @@ fn bookmark_display_lines(
     }
 
     let compact = path_labels::compact_start_for_two_lines(&static_display, best);
-    (
-        wrap_bookmark_display(ui, &compact, width, font_id, 2).0,
-        false,
-    )
+    wrap_bookmark_display(ui, &compact, width, font_id, TEXT_MAX_LINES).0
 }
 
 fn static_bookmark_display(display_name: &str) -> Cow<'_, str> {
@@ -202,63 +173,4 @@ fn text_width(ui: &egui::Ui, text: &str, font_id: &FontId) -> f32 {
         .layout_no_wrap(text.to_owned(), font_id.clone(), theme::TEXT_PRIMARY)
         .size()
         .x
-}
-
-struct MarqueeText<'a> {
-    clip_rect: Rect,
-    pos: egui::Pos2,
-    text: &'a str,
-    font_id: FontId,
-    color: Color32,
-    width: f32,
-    started_at: f64,
-}
-
-fn draw_marquee_text(ui: &egui::Ui, text_run: MarqueeText<'_>) -> Option<Duration> {
-    let MarqueeText {
-        clip_rect,
-        pos,
-        text,
-        font_id,
-        color,
-        width,
-        started_at,
-    } = text_run;
-
-    if text.is_empty() {
-        return None;
-    }
-    let galley = ui
-        .painter()
-        .layout_no_wrap(text.to_owned(), font_id.clone(), color);
-    let overflow = (galley.size().x - width).max(0.0);
-    if overflow <= 0.0 {
-        ui.painter()
-            .text(pos, Align2::LEFT_CENTER, text, font_id, color);
-        return None;
-    }
-
-    let scroll_seconds = (overflow / MARQUEE_SPEED).max(MARQUEE_MIN_SCROLL_SECONDS);
-    let cycle = scroll_seconds + MARQUEE_END_PAUSE_SECONDS;
-    let elapsed = ((ui.input(|input| input.time) - started_at) as f32).max(0.0) % cycle;
-    let scrolling = elapsed < scroll_seconds;
-    let offset = if scrolling {
-        overflow * (elapsed / scroll_seconds)
-    } else {
-        overflow
-    };
-    let text_clip = Rect::from_min_max(
-        egui::pos2(pos.x, clip_rect.top()),
-        egui::pos2(pos.x + width, clip_rect.bottom()),
-    );
-    ui.painter().with_clip_rect(text_clip).galley(
-        egui::pos2(pos.x - offset, pos.y - galley.size().y * 0.5),
-        galley,
-        color,
-    );
-    if scrolling {
-        Some(Duration::from_millis(16))
-    } else {
-        Some(Duration::from_secs_f32((cycle - elapsed).max(0.016)))
-    }
 }

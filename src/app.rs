@@ -163,18 +163,6 @@ struct PendingBookmarkJump {
     page: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BookmarkMarqueeKey {
-    book_id: String,
-    page: usize,
-}
-
-#[derive(Debug, Default)]
-struct BookmarkMarqueeState {
-    key: Option<BookmarkMarqueeKey>,
-    started_at: f64,
-}
-
 pub struct SuiSuiViewApp {
     egui_ctx: egui::Context,
     store: StateStore,
@@ -242,7 +230,6 @@ pub struct SuiSuiViewApp {
     bookmark_search: String,
     bookmark_clear_confirming: bool,
     bookmark_rows: BookmarkRowsCache,
-    bookmark_marquee: BookmarkMarqueeState,
     pending_bookmark_jump: Option<PendingBookmarkJump>,
 }
 
@@ -325,7 +312,6 @@ impl SuiSuiViewApp {
             bookmark_search: String::new(),
             bookmark_clear_confirming: false,
             bookmark_rows: BookmarkRowsCache::default(),
-            bookmark_marquee: BookmarkMarqueeState::default(),
             pending_bookmark_jump: None,
         };
         perf::record_app_new(app_started);

@@ -1,4 +1,4 @@
-use super::super::{BookmarkMarqueeKey, BookmarkMarqueeState, SuiSuiViewApp};
+use super::super::SuiSuiViewApp;
 use super::bookmark_rows::{BookmarkFilter, BookmarkRow};
 use super::bookmark_text::{allocate_bookmark_title, paint_bookmark_title};
 use super::bookmark_thumbnails::{thumbnail_tint_for_state, BookmarkThumbnailState};
@@ -92,7 +92,6 @@ impl SuiSuiViewApp {
         self.bookmark_popover_open = false;
         self.bookmark_clear_confirming = false;
         self.bookmark_popover_anchor = None;
-        self.bookmark_marquee.clear();
     }
 
     fn close_bookmark_popover_on_outside_click(&mut self, ctx: &egui::Context, popover_rect: Rect) {
@@ -323,7 +322,6 @@ impl SuiSuiViewApp {
         let mut jump_to_page = false;
         let mut remove_bookmark = false;
         let mut title_rect = Rect::NOTHING;
-        let mut title_hovered = false;
 
         let frame_response = frame.show(ui, |ui| {
             ui.set_min_height(66.0);
@@ -336,7 +334,6 @@ impl SuiSuiViewApp {
                 let title_width = (ui.available_width() - ROW_ACTION_WIDTH).max(48.0);
                 let title_response = allocate_bookmark_title(ui, &row, title_width);
                 title_rect = title_response.rect;
-                title_hovered = title_response.hovered();
                 if title_response.clicked() {
                     jump_to_page = true;
                 }
@@ -379,18 +376,7 @@ impl SuiSuiViewApp {
                 StrokeKind::Inside,
             );
         }
-        let marquee_started_at = if row_response.hovered() || title_hovered {
-            let now = ui.input(|input| input.time);
-            Some(
-                self.bookmark_marquee
-                    .started_at_for(&row.book_id, row.bookmark.page, now),
-            )
-        } else {
-            self.bookmark_marquee
-                .clear_if_matches(&row.book_id, row.bookmark.page);
-            None
-        };
-        paint_bookmark_title(ui, title_rect, &row, marquee_started_at);
+        paint_bookmark_title(ui, title_rect, &row);
         if row_response.clicked() {
             jump_to_page = true;
         }
@@ -626,38 +612,6 @@ fn show_bookmark_thumbnail(ui: &mut egui::Ui, thumbnail: BookmarkThumbnailState)
     }
 
     response
-}
-
-impl BookmarkMarqueeState {
-    fn started_at_for(&mut self, book_id: &str, page: usize, now: f64) -> f64 {
-        let matches_current = self
-            .key
-            .as_ref()
-            .is_some_and(|key| key.book_id == book_id && key.page == page);
-        if !matches_current {
-            self.key = Some(BookmarkMarqueeKey {
-                book_id: book_id.to_owned(),
-                page,
-            });
-            self.started_at = now;
-        }
-        self.started_at
-    }
-
-    fn clear_if_matches(&mut self, book_id: &str, page: usize) {
-        let matches_current = self
-            .key
-            .as_ref()
-            .is_some_and(|key| key.book_id == book_id && key.page == page);
-        if matches_current {
-            self.clear();
-        }
-    }
-
-    fn clear(&mut self) {
-        self.key = None;
-        self.started_at = 0.0;
-    }
 }
 
 fn fit_rect(rect: Rect, original_size: egui::Vec2) -> Rect {
