@@ -23,7 +23,6 @@ pub(in crate::app) struct BookmarkRow {
     pub(in crate::app) known_path: Option<String>,
     pub(in crate::app) bookmark: PageBookmark,
     pub(in crate::app) display_name: String,
-    pub(in crate::app) compact_name: String,
     search_text: String,
 }
 
@@ -120,8 +119,6 @@ fn bookmark_row(entry: PageBookmarkEntry) -> BookmarkRow {
         entry.bookmark.page_name.as_deref(),
         &entry.bookmark.title,
     );
-    let compact_name =
-        path_labels::compact_start(&display_name, path_labels::BOOKMARK_PATH_LABEL_CHARS);
     let search_text = [
         display_name.as_str(),
         entry.known_path.as_deref().unwrap_or_default(),
@@ -137,7 +134,6 @@ fn bookmark_row(entry: PageBookmarkEntry) -> BookmarkRow {
         known_path: entry.known_path,
         bookmark: entry.bookmark,
         display_name,
-        compact_name,
         search_text,
     }
 }

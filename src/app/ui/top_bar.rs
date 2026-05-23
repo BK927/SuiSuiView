@@ -277,8 +277,7 @@ impl SuiSuiViewApp {
             self.toggle_bookmark_popover_below(response.rect);
         }
         if self.bookmark_popover_open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-            self.bookmark_popover_open = false;
-            self.bookmark_clear_confirming = false;
+            self.close_bookmark_popover();
         }
     }
 

@@ -2,7 +2,6 @@ use crate::core::formats::descriptor_for_extension;
 use std::path::Path;
 
 pub(in crate::app) const RECENT_PATH_LABEL_CHARS: usize = 46;
-pub(in crate::app) const BOOKMARK_PATH_LABEL_CHARS: usize = 42;
 
 pub(in crate::app) fn compact_start(text: &str, max_chars: usize) -> String {
     let count = text.chars().count();

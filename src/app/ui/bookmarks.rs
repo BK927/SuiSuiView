@@ -21,6 +21,10 @@ impl SuiSuiViewApp {
         if !self.bookmark_popover_open {
             return;
         }
+        if self.settings_open || self.about_open {
+            self.close_bookmark_popover();
+            return;
+        }
 
         let screen = ctx.screen_rect();
         let width = POPOVER_WIDTH;
@@ -34,7 +38,7 @@ impl SuiSuiViewApp {
                 .clamp(screen.top() + 8.0, screen.bottom() - height - 8.0),
         );
 
-        egui::Area::new(egui::Id::new("bookmark_popover"))
+        let area_response = egui::Area::new(egui::Id::new("bookmark_popover"))
             .fixed_pos(pos)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
@@ -58,6 +62,7 @@ impl SuiSuiViewApp {
                     },
                 );
             });
+        self.close_bookmark_popover_on_outside_click(ctx, area_response.response.rect);
     }
 
     pub(in crate::app) fn toggle_bookmark_popover_below(&mut self, anchor: Rect) {
@@ -65,8 +70,9 @@ impl SuiSuiViewApp {
         if self.bookmark_popover_open {
             self.bookmark_popover_pos =
                 egui::pos2(anchor.right() - POPOVER_WIDTH, anchor.bottom() + 8.0);
+            self.bookmark_popover_anchor = Some(anchor);
         } else {
-            self.bookmark_clear_confirming = false;
+            self.close_bookmark_popover();
         }
     }
 
@@ -76,8 +82,30 @@ impl SuiSuiViewApp {
             let screen = ctx.screen_rect();
             self.bookmark_popover_pos =
                 egui::pos2(screen.right() - POPOVER_WIDTH - 28.0, screen.top() + 54.0);
+            self.bookmark_popover_anchor = None;
         } else {
-            self.bookmark_clear_confirming = false;
+            self.close_bookmark_popover();
+        }
+    }
+
+    pub(in crate::app) fn close_bookmark_popover(&mut self) {
+        self.bookmark_popover_open = false;
+        self.bookmark_clear_confirming = false;
+        self.bookmark_popover_anchor = None;
+    }
+
+    fn close_bookmark_popover_on_outside_click(&mut self, ctx: &egui::Context, popover_rect: Rect) {
+        let Some(pointer_pos) = ctx.input(|input| input.pointer.press_origin()) else {
+            return;
+        };
+        if !ctx.input(|input| input.pointer.any_pressed()) {
+            return;
+        }
+        let clicked_anchor = self
+            .bookmark_popover_anchor
+            .is_some_and(|rect| rect.contains(pointer_pos));
+        if !popover_rect.contains(pointer_pos) && !clicked_anchor {
+            self.close_bookmark_popover();
         }
     }
 
@@ -128,8 +156,7 @@ impl SuiSuiViewApp {
                     .on_hover_text("닫기")
                     .clicked()
                 {
-                    self.bookmark_popover_open = false;
-                    self.bookmark_clear_confirming = false;
+                    self.close_bookmark_popover();
                 }
             });
         });
@@ -460,7 +487,7 @@ impl SuiSuiViewApp {
         } else {
             self.set_status("북마크 경로를 찾을 수 없습니다.");
         }
-        self.bookmark_popover_open = false;
+        self.close_bookmark_popover();
     }
 
     fn default_page_bookmark_title(&self, page: usize) -> String {
@@ -588,14 +615,63 @@ fn show_bookmark_thumbnail(ui: &mut egui::Ui, thumbnail: BookmarkThumbnailState)
 fn show_bookmark_title(ui: &mut egui::Ui, row: &BookmarkRow, width: f32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 54.0), Sense::click());
     let painter = ui.painter_at(rect);
+    let font_id = FontId::proportional(14.0);
+    let label = compact_start_to_width(
+        ui,
+        &row.display_name,
+        font_id.clone(),
+        theme::TEXT_PRIMARY,
+        (rect.width() - 12.0).max(0.0),
+    );
     painter.text(
         egui::pos2(rect.left() + 6.0, rect.center().y),
         Align2::LEFT_CENTER,
-        &row.compact_name,
-        FontId::proportional(14.0),
+        label,
+        font_id,
         theme::TEXT_PRIMARY,
     );
     response.on_hover_text(&row.display_name)
+}
+
+fn compact_start_to_width(
+    ui: &egui::Ui,
+    text: &str,
+    font_id: FontId,
+    color: Color32,
+    max_width: f32,
+) -> String {
+    let width_of = |candidate: &str| {
+        ui.painter()
+            .layout_no_wrap(candidate.to_owned(), font_id.clone(), color)
+            .size()
+            .x
+    };
+    if width_of(text) <= max_width {
+        return text.to_owned();
+    }
+    if max_width <= 0.0 {
+        return String::new();
+    }
+
+    let chars: Vec<_> = text.chars().collect();
+    let mut low = 0;
+    let mut high = chars.len();
+    while low < high {
+        let mid = (low + high + 1) / 2;
+        let tail: String = chars[chars.len() - mid..].iter().collect();
+        let candidate = format!("...{tail}");
+        if width_of(&candidate) <= max_width {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+
+    if low == 0 {
+        return "...".to_owned();
+    }
+    let tail: String = chars[chars.len() - low..].iter().collect();
+    format!("...{tail}")
 }
 
 fn fit_rect(rect: Rect, original_size: egui::Vec2) -> Rect {
