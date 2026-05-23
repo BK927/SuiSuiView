@@ -324,6 +324,8 @@ impl SuiSuiViewApp {
 
         let mut jump_to_page = false;
         let mut remove_bookmark = false;
+        let mut title_rect = Rect::NOTHING;
+        let mut title_hovered = false;
 
         let frame_response = frame.show(ui, |ui| {
             ui.set_min_height(66.0);
@@ -338,7 +340,10 @@ impl SuiSuiViewApp {
                 }
 
                 let title_width = (ui.available_width() - ROW_ACTION_WIDTH).max(48.0);
-                if show_bookmark_title(ui, &row, title_width).clicked() {
+                let title_response = allocate_bookmark_title(ui, &row, title_width);
+                title_rect = title_response.rect;
+                title_hovered = title_response.hovered();
+                if title_response.clicked() {
                     jump_to_page = true;
                 }
 
@@ -380,6 +385,12 @@ impl SuiSuiViewApp {
                 StrokeKind::Inside,
             );
         }
+        paint_bookmark_title(
+            ui,
+            title_rect,
+            &row,
+            row_response.hovered() || title_hovered,
+        );
         if row_response.clicked() {
             jump_to_page = true;
         }
@@ -609,15 +620,22 @@ fn show_bookmark_thumbnail(ui: &mut egui::Ui, thumbnail: BookmarkThumbnailState)
     response
 }
 
-fn show_bookmark_title(ui: &mut egui::Ui, row: &BookmarkRow, width: f32) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 54.0), Sense::click());
+fn allocate_bookmark_title(ui: &mut egui::Ui, row: &BookmarkRow, width: f32) -> egui::Response {
+    let (_, response) = ui.allocate_exact_size(egui::vec2(width, 54.0), Sense::click());
+    response.on_hover_text(&row.display_name)
+}
+
+fn paint_bookmark_title(ui: &egui::Ui, rect: Rect, row: &BookmarkRow, marquee: bool) {
+    if !rect.is_positive() {
+        return;
+    }
     let painter = ui.painter_at(rect);
     let title_font = FontId::proportional(15.0);
     let context_font = FontId::proportional(12.5);
     let text_width = (rect.width() - 12.0).max(0.0);
     let title_pos = egui::pos2(rect.left() + 6.0, rect.center().y - 9.0);
     let context_pos = egui::pos2(rect.left() + 6.0, rect.center().y + 11.0);
-    if response.hovered() {
+    if marquee {
         let title_marquee_active = draw_marquee_text(
             ui,
             rect,
@@ -640,39 +658,39 @@ fn show_bookmark_title(ui: &mut egui::Ui, row: &BookmarkRow, width: f32) -> egui
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(16));
         }
-    } else {
-        let title = compact_end_to_width(
-            ui,
-            &row.title,
-            title_font.clone(),
-            theme::TEXT_PRIMARY,
-            text_width,
-        );
-        let context = compact_start_to_width(
-            ui,
-            &row.context,
-            context_font.clone(),
-            theme::TEXT_MUTED,
-            text_width,
-        );
-        painter.text(
-            title_pos,
-            Align2::LEFT_CENTER,
-            title,
-            title_font,
-            theme::TEXT_PRIMARY,
-        );
-        if !context.is_empty() {
-            painter.text(
-                context_pos,
-                Align2::LEFT_CENTER,
-                context,
-                context_font,
-                theme::TEXT_MUTED,
-            );
-        }
+        return;
     }
-    response.on_hover_text(&row.display_name)
+
+    let title = compact_end_to_width(
+        ui,
+        &row.title,
+        title_font.clone(),
+        theme::TEXT_PRIMARY,
+        text_width,
+    );
+    let context = compact_start_to_width(
+        ui,
+        &row.context,
+        context_font.clone(),
+        theme::TEXT_MUTED,
+        text_width,
+    );
+    painter.text(
+        title_pos,
+        Align2::LEFT_CENTER,
+        title,
+        title_font,
+        theme::TEXT_PRIMARY,
+    );
+    if !context.is_empty() {
+        painter.text(
+            context_pos,
+            Align2::LEFT_CENTER,
+            context,
+            context_font,
+            theme::TEXT_MUTED,
+        );
+    }
 }
 
 fn draw_marquee_text(
