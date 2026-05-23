@@ -86,10 +86,6 @@ state file.
   model folder, scale, tile size, output format, and optional current/next-page
   AI prefetch.
 
-> [!NOTE]
-> AI upscale is disabled by default. SuiSuiView does not bundle Python, PyTorch,
-> Real-ESRGAN binaries, or AI model files.
-
 ## Bookmarks And State
 
 Bookmarks and viewer preferences are saved to the platform data directory. On
