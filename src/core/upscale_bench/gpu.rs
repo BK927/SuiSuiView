@@ -1,0 +1,358 @@
+use crate::core::gpu_effect::color_image_to_rgba;
+use crate::core::state::DisplayUpscaler;
+use eframe::egui::ColorImage;
+use std::borrow::Cow;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+use wgpu::util::DeviceExt;
+
+const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct UpscaleParams {
+    source_output: [u32; 4],
+    method: [u32; 4],
+}
+
+pub(crate) struct GpuUpscaleBench {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+}
+
+pub(crate) struct GpuUpscaleOutput {
+    pub(crate) image: ColorImage,
+    pub(crate) elapsed: Duration,
+}
+
+impl GpuUpscaleBench {
+    pub(crate) fn new() -> Result<Self, String> {
+        pollster::block_on(Self::new_async())
+    }
+
+    async fn new_async() -> Result<Self, String> {
+        let instance = wgpu::Instance::default();
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
+            .await
+            .map_err(|error| format!("wgpu adapter unavailable: {error}"))?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("suisuiview-upscale-bench-device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                    .using_resolution(adapter.limits()),
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::Off,
+            })
+            .await
+            .map_err(|error| format!("wgpu device unavailable: {error}"))?;
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("suisuiview-upscale-bench-shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("../gpu_upscale.wgsl"))),
+        });
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("suisuiview-upscale-bench-bind-group-layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("suisuiview-upscale-bench-pipeline-layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("suisuiview-upscale-bench-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: TEXTURE_FORMAT,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        Ok(Self {
+            device,
+            queue,
+            pipeline,
+            bind_group_layout,
+        })
+    }
+
+    pub(crate) fn apply(
+        &self,
+        image: &ColorImage,
+        output_size: [usize; 2],
+        method: DisplayUpscaler,
+    ) -> Result<GpuUpscaleOutput, String> {
+        let [source_width, source_height] = image.size;
+        let [output_width, output_height] = output_size;
+        if source_width == 0 || source_height == 0 || output_width == 0 || output_height == 0 {
+            return Err("cannot upscale an empty image".to_owned());
+        }
+
+        let started = Instant::now();
+        let source_bytes = color_image_to_rgba(image);
+        let source_extent = wgpu::Extent3d {
+            width: source_width as u32,
+            height: source_height as u32,
+            depth_or_array_layers: 1,
+        };
+        let output_extent = wgpu::Extent3d {
+            width: output_width as u32,
+            height: output_height as u32,
+            depth_or_array_layers: 1,
+        };
+
+        let source_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("suisuiview-upscale-source"),
+            size: source_extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEXTURE_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &source_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &source_bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some((source_width * 4) as u32),
+                rows_per_image: Some(source_height as u32),
+            },
+            source_extent,
+        );
+
+        let output_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("suisuiview-upscale-output"),
+            size: output_extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEXTURE_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let padded_bytes_per_row = align_to(
+            (output_width * 4) as u32,
+            wgpu::COPY_BYTES_PER_ROW_ALIGNMENT,
+        );
+        let output_buffer_size = padded_bytes_per_row as u64 * output_height as u64;
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("suisuiview-upscale-readback"),
+            size: output_buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("suisuiview-upscale-encoder"),
+            });
+
+        if let Some(rcas_method_id) = method.rcas_shader_method_id() {
+            let intermediate_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("suisuiview-upscale-intermediate"),
+                size: output_extent,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: TEXTURE_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let intermediate_view =
+                intermediate_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.render_pass(
+                &mut encoder,
+                &source_view,
+                [source_width as u32, source_height as u32],
+                [output_width as u32, output_height as u32],
+                method.shader_method_id(),
+                &intermediate_view,
+            );
+
+            let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.render_pass(
+                &mut encoder,
+                &intermediate_view,
+                [output_width as u32, output_height as u32],
+                [output_width as u32, output_height as u32],
+                rcas_method_id,
+                &output_view,
+            );
+        } else {
+            let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.render_pass(
+                &mut encoder,
+                &source_view,
+                [source_width as u32, source_height as u32],
+                [output_width as u32, output_height as u32],
+                method.shader_method_id(),
+                &output_view,
+            );
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &output_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(output_height as u32),
+                },
+            },
+            output_extent,
+        );
+        self.queue.submit(Some(encoder.finish()));
+        let buffer_slice = readback.slice(..);
+        let (tx, rx) = mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result.map_err(|error| error.to_string()));
+        });
+        self.device
+            .poll(wgpu::PollType::Wait)
+            .map_err(|error| format!("wgpu poll failed: {error}"))?;
+        rx.recv()
+            .map_err(|error| format!("wgpu readback channel failed: {error}"))?
+            .map_err(|error| format!("wgpu readback failed: {error}"))?;
+        let elapsed = started.elapsed();
+
+        let mapped = buffer_slice.get_mapped_range();
+        let mut output_bytes = Vec::with_capacity(output_width * output_height * 4);
+        let row_bytes = output_width * 4;
+        for row in 0..output_height {
+            let start = row * padded_bytes_per_row as usize;
+            output_bytes.extend_from_slice(&mapped[start..start + row_bytes]);
+        }
+        drop(mapped);
+        readback.unmap();
+
+        Ok(GpuUpscaleOutput {
+            image: ColorImage::from_rgba_unmultiplied(output_size, &output_bytes),
+            elapsed,
+        })
+    }
+
+    fn render_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        source_view: &wgpu::TextureView,
+        source_size: [u32; 2],
+        output_size: [u32; 2],
+        method_id: u32,
+        output_view: &wgpu::TextureView,
+    ) {
+        let params = UpscaleParams {
+            source_output: [
+                source_size[0],
+                source_size[1],
+                output_size[0],
+                output_size[1],
+            ],
+            method: [method_id, 0, 0, 0],
+        };
+        let params_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("suisuiview-upscale-params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("suisuiview-upscale-bind-group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("suisuiview-upscale-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: output_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+}
+
+fn align_to(value: u32, alignment: u32) -> u32 {
+    value.div_ceil(alignment) * alignment
+}

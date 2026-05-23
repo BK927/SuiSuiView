@@ -1,0 +1,109 @@
+schema_version = 1
+
+[defaults]
+source_globs = ["src/**/*.rs"]
+new_file_warn_lines = 600
+new_file_fail_lines = 900
+bad_module_names = ["utils.rs", "helpers.rs", "misc.rs"]
+allowed_bad_module_paths = []
+
+[[files]]
+path = "src/app.rs"
+kind = "legacy-large"
+baseline_lines = 2686
+growth_warn_lines = 100
+growth_fail_lines = 200
+purpose = "Application shell, durable SuiSuiViewApp state, and top-level egui update orchestration."
+allowed_growth = [
+  "SuiSuiViewApp state fields that are genuinely cross-cutting.",
+  "Top-level eframe::App update orchestration.",
+  "Small wiring needed while extracting app submodules."
+]
+remediation = [
+  "Move keyboard commands and shortcut mapping to src/app/commands.rs.",
+  "Move toolbar, status bar, context menu, and settings UI to src/app/ui/.",
+  "Move viewer layout, spread math, pointer handling, and painting to src/app/viewer.rs or src/app/render.rs.",
+  "Move session-only image transforms and filters to src/app/effects.rs.",
+  "Move clipboard, dialogs, file manager, fonts, and window-level integration to src/app/platform.rs."
+]
+
+[[files]]
+path = "src/core/worker.rs"
+kind = "legacy-large"
+baseline_lines = 1446
+growth_warn_lines = 80
+growth_fail_lines = 160
+purpose = "Page worker orchestration, public worker-facing decode API, shared image preparation, and metadata policy."
+allowed_growth = [
+  "Worker command/event orchestration.",
+  "Public worker API types that are shared by app, perf, and quality flows.",
+  "Small wiring needed while extracting worker submodules."
+]
+remediation = [
+  "Keep format-specific JPEG, PNG, BMP, and GIF decode changes in src/core/worker/{jpeg,png,bmp,gif}.rs.",
+  "Move EXIF and ICC handling to src/core/worker/metadata.rs.",
+  "Move prefetch ordering and visible-page job selection to src/core/worker/scheduler.rs.",
+  "Move worker cache sizing, pruning, and cache-key helpers to src/core/worker/cache.rs."
+]
+
+[[routing]]
+name = "App commands and shortcuts"
+avoid_paths = ["src/app.rs"]
+destination = "src/app/commands.rs"
+signals = ["AppCommand", "Shortcut", "TRACKED_KEYS", "command_for_shortcut", "collect_keyboard_commands"]
+
+[[routing]]
+name = "App UI panels"
+avoid_paths = ["src/app.rs"]
+destination = "src/app/ui/"
+signals = ["show_toolbar", "show_status_bar", "show_context_menu", "show_settings_window"]
+
+[[routing]]
+name = "Viewer rendering"
+avoid_paths = ["src/app.rs"]
+destination = "src/app/viewer.rs or src/app/render.rs"
+signals = ["show_viewer", "paint_spread", "paint_placeholder", "spread_origin", "scale_for"]
+
+[[routing]]
+name = "Session image effects"
+avoid_paths = ["src/app.rs"]
+destination = "src/app/effects.rs"
+signals = ["ViewEffects", "ViewTransform", "ImageFilter", "apply_effects_to_image", "transform_image"]
+
+[[routing]]
+name = "Platform integration"
+avoid_paths = ["src/app.rs"]
+destination = "src/app/platform.rs"
+signals = ["Clipboard", "FileDialog", "MessageDialog", "reveal_in_file_manager", "install_cjk_font_fallback"]
+
+[[routing]]
+name = "Format-specific decode backends"
+avoid_paths = ["src/core/worker.rs"]
+destination = "src/core/worker/{jpeg,png,bmp,gif}.rs"
+signals = ["prepare_image_with_scaled_jpeg", "prepare_image_with_sampled_png", "prepare_image_with_sampled_bmp", "prepare_image_with_sampled_gif"]
+
+[[routing]]
+name = "Metadata decode policy"
+avoid_paths = ["src/core/worker.rs"]
+destination = "src/core/worker/metadata.rs"
+signals = ["read_image_metadata", "apply_embedded_icc_to_rgba", "apply_exif_orientation_to_page"]
+
+[[routing]]
+name = "Worker scheduling and cache policy"
+avoid_paths = ["src/core/worker.rs"]
+destination = "src/core/worker/scheduler.rs or src/core/worker/cache.rs"
+signals = ["prioritized_jobs", "prioritized_indices", "prune_worker_cache", "clear_cache_on_book_or_decode_change"]
+
+# Waivers should be rare and temporary. Example:
+#
+# [[waivers]]
+# path = "src/app.rs"
+# rule = "legacy_growth"
+# reason = "Temporary wiring while extracting app/ui modules."
+# expires = "2026-06-15"
+
+[[waivers]]
+path = "src/app.rs"
+rule = "legacy_growth"
+reason = "Temporary first-visible diagnostics wiring until viewer rendering is extracted."
+expires = "2026-06-15"

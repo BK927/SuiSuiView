@@ -1,0 +1,33 @@
+[licenses]
+allow = [
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.8
+
+[[licenses.exceptions]]
+allow = ["Ubuntu-font-1.0", "OFL-1.1"]
+name = "epaint_default_fonts"
+
+[[licenses.exceptions]]
+allow = ["GPL-3.0-only"]
+name = "suisuiview"
+
+[advisories]
+ignore = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

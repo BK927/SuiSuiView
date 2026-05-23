@@ -1,0 +1,17 @@
+accepted = [
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "OFL-1.1",
+  "Unicode-3.0",
+  "Ubuntu-font-1.0",
+  "Zlib",
+]
+
+[suisuiview]
+accepted = ["GPL-3.0-only"]

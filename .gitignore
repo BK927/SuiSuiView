@@ -1,0 +1,30 @@
+# Rust build output
+/target/
+
+# Editor and IDE state
+/.idea/
+/.vscode/
+
+# Local binaries and debug symbols
+*.exe
+*.pdb
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+__pycache__/
+*.pyc
+
+# Local stress-test image sets
+/perf-fixtures/
+/validation-reports*/
+/validation-samples*/
+
+# Local development helper scripts
+/tools/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini

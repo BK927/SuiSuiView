@@ -1,0 +1,196 @@
+SuiSuiView Third-Party Notices
+==============================
+
+This application includes third-party open-source software. This notice is
+shown in the About window and should also be shipped with packaged releases.
+For exact dependency versions, see Cargo.lock in the corresponding source
+release.
+
+Application
+-----------
+
+SuiSuiView
+License: GPL-3.0-only
+Note: A copy of the GNU General Public License version 3 is included in the
+LICENSE file. Corresponding source code is provided through the source release
+or repository for the distributed version.
+
+Direct Rust Dependencies
+------------------------
+
+arboard
+License: MIT OR Apache-2.0
+Source: https://crates.io/crates/arboard
+
+blake3
+License: CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception
+Source: https://crates.io/crates/blake3
+
+crossbeam-channel
+License: MIT OR Apache-2.0
+Source: https://crates.io/crates/crossbeam-channel
+
+directories
+License: MIT OR Apache-2.0
+Source: https://crates.io/crates/directories
+
+eframe / egui
+License: MIT OR Apache-2.0
+Source: https://crates.io/crates/eframe
+
+gif
+License: MIT OR Apache-2.0
+Source: https://crates.io/crates/gif
+
+image
+License: MIT OR Apache-2.0
+Source: https://crates.io/crates/image
+Note: Built with format features for BMP, DDS, EXR, GIF, HDR/RGBE, ICO,
+JPEG, PNG, PNM, QOI, TGA, TIFF, and WebP.
+
+jpeg-decoder
+License: MIT OR Apache-2.0
+Source: https://crates.io/crates/jpeg-decoder
+
+kamadak-exif
+License: BSD-2-Clause
+Source: https://crates.io/crates/kamadak-exif
+
+lcms2 / lcms2-sys
+License: MIT
+Source: https://crates.io/crates/lcms2
+Note: lcms2-sys vendors Little CMS code under the MIT license.
+
+lru
+License: MIT
+Source: https://crates.io/crates/lru
+
+png
+License: MIT OR Apache-2.0
+Source: https://crates.io/crates/png
+
+rfd
+License: MIT
+Source: https://crates.io/crates/rfd
+
+serde / serde_json
+License: MIT OR Apache-2.0
+Source: https://crates.io/crates/serde
+
+sysinfo
+License: MIT
+Source: https://crates.io/crates/sysinfo
+
+trash
+License: MIT
+Source: https://crates.io/crates/trash
+
+winresource
+License: MIT
+Source: https://crates.io/crates/winresource
+
+zip
+License: MIT
+Source: https://crates.io/crates/zip
+
+Notable Transitive Dependencies
+-------------------------------
+
+epaint_default_fonts
+License: (MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0
+Source: https://crates.io/crates/epaint_default_fonts
+Note: egui's default embedded fonts are included in the application binary.
+
+option-ext
+License: MPL-2.0
+Source: https://crates.io/crates/option-ext
+Note: This is a file-level copyleft license. SuiSuiView does not modify this
+crate. If this crate is modified and redistributed, the modified MPL-covered
+source files must be made available.
+
+bzip2 / bzip2-sys
+License: MIT OR Apache-2.0 for the Rust wrapper; bundled libbzip2 uses the
+bzip2 license.
+Source: https://crates.io/crates/bzip2
+
+clipboard-win / error-code
+License: BSL-1.0
+Source: https://crates.io/crates/clipboard-win
+
+exr
+License: BSD-3-Clause
+Source: https://crates.io/crates/exr
+
+image-webp
+License: MIT OR Apache-2.0
+Source: https://crates.io/crates/image-webp
+
+qoi
+License: MIT OR Apache-2.0
+Source: https://crates.io/crates/qoi
+
+tiff
+License: MIT
+Source: https://crates.io/crates/tiff
+
+xz2 / lzma-sys
+License: MIT/Apache-2.0 for the Rust wrapper. The bundled liblzma code from
+XZ Utils is identified by XZ Utils as public domain.
+Source: https://crates.io/crates/xz2
+
+zstd / zstd-sys
+License: MIT OR Apache-2.0 for the Rust wrapper; bundled zstd code uses the
+BSD license.
+Source: https://crates.io/crates/zstd
+
+zune-jpeg / zune-core
+License: MIT OR Apache-2.0 OR Zlib
+Source: https://crates.io/crates/zune-jpeg
+
+Unicode and ICU4X crates
+License: Unicode-3.0
+Source: https://github.com/unicode-org/icu4x
+
+Bundled Icon Fonts
+------------------
+
+Fluent UI System Icons
+License: MIT
+Copyright: Copyright (c) 2020 Microsoft Corporation
+Source: https://github.com/microsoft/fluentui-system-icons
+Files:
+- assets/fonts/FluentSystemIcons-Regular.ttf
+- assets/fonts/FluentSystemIcons-Filled.ttf
+
+System Resources and External Tools
+-----------------------------------
+
+SuiSuiView may load an installed system font for CJK text fallback. Those
+system fonts are read from the user's operating system and are not
+redistributed by SuiSuiView.
+
+Real-ESRGAN ncnn-vulkan support is optional. SuiSuiView lets the user choose
+their own executable and model paths. SuiSuiView does not bundle Python,
+PyTorch, Real-ESRGAN binaries, ncnn binaries, or model files.
+
+Shader Algorithm References
+---------------------------
+
+AMD FidelityFX Super Resolution 1.0
+License: MIT
+Copyright: Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
+Source: https://github.com/GPUOpen-Effects/FidelityFX-FSR
+Note: The `--upscale-bench` experiment includes a WGSL port of the FSR1 EASU
+and RCAS equations for evaluation. It is not exposed as a default user-facing
+display mode yet.
+
+Bundled Assets
+--------------
+
+assets/app-icon.png
+assets/app-icon.ico
+assets/fonts/FluentSystemIcons-Regular.ttf
+assets/fonts/FluentSystemIcons-Filled.ttf
+
+Before a paid public release, confirm that the app icon artwork is either
+owned by the distributor or licensed for commercial application distribution.

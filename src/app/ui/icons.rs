@@ -1,0 +1,73 @@
+use super::theme;
+use eframe::egui::{self, text::LayoutJob, Color32, FontFamily, FontId, RichText, TextFormat};
+
+pub(in crate::app) const REGULAR_FONT: &str = "suisuiview-fluent-icons-regular";
+pub(in crate::app) const FILLED_FONT: &str = "suisuiview-fluent-icons-filled";
+
+// Fluent regular/filled fonts share codepoints; IconStyle selects the glyph shape.
+pub(in crate::app) const BOOKMARK: char = '\u{F1F6}';
+pub(in crate::app) const BOOKMARK_FILLED: char = BOOKMARK;
+pub(in crate::app) const CHEVRON_LEFT: char = '\u{F2AB}';
+pub(in crate::app) const CHEVRON_RIGHT: char = '\u{F2B1}';
+pub(in crate::app) const DELETE: char = '\u{F34D}';
+pub(in crate::app) const DISMISS: char = '\u{F36A}';
+pub(in crate::app) const DOCUMENT: char = '\u{F379}';
+pub(in crate::app) const EYE: char = '\u{E5F3}';
+pub(in crate::app) const FOLDER_OPEN: char = '\u{F42F}';
+pub(in crate::app) const INFO: char = '\u{F4A4}';
+pub(in crate::app) const PIN: char = '\u{F602}';
+pub(in crate::app) const SEARCH: char = '\u{F690}';
+pub(in crate::app) const SETTINGS: char = '\u{F6AA}';
+pub(in crate::app) const WAND: char = '\u{EE38}';
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) enum IconStyle {
+    Regular,
+    Filled,
+}
+
+pub(in crate::app) fn icon(code: char, style: IconStyle, size: f32, color: Color32) -> RichText {
+    RichText::new(code.to_string())
+        .font(icon_font(style, size))
+        .color(color)
+}
+
+pub(in crate::app) fn icon_text(code: char, text: &str) -> egui::WidgetText {
+    let mut job = LayoutJob::default();
+    job.append(
+        &code.to_string(),
+        0.0,
+        TextFormat {
+            font_id: icon_font(IconStyle::Regular, 18.0),
+            color: theme::TEXT_PRIMARY,
+            ..Default::default()
+        },
+    );
+    job.append(
+        "  ",
+        0.0,
+        TextFormat {
+            font_id: FontId::proportional(14.0),
+            color: theme::TEXT_PRIMARY,
+            ..Default::default()
+        },
+    );
+    job.append(
+        text,
+        0.0,
+        TextFormat {
+            font_id: FontId::proportional(14.0),
+            color: theme::TEXT_PRIMARY,
+            ..Default::default()
+        },
+    );
+    job.into()
+}
+
+pub(in crate::app) fn icon_font(style: IconStyle, size: f32) -> FontId {
+    let family = match style {
+        IconStyle::Regular => REGULAR_FONT,
+        IconStyle::Filled => FILLED_FONT,
+    };
+    FontId::new(size, FontFamily::Name(family.into()))
+}

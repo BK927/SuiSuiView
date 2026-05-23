@@ -1,0 +1,15 @@
+pub mod effect_bench;
+pub mod effects;
+pub mod formats;
+pub mod gpu_effect;
+pub mod image_info;
+pub mod natural;
+pub mod perf;
+pub mod perf_trace;
+pub mod quality;
+pub mod source;
+pub mod state;
+pub mod upscale;
+pub mod upscale_bench;
+pub mod upscale_quality;
+pub mod worker;
