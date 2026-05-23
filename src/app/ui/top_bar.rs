@@ -4,10 +4,18 @@ use super::super::{SuiSuiViewApp, ViewMode};
 use super::{icons, path_labels, theme};
 use crate::core::effects::ImageFilter;
 use crate::core::state::{AiUpscaleBackend, FitMode, ReadingDirection};
-use eframe::egui::{self, Align2, Button, Color32, Frame, Margin, RichText, Stroke};
+use eframe::egui::{
+    self, Align2, Button, Color32, FontId, Frame, Margin, RichText, Sense, Stroke, Vec2,
+};
 use std::path::PathBuf;
 
 const OPEN_MENU_MIN_WIDTH: f32 = 560.0;
+const OPEN_MENU_MAX_VIEWPORT_FRACTION: f32 = 0.8;
+const OPEN_MENU_OUTER_MARGIN: f32 = 24.0;
+const RECENT_ROW_HORIZONTAL_PADDING: f32 = 10.0;
+const RECENT_ROW_VERTICAL_PADDING: f32 = 6.0;
+const RECENT_ROW_CORNER_RADIUS: u8 = 5;
+const RECENT_ROW_HOVER_FILL: Color32 = Color32::from_rgb(38, 41, 47);
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn show_top_bar(&mut self, ctx: &egui::Context) {
@@ -58,7 +66,11 @@ impl SuiSuiViewApp {
 
     fn show_open_group(&mut self, ui: &mut egui::Ui) {
         ui.menu_button(icons::icon_text(icons::FOLDER_OPEN, "열기"), |ui| {
-            ui.set_min_width(OPEN_MENU_MIN_WIDTH);
+            let recent_books = self.store.recent_books(8);
+            let menu_width = recent_open_menu_width(ui, &recent_books);
+            ui.set_min_width(menu_width);
+            ui.set_max_width(menu_width);
+
             if ui
                 .button(icons::icon_text(icons::DOCUMENT, "파일 열기"))
                 .clicked()
@@ -76,7 +88,6 @@ impl SuiSuiViewApp {
 
             ui.separator();
             ui.label(RichText::new("최근").color(theme::TEXT_MUTED));
-            let recent_books = self.store.recent_books(8);
             if recent_books.is_empty() {
                 ui.add_enabled(false, egui::Label::new("최근 책 없음"));
                 return;
@@ -84,9 +95,10 @@ impl SuiSuiViewApp {
 
             for book in &recent_books {
                 if let Some(path) = book.known_paths.last() {
-                    let label =
-                        path_labels::compact_start(path, path_labels::RECENT_PATH_LABEL_CHARS);
-                    if ui.button(label).on_hover_text(path).clicked() {
+                    if recent_path_row(ui, path, menu_width)
+                        .on_hover_text(path)
+                        .clicked()
+                    {
                         self.open_path(PathBuf::from(path));
                         ui.close();
                     }
@@ -298,6 +310,175 @@ impl SuiSuiViewApp {
             );
         }
     }
+}
+
+fn recent_open_menu_width(ui: &egui::Ui, recent_books: &[crate::core::state::Bookmark]) -> f32 {
+    let viewport_width = ui.ctx().input(|input| {
+        input
+            .viewport()
+            .inner_rect
+            .map_or(OPEN_MENU_MIN_WIDTH, |rect| rect.width())
+    });
+    let max_width = (viewport_width * OPEN_MENU_MAX_VIEWPORT_FRACTION).max(OPEN_MENU_MIN_WIDTH);
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let longest_path_width = recent_books
+        .iter()
+        .filter_map(|book| book.known_paths.last())
+        .map(|path| text_width(ui, path, &font_id))
+        .fold(0.0_f32, f32::max);
+    let desired_width =
+        (longest_path_width * 0.5 + RECENT_ROW_HORIZONTAL_PADDING * 2.0 + OPEN_MENU_OUTER_MARGIN)
+            .ceil();
+
+    desired_width.clamp(OPEN_MENU_MIN_WIDTH, max_width)
+}
+
+fn recent_path_row(ui: &mut egui::Ui, path: &str, menu_width: f32) -> egui::Response {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let line_height = font_id.size + 5.0;
+    let row_width = ui.available_width().max(menu_width);
+    let row_height = line_height * 2.0 + RECENT_ROW_VERTICAL_PADDING * 2.0;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(row_width, row_height), Sense::click());
+
+    if ui.is_rect_visible(rect) {
+        if response.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                egui::CornerRadius::same(RECENT_ROW_CORNER_RADIUS),
+                RECENT_ROW_HOVER_FILL,
+            );
+        }
+
+        let text_rect = rect.shrink2(Vec2::new(
+            RECENT_ROW_HORIZONTAL_PADDING,
+            RECENT_ROW_VERTICAL_PADDING,
+        ));
+        let lines = recent_path_lines(ui, path, text_rect.width(), &font_id);
+        for (index, line) in lines.iter().enumerate() {
+            let y = text_rect.top() + line_height * (index as f32 + 0.5);
+            ui.painter().text(
+                egui::pos2(text_rect.left(), y),
+                Align2::LEFT_CENTER,
+                line,
+                font_id.clone(),
+                theme::TEXT_PRIMARY,
+            );
+        }
+    }
+
+    response
+}
+
+fn recent_path_lines(ui: &egui::Ui, path: &str, width: f32, font_id: &FontId) -> Vec<String> {
+    let (lines, fits) = wrap_recent_path(ui, path, width, font_id, 2);
+    if fits {
+        return lines;
+    }
+
+    let char_count = path
+        .chars()
+        .count()
+        .min(path_labels::RECENT_PATH_LABEL_CHARS);
+    let mut best = 4_usize;
+    let mut low = 4_usize;
+    let mut high = char_count;
+    while low <= high {
+        let mid = low + (high - low) / 2;
+        let candidate = path_labels::compact_start_for_two_lines(path, mid);
+        let (_, candidate_fits) = wrap_recent_path(ui, &candidate, width, font_id, 2);
+        if candidate_fits {
+            best = mid;
+            low = mid + 1;
+        } else {
+            high = mid.saturating_sub(1);
+        }
+    }
+
+    let compact = path_labels::compact_start_for_two_lines(path, best);
+    wrap_recent_path(ui, &compact, width, font_id, 2).0
+}
+
+fn wrap_recent_path(
+    ui: &egui::Ui,
+    text: &str,
+    width: f32,
+    font_id: &FontId,
+    max_lines: usize,
+) -> (Vec<String>, bool) {
+    let mut lines = Vec::new();
+    let mut rest = text.trim();
+    while !rest.is_empty() && lines.len() < max_lines {
+        let (line, next) = take_wrapped_line(ui, rest, width, font_id);
+        if line.is_empty() {
+            break;
+        }
+        lines.push(line.to_owned());
+        rest = next.trim_start();
+    }
+    (lines, rest.is_empty())
+}
+
+fn take_wrapped_line<'a>(
+    ui: &egui::Ui,
+    text: &'a str,
+    width: f32,
+    font_id: &FontId,
+) -> (&'a str, &'a str) {
+    if text_width(ui, text, font_id) <= width {
+        return (text.trim_end(), "");
+    }
+
+    let char_ends: Vec<usize> = text
+        .char_indices()
+        .map(|(index, ch)| index + ch.len_utf8())
+        .collect();
+    let last_fit = largest_fitting_prefix(ui, text, width, font_id, &char_ends);
+
+    if last_fit == 0 {
+        return ("", text);
+    }
+
+    let last_break = text[..last_fit]
+        .char_indices()
+        .filter_map(|(index, ch)| {
+            matches!(ch, '\\' | '/' | ' ' | '|').then_some(index + ch.len_utf8())
+        })
+        .last();
+    let end = last_break.unwrap_or(last_fit);
+
+    (text[..end].trim_end(), &text[end..])
+}
+
+fn largest_fitting_prefix(
+    ui: &egui::Ui,
+    text: &str,
+    width: f32,
+    font_id: &FontId,
+    char_ends: &[usize],
+) -> usize {
+    let mut best = 0;
+    let mut low = 0;
+    let mut high = char_ends.len();
+
+    while low < high {
+        let mid = low + (high - low) / 2;
+        let end = char_ends[mid];
+        if text_width(ui, &text[..end], font_id) <= width {
+            best = end;
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+
+    best
+}
+
+fn text_width(ui: &egui::Ui, text: &str, font_id: &FontId) -> f32 {
+    ui.painter()
+        .layout_no_wrap(text.to_owned(), font_id.clone(), theme::TEXT_PRIMARY)
+        .size()
+        .x
 }
 
 fn compare_target_combo(

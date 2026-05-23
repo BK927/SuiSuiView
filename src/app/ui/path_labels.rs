@@ -1,7 +1,7 @@
 use crate::core::formats::descriptor_for_extension;
 use std::path::{Path, PathBuf};
 
-pub(in crate::app) const RECENT_PATH_LABEL_CHARS: usize = 92;
+pub(in crate::app) const RECENT_PATH_LABEL_CHARS: usize = 180;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::app) struct BookmarkDisplayParts {
@@ -21,6 +21,10 @@ pub(in crate::app) fn compact_start(text: &str, max_chars: usize) -> String {
 
     let tail: String = text.chars().skip(count - (max_chars - 3)).collect();
     format!("...{tail}")
+}
+
+pub(in crate::app) fn compact_start_for_two_lines(text: &str, max_chars: usize) -> String {
+    compact_start(text, max_chars)
 }
 
 pub(in crate::app) fn bookmark_display_parts(
@@ -124,7 +128,9 @@ fn parent_display(path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bookmark_display_parts, compact_start, RECENT_PATH_LABEL_CHARS};
+    use super::{
+        bookmark_display_parts, compact_start, compact_start_for_two_lines, RECENT_PATH_LABEL_CHARS,
+    };
 
     #[test]
     fn compact_start_preserves_tail() {
@@ -143,6 +149,17 @@ mod tests {
                 RECENT_PATH_LABEL_CHARS
             ),
             "C:/Users/dead4/Pictures/wallpaper/kanata03.png"
+        );
+    }
+
+    #[test]
+    fn compact_start_for_two_lines_preserves_long_tail() {
+        assert_eq!(
+            compact_start_for_two_lines(
+                "C:/Users/dead4/Pictures/아주 긴 폴더 이름/wallpaper/kanata03.png",
+                34,
+            ),
+            "... 긴 폴더 이름/wallpaper/kanata03.png"
         );
     }
 
