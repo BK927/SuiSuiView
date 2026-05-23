@@ -195,7 +195,13 @@ impl DisplayUpscaler {
         let target_is_larger =
             target_size[0] > output_size[0] as u32 || target_size[1] > output_size[1] as u32;
         match self {
-            Self::Auto if target_is_larger => Some(Self::WgslFsr1Style),
+            Self::Auto if target_is_larger => {
+                if automatic_upscale_prefers_fsr1_easu_rcas(output_size, target_size) {
+                    Some(Self::WgslFsr1EasuRcas)
+                } else {
+                    Some(Self::WgslFsr1Style)
+                }
+            }
             Self::Auto | Self::None => None,
             other => Some(other),
         }
@@ -217,6 +223,15 @@ impl DisplayUpscaler {
             _ => None,
         }
     }
+}
+
+fn automatic_upscale_prefers_fsr1_easu_rcas(
+    output_size: [usize; 2],
+    target_size: [u32; 2],
+) -> bool {
+    let source_long = output_size[0].max(output_size[1]) as u32;
+    let target_long = target_size[0].max(target_size[1]);
+    source_long <= 1600 && target_long >= source_long.saturating_mul(3) / 2
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -698,6 +713,10 @@ mod tests {
         );
         assert_eq!(
             DisplayUpscaler::Auto.resolve_for_render([800, 1200], [1600, 2400]),
+            Some(DisplayUpscaler::WgslFsr1EasuRcas)
+        );
+        assert_eq!(
+            DisplayUpscaler::Auto.resolve_for_render([1400, 2100], [2000, 3000]),
             Some(DisplayUpscaler::WgslFsr1Style)
         );
         assert_eq!(

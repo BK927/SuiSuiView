@@ -84,7 +84,7 @@ mod tests {
     fn compact_start_preserves_tail() {
         assert_eq!(
             compact_start("C:/books/series/page-001.png", 18),
-            "...s/page-001.png"
+            "...es/page-001.png"
         );
         assert_eq!(compact_start("short.png", 18), "short.png");
     }
