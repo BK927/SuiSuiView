@@ -1,7 +1,7 @@
 use crate::core::formats::descriptor_for_extension;
 use std::path::{Path, PathBuf};
 
-pub(in crate::app) const RECENT_PATH_LABEL_CHARS: usize = 46;
+pub(in crate::app) const RECENT_PATH_LABEL_CHARS: usize = 92;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::app) struct BookmarkDisplayParts {
@@ -124,7 +124,7 @@ fn parent_display(path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bookmark_display_parts, compact_start};
+    use super::{bookmark_display_parts, compact_start, RECENT_PATH_LABEL_CHARS};
 
     #[test]
     fn compact_start_preserves_tail() {
@@ -133,6 +133,17 @@ mod tests {
             "...es/page-001.png"
         );
         assert_eq!(compact_start("short.png", 18), "short.png");
+    }
+
+    #[test]
+    fn recent_path_label_limit_keeps_common_windows_paths_readable() {
+        assert_eq!(
+            compact_start(
+                "C:/Users/dead4/Pictures/wallpaper/kanata03.png",
+                RECENT_PATH_LABEL_CHARS
+            ),
+            "C:/Users/dead4/Pictures/wallpaper/kanata03.png"
+        );
     }
 
     #[test]

@@ -7,6 +7,8 @@ use crate::core::state::{AiUpscaleBackend, FitMode, ReadingDirection};
 use eframe::egui::{self, Align2, Button, Color32, Frame, Margin, RichText, Stroke};
 use std::path::PathBuf;
 
+const OPEN_MENU_MIN_WIDTH: f32 = 560.0;
+
 impl SuiSuiViewApp {
     pub(in crate::app) fn show_top_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("focus_bar")
@@ -56,7 +58,7 @@ impl SuiSuiViewApp {
 
     fn show_open_group(&mut self, ui: &mut egui::Ui) {
         ui.menu_button(icons::icon_text(icons::FOLDER_OPEN, "열기"), |ui| {
-            ui.set_min_width(320.0);
+            ui.set_min_width(OPEN_MENU_MIN_WIDTH);
             if ui
                 .button(icons::icon_text(icons::DOCUMENT, "파일 열기"))
                 .clicked()
