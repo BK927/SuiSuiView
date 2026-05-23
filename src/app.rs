@@ -224,6 +224,9 @@ pub struct SuiSuiViewApp {
     fullscreen: bool,
     maximized: bool,
     window_position_checked: bool,
+    window_last_native_pixels_per_point: Option<f32>,
+    window_size_save_block_until: Option<Instant>,
+    window_stable_inner_size: Option<[f32; 2]>,
     status: String,
     status_updated_at: Instant,
     pending_state_save_at: Option<Instant>,
@@ -249,6 +252,7 @@ impl SuiSuiViewApp {
         ui::apply_app_theme(&cc.egui_ctx);
         let (loader_tx, loader_rx) = unbounded();
         let settings = store.settings().clone();
+        let initial_window_size = store.window_placement().inner_size;
         apply_window_level(&cc.egui_ctx, settings.always_on_top);
         let app = Self {
             egui_ctx: cc.egui_ctx.clone(),
@@ -302,6 +306,9 @@ impl SuiSuiViewApp {
             fullscreen: false,
             maximized: false,
             window_position_checked: false,
+            window_last_native_pixels_per_point: None,
+            window_size_save_block_until: None,
+            window_stable_inner_size: initial_window_size,
             status: "Open a folder, ZIP, or CBZ file. Drag-and-drop works too.".to_owned(),
             status_updated_at: Instant::now(),
             pending_state_save_at: None,
