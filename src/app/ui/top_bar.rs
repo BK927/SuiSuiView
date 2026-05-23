@@ -13,7 +13,8 @@ const OPEN_MENU_MIN_WIDTH: f32 = 560.0;
 const OPEN_MENU_MAX_VIEWPORT_FRACTION: f32 = 0.8;
 const OPEN_MENU_OUTER_MARGIN: f32 = 24.0;
 const RECENT_ROW_HORIZONTAL_PADDING: f32 = 10.0;
-const RECENT_ROW_VERTICAL_PADDING: f32 = 6.0;
+const RECENT_ROW_VERTICAL_PADDING: f32 = 3.0;
+const RECENT_ROW_LINE_GAP: f32 = 3.0;
 const RECENT_ROW_CORNER_RADIUS: u8 = 5;
 const RECENT_ROW_HOVER_FILL: Color32 = Color32::from_rgb(38, 41, 47);
 
@@ -338,12 +339,11 @@ fn recent_menu_width_for(longest_path_width: f32, viewport_width: f32) -> f32 {
 
 fn recent_path_row(ui: &mut egui::Ui, path: &str, menu_width: f32) -> egui::Response {
     let font_id = egui::TextStyle::Button.resolve(ui.style());
-    let line_height = font_id.size + 5.0;
+    let line_height = recent_row_line_height(font_id.size);
     let row_width = ui.available_width().max(menu_width);
     let text_width = (row_width - RECENT_ROW_HORIZONTAL_PADDING * 2.0).max(1.0);
     let lines = recent_path_lines(ui, path, text_width, &font_id);
-    let line_count = lines.len().max(1) as f32;
-    let row_height = line_height * line_count + RECENT_ROW_VERTICAL_PADDING * 2.0;
+    let row_height = recent_row_height(lines.len().max(1), font_id.size);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(row_width, row_height), Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -372,6 +372,14 @@ fn recent_path_row(ui: &mut egui::Ui, path: &str, menu_width: f32) -> egui::Resp
     }
 
     response
+}
+
+fn recent_row_line_height(font_size: f32) -> f32 {
+    font_size + RECENT_ROW_LINE_GAP
+}
+
+fn recent_row_height(line_count: usize, font_size: f32) -> f32 {
+    recent_row_line_height(font_size) * line_count.max(1) as f32 + RECENT_ROW_VERTICAL_PADDING * 2.0
 }
 
 fn recent_path_lines(ui: &egui::Ui, path: &str, width: f32, font_id: &FontId) -> Vec<String> {
@@ -488,7 +496,7 @@ fn text_width(ui: &egui::Ui, text: &str, font_id: &FontId) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{recent_menu_width_for, OPEN_MENU_MIN_WIDTH};
+    use super::{recent_menu_width_for, recent_row_height, OPEN_MENU_MIN_WIDTH};
 
     #[test]
     fn recent_menu_width_uses_minimum_for_short_paths() {
@@ -503,6 +511,12 @@ mod tests {
     #[test]
     fn recent_menu_width_uses_full_path_width_before_cap() {
         assert_eq!(recent_menu_width_for(700.0, 1600.0), 744.0);
+    }
+
+    #[test]
+    fn recent_row_height_uses_single_line_when_possible() {
+        assert_eq!(recent_row_height(1, 18.0), 27.0);
+        assert_eq!(recent_row_height(2, 18.0), 48.0);
     }
 }
 
