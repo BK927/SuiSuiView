@@ -1,14 +1,13 @@
 use super::super::{BookmarkMarqueeKey, BookmarkMarqueeState, SuiSuiViewApp};
 use super::bookmark_rows::{BookmarkFilter, BookmarkRow};
+use super::bookmark_text::{allocate_bookmark_title, paint_bookmark_title};
 use super::bookmark_thumbnails::{thumbnail_tint_for_state, BookmarkThumbnailState};
-use super::text_fit::{compact_end_to_width, compact_start_to_width};
 use super::{dialog, icons, theme};
 use crate::core::state::PageBookmarkEntry;
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Rect, RichText, Sense, Stroke,
     StrokeKind,
 };
-use std::time::Duration;
 
 const POPOVER_WIDTH: f32 = 430.0;
 const POPOVER_HEIGHT: f32 = 386.0;
@@ -16,9 +15,6 @@ const THUMBNAIL_SIZE: egui::Vec2 = egui::vec2(64.0, 54.0);
 const BOOKMARK_ROW_HEIGHT: f32 = 82.0;
 const BOOKMARK_ROWS_MAX_HEIGHT: f32 = 154.0;
 const ROW_ACTION_WIDTH: f32 = 48.0;
-const MARQUEE_SPEED: f32 = 82.0;
-const MARQUEE_MIN_SCROLL_SECONDS: f32 = 1.2;
-const MARQUEE_END_PAUSE_SECONDS: f32 = 0.7;
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn show_bookmark_popover(&mut self, ctx: &egui::Context) {
@@ -632,145 +628,17 @@ fn show_bookmark_thumbnail(ui: &mut egui::Ui, thumbnail: BookmarkThumbnailState)
     response
 }
 
-fn allocate_bookmark_title(ui: &mut egui::Ui, row: &BookmarkRow, width: f32) -> egui::Response {
-    let (_, response) = ui.allocate_exact_size(egui::vec2(width, 54.0), Sense::click());
-    response.on_hover_text(&row.display_name)
-}
-
-fn paint_bookmark_title(
-    ui: &egui::Ui,
-    rect: Rect,
-    row: &BookmarkRow,
-    marquee_started_at: Option<f64>,
-) {
-    if !rect.is_positive() {
-        return;
-    }
-    let painter = ui.painter_at(rect);
-    let title_font = FontId::proportional(15.0);
-    let context_font = FontId::proportional(12.5);
-    let text_width = (rect.width() - 12.0).max(0.0);
-    let title_pos = egui::pos2(rect.left() + 6.0, rect.center().y - 9.0);
-    let context_pos = egui::pos2(rect.left() + 6.0, rect.center().y + 11.0);
-    if let Some(started_at) = marquee_started_at {
-        let mut repaint_after = draw_marquee_text(
-            ui,
-            rect,
-            title_pos,
-            &row.title,
-            title_font,
-            theme::TEXT_PRIMARY,
-            text_width,
-            started_at,
-        );
-        if let Some(context_repaint_after) = draw_marquee_text(
-            ui,
-            rect,
-            context_pos,
-            &row.context,
-            context_font,
-            theme::TEXT_MUTED,
-            text_width,
-            started_at,
-        ) {
-            repaint_after = Some(repaint_after.map_or(context_repaint_after, |delay| {
-                delay.min(context_repaint_after)
-            }));
-        }
-        if let Some(repaint_after) = repaint_after {
-            ui.ctx().request_repaint_after(repaint_after);
-        }
-        return;
-    }
-
-    let title = compact_end_to_width(
-        ui,
-        &row.title,
-        title_font.clone(),
-        theme::TEXT_PRIMARY,
-        text_width,
-    );
-    let context = compact_start_to_width(
-        ui,
-        &row.context,
-        context_font.clone(),
-        theme::TEXT_MUTED,
-        text_width,
-    );
-    painter.text(
-        title_pos,
-        Align2::LEFT_CENTER,
-        title,
-        title_font,
-        theme::TEXT_PRIMARY,
-    );
-    if !context.is_empty() {
-        painter.text(
-            context_pos,
-            Align2::LEFT_CENTER,
-            context,
-            context_font,
-            theme::TEXT_MUTED,
-        );
-    }
-}
-
-fn draw_marquee_text(
-    ui: &egui::Ui,
-    clip_rect: Rect,
-    pos: egui::Pos2,
-    text: &str,
-    font_id: FontId,
-    color: Color32,
-    width: f32,
-    started_at: f64,
-) -> Option<Duration> {
-    if text.is_empty() {
-        return None;
-    }
-    let galley = ui
-        .painter()
-        .layout_no_wrap(text.to_owned(), font_id.clone(), color);
-    let overflow = (galley.size().x - width).max(0.0);
-    if overflow <= 0.0 {
-        ui.painter()
-            .text(pos, Align2::LEFT_CENTER, text, font_id, color);
-        return None;
-    }
-
-    let scroll_seconds = (overflow / MARQUEE_SPEED).max(MARQUEE_MIN_SCROLL_SECONDS);
-    let cycle = scroll_seconds + MARQUEE_END_PAUSE_SECONDS;
-    let elapsed = ((ui.input(|input| input.time) - started_at) as f32).max(0.0) % cycle;
-    let scrolling = elapsed < scroll_seconds;
-    let offset = if scrolling {
-        overflow * (elapsed / scroll_seconds)
-    } else {
-        overflow
-    };
-    let text_clip = Rect::from_min_max(
-        egui::pos2(pos.x, clip_rect.top()),
-        egui::pos2(pos.x + width, clip_rect.bottom()),
-    );
-    ui.painter().with_clip_rect(text_clip).galley(
-        egui::pos2(pos.x - offset, pos.y - galley.size().y * 0.5),
-        galley,
-        color,
-    );
-    if scrolling {
-        Some(Duration::from_millis(16))
-    } else {
-        Some(Duration::from_secs_f32((cycle - elapsed).max(0.016)))
-    }
-}
-
 impl BookmarkMarqueeState {
     fn started_at_for(&mut self, book_id: &str, page: usize, now: f64) -> f64 {
-        let key = BookmarkMarqueeKey {
-            book_id: book_id.to_owned(),
-            page,
-        };
-        if self.key.as_ref() != Some(&key) {
-            self.key = Some(key);
+        let matches_current = self
+            .key
+            .as_ref()
+            .is_some_and(|key| key.book_id == book_id && key.page == page);
+        if !matches_current {
+            self.key = Some(BookmarkMarqueeKey {
+                book_id: book_id.to_owned(),
+                page,
+            });
             self.started_at = now;
         }
         self.started_at

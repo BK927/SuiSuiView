@@ -1,4 +1,5 @@
 mod bookmark_rows;
+mod bookmark_text;
 mod bookmark_thumbnail_cache;
 mod bookmark_thumbnail_worker;
 mod bookmark_thumbnails;
@@ -7,7 +8,6 @@ pub(in crate::app) mod dialog;
 pub(in crate::app) mod icons;
 mod path_labels;
 mod status;
-mod text_fit;
 pub(in crate::app) mod theme;
 mod top_bar;
 

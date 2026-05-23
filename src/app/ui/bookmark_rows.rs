@@ -23,8 +23,6 @@ pub(in crate::app) struct BookmarkRow {
     pub(in crate::app) known_path: Option<String>,
     pub(in crate::app) bookmark: PageBookmark,
     pub(in crate::app) display_name: String,
-    pub(in crate::app) title: String,
-    pub(in crate::app) context: String,
     search_text: String,
 }
 
@@ -138,8 +136,6 @@ fn bookmark_row(entry: PageBookmarkEntry) -> BookmarkRow {
         known_path: entry.known_path,
         bookmark: entry.bookmark,
         display_name: parts.full,
-        title: parts.title,
-        context: parts.context,
         search_text,
     }
 }
