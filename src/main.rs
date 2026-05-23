@@ -81,10 +81,12 @@ fn main() -> eframe::Result<()> {
                 source_long_edge,
                 target_long_edge,
                 report_path,
+                visual_dir,
             } => {
                 if let Err(error) = core::upscale_quality::run_upscale_quality_scan(
                     &path,
                     report_path.as_deref(),
+                    visual_dir.as_deref(),
                     source_long_edge,
                     target_long_edge,
                 ) {
@@ -188,6 +190,7 @@ enum CliCommand {
         source_long_edge: u32,
         target_long_edge: u32,
         report_path: Option<PathBuf>,
+        visual_dir: Option<PathBuf>,
     },
 }
 
@@ -393,7 +396,7 @@ impl CliCommand {
     fn parse_upscale_quality_scan(mut args: impl Iterator<Item = OsString>) -> Self {
         let path = args.next().map(PathBuf::from).unwrap_or_else(|| {
             eprintln!(
-                "usage: suisuiview --upscale-quality-scan <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-quality-report <report.json>]"
+                "usage: suisuiview --upscale-quality-scan <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-quality-report <report.json>] [--upscale-quality-visuals <dir>]"
             );
             std::process::exit(2);
         });
@@ -401,6 +404,7 @@ impl CliCommand {
         let mut target_long_edge = DEFAULT_TARGET_LONG_EDGE;
         let mut source_long_edge = None;
         let mut report_path = None;
+        let mut visual_dir = None;
         while let Some(arg) = args.next() {
             if arg == "--target-long-edge" {
                 target_long_edge = args
@@ -426,6 +430,11 @@ impl CliCommand {
                 }));
             } else if arg == "--upscale-quality-report-default" {
                 report_path = Some(core::upscale_quality::default_upscale_quality_report_path());
+            } else if arg == "--upscale-quality-visuals" {
+                visual_dir = Some(args.next().map(PathBuf::from).unwrap_or_else(|| {
+                    eprintln!("--upscale-quality-visuals requires a directory");
+                    std::process::exit(2);
+                }));
             } else {
                 eprintln!("unknown argument: {}", arg.to_string_lossy());
                 std::process::exit(2);
@@ -438,6 +447,7 @@ impl CliCommand {
                 .unwrap_or_else(|| (target_long_edge / 2).max(MIN_TARGET_LONG_EDGE)),
             target_long_edge,
             report_path,
+            visual_dir,
         }
     }
 }

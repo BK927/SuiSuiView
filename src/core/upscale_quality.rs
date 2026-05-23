@@ -12,6 +12,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[path = "upscale_quality/visuals.rs"]
+mod visuals;
+
 #[derive(Debug, Serialize)]
 pub struct UpscaleQualityReport {
     pub path: String,
@@ -48,8 +51,16 @@ pub struct PageUpscaleQuality {
     pub source_height: Option<usize>,
     pub output_width: Option<usize>,
     pub output_height: Option<usize>,
+    pub contact_sheet: Option<String>,
+    pub visuals: Vec<UpscaleQualityVisual>,
     pub runs: Vec<UpscaleQualityRun>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpscaleQualityVisual {
+    pub method: String,
+    pub path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -81,6 +92,7 @@ struct QualityMetrics {
 pub fn run_upscale_quality_scan(
     path: &Path,
     report_path: Option<&Path>,
+    visual_dir: Option<&Path>,
     source_long_edge: u32,
     target_long_edge: u32,
 ) -> Result<(), String> {
@@ -88,6 +100,7 @@ pub fn run_upscale_quality_scan(
         path,
         clamp_target_long_edge(source_long_edge),
         clamp_target_long_edge(target_long_edge),
+        visual_dir,
     )?;
     print_report(&report);
     if let Some(report_path) = report_path {
@@ -101,6 +114,7 @@ pub fn scan_upscale_quality(
     path: &Path,
     source_long_edge: u32,
     target_long_edge: u32,
+    visual_dir: Option<&Path>,
 ) -> Result<UpscaleQualityReport, String> {
     let (source, _forced_page) = open_source_from_path(path).map_err(|error| error.to_string())?;
     let gpu = match GpuUpscaleBench::new() {
@@ -126,6 +140,8 @@ pub fn scan_upscale_quality(
             source_height: None,
             output_width: None,
             output_height: None,
+            contact_sheet: None,
+            visuals: Vec::new(),
             runs: Vec::new(),
             error: None,
         };
@@ -143,7 +159,14 @@ pub fn scan_upscale_quality(
                 page.output_width = Some(output_size[0]);
                 page.output_height = Some(output_size[1]);
 
-                run_cpu_case(
+                let mut visual_images = visual_dir.is_some().then(|| {
+                    vec![(
+                        "reference-lanczos3".to_owned(),
+                        baseline.image.as_ref().clone(),
+                    )]
+                });
+
+                let bicubic = run_cpu_case(
                     &input.image,
                     &baseline.image,
                     output_size,
@@ -152,7 +175,11 @@ pub fn scan_upscale_quality(
                     &mut page,
                     &mut summaries,
                 );
-                run_cpu_case(
+                if let Some(images) = &mut visual_images {
+                    images.push(("cpu-bicubic".to_owned(), bicubic));
+                }
+
+                let lanczos3 = run_cpu_case(
                     &input.image,
                     &baseline.image,
                     output_size,
@@ -161,10 +188,26 @@ pub fn scan_upscale_quality(
                     &mut page,
                     &mut summaries,
                 );
+                if let Some(images) = &mut visual_images {
+                    images.push(("cpu-lanczos3".to_owned(), lanczos3));
+                }
+
+                let triangle = run_cpu_case(
+                    &input.image,
+                    &baseline.image,
+                    output_size,
+                    "Fast/Triangle",
+                    ResizeFilter::FastTriangle,
+                    &mut page,
+                    &mut summaries,
+                );
+                if let Some(images) = &mut visual_images {
+                    images.push(("cpu-fast-triangle".to_owned(), triangle));
+                }
 
                 if let Some(gpu) = &gpu {
                     for method in DisplayUpscaler::GPU_METHODS {
-                        run_gpu_case(
+                        let image = run_gpu_case(
                             gpu,
                             &input.image,
                             &baseline.image,
@@ -173,6 +216,22 @@ pub fn scan_upscale_quality(
                             &mut page,
                             &mut summaries,
                         );
+                        if let (Some(images), Some(image)) = (&mut visual_images, image) {
+                            images.push((visuals::sanitize_name(method.label()), image));
+                        }
+                    }
+                }
+
+                if let (Some(root), Some(images)) = (visual_dir, visual_images) {
+                    match visuals::write_page_visuals(root, index, &images) {
+                        Ok((contact_sheet, visuals)) => {
+                            page.contact_sheet = Some(contact_sheet);
+                            page.visuals = visuals;
+                        }
+                        Err(error) => {
+                            page.error = Some(format!("visual export failed: {error}"));
+                            failures += 1;
+                        }
                     }
                 }
             }
@@ -250,9 +309,10 @@ fn run_cpu_case(
     resize_filter: ResizeFilter,
     page: &mut PageUpscaleQuality,
     summaries: &mut BTreeMap<String, SummaryAccumulator>,
-) {
+) -> ColorImage {
     let image = resize_color_image(input, output_size, resize_filter);
     push_run(label, baseline, &image, page, summaries, None);
+    image
 }
 
 fn run_gpu_case(
@@ -263,16 +323,19 @@ fn run_gpu_case(
     method: DisplayUpscaler,
     page: &mut PageUpscaleQuality,
     summaries: &mut BTreeMap<String, SummaryAccumulator>,
-) {
+) -> Option<ColorImage> {
     match gpu.apply(input, output_size, method) {
-        Ok(output) => push_run(
-            method.label(),
-            baseline,
-            &output.image,
-            page,
-            summaries,
-            None,
-        ),
+        Ok(output) => {
+            push_run(
+                method.label(),
+                baseline,
+                &output.image,
+                page,
+                summaries,
+                None,
+            );
+            Some(output.image)
+        }
         Err(error) => {
             page.runs.push(UpscaleQualityRun {
                 method: method.label().to_owned(),
@@ -286,6 +349,7 @@ fn run_gpu_case(
                 ringing_score: 0.0,
                 error: Some(error),
             });
+            None
         }
     }
 }

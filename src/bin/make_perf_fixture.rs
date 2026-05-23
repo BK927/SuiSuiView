@@ -5,6 +5,9 @@ use std::io::{self, Seek, Write};
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 
+#[path = "make_perf_fixture/comic.rs"]
+mod comic;
+
 const DEFAULT_COUNT: usize = 20;
 const DEFAULT_MIN_LONG_EDGE: u32 = 4000;
 const MAX_SEED_BYTES: u64 = 100 * 1024 * 1024;
@@ -58,11 +61,34 @@ struct Args {
     seed_dir: Option<PathBuf>,
     count: usize,
     min_long_edge: u32,
+    profile: FixtureProfile,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum FixtureProfile {
+    #[default]
+    Mixed,
+    Comic,
+}
+
+impl FixtureProfile {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "mixed" => Ok(Self::Mixed),
+            "comic" => Ok(Self::Comic),
+            _ => Err("--profile must be one of: mixed, comic".to_owned()),
+        }
+    }
 }
 
 fn main() -> Result<(), String> {
     let args = Args::parse()?;
     fs::create_dir_all(&args.out_dir).map_err(|error| error.to_string())?;
+
+    if args.profile == FixtureProfile::Comic {
+        comic::create(&args)?;
+        return Ok(());
+    }
 
     let seeds = load_seed_paths(args.seed_dir.as_deref());
     let mixed_dir = args.out_dir.join("mixed-folder");
@@ -117,6 +143,7 @@ impl Args {
         let mut seed_dir = None;
         let mut count = DEFAULT_COUNT;
         let mut min_long_edge = DEFAULT_MIN_LONG_EDGE;
+        let mut profile = FixtureProfile::Mixed;
         let mut args = env::args_os().skip(1);
 
         while let Some(arg) = args.next() {
@@ -146,6 +173,12 @@ impl Args {
                         .parse()
                         .map_err(|_| "--min-long-edge must be a positive integer")?;
                 }
+                "--profile" => {
+                    let value = args
+                        .next()
+                        .ok_or("--profile requires one of: mixed, comic")?;
+                    profile = FixtureProfile::parse(&value.to_string_lossy())?;
+                }
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -159,12 +192,14 @@ impl Args {
             seed_dir,
             count: count.max(1),
             min_long_edge: min_long_edge.max(256),
+            profile,
         })
     }
 }
 
 fn print_help() {
     println!("make_perf_fixture --out perf-fixtures --count 50 --min-long-edge 4000");
+    println!("  --profile mixed|comic chooses random format stress or comic-like line art");
     println!("  --seed-dir <path> uses downloaded/source images when available");
 }
 

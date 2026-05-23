@@ -13,6 +13,8 @@
 *.log
 *.tmp
 *.temp
+/tmp/
+/bench-output/
 __pycache__/
 *.pyc
 

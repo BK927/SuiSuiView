@@ -470,13 +470,12 @@ impl SuiSuiViewApp {
             .or(bookmarked_page)
             .unwrap_or_default()
             .min(page_count.saturating_sub(1));
-        if pending_page.is_some() {
-            self.pending_bookmark_jump = None;
-        } else if self
-            .pending_bookmark_jump
-            .as_ref()
-            .is_some_and(|pending| pending.path == opened_path)
-        {
+        let clear_pending_bookmark_jump = pending_page.is_some()
+            || self
+                .pending_bookmark_jump
+                .as_ref()
+                .is_some_and(|pending| pending.path == opened_path);
+        if clear_pending_bookmark_jump {
             self.pending_bookmark_jump = None;
         }
         self.book_id = Some(book_id.clone());
