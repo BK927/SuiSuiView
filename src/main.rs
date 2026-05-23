@@ -100,6 +100,7 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: initial_viewport(&store, window_icon()),
         renderer: eframe::Renderer::Wgpu,
+        persist_window: false,
         ..Default::default()
     };
 

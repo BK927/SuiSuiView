@@ -6,7 +6,20 @@ use std::time::{Duration, Instant};
 const POSITION_EDGE_PADDING: f32 = 16.0;
 const MIN_VISIBLE_EDGE: f32 = 80.0;
 const SCALE_CHANGE_EPSILON: f32 = 0.01;
-const SIZE_SAVE_BLOCK_AFTER_SCALE_CHANGE: Duration = Duration::from_millis(750);
+const DPI_ARTIFACT_RATIO_TOLERANCE: f32 = 0.08;
+const DPI_ARTIFACT_MIN_DELTA_POINTS: f32 = 48.0;
+const DPI_SIZE_GUARD_DURATION: Duration = Duration::from_millis(2_000);
+const DPI_SIZE_RESTORE_RETRY_INTERVAL: Duration = Duration::from_millis(150);
+const DPI_SIZE_RESTORE_MAX_ATTEMPTS: u8 = 3;
+
+pub(in crate::app) struct WindowDpiSizeGuard {
+    previous_scale: f32,
+    current_scale: f32,
+    stable_size: [f32; 2],
+    expires_at: Instant,
+    restore_attempts: u8,
+    last_restore_at: Option<Instant>,
+}
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn maintain_native_window_state(&mut self, ctx: &egui::Context) {
@@ -102,6 +115,7 @@ impl SuiSuiViewApp {
         if let Some(inner_rect) = inner_rect {
             let size = inner_rect.size();
             if size.x.is_finite() && size.y.is_finite() && size.x > 0.0 && size.y > 0.0 {
+                self.restore_dpi_artifact_size_if_needed(ctx, size, now);
                 placement.inner_size = Some(self.inner_size_for_persistence(size, now));
             }
         }
@@ -116,13 +130,68 @@ impl SuiSuiViewApp {
     }
 
     fn observe_window_scale(&mut self, scale: Option<f32>, now: Instant) {
-        let Some(scale) = valid_scale(scale) else {
+        let Some(current_scale) = valid_scale(scale) else {
             return;
         };
-        if scale_changed(self.window_last_native_pixels_per_point, Some(scale)) {
-            self.window_size_save_block_until = Some(now + SIZE_SAVE_BLOCK_AFTER_SCALE_CHANGE);
+        if scale_changed(
+            self.window_last_native_pixels_per_point,
+            Some(current_scale),
+        ) {
+            self.window_size_save_block_until = Some(now + DPI_SIZE_GUARD_DURATION);
+            if let Some(previous_scale) = self.window_last_native_pixels_per_point {
+                self.window_dpi_size_guard =
+                    self.window_stable_inner_size
+                        .map(|stable_size| WindowDpiSizeGuard {
+                            previous_scale,
+                            current_scale,
+                            stable_size,
+                            expires_at: now + DPI_SIZE_GUARD_DURATION,
+                            restore_attempts: 0,
+                            last_restore_at: None,
+                        });
+            }
         }
-        self.window_last_native_pixels_per_point = Some(scale);
+        self.window_last_native_pixels_per_point = Some(current_scale);
+    }
+
+    fn restore_dpi_artifact_size_if_needed(
+        &mut self,
+        ctx: &egui::Context,
+        current_size: Vec2,
+        now: Instant,
+    ) {
+        if self.window_dpi_size_guard.as_ref().is_some_and(|guard| {
+            now > guard.expires_at || size_close_to(guard.stable_size, current_size)
+        }) {
+            self.window_dpi_size_guard = None;
+            return;
+        }
+
+        let Some(guard) = self.window_dpi_size_guard.as_mut() else {
+            return;
+        };
+        if !looks_like_dpi_size_artifact(
+            guard.previous_scale,
+            guard.current_scale,
+            guard.stable_size,
+            current_size,
+        ) {
+            return;
+        }
+
+        let may_retry = guard
+            .last_restore_at
+            .is_none_or(|last| now.duration_since(last) >= DPI_SIZE_RESTORE_RETRY_INTERVAL);
+        if guard.restore_attempts < DPI_SIZE_RESTORE_MAX_ATTEMPTS && may_retry {
+            let restore_size = Vec2::new(guard.stable_size[0], guard.stable_size[1]);
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(restore_size));
+            guard.restore_attempts += 1;
+            guard.last_restore_at = Some(now);
+            if guard.restore_attempts < DPI_SIZE_RESTORE_MAX_ATTEMPTS {
+                ctx.request_repaint_after(DPI_SIZE_RESTORE_RETRY_INTERVAL);
+            }
+        }
+        self.window_size_save_block_until = Some(guard.expires_at);
     }
 
     fn inner_size_for_persistence(&mut self, current_size: Vec2, now: Instant) -> [f32; 2] {
@@ -175,6 +244,44 @@ fn persistent_inner_size(
     (current, Some(current))
 }
 
+fn looks_like_dpi_size_artifact(
+    previous_scale: f32,
+    current_scale: f32,
+    stable_size: [f32; 2],
+    current_size: Vec2,
+) -> bool {
+    let (Some(previous_scale), Some(current_scale)) = (
+        valid_scale(Some(previous_scale)),
+        valid_scale(Some(current_scale)),
+    ) else {
+        return false;
+    };
+    let expected_ratio = previous_scale / current_scale;
+    if !expected_ratio.is_finite() || (expected_ratio - 1.0).abs() <= SCALE_CHANGE_EPSILON {
+        return false;
+    }
+
+    let stable = Vec2::new(stable_size[0], stable_size[1]);
+    if stable.x <= 0.0 || stable.y <= 0.0 || current_size.x <= 0.0 || current_size.y <= 0.0 {
+        return false;
+    }
+
+    let delta_x = (current_size.x - stable.x).abs();
+    let delta_y = (current_size.y - stable.y).abs();
+    if delta_x < DPI_ARTIFACT_MIN_DELTA_POINTS || delta_y < DPI_ARTIFACT_MIN_DELTA_POINTS {
+        return false;
+    }
+
+    let x_ratio = current_size.x / stable.x;
+    let y_ratio = current_size.y / stable.y;
+    (x_ratio - expected_ratio).abs() <= DPI_ARTIFACT_RATIO_TOLERANCE
+        && (y_ratio - expected_ratio).abs() <= DPI_ARTIFACT_RATIO_TOLERANCE
+}
+
+fn size_close_to(stable_size: [f32; 2], current_size: Vec2) -> bool {
+    (current_size.x - stable_size[0]).abs() <= 4.0 && (current_size.y - stable_size[1]).abs() <= 4.0
+}
+
 fn clamped_window_position(outer_rect: Rect, monitor_size: Vec2) -> Option<Pos2> {
     let mut position = outer_rect.min;
     let max_x =
@@ -199,7 +306,10 @@ fn clamped_window_position(outer_rect: Rect, monitor_size: Vec2) -> Option<Pos2>
 
 #[cfg(test)]
 mod tests {
-    use super::{clamped_window_position, persistent_inner_size, scale_changed};
+    use super::{
+        clamped_window_position, looks_like_dpi_size_artifact, persistent_inner_size,
+        scale_changed, size_close_to,
+    };
     use eframe::egui::{pos2, vec2, Rect};
 
     #[test]
@@ -253,5 +363,41 @@ mod tests {
             persistent_inner_size(Some([1200.0, 800.0]), None, vec2(1500.0, 900.0), false),
             ([1500.0, 900.0], Some([1500.0, 900.0]))
         );
+    }
+
+    #[test]
+    fn dpi_artifact_detection_matches_high_to_low_scale_growth() {
+        assert!(looks_like_dpi_size_artifact(
+            1.75,
+            1.25,
+            [1280.0, 820.0],
+            vec2(1792.0, 1148.0)
+        ));
+    }
+
+    #[test]
+    fn dpi_artifact_detection_ignores_ordinary_resize() {
+        assert!(!looks_like_dpi_size_artifact(
+            1.75,
+            1.25,
+            [1280.0, 820.0],
+            vec2(1380.0, 860.0)
+        ));
+    }
+
+    #[test]
+    fn dpi_artifact_detection_ignores_tiny_scale_delta() {
+        assert!(!looks_like_dpi_size_artifact(
+            1.25,
+            1.255,
+            [1280.0, 820.0],
+            vec2(1275.0, 817.0)
+        ));
+    }
+
+    #[test]
+    fn stable_size_close_check_allows_small_rounding_drift() {
+        assert!(size_close_to([1280.0, 820.0], vec2(1277.0, 823.0)));
+        assert!(!size_close_to([1280.0, 820.0], vec2(1270.0, 823.0)));
     }
 }
