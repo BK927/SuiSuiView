@@ -8,14 +8,16 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Rect, RichText, Sense, Stroke,
     StrokeKind,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const POPOVER_WIDTH: f32 = 430.0;
 const POPOVER_HEIGHT: f32 = 386.0;
 const THUMBNAIL_SIZE: egui::Vec2 = egui::vec2(64.0, 54.0);
 const BOOKMARK_ROW_HEIGHT: f32 = 82.0;
 const BOOKMARK_ROWS_MAX_HEIGHT: f32 = 154.0;
-const ROW_ACTION_WIDTH: f32 = 116.0;
+const ROW_ACTION_WIDTH: f32 = 48.0;
+const MARQUEE_SPEED: f32 = 165.0;
+const MARQUEE_GAP: f32 = 56.0;
+const MARQUEE_MIN_CYCLE_SECONDS: f32 = 1.1;
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn show_bookmark_popover(&mut self, ctx: &egui::Context) {
@@ -291,7 +293,6 @@ impl SuiSuiViewApp {
             return;
         }
 
-        let now = current_unix_seconds();
         egui::ScrollArea::vertical()
             .max_height(rows_height)
             .show_rows(
@@ -301,14 +302,14 @@ impl SuiSuiViewApp {
                 |ui, row_range| {
                     for index in row_range {
                         if let Some(row) = self.bookmark_rows.row(index) {
-                            self.show_bookmark_row(ui, row, now);
+                            self.show_bookmark_row(ui, row);
                         }
                     }
                 },
             );
     }
 
-    fn show_bookmark_row(&mut self, ui: &mut egui::Ui, row: BookmarkRow, now: u64) {
+    fn show_bookmark_row(&mut self, ui: &mut egui::Ui, row: BookmarkRow) {
         let current_book = self.book_id.as_deref() == Some(row.book_id.as_str());
         let current = current_book && row.bookmark.page == self.current_page;
         let frame = Frame::new()
@@ -353,11 +354,6 @@ impl SuiSuiViewApp {
                     {
                         remove_bookmark = true;
                     }
-
-                    ui.label(
-                        RichText::new(relative_time_label(row.bookmark.updated_at, now))
-                            .color(theme::TEXT_MUTED),
-                    );
                 });
             });
         });
@@ -619,37 +615,102 @@ fn show_bookmark_title(ui: &mut egui::Ui, row: &BookmarkRow, width: f32) -> egui
     let title_font = FontId::proportional(15.0);
     let context_font = FontId::proportional(12.5);
     let text_width = (rect.width() - 12.0).max(0.0);
-    let title = compact_end_to_width(
-        ui,
-        &row.title,
-        title_font.clone(),
-        theme::TEXT_PRIMARY,
-        text_width,
-    );
-    let context = compact_start_to_width(
-        ui,
-        &row.context,
-        context_font.clone(),
-        theme::TEXT_MUTED,
-        text_width,
-    );
-    painter.text(
-        egui::pos2(rect.left() + 6.0, rect.center().y - 9.0),
-        Align2::LEFT_CENTER,
-        title,
-        title_font,
-        theme::TEXT_PRIMARY,
-    );
-    if !context.is_empty() {
-        painter.text(
-            egui::pos2(rect.left() + 6.0, rect.center().y + 11.0),
-            Align2::LEFT_CENTER,
-            context,
+    let title_pos = egui::pos2(rect.left() + 6.0, rect.center().y - 9.0);
+    let context_pos = egui::pos2(rect.left() + 6.0, rect.center().y + 11.0);
+    if response.hovered() {
+        let title_marquee_active = draw_marquee_text(
+            ui,
+            rect,
+            title_pos,
+            &row.title,
+            title_font,
+            theme::TEXT_PRIMARY,
+            text_width,
+        );
+        let context_marquee_active = draw_marquee_text(
+            ui,
+            rect,
+            context_pos,
+            &row.context,
             context_font,
             theme::TEXT_MUTED,
+            text_width,
         );
+        if title_marquee_active || context_marquee_active {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(16));
+        }
+    } else {
+        let title = compact_end_to_width(
+            ui,
+            &row.title,
+            title_font.clone(),
+            theme::TEXT_PRIMARY,
+            text_width,
+        );
+        let context = compact_start_to_width(
+            ui,
+            &row.context,
+            context_font.clone(),
+            theme::TEXT_MUTED,
+            text_width,
+        );
+        painter.text(
+            title_pos,
+            Align2::LEFT_CENTER,
+            title,
+            title_font,
+            theme::TEXT_PRIMARY,
+        );
+        if !context.is_empty() {
+            painter.text(
+                context_pos,
+                Align2::LEFT_CENTER,
+                context,
+                context_font,
+                theme::TEXT_MUTED,
+            );
+        }
     }
     response.on_hover_text(&row.display_name)
+}
+
+fn draw_marquee_text(
+    ui: &egui::Ui,
+    clip_rect: Rect,
+    pos: egui::Pos2,
+    text: &str,
+    font_id: FontId,
+    color: Color32,
+    width: f32,
+) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), font_id.clone(), color);
+    let overflow = (galley.size().x - width).max(0.0);
+    if overflow <= 0.0 {
+        ui.painter()
+            .text(pos, Align2::LEFT_CENTER, text, font_id, color);
+        return false;
+    }
+
+    let travel = overflow + MARQUEE_GAP;
+    let cycle = (travel / MARQUEE_SPEED).max(MARQUEE_MIN_CYCLE_SECONDS);
+    let phase = (ui.input(|input| input.time) as f32 % cycle) / cycle;
+    let offset = phase * travel;
+    let text_clip = Rect::from_min_max(
+        egui::pos2(pos.x, clip_rect.top()),
+        egui::pos2(pos.x + width, clip_rect.bottom()),
+    );
+    ui.painter().with_clip_rect(text_clip).galley(
+        egui::pos2(pos.x - offset, pos.y - galley.size().y * 0.5),
+        galley,
+        color,
+    );
+    true
 }
 
 fn fit_rect(rect: Rect, original_size: egui::Vec2) -> Rect {
@@ -696,37 +757,4 @@ fn empty_bookmark_message(ui: &mut egui::Ui, text: &str, max_height: f32) {
         FontId::proportional(16.5),
         theme::TEXT_MUTED,
     );
-}
-
-fn relative_time_label(updated_at: u64, now: u64) -> String {
-    let seconds = now.saturating_sub(updated_at);
-    if seconds < 60 {
-        "방금 전".to_owned()
-    } else if seconds < 60 * 60 {
-        format!("{}분 전", seconds / 60)
-    } else if seconds < 60 * 60 * 24 {
-        format!("{}시간 전", seconds / (60 * 60))
-    } else {
-        format!("{}일 전", seconds / (60 * 60 * 24))
-    }
-}
-
-fn current_unix_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::relative_time_label;
-
-    #[test]
-    fn relative_time_label_uses_compact_korean_units() {
-        assert_eq!(relative_time_label(1_000, 1_020), "방금 전");
-        assert_eq!(relative_time_label(1_000, 1_300), "5분 전");
-        assert_eq!(relative_time_label(1_000, 8_200), "2시간 전");
-        assert_eq!(relative_time_label(1_000, 173_800), "2일 전");
-    }
 }
