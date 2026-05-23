@@ -332,11 +332,7 @@ impl SuiSuiViewApp {
         let frame_response = frame.show(ui, |ui| {
             ui.set_min_height(66.0);
             ui.horizontal(|ui| {
-                let thumbnail = if current_book {
-                    self.bookmark_thumbnail_state(&row.book_id, row.bookmark.page)
-                } else {
-                    BookmarkThumbnailState::Loading
-                };
+                let thumbnail = self.bookmark_thumbnail_state(&row, current_book);
                 if show_bookmark_thumbnail(ui, thumbnail).clicked() {
                     jump_to_page = true;
                 }
@@ -477,13 +473,21 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn bookmark_thumbnail_state(&mut self, book_id: &str, page: usize) -> BookmarkThumbnailState {
-        let Some(source) = self.source.clone() else {
-            return BookmarkThumbnailState::Failed;
-        };
+    fn bookmark_thumbnail_state(
+        &mut self,
+        row: &BookmarkRow,
+        current_book: bool,
+    ) -> BookmarkThumbnailState {
+        let source = current_book.then(|| self.source.clone()).flatten();
         let decode = self.decode_options();
-        self.bookmark_thumbnails
-            .thumbnail(source, book_id, page, decode)
+        self.bookmark_thumbnails.thumbnail(
+            source,
+            &row.book_id,
+            row.known_path.as_deref(),
+            row.bookmark.page,
+            row.bookmark.page_name.as_deref(),
+            decode,
+        )
     }
 
     fn jump_to_bookmark(&mut self, row: BookmarkRow) {

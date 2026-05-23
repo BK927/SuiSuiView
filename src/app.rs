@@ -2597,10 +2597,7 @@ impl eframe::App for SuiSuiViewApp {
         self.drain_worker_events();
         self.drain_debug_compare_events();
         self.drain_upscale_events();
-        let active_book_id = self.book_id.clone();
-        let active_decode = self.decode_options();
-        self.bookmark_thumbnails
-            .drain(ctx, active_book_id.as_deref(), active_decode);
+        self.bookmark_thumbnails.drain(ctx);
         self.handle_dropped_files(ctx);
         self.handle_keyboard(ctx);
         self.maintain_native_window_state(ctx);
