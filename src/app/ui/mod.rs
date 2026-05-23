@@ -5,6 +5,7 @@ pub(in crate::app) mod dialog;
 pub(in crate::app) mod icons;
 mod path_labels;
 mod status;
+mod text_fit;
 pub(in crate::app) mod theme;
 mod top_bar;
 

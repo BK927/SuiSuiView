@@ -1,7 +1,14 @@
 use crate::core::formats::descriptor_for_extension;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(in crate::app) const RECENT_PATH_LABEL_CHARS: usize = 46;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::app) struct BookmarkDisplayParts {
+    pub(in crate::app) title: String,
+    pub(in crate::app) context: String,
+    pub(in crate::app) full: String,
+}
 
 pub(in crate::app) fn compact_start(text: &str, max_chars: usize) -> String {
     let count = text.chars().count();
@@ -16,20 +23,41 @@ pub(in crate::app) fn compact_start(text: &str, max_chars: usize) -> String {
     format!("...{tail}")
 }
 
-pub(in crate::app) fn bookmark_display_name(
+pub(in crate::app) fn bookmark_display_parts(
     known_path: Option<&str>,
     page_name: Option<&str>,
     fallback_title: &str,
-) -> String {
+) -> BookmarkDisplayParts {
     let page_name = useful_page_name(page_name, fallback_title);
     match (known_path.filter(|path| !path.trim().is_empty()), page_name) {
-        (Some(path), Some(page_name)) if is_archive_path(path) => {
-            format!("{path} | {page_name}")
+        (Some(path), Some(page_name)) if is_archive_path(path) => BookmarkDisplayParts {
+            title: page_file_name(page_name),
+            context: path.to_owned(),
+            full: format!("{path} | {page_name}"),
+        },
+        (Some(path), Some(page_name)) => {
+            let full = folder_page_display_path(path, page_name);
+            BookmarkDisplayParts {
+                title: page_file_name(page_name),
+                context: parent_display(&full).unwrap_or_else(|| path.to_owned()),
+                full,
+            }
         }
-        (Some(path), Some(page_name)) => folder_page_display_path(path, page_name),
-        (Some(path), None) => path.to_owned(),
-        (None, Some(page_name)) => page_name.to_owned(),
-        (None, None) => fallback_title.to_owned(),
+        (Some(path), None) => BookmarkDisplayParts {
+            title: path_file_name(path).unwrap_or_else(|| path.to_owned()),
+            context: parent_display(path).unwrap_or_default(),
+            full: path.to_owned(),
+        },
+        (None, Some(page_name)) => BookmarkDisplayParts {
+            title: page_file_name(page_name),
+            context: parent_display(page_name).unwrap_or_default(),
+            full: page_name.to_owned(),
+        },
+        (None, None) => BookmarkDisplayParts {
+            title: fallback_title.to_owned(),
+            context: String::new(),
+            full: fallback_title.to_owned(),
+        },
     }
 }
 
@@ -75,9 +103,28 @@ fn extension(path: &str) -> Option<String> {
         .map(|extension| extension.to_lowercase())
 }
 
+fn page_file_name(path: &str) -> String {
+    path_file_name(path).unwrap_or_else(|| path.to_owned())
+}
+
+fn path_file_name(path: &str) -> Option<String> {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+}
+
+fn parent_display(path: &str) -> Option<String> {
+    PathBuf::from(path)
+        .parent()
+        .map(|parent| parent.display().to_string())
+        .filter(|parent| !parent.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{bookmark_display_name, compact_start};
+    use super::{bookmark_display_parts, compact_start};
 
     #[test]
     fn compact_start_preserves_tail() {
@@ -91,22 +138,43 @@ mod tests {
     #[test]
     fn bookmark_display_uses_archive_separator() {
         assert_eq!(
-            bookmark_display_name(
+            bookmark_display_parts(
                 Some("C:/books/book.cbz"),
                 Some("chapter/page-001.jpg"),
                 "ignored",
-            ),
+            )
+            .full,
             "C:/books/book.cbz | chapter/page-001.jpg"
         );
     }
 
     #[test]
-    fn bookmark_display_combines_folder_and_page_name() {
-        let display = bookmark_display_name(
+    fn bookmark_display_parts_prioritize_file_name() {
+        let folder = bookmark_display_parts(
             Some("C:/books/series"),
             Some("chapter/page-001.jpg"),
             "ignored",
         );
+        assert_eq!(folder.title, "page-001.jpg");
+        assert!(folder.context.contains("series"));
+
+        let archive = bookmark_display_parts(
+            Some("C:/books/book.cbz"),
+            Some("chapter/page-001.jpg"),
+            "ignored",
+        );
+        assert_eq!(archive.title, "page-001.jpg");
+        assert_eq!(archive.context, "C:/books/book.cbz");
+    }
+
+    #[test]
+    fn bookmark_display_combines_folder_and_page_name() {
+        let display = bookmark_display_parts(
+            Some("C:/books/series"),
+            Some("chapter/page-001.jpg"),
+            "ignored",
+        )
+        .full;
         assert!(
             display.ends_with("chapter\\page-001.jpg") || display.ends_with("chapter/page-001.jpg")
         );
@@ -115,9 +183,12 @@ mod tests {
     #[test]
     fn bookmark_display_falls_back_without_page_name() {
         assert_eq!(
-            bookmark_display_name(Some("C:/books/series"), None, "p. 006"),
+            bookmark_display_parts(Some("C:/books/series"), None, "p. 006").full,
             "C:/books/series"
         );
-        assert_eq!(bookmark_display_name(None, None, "cover.png"), "cover.png");
+        assert_eq!(
+            bookmark_display_parts(None, None, "cover.png").full,
+            "cover.png"
+        );
     }
 }

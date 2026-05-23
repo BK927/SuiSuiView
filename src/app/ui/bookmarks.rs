@@ -1,6 +1,7 @@
 use super::super::SuiSuiViewApp;
 use super::bookmark_rows::{BookmarkFilter, BookmarkRow};
 use super::bookmark_thumbnails::{thumbnail_tint_for_state, BookmarkThumbnailState};
+use super::text_fit::{compact_end_to_width, compact_start_to_width};
 use super::{dialog, icons, theme};
 use crate::core::state::PageBookmarkEntry;
 use eframe::egui::{
@@ -615,63 +616,40 @@ fn show_bookmark_thumbnail(ui: &mut egui::Ui, thumbnail: BookmarkThumbnailState)
 fn show_bookmark_title(ui: &mut egui::Ui, row: &BookmarkRow, width: f32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 54.0), Sense::click());
     let painter = ui.painter_at(rect);
-    let font_id = FontId::proportional(14.0);
-    let label = compact_start_to_width(
+    let title_font = FontId::proportional(15.0);
+    let context_font = FontId::proportional(12.5);
+    let text_width = (rect.width() - 12.0).max(0.0);
+    let title = compact_end_to_width(
         ui,
-        &row.display_name,
-        font_id.clone(),
+        &row.title,
+        title_font.clone(),
         theme::TEXT_PRIMARY,
-        (rect.width() - 12.0).max(0.0),
+        text_width,
+    );
+    let context = compact_start_to_width(
+        ui,
+        &row.context,
+        context_font.clone(),
+        theme::TEXT_MUTED,
+        text_width,
     );
     painter.text(
-        egui::pos2(rect.left() + 6.0, rect.center().y),
+        egui::pos2(rect.left() + 6.0, rect.center().y - 9.0),
         Align2::LEFT_CENTER,
-        label,
-        font_id,
+        title,
+        title_font,
         theme::TEXT_PRIMARY,
     );
+    if !context.is_empty() {
+        painter.text(
+            egui::pos2(rect.left() + 6.0, rect.center().y + 11.0),
+            Align2::LEFT_CENTER,
+            context,
+            context_font,
+            theme::TEXT_MUTED,
+        );
+    }
     response.on_hover_text(&row.display_name)
-}
-
-fn compact_start_to_width(
-    ui: &egui::Ui,
-    text: &str,
-    font_id: FontId,
-    color: Color32,
-    max_width: f32,
-) -> String {
-    let width_of = |candidate: &str| {
-        ui.painter()
-            .layout_no_wrap(candidate.to_owned(), font_id.clone(), color)
-            .size()
-            .x
-    };
-    if width_of(text) <= max_width {
-        return text.to_owned();
-    }
-    if max_width <= 0.0 {
-        return String::new();
-    }
-
-    let chars: Vec<_> = text.chars().collect();
-    let mut low = 0;
-    let mut high = chars.len();
-    while low < high {
-        let mid = (low + high + 1) / 2;
-        let tail: String = chars[chars.len() - mid..].iter().collect();
-        let candidate = format!("...{tail}");
-        if width_of(&candidate) <= max_width {
-            low = mid;
-        } else {
-            high = mid - 1;
-        }
-    }
-
-    if low == 0 {
-        return "...".to_owned();
-    }
-    let tail: String = chars[chars.len() - low..].iter().collect();
-    format!("...{tail}")
 }
 
 fn fit_rect(rect: Rect, original_size: egui::Vec2) -> Rect {

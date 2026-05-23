@@ -23,6 +23,8 @@ pub(in crate::app) struct BookmarkRow {
     pub(in crate::app) known_path: Option<String>,
     pub(in crate::app) bookmark: PageBookmark,
     pub(in crate::app) display_name: String,
+    pub(in crate::app) title: String,
+    pub(in crate::app) context: String,
     search_text: String,
 }
 
@@ -114,13 +116,15 @@ fn filtered_bookmark_rows(
 }
 
 fn bookmark_row(entry: PageBookmarkEntry) -> BookmarkRow {
-    let display_name = path_labels::bookmark_display_name(
+    let parts = path_labels::bookmark_display_parts(
         entry.known_path.as_deref(),
         entry.bookmark.page_name.as_deref(),
         &entry.bookmark.title,
     );
     let search_text = [
-        display_name.as_str(),
+        parts.full.as_str(),
+        parts.title.as_str(),
+        parts.context.as_str(),
         entry.known_path.as_deref().unwrap_or_default(),
         entry.book_title.as_str(),
         entry.bookmark.title.as_str(),
@@ -133,7 +137,9 @@ fn bookmark_row(entry: PageBookmarkEntry) -> BookmarkRow {
         book_id: entry.book_id,
         known_path: entry.known_path,
         bookmark: entry.bookmark,
-        display_name,
+        display_name: parts.full,
+        title: parts.title,
+        context: parts.context,
         search_text,
     }
 }
