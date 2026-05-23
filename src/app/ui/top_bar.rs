@@ -319,16 +319,19 @@ fn recent_open_menu_width(ui: &egui::Ui, recent_books: &[crate::core::state::Boo
             .inner_rect
             .map_or(OPEN_MENU_MIN_WIDTH, |rect| rect.width())
     });
-    let max_width = (viewport_width * OPEN_MENU_MAX_VIEWPORT_FRACTION).max(OPEN_MENU_MIN_WIDTH);
     let font_id = egui::TextStyle::Button.resolve(ui.style());
     let longest_path_width = recent_books
         .iter()
         .filter_map(|book| book.known_paths.last())
         .map(|path| text_width(ui, path, &font_id))
         .fold(0.0_f32, f32::max);
+    recent_menu_width_for(longest_path_width, viewport_width)
+}
+
+fn recent_menu_width_for(longest_path_width: f32, viewport_width: f32) -> f32 {
+    let max_width = (viewport_width * OPEN_MENU_MAX_VIEWPORT_FRACTION).max(OPEN_MENU_MIN_WIDTH);
     let desired_width =
-        (longest_path_width * 0.5 + RECENT_ROW_HORIZONTAL_PADDING * 2.0 + OPEN_MENU_OUTER_MARGIN)
-            .ceil();
+        (longest_path_width + RECENT_ROW_HORIZONTAL_PADDING * 2.0 + OPEN_MENU_OUTER_MARGIN).ceil();
 
     desired_width.clamp(OPEN_MENU_MIN_WIDTH, max_width)
 }
@@ -337,7 +340,10 @@ fn recent_path_row(ui: &mut egui::Ui, path: &str, menu_width: f32) -> egui::Resp
     let font_id = egui::TextStyle::Button.resolve(ui.style());
     let line_height = font_id.size + 5.0;
     let row_width = ui.available_width().max(menu_width);
-    let row_height = line_height * 2.0 + RECENT_ROW_VERTICAL_PADDING * 2.0;
+    let text_width = (row_width - RECENT_ROW_HORIZONTAL_PADDING * 2.0).max(1.0);
+    let lines = recent_path_lines(ui, path, text_width, &font_id);
+    let line_count = lines.len().max(1) as f32;
+    let row_height = line_height * line_count + RECENT_ROW_VERTICAL_PADDING * 2.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(row_width, row_height), Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -353,7 +359,6 @@ fn recent_path_row(ui: &mut egui::Ui, path: &str, menu_width: f32) -> egui::Resp
             RECENT_ROW_HORIZONTAL_PADDING,
             RECENT_ROW_VERTICAL_PADDING,
         ));
-        let lines = recent_path_lines(ui, path, text_rect.width(), &font_id);
         for (index, line) in lines.iter().enumerate() {
             let y = text_rect.top() + line_height * (index as f32 + 0.5);
             ui.painter().text(
@@ -479,6 +484,26 @@ fn text_width(ui: &egui::Ui, text: &str, font_id: &FontId) -> f32 {
         .layout_no_wrap(text.to_owned(), font_id.clone(), theme::TEXT_PRIMARY)
         .size()
         .x
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{recent_menu_width_for, OPEN_MENU_MIN_WIDTH};
+
+    #[test]
+    fn recent_menu_width_uses_minimum_for_short_paths() {
+        assert_eq!(recent_menu_width_for(180.0, 1600.0), OPEN_MENU_MIN_WIDTH);
+    }
+
+    #[test]
+    fn recent_menu_width_can_grow_to_viewport_cap() {
+        assert_eq!(recent_menu_width_for(3000.0, 1600.0), 1280.0);
+    }
+
+    #[test]
+    fn recent_menu_width_uses_full_path_width_before_cap() {
+        assert_eq!(recent_menu_width_for(700.0, 1600.0), 744.0);
+    }
 }
 
 fn compare_target_combo(
