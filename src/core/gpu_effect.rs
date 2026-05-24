@@ -22,7 +22,8 @@ pub struct GpuEffectBench {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
+    texture_bind_group_layout: wgpu::BindGroupLayout,
+    params_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 pub struct GpuEffectOutput {
@@ -61,10 +62,10 @@ impl GpuEffectBench {
             label: Some("suisuiview-effect-bench-shader"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("gpu_effect.wgsl"))),
         });
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("suisuiview-effect-bench-bind-group-layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("suisuiview-effect-bench-texture-layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
@@ -73,9 +74,13 @@ impl GpuEffectBench {
                         multisampled: false,
                     },
                     count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
+                }],
+            });
+        let params_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("suisuiview-effect-bench-params-layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
@@ -83,12 +88,11 @@ impl GpuEffectBench {
                         min_binding_size: None,
                     },
                     count: None,
-                },
-            ],
-        });
+                }],
+            });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("suisuiview-effect-bench-pipeline-layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[&texture_bind_group_layout, &params_bind_group_layout],
             push_constant_ranges: &[],
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -121,7 +125,8 @@ impl GpuEffectBench {
             device,
             queue,
             pipeline,
-            bind_group_layout,
+            texture_bind_group_layout,
+            params_bind_group_layout,
         })
     }
 
@@ -201,19 +206,21 @@ impl GpuEffectBench {
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("suisuiview-effect-bind-group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&source_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
+        let texture_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("suisuiview-effect-texture-bind-group"),
+            layout: &self.texture_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&source_view),
+            }],
+        });
+        let params_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("suisuiview-effect-params-bind-group"),
+            layout: &self.params_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            }],
         });
 
         let padded_bytes_per_row = align_to(
@@ -251,7 +258,8 @@ impl GpuEffectBench {
                 occlusion_query_set: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, &texture_bind_group, &[]);
+            pass.set_bind_group(1, &params_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
         encoder.copy_texture_to_buffer(

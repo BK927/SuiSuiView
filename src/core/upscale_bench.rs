@@ -122,15 +122,17 @@ pub fn scan_upscalers(
 
         match result {
             Ok((input, baseline)) => {
-                let output_size = baseline.image.size;
-                page.source_width = Some(input.image.size[0]);
-                page.source_height = Some(input.image.size[1]);
+                let input_image = input.color_image();
+                let baseline_image = baseline.color_image();
+                let output_size = baseline_image.size;
+                page.source_width = Some(input_image.size[0]);
+                page.source_height = Some(input_image.size[1]);
                 page.output_width = Some(output_size[0]);
                 page.output_height = Some(output_size[1]);
 
                 run_cpu_case(
-                    &input.image,
-                    &baseline.image,
+                    &input_image,
+                    &baseline_image,
                     output_size,
                     "cpu_bicubic",
                     ResizeFilter::Bicubic,
@@ -138,8 +140,8 @@ pub fn scan_upscalers(
                     &mut summaries,
                 );
                 run_cpu_case(
-                    &input.image,
-                    &baseline.image,
+                    &input_image,
+                    &baseline_image,
                     output_size,
                     "cpu_lanczos3",
                     ResizeFilter::Lanczos3,
@@ -147,8 +149,8 @@ pub fn scan_upscalers(
                     &mut summaries,
                 );
                 run_cpu_case(
-                    &input.image,
-                    &baseline.image,
+                    &input_image,
+                    &baseline_image,
                     output_size,
                     "cpu_triangle",
                     ResizeFilter::FastTriangle,
@@ -160,8 +162,8 @@ pub fn scan_upscalers(
                     for method in DisplayUpscaler::GPU_METHODS {
                         run_gpu_case(
                             gpu,
-                            &input.image,
-                            &baseline.image,
+                            &input_image,
+                            &baseline_image,
                             output_size,
                             method,
                             &mut page,

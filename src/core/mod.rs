@@ -1,6 +1,7 @@
 pub mod effect_bench;
 pub mod effects;
 pub mod formats;
+pub mod gpu_copy_bench;
 pub mod gpu_effect;
 pub mod image_info;
 pub mod natural;

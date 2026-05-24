@@ -85,10 +85,8 @@ impl SuiSuiViewApp {
             return true;
         }
 
-        let held = self
-            .top_bar_auto_hide_until
-            .is_some_and(|hide_at| Instant::now() < hide_at);
-        held
+        self.top_bar_auto_hide_until
+            .is_some_and(|hide_at| Instant::now() < hide_at)
     }
 
     fn update_top_bar_visibility(&mut self, ctx: &egui::Context) -> bool {
@@ -627,7 +625,7 @@ fn take_wrapped_line<'a>(
         .filter_map(|(index, ch)| {
             matches!(ch, '\\' | '/' | ' ' | '|').then_some(index + ch.len_utf8())
         })
-        .last();
+        .next_back();
     let end = last_break.unwrap_or(last_fit);
 
     (text[..end].trim_end(), &text[end..])
@@ -663,72 +661,6 @@ fn text_width(ui: &egui::Ui, text: &str, font_id: &FontId) -> f32 {
         .layout_no_wrap(text.to_owned(), font_id.clone(), theme::TEXT_PRIMARY)
         .size()
         .x
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        ease_out_cubic, recent_menu_width_for, recent_row_height, top_bar_overlay_is_interactive,
-        top_bar_pointer_limit, top_bar_slide_offset, OPEN_MENU_MIN_WIDTH, TOP_BAR_HOVER_ZONE_EXTRA,
-        TOP_BAR_MIN_INTERACTIVE_ALPHA, TOP_BAR_SLIDE_DISTANCE,
-    };
-    use crate::app::ui::theme;
-
-    #[test]
-    fn recent_menu_width_uses_minimum_for_short_paths() {
-        assert_eq!(recent_menu_width_for(180.0, 1600.0), OPEN_MENU_MIN_WIDTH);
-    }
-
-    #[test]
-    fn recent_menu_width_can_grow_to_viewport_cap() {
-        assert_eq!(recent_menu_width_for(3000.0, 1600.0), 1280.0);
-    }
-
-    #[test]
-    fn recent_menu_width_uses_full_path_width_before_cap() {
-        assert_eq!(recent_menu_width_for(700.0, 1600.0), 744.0);
-    }
-
-    #[test]
-    fn recent_row_height_uses_single_line_when_possible() {
-        assert_eq!(recent_row_height(1, 18.0), 27.0);
-        assert_eq!(recent_row_height(2, 18.0), 48.0);
-    }
-
-    #[test]
-    fn top_bar_uses_same_pointer_zone_for_reveal_and_hide() {
-        assert_eq!(
-            top_bar_pointer_limit(),
-            theme::TOP_BAR_HEIGHT + TOP_BAR_HOVER_ZONE_EXTRA
-        );
-    }
-
-    #[test]
-    fn top_bar_overlay_slides_from_above() {
-        assert_eq!(top_bar_slide_offset(0.0), -TOP_BAR_SLIDE_DISTANCE);
-        assert_eq!(top_bar_slide_offset(1.0), 0.0);
-        assert!(top_bar_slide_offset(0.5) < 0.0);
-    }
-
-    #[test]
-    fn top_bar_overlay_uses_ease_out_curve() {
-        assert_eq!(ease_out_cubic(0.0), 0.0);
-        assert_eq!(ease_out_cubic(1.0), 1.0);
-        assert!(ease_out_cubic(0.5) > 0.5);
-    }
-
-    #[test]
-    fn top_bar_overlay_stops_intercepting_clicks_while_fading_out() {
-        assert!(top_bar_overlay_is_interactive(true, 0.0));
-        assert!(top_bar_overlay_is_interactive(
-            false,
-            TOP_BAR_MIN_INTERACTIVE_ALPHA
-        ));
-        assert!(!top_bar_overlay_is_interactive(
-            false,
-            TOP_BAR_MIN_INTERACTIVE_ALPHA - 0.01
-        ));
-    }
 }
 
 fn compare_target_combo(
@@ -853,5 +785,71 @@ fn view_mode_label(mode: ViewMode) -> &'static str {
     match mode {
         ViewMode::Single => "1장",
         ViewMode::Double => "2장",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ease_out_cubic, recent_menu_width_for, recent_row_height, top_bar_overlay_is_interactive,
+        top_bar_pointer_limit, top_bar_slide_offset, OPEN_MENU_MIN_WIDTH, TOP_BAR_HOVER_ZONE_EXTRA,
+        TOP_BAR_MIN_INTERACTIVE_ALPHA, TOP_BAR_SLIDE_DISTANCE,
+    };
+    use crate::app::ui::theme;
+
+    #[test]
+    fn recent_menu_width_uses_minimum_for_short_paths() {
+        assert_eq!(recent_menu_width_for(180.0, 1600.0), OPEN_MENU_MIN_WIDTH);
+    }
+
+    #[test]
+    fn recent_menu_width_can_grow_to_viewport_cap() {
+        assert_eq!(recent_menu_width_for(3000.0, 1600.0), 1280.0);
+    }
+
+    #[test]
+    fn recent_menu_width_uses_full_path_width_before_cap() {
+        assert_eq!(recent_menu_width_for(700.0, 1600.0), 744.0);
+    }
+
+    #[test]
+    fn recent_row_height_uses_single_line_when_possible() {
+        assert_eq!(recent_row_height(1, 18.0), 27.0);
+        assert_eq!(recent_row_height(2, 18.0), 48.0);
+    }
+
+    #[test]
+    fn top_bar_uses_same_pointer_zone_for_reveal_and_hide() {
+        assert_eq!(
+            top_bar_pointer_limit(),
+            theme::TOP_BAR_HEIGHT + TOP_BAR_HOVER_ZONE_EXTRA
+        );
+    }
+
+    #[test]
+    fn top_bar_overlay_slides_from_above() {
+        assert_eq!(top_bar_slide_offset(0.0), -TOP_BAR_SLIDE_DISTANCE);
+        assert_eq!(top_bar_slide_offset(1.0), 0.0);
+        assert!(top_bar_slide_offset(0.5) < 0.0);
+    }
+
+    #[test]
+    fn top_bar_overlay_uses_ease_out_curve() {
+        assert_eq!(ease_out_cubic(0.0), 0.0);
+        assert_eq!(ease_out_cubic(1.0), 1.0);
+        assert!(ease_out_cubic(0.5) > 0.5);
+    }
+
+    #[test]
+    fn top_bar_overlay_stops_intercepting_clicks_while_fading_out() {
+        assert!(top_bar_overlay_is_interactive(true, 0.0));
+        assert!(top_bar_overlay_is_interactive(
+            false,
+            TOP_BAR_MIN_INTERACTIVE_ALPHA
+        ));
+        assert!(!top_bar_overlay_is_interactive(
+            false,
+            TOP_BAR_MIN_INTERACTIVE_ALPHA - 0.01
+        ));
     }
 }

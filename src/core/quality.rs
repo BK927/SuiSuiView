@@ -91,7 +91,7 @@ pub fn scan_path(path: &Path, target_long_edge: u32) -> Result<QualityReport, St
                 )?;
                 let candidate =
                     prepare_image_with_strategy(&bytes, target_long_edge, DecodeStrategy::Auto)?;
-                let metrics = compare_images(&baseline.image, &candidate.image)?;
+                let metrics = compare_images(&baseline.color_image(), &candidate.color_image())?;
                 Ok((candidate.decode_backend, metrics))
             });
 
