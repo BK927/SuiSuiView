@@ -37,7 +37,7 @@ impl SuiSuiViewApp {
         setting_group(
             ui,
             "단축키",
-            "명령을 기준으로 현재 키와 내부 ID를 한 표에 표시합니다.",
+            "명령을 기준으로 현재 키를 한 표에 표시합니다.",
             |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if ui.button("전체 기본값 초기화").clicked() {
@@ -69,13 +69,12 @@ impl SuiSuiViewApp {
         let mut reset_command = None;
         dialog::setting_card(ui, |ui| {
             egui::Grid::new("settings_key_binding_grid")
-                .num_columns(4)
+                .num_columns(3)
                 .spacing([14.0, 5.0])
                 .striped(true)
                 .show(ui, |ui| {
                     ui.label(RichText::new("명령").strong().color(theme::TEXT_MUTED));
                     ui.label(RichText::new("키").strong().color(theme::TEXT_MUTED));
-                    ui.label(RichText::new("ID").strong().color(theme::TEXT_MUTED));
                     ui.label(RichText::new("편집").strong().color(theme::TEXT_MUTED));
                     ui.end_row();
 
@@ -102,11 +101,6 @@ impl SuiSuiViewApp {
                             .truncate(),
                         )
                         .on_hover_text(command_shortcut_hover(&draft.key_bindings, &indices));
-                        ui.label(
-                            RichText::new(command.id().to_string())
-                                .monospace()
-                                .color(theme::TEXT_MUTED),
-                        );
                         ui.horizontal(|ui| {
                             if ui.small_button("추가").clicked() {
                                 self.shortcut_capture = Some(ShortcutCapture {
