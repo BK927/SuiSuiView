@@ -238,6 +238,9 @@ impl SuiSuiViewApp {
         if decode_changed || preview_changed {
             self.decoded_pages.clear();
             self.decoded_bytes = 0;
+            if decode_changed {
+                self.page_metrics.clear();
+            }
             self.upscaled_pages.clear();
             self.upscaled_bytes = 0;
             self.textures.clear();
@@ -278,7 +281,7 @@ impl SuiSuiViewApp {
                 || previous_cache_budget != self.cpu_cache_budget_bytes())
         {
             self.worker.set_page(
-                self.current_page,
+                self.worker_center_page(),
                 self.last_nav_direction,
                 self.target_long_edge,
                 self.visible_page_count(),
@@ -443,8 +446,8 @@ fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, ch
                 .show(ui, |ui| {
                     grid_label_with_help(
                         ui,
-                        "CPU 준비 보간",
-                        "표시용 이미지를 미리 만들 때 사용하는 CPU 리사이즈 품질입니다.",
+                        "기본 업스케일러",
+                        "캐시에 저장할 표시용 이미지를 준비할 때 쓰는 기본 리사이즈 방식입니다. 큰 이미지를 줄이거나 GPU 가속 업스케일러를 사용할 수 없을 때의 표시 품질을 결정합니다.",
                     );
                     egui::ComboBox::from_id_salt("resize_filter")
                         .selected_text(draft.resize_filter.label())
@@ -463,8 +466,8 @@ fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, ch
 
                     grid_label_with_help(
                         ui,
-                        "실시간 업스케일러",
-                        "화면에 그리는 순간 GPU shader로 확대 표시 품질을 보정합니다.",
+                        "GPU 가속 업스케일러",
+                        "화면에 확대해서 표시할 때 GPU shader로 추가 보정합니다. 사용할 수 있으면 작은 이미지는 CPU에서 먼저 키우지 않고 GPU가 확대 표시를 맡습니다.",
                     );
                     egui::ComboBox::from_id_salt("display_upscaler")
                         .selected_text(draft.display_upscaler.label())
@@ -484,7 +487,7 @@ fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, ch
             ui.add_space(4.0);
             ui.label(
                 RichText::new(
-                    "GPU 효과 경로는 자동으로 관리됩니다. 일반적으로 여기서는 보간 품질만 고르면 됩니다.",
+                    "기본 업스케일러는 캐시 준비와 CPU fallback에 쓰이고, GPU 가속 업스케일러는 확대 표시가 필요할 때 화면에서 적용됩니다.",
                 )
                 .size(12.0)
                 .color(theme::TEXT_MUTED),

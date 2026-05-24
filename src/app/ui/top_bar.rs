@@ -3,7 +3,7 @@ use super::super::debug_compare::DebugCompareTarget;
 use super::super::{SuiSuiViewApp, ViewMode};
 use super::{icons, path_labels, theme};
 use crate::core::effects::ImageFilter;
-use crate::core::state::{AiUpscaleBackend, FitMode, PageTransitionStyle, ReadingDirection};
+use crate::core::state::{AiUpscaleBackend, FitMode, PageTransitionStyle};
 use eframe::egui::{
     self, Align2, Button, Color32, FontId, Frame, Margin, RichText, Sense, Stroke, Vec2,
 };
@@ -290,27 +290,19 @@ impl SuiSuiViewApp {
             self.hold_top_bar_open_for_menu();
             ui.set_min_width(260.0);
             ui.label("레이아웃");
-            ui.horizontal(|ui| {
-                for mode in [ViewMode::Single, ViewMode::Double] {
+            ui.horizontal_wrapped(|ui| {
+                for mode in [
+                    ViewMode::Single,
+                    ViewMode::DoubleLeftToRight,
+                    ViewMode::DoubleRightToLeft,
+                    ViewMode::SmartDoubleLeftToRight,
+                    ViewMode::SmartDoubleRightToLeft,
+                ] {
                     if ui
                         .selectable_label(self.view_mode == mode, view_mode_label(mode))
                         .clicked()
                     {
                         self.set_view_mode(mode);
-                    }
-                }
-            });
-
-            ui.separator();
-            ui.label("읽기 방향");
-            ui.horizontal(|ui| {
-                for direction in [ReadingDirection::LeftToRight, ReadingDirection::RightToLeft] {
-                    if ui
-                        .selectable_label(self.reading_direction == direction, direction.label())
-                        .clicked()
-                    {
-                        self.reading_direction = direction;
-                        self.persist_current_bookmark();
                     }
                 }
             });
@@ -439,14 +431,19 @@ impl SuiSuiViewApp {
             return;
         }
         self.view_mode = mode;
+        if let Some(direction) = mode.reading_direction() {
+            self.reading_direction = direction;
+        }
         if self.source.is_some() {
             self.worker.set_page(
-                self.current_page,
+                self.worker_center_page(),
                 self.last_nav_direction,
                 self.target_long_edge,
                 self.visible_page_count(),
                 self.worker_options(),
             );
+            self.persist_current_bookmark();
+            self.refresh_ai_prefetch_queue();
         }
     }
 }
@@ -784,7 +781,10 @@ fn bookmark_toolbar_button(
 fn view_mode_label(mode: ViewMode) -> &'static str {
     match mode {
         ViewMode::Single => "1장",
-        ViewMode::Double => "2장",
+        ViewMode::DoubleLeftToRight => "2장 L→R",
+        ViewMode::DoubleRightToLeft => "2장 R→L",
+        ViewMode::SmartDoubleLeftToRight => "스마트 L→R",
+        ViewMode::SmartDoubleRightToLeft => "스마트 R→L",
     }
 }
 

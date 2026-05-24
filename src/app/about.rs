@@ -567,7 +567,10 @@ fn on_off(value: bool) -> String {
 fn view_mode_label(mode: ViewMode) -> &'static str {
     match mode {
         ViewMode::Single => "한 페이지",
-        ViewMode::Double => "두 페이지",
+        ViewMode::DoubleLeftToRight => "두 페이지 L→R",
+        ViewMode::DoubleRightToLeft => "두 페이지 R→L",
+        ViewMode::SmartDoubleLeftToRight => "스마트 두 페이지 L→R",
+        ViewMode::SmartDoubleRightToLeft => "스마트 두 페이지 R→L",
     }
 }
 

@@ -67,19 +67,159 @@ const TRANSITION_MS: f32 = 120.0;
 const SPREAD_GAP_POINTS: f32 = 14.0;
 const TARGET_EDGE_HYSTERESIS: u32 = 512;
 const STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
+const SMART_WIDE_ASPECT: f32 = 1.20;
+const SMART_TALL_ASPECT: f32 = 2.40;
+const SMART_HEIGHT_MISMATCH: f32 = 0.25;
+const SMART_ASPECT_MISMATCH: f32 = 0.30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ViewMode {
     Single,
-    Double,
+    DoubleLeftToRight,
+    DoubleRightToLeft,
+    SmartDoubleLeftToRight,
+    SmartDoubleRightToLeft,
 }
 
 impl ViewMode {
     fn step(self) -> usize {
         match self {
             Self::Single => 1,
-            Self::Double => 2,
+            Self::DoubleLeftToRight
+            | Self::DoubleRightToLeft
+            | Self::SmartDoubleLeftToRight
+            | Self::SmartDoubleRightToLeft => 2,
         }
+    }
+
+    fn is_smart(self) -> bool {
+        matches!(
+            self,
+            Self::SmartDoubleLeftToRight | Self::SmartDoubleRightToLeft
+        )
+    }
+
+    fn reading_direction(self) -> Option<ReadingDirection> {
+        match self {
+            Self::Single => None,
+            Self::DoubleLeftToRight | Self::SmartDoubleLeftToRight => {
+                Some(ReadingDirection::LeftToRight)
+            }
+            Self::DoubleRightToLeft | Self::SmartDoubleRightToLeft => {
+                Some(ReadingDirection::RightToLeft)
+            }
+        }
+    }
+
+    fn is_right_to_left(self, fallback: ReadingDirection) -> bool {
+        self.reading_direction().unwrap_or(fallback) == ReadingDirection::RightToLeft
+    }
+
+    fn with_reading_direction(self, direction: ReadingDirection) -> Self {
+        match self {
+            Self::Single => Self::Single,
+            Self::DoubleLeftToRight | Self::DoubleRightToLeft => match direction {
+                ReadingDirection::LeftToRight => Self::DoubleLeftToRight,
+                ReadingDirection::RightToLeft => Self::DoubleRightToLeft,
+            },
+            Self::SmartDoubleLeftToRight | Self::SmartDoubleRightToLeft => match direction {
+                ReadingDirection::LeftToRight => Self::SmartDoubleLeftToRight,
+                ReadingDirection::RightToLeft => Self::SmartDoubleRightToLeft,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PageMetrics {
+    width: f32,
+    height: f32,
+}
+
+impl PageMetrics {
+    fn from_page(page: &PreparedPage) -> Self {
+        Self {
+            width: page.original_width.max(1) as f32,
+            height: page.original_height.max(1) as f32,
+        }
+    }
+
+    fn aspect(self) -> f32 {
+        self.width / self.height
+    }
+
+    fn is_standalone(self) -> bool {
+        self.aspect() >= SMART_WIDE_ASPECT || self.height / self.width >= SMART_TALL_ASPECT
+    }
+
+    fn can_pair_with(self, other: Self) -> bool {
+        if self.is_standalone() || other.is_standalone() {
+            return false;
+        }
+        relative_difference(self.height, other.height) <= SMART_HEIGHT_MISMATCH
+            && relative_difference(self.aspect(), other.aspect()) <= SMART_ASPECT_MISMATCH
+    }
+}
+
+fn ordered_spread_indices(
+    mut indices: Vec<usize>,
+    mode: ViewMode,
+    fallback: ReadingDirection,
+) -> Vec<usize> {
+    if mode.is_right_to_left(fallback) {
+        indices.reverse();
+    }
+    indices
+}
+
+fn double_spread_indices(page: usize, page_count: usize) -> Vec<usize> {
+    if page_count == 0 {
+        return Vec::new();
+    }
+    let page = page.min(page_count - 1);
+    let mut indices = vec![page];
+    if let Some(next) = page.checked_add(1).filter(|next| *next < page_count) {
+        indices.push(next);
+    }
+    indices
+}
+
+fn smart_spread_indices_for_metrics(
+    page: usize,
+    page_count: usize,
+    metrics: &HashMap<usize, PageMetrics>,
+) -> Vec<usize> {
+    if page_count == 0 {
+        return Vec::new();
+    }
+    let page = page.min(page_count - 1);
+    let anchor = page - (page % 2);
+    let Some(next) = anchor.checked_add(1).filter(|next| *next < page_count) else {
+        return vec![page];
+    };
+    let Some(anchor_metrics) = metrics.get(&anchor).copied() else {
+        return vec![page];
+    };
+    let Some(next_metrics) = metrics.get(&next).copied() else {
+        return vec![page];
+    };
+    if anchor_metrics.can_pair_with(next_metrics) {
+        vec![anchor, next]
+    } else {
+        vec![page]
+    }
+}
+
+fn relative_difference(left: f32, right: f32) -> f32 {
+    let base = left.max(right).max(1.0);
+    (left - right).abs() / base
+}
+
+fn worker_center_page_for_mode(current_page: usize, mode: ViewMode) -> usize {
+    if mode.is_smart() {
+        current_page - (current_page % 2)
+    } else {
+        current_page
     }
 }
 
@@ -220,6 +360,7 @@ pub struct SuiSuiViewApp {
     pan: Vec2,
     decoded_pages: LruCache<PageCacheKey, Arc<PreparedPage>>,
     decoded_bytes: usize,
+    page_metrics: HashMap<usize, PageMetrics>,
     upscaled_pages: LruCache<PageCacheKey, Arc<PreparedPage>>,
     upscaled_bytes: usize,
     use_ai_upscaled_pages: bool,
@@ -314,6 +455,7 @@ impl SuiSuiViewApp {
             pan: Vec2::ZERO,
             decoded_pages: LruCache::new(NonZeroUsize::new(64).unwrap()),
             decoded_bytes: 0,
+            page_metrics: HashMap::new(),
             upscaled_pages: LruCache::new(NonZeroUsize::new(8).unwrap()),
             upscaled_bytes: 0,
             use_ai_upscaled_pages: true,
@@ -502,6 +644,9 @@ impl SuiSuiViewApp {
             .as_ref()
             .map(|bookmark| bookmark.reading_direction)
             .unwrap_or_default();
+        self.view_mode = self
+            .view_mode
+            .with_reading_direction(self.reading_direction);
         self.fit_mode = bookmark
             .as_ref()
             .map(|bookmark| bookmark.fit_mode)
@@ -545,6 +690,7 @@ impl SuiSuiViewApp {
         self.effects = ViewEffects::default();
         self.decoded_pages.clear();
         self.decoded_bytes = 0;
+        self.page_metrics.clear();
         self.upscaled_pages.clear();
         self.upscaled_bytes = 0;
         self.textures.clear();
@@ -560,7 +706,7 @@ impl SuiSuiViewApp {
         self.last_nav_direction = NavigationDirection::Forward;
         self.worker.load_book(
             source.clone(),
-            self.current_page,
+            self.worker_center_page(),
             self.last_nav_direction,
             self.target_long_edge,
             self.visible_page_count(),
@@ -692,6 +838,8 @@ impl SuiSuiViewApp {
                     if let Some(notice) = page.notice.as_ref() {
                         self.set_status(notice.clone());
                     }
+                    self.page_metrics
+                        .insert(index, PageMetrics::from_page(&page));
                     self.insert_prepared_page(key, page);
                     self.prune_decoded_cache();
                     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -825,11 +973,15 @@ impl SuiSuiViewApp {
     }
 
     fn should_allow_display_upscale(&self) -> bool {
-        match self.fit_mode {
-            FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight => true,
-            FitMode::Manual => self.manual_zoom > 1.0,
-            FitMode::Original => false,
-        }
+        should_allow_cpu_display_upscale(
+            self.fit_mode,
+            self.manual_zoom,
+            self.gpu_display_upscale_can_own_upscale(),
+        )
+    }
+
+    fn gpu_display_upscale_can_own_upscale(&self) -> bool {
+        self.active_display_upscaler() != DisplayUpscaler::None
     }
 
     fn worker_options(&self) -> WorkerOptions {
@@ -1129,6 +1281,7 @@ impl SuiSuiViewApp {
         self.edge_prompt = None;
         self.decoded_pages.clear();
         self.decoded_bytes = 0;
+        self.page_metrics.clear();
         self.upscaled_pages.clear();
         self.upscaled_bytes = 0;
         self.textures.clear();
@@ -1164,24 +1317,43 @@ impl SuiSuiViewApp {
             return;
         };
         let max_page = source.page_count().saturating_sub(1);
-        if self.current_page >= max_page {
-            self.handle_edge_page(NavigationDirection::Forward);
-            return;
-        }
-        let target = self
-            .current_page
-            .saturating_add(self.view_mode.step())
-            .min(max_page);
+        let target = if self.view_mode.is_smart() {
+            let indices = self.spread_indices_for_unordered(self.current_page);
+            let last = indices.last().copied().unwrap_or(self.current_page);
+            if last >= max_page {
+                self.handle_edge_page(NavigationDirection::Forward);
+                return;
+            }
+            last.saturating_add(1).min(max_page)
+        } else {
+            if self.current_page >= max_page {
+                self.handle_edge_page(NavigationDirection::Forward);
+                return;
+            }
+            self.current_page
+                .saturating_add(self.view_mode.step())
+                .min(max_page)
+        };
         self.set_page(target, NavigationDirection::Forward);
     }
 
     fn previous_page(&mut self) {
-        if self.current_page == 0 {
-            self.handle_edge_page(NavigationDirection::Backward);
-            return;
-        }
-        let step = self.view_mode.step();
-        let target = self.current_page.saturating_sub(step);
+        let target = if self.view_mode.is_smart() {
+            let indices = self.spread_indices_for_unordered(self.current_page);
+            let first = indices.first().copied().unwrap_or(self.current_page);
+            if first == 0 {
+                self.handle_edge_page(NavigationDirection::Backward);
+                return;
+            }
+            first.saturating_sub(1)
+        } else {
+            if self.current_page == 0 {
+                self.handle_edge_page(NavigationDirection::Backward);
+                return;
+            }
+            let step = self.view_mode.step();
+            self.current_page.saturating_sub(step)
+        };
         self.set_page(target, NavigationDirection::Backward);
     }
 
@@ -1412,7 +1584,7 @@ impl SuiSuiViewApp {
         }
 
         self.worker.set_page(
-            self.current_page,
+            self.worker_center_page(),
             direction,
             self.target_long_edge,
             self.visible_page_count(),
@@ -1455,7 +1627,7 @@ impl SuiSuiViewApp {
     fn request_page_if_decode_changed(&mut self, previous_decode: DecodeOptions) {
         if self.source.is_some() && previous_decode != self.decode_options() {
             self.worker.set_page(
-                self.current_page,
+                self.worker_center_page(),
                 self.last_nav_direction,
                 self.target_long_edge,
                 self.visible_page_count(),
@@ -1466,10 +1638,13 @@ impl SuiSuiViewApp {
     }
 
     fn set_double_mode(&mut self, direction: ReadingDirection) {
-        self.view_mode = ViewMode::Double;
+        self.view_mode = match direction {
+            ReadingDirection::LeftToRight => ViewMode::DoubleLeftToRight,
+            ReadingDirection::RightToLeft => ViewMode::DoubleRightToLeft,
+        };
         self.reading_direction = direction;
         self.worker.set_page(
-            self.current_page,
+            self.worker_center_page(),
             self.last_nav_direction,
             self.target_long_edge,
             self.visible_page_count(),
@@ -1481,11 +1656,20 @@ impl SuiSuiViewApp {
 
     fn toggle_double_mode(&mut self) {
         self.view_mode = match self.view_mode {
-            ViewMode::Single => ViewMode::Double,
-            ViewMode::Double => ViewMode::Single,
+            ViewMode::Single => match self.reading_direction {
+                ReadingDirection::LeftToRight => ViewMode::DoubleLeftToRight,
+                ReadingDirection::RightToLeft => ViewMode::DoubleRightToLeft,
+            },
+            ViewMode::DoubleLeftToRight
+            | ViewMode::DoubleRightToLeft
+            | ViewMode::SmartDoubleLeftToRight
+            | ViewMode::SmartDoubleRightToLeft => ViewMode::Single,
         };
+        if let Some(direction) = self.view_mode.reading_direction() {
+            self.reading_direction = direction;
+        }
         self.worker.set_page(
-            self.current_page,
+            self.worker_center_page(),
             self.last_nav_direction,
             self.target_long_edge,
             self.visible_page_count(),
@@ -1890,6 +2074,14 @@ impl SuiSuiViewApp {
     }
 
     fn spread_indices_for(&self, page: usize) -> Vec<usize> {
+        ordered_spread_indices(
+            self.spread_indices_for_unordered(page),
+            self.view_mode,
+            self.reading_direction,
+        )
+    }
+
+    fn spread_indices_for_unordered(&self, page: usize) -> Vec<usize> {
         let Some(source) = self.source.as_ref() else {
             return Vec::new();
         };
@@ -1898,21 +2090,28 @@ impl SuiSuiViewApp {
             return Vec::new();
         }
 
-        let mut indices = vec![page.min(page_count - 1)];
-        if self.view_mode == ViewMode::Double {
-            let next = page.saturating_add(1);
-            if next < page_count {
-                indices.push(next);
+        let page = page.min(page_count - 1);
+        match self.view_mode {
+            ViewMode::Single => vec![page],
+            ViewMode::DoubleLeftToRight | ViewMode::DoubleRightToLeft => {
+                double_spread_indices(page, page_count)
+            }
+            ViewMode::SmartDoubleLeftToRight | ViewMode::SmartDoubleRightToLeft => {
+                self.smart_spread_indices_for(page, page_count)
             }
         }
-        if self.reading_direction == ReadingDirection::RightToLeft {
-            indices.reverse();
-        }
-        indices
+    }
+
+    fn smart_spread_indices_for(&self, page: usize, page_count: usize) -> Vec<usize> {
+        smart_spread_indices_for_metrics(page, page_count, &self.page_metrics)
     }
 
     fn visible_page_count(&self) -> usize {
         self.view_mode.step()
+    }
+
+    fn worker_center_page(&self) -> usize {
+        worker_center_page_for_mode(self.current_page, self.view_mode)
     }
 
     fn page_visual(
@@ -2704,7 +2903,7 @@ impl SuiSuiViewApp {
 
         self.target_long_edge = next;
         self.worker.set_page(
-            self.current_page,
+            self.worker_center_page(),
             self.last_nav_direction,
             next,
             self.visible_page_count(),
@@ -2715,11 +2914,10 @@ impl SuiSuiViewApp {
     }
 
     fn target_long_edge_for(&self, ctx: &egui::Context, viewport: Vec2) -> u32 {
-        let page_viewport = match self.view_mode {
-            ViewMode::Single => viewport,
-            ViewMode::Double => {
-                Vec2::new((viewport.x - SPREAD_GAP_POINTS).max(1.0) * 0.5, viewport.y)
-            }
+        let page_viewport = if self.page_viewport_count_for_target() <= 1 {
+            viewport
+        } else {
+            Vec2::new((viewport.x - SPREAD_GAP_POINTS).max(1.0) * 0.5, viewport.y)
         };
         let base_points = match self.fit_mode {
             FitMode::FitWidth => page_viewport.x,
@@ -2735,6 +2933,29 @@ impl SuiSuiViewApp {
         let raw = viewport_pixels * 1.5 * zoom_multiplier;
         let quantized = ((raw / 256.0).ceil() * 256.0) as u32;
         clamp_target_long_edge(quantized.clamp(MIN_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE))
+    }
+
+    fn page_viewport_count_for_target(&self) -> usize {
+        if !self.view_mode.is_smart() {
+            return self.view_mode.step();
+        }
+        let Some(source) = self.source.as_ref() else {
+            return 2;
+        };
+        let page_count = source.page_count();
+        if page_count == 0 {
+            return 1;
+        }
+        let page = self.current_page.min(page_count - 1);
+        let anchor = page - (page % 2);
+        let Some(next) = anchor.checked_add(1).filter(|next| *next < page_count) else {
+            return 1;
+        };
+        if self.page_metrics.contains_key(&anchor) && self.page_metrics.contains_key(&next) {
+            self.smart_spread_indices_for(page, page_count).len()
+        } else {
+            2
+        }
     }
 
     fn handle_viewer_pointer(&mut self, ui: &egui::Ui, response: &egui::Response) {
@@ -3131,6 +3352,22 @@ fn cache_budget_bytes(settings: &AppSettings) -> usize {
         CacheMemoryMode::Manual => {
             (settings.manual_cache_mb.clamp(64, 2048) as usize) * 1024 * 1024
         }
+    }
+}
+
+fn should_allow_cpu_display_upscale(
+    fit_mode: FitMode,
+    manual_zoom: f32,
+    gpu_display_upscale_can_own_upscale: bool,
+) -> bool {
+    if gpu_display_upscale_can_own_upscale {
+        return false;
+    }
+
+    match fit_mode {
+        FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight => true,
+        FitMode::Manual => manual_zoom > 1.0,
+        FitMode::Original => false,
     }
 }
 
@@ -3605,11 +3842,14 @@ mod tests {
     use super::windows_explorer_select_arguments;
     use super::{
         ai_prefetch_pages_for, apply_effects_to_image, best_page_key_at_or_below_in_cache,
-        best_page_key_in_cache, command_for_shortcut, delete_target_for, korean_font_candidates,
-        load_first_existing_font, page_cache_state_from_hit, preferred_page_key_in_cache,
-        sanitize_font_name, sibling_book_path, transformed_page_size, transition_paint_params,
-        transition_screen_sign, AppCommand, DeleteMode, ImageFilter, OpenOrigin, PageCacheKey,
-        TextureCacheKey, ViewEffects, ViewTransform,
+        best_page_key_in_cache, command_for_shortcut, delete_target_for, double_spread_indices,
+        korean_font_candidates, load_first_existing_font, ordered_spread_indices,
+        page_cache_state_from_hit, preferred_page_key_in_cache, relative_difference,
+        sanitize_font_name, should_allow_cpu_display_upscale, sibling_book_path,
+        smart_spread_indices_for_metrics, transformed_page_size, transition_paint_params,
+        transition_screen_sign, worker_center_page_for_mode, AppCommand, DeleteMode, ImageFilter,
+        OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey, ViewEffects, ViewMode,
+        ViewTransform,
     };
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
@@ -3657,6 +3897,93 @@ mod tests {
         assert!(paint.to_offset.x < 0.0);
         assert!(paint.from_scale.x < 1.0);
         assert!(paint.to_scale.x < 1.0);
+    }
+
+    #[test]
+    fn smart_spread_pairs_even_pages_without_cover_assumption() {
+        let metrics = [
+            (0, page_metrics(900.0, 1400.0)),
+            (1, page_metrics(910.0, 1410.0)),
+            (2, page_metrics(900.0, 1400.0)),
+            (3, page_metrics(890.0, 1390.0)),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(smart_spread_indices_for_metrics(0, 4, &metrics), vec![0, 1]);
+        assert_eq!(smart_spread_indices_for_metrics(1, 4, &metrics), vec![0, 1]);
+        assert_eq!(smart_spread_indices_for_metrics(2, 4, &metrics), vec![2, 3]);
+    }
+
+    #[test]
+    fn smart_spread_solos_wide_tall_and_mismatched_pages() {
+        let metrics = [
+            (0, page_metrics(1600.0, 1000.0)),
+            (1, page_metrics(900.0, 1400.0)),
+            (2, page_metrics(500.0, 1300.0)),
+            (3, page_metrics(900.0, 1400.0)),
+            (4, page_metrics(900.0, 1400.0)),
+            (5, page_metrics(900.0, 1900.0)),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(smart_spread_indices_for_metrics(0, 6, &metrics), vec![0]);
+        assert_eq!(smart_spread_indices_for_metrics(1, 6, &metrics), vec![1]);
+        assert_eq!(smart_spread_indices_for_metrics(2, 6, &metrics), vec![2]);
+        assert_eq!(smart_spread_indices_for_metrics(3, 6, &metrics), vec![3]);
+        assert_eq!(smart_spread_indices_for_metrics(4, 6, &metrics), vec![4]);
+        assert_eq!(smart_spread_indices_for_metrics(5, 6, &metrics), vec![5]);
+    }
+
+    #[test]
+    fn smart_spread_falls_back_to_current_page_until_metrics_arrive() {
+        let metrics = [(0, page_metrics(900.0, 1400.0))].into_iter().collect();
+
+        assert_eq!(smart_spread_indices_for_metrics(0, 2, &metrics), vec![0]);
+        assert_eq!(smart_spread_indices_for_metrics(1, 2, &metrics), vec![1]);
+    }
+
+    #[test]
+    fn smart_spread_direction_changes_display_order_only() {
+        let indices = vec![0, 1];
+
+        assert_eq!(
+            ordered_spread_indices(
+                indices.clone(),
+                ViewMode::SmartDoubleLeftToRight,
+                ReadingDirection::RightToLeft,
+            ),
+            vec![0, 1]
+        );
+        assert_eq!(
+            ordered_spread_indices(
+                indices,
+                ViewMode::SmartDoubleRightToLeft,
+                ReadingDirection::LeftToRight,
+            ),
+            vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn smart_spread_worker_request_starts_from_pair_anchor() {
+        assert_eq!(
+            worker_center_page_for_mode(3, ViewMode::SmartDoubleLeftToRight),
+            2
+        );
+        assert_eq!(
+            worker_center_page_for_mode(3, ViewMode::DoubleLeftToRight),
+            3
+        );
+        assert_eq!(
+            worker_center_page_for_mode(0, ViewMode::SmartDoubleRightToLeft),
+            0
+        );
+    }
+
+    fn page_metrics(width: f32, height: f32) -> PageMetrics {
+        PageMetrics { width, height }
     }
 
     #[test]
@@ -4048,6 +4375,54 @@ mod tests {
         assert_eq!(summary.estimated_cpu_pages, 10);
         assert_eq!(summary.worker_prefetch_bytes, 80 * 1024 * 1024);
         assert_eq!(summary.estimated_worker_pages, 5);
+    }
+
+    #[test]
+    fn relative_difference_handles_zero_and_ratio_cases() {
+        assert_eq!(relative_difference(10.0, 10.0), 0.0);
+        assert_eq!(relative_difference(10.0, 5.0), 0.5);
+        assert_eq!(relative_difference(0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn double_spread_indices_uses_current_page_then_next() {
+        assert_eq!(double_spread_indices(0, 4), vec![0, 1]);
+        assert_eq!(double_spread_indices(2, 4), vec![2, 3]);
+        assert_eq!(double_spread_indices(3, 4), vec![3]);
+        assert!(double_spread_indices(0, 0).is_empty());
+    }
+
+    #[test]
+    fn gpu_display_upscale_disables_cpu_prepare_upscale() {
+        assert!(!should_allow_cpu_display_upscale(
+            FitMode::FitPage,
+            1.0,
+            true
+        ));
+        assert!(!should_allow_cpu_display_upscale(
+            FitMode::Manual,
+            2.0,
+            true
+        ));
+    }
+
+    #[test]
+    fn cpu_prepare_upscale_remains_for_fallback_modes() {
+        assert!(should_allow_cpu_display_upscale(
+            FitMode::FitPage,
+            1.0,
+            false
+        ));
+        assert!(should_allow_cpu_display_upscale(
+            FitMode::Manual,
+            1.25,
+            false
+        ));
+        assert!(!should_allow_cpu_display_upscale(
+            FitMode::Original,
+            4.0,
+            false
+        ));
     }
 
     #[test]
