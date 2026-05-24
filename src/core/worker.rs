@@ -636,16 +636,17 @@ fn apply_exif_orientation_to_page(
         return page;
     }
 
-    let source = page.color_image();
-    let oriented = orient_color_image(&source, orientation);
-    let rgba = Arc::<[u8]>::from(
-        crate::core::gpu_effect::color_image_to_rgba(&oriented).into_boxed_slice(),
-    );
+    let transform = orientation_transform(orientation);
+    let source_size = [page.display_width, page.display_height];
+    let (output_size, output_rgba) = transform_rgba_pixels(source_size, &page.rgba, transform)
+        .unwrap_or_else(|| (source_size, page.rgba.to_vec()));
+    let rgba = Arc::<[u8]>::from(output_rgba.into_boxed_slice());
     page.byte_size = retained_page_byte_size(rgba.len());
     page.rgba = rgba;
+    page.display_width = output_size[0];
+    page.display_height = output_size[1];
     if orientation_swaps_dimensions(orientation) {
         std::mem::swap(&mut page.original_width, &mut page.original_height);
-        std::mem::swap(&mut page.display_width, &mut page.display_height);
     }
     page
 }
@@ -658,7 +659,11 @@ struct OrientationTransform {
 }
 
 fn orient_color_image(image: &ColorImage, orientation: Orientation) -> ColorImage {
-    let transform = match orientation {
+    transform_color_image(image, orientation_transform(orientation))
+}
+
+fn orientation_transform(orientation: Orientation) -> OrientationTransform {
+    match orientation {
         Orientation::NoTransforms => OrientationTransform::default(),
         Orientation::Rotate90 => OrientationTransform {
             rotation_quadrants: 1,
@@ -690,8 +695,7 @@ fn orient_color_image(image: &ColorImage, orientation: Orientation) -> ColorImag
             flip_horizontal: true,
             ..OrientationTransform::default()
         },
-    };
-    transform_color_image(image, transform)
+    }
 }
 
 fn transform_color_image(image: &ColorImage, transform: OrientationTransform) -> ColorImage {
@@ -731,6 +735,54 @@ fn transform_color_image(image: &ColorImage, transform: OrientationTransform) ->
         }
     }
     ColorImage::new(output_size, pixels)
+}
+
+fn transform_rgba_pixels(
+    size: [usize; 2],
+    rgba: &[u8],
+    transform: OrientationTransform,
+) -> Option<([usize; 2], Vec<u8>)> {
+    let [width, height] = size;
+    if rgba.len() != width.checked_mul(height)?.checked_mul(4)? {
+        return None;
+    }
+
+    if transform == OrientationTransform::default() {
+        return Some((size, rgba.to_vec()));
+    }
+
+    let rotation = transform.rotation_quadrants % 4;
+    let output_size = if rotation % 2 == 1 {
+        [height, width]
+    } else {
+        [width, height]
+    };
+    let [out_width, out_height] = output_size;
+    let mut output = Vec::with_capacity(out_width * out_height * 4);
+    for dst_y in 0..out_height {
+        for dst_x in 0..out_width {
+            let rotated_x = if transform.flip_horizontal {
+                out_width - 1 - dst_x
+            } else {
+                dst_x
+            };
+            let rotated_y = if transform.flip_vertical {
+                out_height - 1 - dst_y
+            } else {
+                dst_y
+            };
+            let (src_x, src_y) = match rotation {
+                0 => (rotated_x, rotated_y),
+                1 => (rotated_y, height - 1 - rotated_x),
+                2 => (width - 1 - rotated_x, height - 1 - rotated_y),
+                3 => (width - 1 - rotated_y, rotated_x),
+                _ => unreachable!(),
+            };
+            let src_offset = (src_y * width + src_x) * 4;
+            output.extend_from_slice(&rgba[src_offset..src_offset + 4]);
+        }
+    }
+    Some((output_size, output))
 }
 
 fn orientation_swaps_dimensions(orientation: Orientation) -> bool {
@@ -1197,10 +1249,12 @@ fn page_cache_key(
 mod tests {
     use super::{
         display_dimensions, display_dimensions_with_upscale, image_filter_type, orient_color_image,
-        orientation_swaps_dimensions, page_cache_key, prepare_image, prepare_image_with_strategy,
-        run_worker, DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection,
-        WorkerCommand, WorkerEvent, WorkerOptions, MAX_TARGET_LONG_EDGE,
+        orientation_swaps_dimensions, orientation_transform, page_cache_key, prepare_image,
+        prepare_image_with_strategy, run_worker, transform_rgba_pixels, DecodeBackend,
+        DecodeOptions, DecodeStrategy, NavigationDirection, WorkerCommand, WorkerEvent,
+        WorkerOptions, MAX_TARGET_LONG_EDGE,
     };
+    use crate::core::gpu_effect::color_image_to_rgba;
     use crate::core::source::{BookSource, SharedSource, SourceError};
     use crate::core::state::ResizeFilter;
     use crossbeam_channel::unbounded;
@@ -1486,6 +1540,45 @@ mod tests {
         assert!(orientation_swaps_dimensions(Orientation::Rotate90));
         assert!(orientation_swaps_dimensions(Orientation::Rotate270));
         assert!(!orientation_swaps_dimensions(Orientation::Rotate180));
+    }
+
+    #[test]
+    fn rgba_orientation_matches_color_image_reference() {
+        let image = ColorImage::new(
+            [2, 3],
+            vec![
+                Color32::from_rgb(10, 0, 0),
+                Color32::from_rgb(20, 0, 0),
+                Color32::from_rgb(30, 0, 0),
+                Color32::from_rgb(40, 0, 0),
+                Color32::from_rgb(50, 0, 0),
+                Color32::from_rgb(60, 0, 0),
+            ],
+        );
+        let rgba = color_image_to_rgba(&image);
+
+        for orientation in [
+            Orientation::NoTransforms,
+            Orientation::Rotate90,
+            Orientation::Rotate180,
+            Orientation::Rotate270,
+            Orientation::FlipHorizontal,
+            Orientation::FlipVertical,
+            Orientation::Rotate90FlipH,
+            Orientation::Rotate270FlipH,
+        ] {
+            let reference = orient_color_image(&image, orientation);
+            let (size, oriented_rgba) =
+                transform_rgba_pixels(image.size, &rgba, orientation_transform(orientation))
+                    .expect("valid RGBA test image should transform");
+
+            assert_eq!(size, reference.size, "{orientation:?}");
+            assert_eq!(
+                oriented_rgba,
+                color_image_to_rgba(&reference),
+                "{orientation:?}"
+            );
+        }
     }
 
     fn encoded_test_image(format: ImageFormat) -> Vec<u8> {
