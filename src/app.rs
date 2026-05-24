@@ -32,6 +32,8 @@ use lru::LruCache;
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
+#[cfg(target_os = "windows")]
+use std::ffi::OsString;
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -2812,8 +2814,9 @@ fn copy_color_image_to_clipboard(image: &ColorImage) -> Result<(), String> {
 fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("explorer")
-            .arg(format!("/select,{}", path.display()))
+        let args = windows_explorer_select_arguments(path);
+        Command::new("explorer.exe")
+            .args(args)
             .spawn()
             .map(|_| ())
             .map_err(|error| error.to_string())
@@ -2838,6 +2841,11 @@ fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
             .map(|_| ())
             .map_err(|error| error.to_string())
     }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_explorer_select_arguments(path: &Path) -> [OsString; 2] {
+    [OsString::from("/select,"), path.as_os_str().to_os_string()]
 }
 
 fn random_offset(max: usize) -> usize {
@@ -3138,6 +3146,8 @@ fn preferred_page_key_in_cache(
 #[cfg(test)]
 mod tests {
     use super::perf::PageCacheState;
+    #[cfg(target_os = "windows")]
+    use super::windows_explorer_select_arguments;
     use super::{
         ai_prefetch_pages_for, apply_effects_to_image, best_page_key_at_or_below_in_cache,
         best_page_key_in_cache, command_for_shortcut, delete_target_for, korean_font_candidates,
@@ -3592,6 +3602,17 @@ mod tests {
             delete_target_for(OpenOrigin::SingleImage, &source, 0),
             Some(page)
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn explorer_select_args_keep_switch_and_path_separate() {
+        let path = Path::new(r"C:\Users\dead4\Pictures\folder with space\image.png");
+        let args = windows_explorer_select_arguments(path);
+
+        assert_eq!(args[0], std::ffi::OsString::from("/select,"));
+        assert_eq!(args[1], path.as_os_str().to_os_string());
+        assert!(!args[0].to_string_lossy().contains("image.png"));
     }
 
     #[test]
