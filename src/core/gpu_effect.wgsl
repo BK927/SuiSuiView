@@ -8,7 +8,8 @@ struct Params {
 
 @group(0) @binding(0)
 var source_texture: texture_2d<f32>;
-@group(0) @binding(1)
+
+@group(1) @binding(0)
 var<uniform> params: Params;
 
 struct VertexOut {

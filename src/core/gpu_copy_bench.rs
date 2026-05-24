@@ -44,6 +44,8 @@ pub struct GpuCopyBenchSummary {
     pub p95_ms: f64,
     pub max_ms: f64,
     pub avg_bytes: usize,
+    pub avg_bind_group_creates: f64,
+    pub avg_uniform_buffer_creates: f64,
     pub interpretation: String,
 }
 
@@ -69,6 +71,8 @@ pub struct GpuCopyBenchCase {
     pub p95_ms: f64,
     pub max_ms: f64,
     pub bytes: usize,
+    pub bind_group_creates_per_iteration: usize,
+    pub uniform_buffer_creates_per_iteration: usize,
 }
 
 pub fn run_gpu_copy_bench(
@@ -197,7 +201,9 @@ struct GpuCopyBench {
     queue: wgpu::Queue,
     adapter: String,
     pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
+    texture_bind_group_layout: wgpu::BindGroupLayout,
+    params_bind_group_layout: wgpu::BindGroupLayout,
+    legacy_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl GpuCopyBench {
@@ -234,10 +240,10 @@ impl GpuCopyBench {
                 "gpu_effect.wgsl"
             ))),
         });
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("suisuiview-gpu-copy-bench-bind-group-layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("suisuiview-gpu-copy-bench-texture-layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
@@ -246,9 +252,13 @@ impl GpuCopyBench {
                         multisampled: false,
                     },
                     count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
+                }],
+            });
+        let params_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("suisuiview-gpu-copy-bench-params-layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
@@ -256,12 +266,37 @@ impl GpuCopyBench {
                         min_binding_size: None,
                     },
                     count: None,
-                },
-            ],
-        });
+                }],
+            });
+        let legacy_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("suisuiview-gpu-copy-bench-legacy-layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("suisuiview-gpu-copy-bench-pipeline-layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[&texture_bind_group_layout, &params_bind_group_layout],
             push_constant_ranges: &[],
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -295,7 +330,9 @@ impl GpuCopyBench {
             queue,
             adapter: adapter_name,
             pipeline,
-            bind_group_layout,
+            texture_bind_group_layout,
+            params_bind_group_layout,
+            legacy_bind_group_layout,
         })
     }
 
@@ -346,6 +383,52 @@ impl GpuCopyBench {
                 std::hint::black_box(&view);
             })?,
         );
+        let source_texture_for_bind_group = self.create_source_texture(width, height);
+        let source_view_for_bind_group =
+            source_texture_for_bind_group.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group_params = params_for_effects(
+            [width, height],
+            [width, height],
+            ViewEffects::default(),
+            DisplayUpscaler::None,
+            [0, 0],
+            [width as u32, height as u32],
+            1.0,
+        );
+        cases.push(self.measure_case_with_counts(
+            "legacy_combined_bind_group_create",
+            byte_size,
+            iterations,
+            1,
+            1,
+            || {
+                let bind_group =
+                    self.legacy_bind_group_for(&source_view_for_bind_group, bind_group_params);
+                std::hint::black_box(&bind_group);
+            },
+        )?);
+        cases.push(self.measure_case_with_counts(
+            "texture_bind_group_create",
+            byte_size,
+            iterations,
+            1,
+            0,
+            || {
+                let bind_group = self.texture_bind_group_for(&source_view_for_bind_group);
+                std::hint::black_box(&bind_group);
+            },
+        )?);
+        cases.push(self.measure_case_with_counts(
+            "params_bind_group_create",
+            byte_size,
+            iterations,
+            1,
+            1,
+            || {
+                let bind_group = self.params_bind_group_for(bind_group_params);
+                std::hint::black_box(&bind_group);
+            },
+        )?);
         cases.push(
             self.measure_case("current_first_upload", byte_size, iterations, || {
                 let texture = self.create_source_texture(width, height);
@@ -369,18 +452,23 @@ impl GpuCopyBench {
         self.write_texture(&source_texture, width, height, bytes.as_ref());
         self.flush()?;
         let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let source_bind_group = self.texture_bind_group_for(&source_view);
         let output_texture = self.create_output_texture(width, height);
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        cases.push(self.measure_case(
+        cases.push(self.measure_case_with_counts(
             "fsr1_twopass_recreate_intermediate",
             byte_size,
             iterations,
+            3,
+            2,
             || {
                 let intermediate = self.create_intermediate_texture(width, height);
                 let intermediate_view =
                     intermediate.create_view(&wgpu::TextureViewDescriptor::default());
+                let intermediate_bind_group = self.texture_bind_group_for(&intermediate_view);
                 self.render_fsr1_twopass(
-                    &source_view,
+                    &source_bind_group,
+                    &intermediate_bind_group,
                     [width, height],
                     [width as u32, height as u32],
                     &intermediate_view,
@@ -391,13 +479,17 @@ impl GpuCopyBench {
         let reused_intermediate = self.create_intermediate_texture(width, height);
         let reused_intermediate_view =
             reused_intermediate.create_view(&wgpu::TextureViewDescriptor::default());
-        cases.push(self.measure_case(
+        let reused_intermediate_bind_group = self.texture_bind_group_for(&reused_intermediate_view);
+        cases.push(self.measure_case_with_counts(
             "fsr1_twopass_reuse_intermediate",
             byte_size,
             iterations,
+            2,
+            2,
             || {
                 self.render_fsr1_twopass(
-                    &source_view,
+                    &source_bind_group,
+                    &reused_intermediate_bind_group,
                     [width, height],
                     [width as u32, height as u32],
                     &reused_intermediate_view,
@@ -414,6 +506,21 @@ impl GpuCopyBench {
         label: &str,
         bytes: usize,
         iterations: usize,
+        run: F,
+    ) -> Result<GpuCopyBenchCase, String>
+    where
+        F: FnMut(),
+    {
+        self.measure_case_with_counts(label, bytes, iterations, 0, 0, run)
+    }
+
+    fn measure_case_with_counts<F>(
+        &self,
+        label: &str,
+        bytes: usize,
+        iterations: usize,
+        bind_group_creates_per_iteration: usize,
+        uniform_buffer_creates_per_iteration: usize,
         mut run: F,
     ) -> Result<GpuCopyBenchCase, String>
     where
@@ -442,6 +549,8 @@ impl GpuCopyBench {
             p95_ms: stats.p95_ms,
             max_ms: stats.max_ms,
             bytes,
+            bind_group_creates_per_iteration,
+            uniform_buffer_creates_per_iteration,
         })
     }
 
@@ -504,7 +613,8 @@ impl GpuCopyBench {
 
     fn render_fsr1_twopass(
         &self,
-        source_view: &wgpu::TextureView,
+        source_bind_group: &wgpu::BindGroup,
+        intermediate_bind_group: &wgpu::BindGroup,
         source_size: [usize; 2],
         target_size: [u32; 2],
         intermediate_view: &wgpu::TextureView,
@@ -524,8 +634,13 @@ impl GpuCopyBench {
             target_size,
             1.0,
         );
-        let easu_bind_group = self.bind_group_for(source_view, easu_params);
-        self.render_pass(&mut encoder, intermediate_view, &easu_bind_group);
+        let easu_params_bind_group = self.params_bind_group_for(easu_params);
+        self.render_pass(
+            &mut encoder,
+            intermediate_view,
+            source_bind_group,
+            &easu_params_bind_group,
+        );
 
         let rcas_method = DisplayUpscaler::WgslFsr1EasuRcas
             .rcas_shader_method_id()
@@ -539,12 +654,46 @@ impl GpuCopyBench {
             target_size,
             1.0,
         );
-        let rcas_bind_group = self.bind_group_for(intermediate_view, rcas_params);
-        self.render_pass(&mut encoder, output_view, &rcas_bind_group);
+        let rcas_params_bind_group = self.params_bind_group_for(rcas_params);
+        self.render_pass(
+            &mut encoder,
+            output_view,
+            intermediate_bind_group,
+            &rcas_params_bind_group,
+        );
         self.queue.submit(Some(encoder.finish()));
     }
 
-    fn bind_group_for(
+    fn texture_bind_group_for(&self, source_view: &wgpu::TextureView) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("suisuiview-gpu-copy-texture-bind-group"),
+            layout: &self.texture_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(source_view),
+            }],
+        })
+    }
+
+    fn params_bind_group_for(&self, params: EffectParams) -> wgpu::BindGroup {
+        let params_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("suisuiview-gpu-copy-params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("suisuiview-gpu-copy-params-bind-group"),
+            layout: &self.params_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            }],
+        })
+    }
+
+    fn legacy_bind_group_for(
         &self,
         source_view: &wgpu::TextureView,
         params: EffectParams,
@@ -558,7 +707,7 @@ impl GpuCopyBench {
             });
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("suisuiview-gpu-copy-fsr1-bind-group"),
-            layout: &self.bind_group_layout,
+            layout: &self.legacy_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -576,7 +725,8 @@ impl GpuCopyBench {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         output_view: &wgpu::TextureView,
-        bind_group: &wgpu::BindGroup,
+        texture_bind_group: &wgpu::BindGroup,
+        params_bind_group: &wgpu::BindGroup,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("suisuiview-gpu-copy-fsr1-pass"),
@@ -593,7 +743,8 @@ impl GpuCopyBench {
             occlusion_query_set: None,
         });
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, bind_group, &[]);
+        pass.set_bind_group(0, texture_bind_group, &[]);
+        pass.set_bind_group(1, params_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 
@@ -643,6 +794,8 @@ struct SummaryAccumulator {
     pages: usize,
     samples: usize,
     bytes_total: usize,
+    bind_group_creates_total: usize,
+    uniform_buffer_creates_total: usize,
     values: Vec<f64>,
 }
 
@@ -653,6 +806,8 @@ impl SummaryAccumulator {
             pages: 0,
             samples: 0,
             bytes_total: 0,
+            bind_group_creates_total: 0,
+            uniform_buffer_creates_total: 0,
             values: Vec::new(),
         }
     }
@@ -661,6 +816,14 @@ impl SummaryAccumulator {
         self.pages += 1;
         self.samples += case.samples;
         self.bytes_total = self.bytes_total.saturating_add(case.bytes);
+        self.bind_group_creates_total = self.bind_group_creates_total.saturating_add(
+            case.bind_group_creates_per_iteration
+                .saturating_mul(case.samples),
+        );
+        self.uniform_buffer_creates_total = self.uniform_buffer_creates_total.saturating_add(
+            case.uniform_buffer_creates_per_iteration
+                .saturating_mul(case.samples),
+        );
         self.values.extend(case.raw_samples_ms.iter().copied());
     }
 
@@ -680,7 +843,20 @@ impl SummaryAccumulator {
             p95_ms: stats.p95_ms,
             max_ms: stats.max_ms,
             avg_bytes,
+            avg_bind_group_creates: average_count(self.bind_group_creates_total, self.samples),
+            avg_uniform_buffer_creates: average_count(
+                self.uniform_buffer_creates_total,
+                self.samples,
+            ),
         }
+    }
+}
+
+fn average_count(total: usize, samples: usize) -> f64 {
+    if samples == 0 {
+        0.0
+    } else {
+        total as f64 / samples as f64
     }
 }
 
@@ -726,6 +902,13 @@ fn interpretation_for_case(case: &str) -> &str {
         "write_texture_reused_texture" => "CPU-side queue.write_texture cost with bytes already available.",
         "precomputed_first_upload" => {
             "Estimated source cache miss if upload bytes are precomputed off the paint path."
+        }
+        "legacy_combined_bind_group_create" => {
+            "Old-style combined texture+uniform bind group creation cost."
+        }
+        "texture_bind_group_create" => "Texture-only bind group creation cost for reusable texture bindings.",
+        "params_bind_group_create" => {
+            "Per-draw uniform buffer and params bind group creation cost."
         }
         "current_first_upload" => {
             "Current source cache miss shape: texture creation, RGBA conversion, upload, view creation."
@@ -776,9 +959,18 @@ fn print_report(report: &GpuCopyBenchReport) {
             .unwrap_or("unavailable")
     );
     for summary in &report.summaries {
+        let creation_note =
+            if summary.avg_bind_group_creates > 0.0 || summary.avg_uniform_buffer_creates > 0.0 {
+                format!(
+                    ", bind groups {:.1}, uniform buffers {:.1}",
+                    summary.avg_bind_group_creates, summary.avg_uniform_buffer_creates
+                )
+            } else {
+                String::new()
+            };
         println!(
-            "{:<36} avg {:>7.3} ms, p95 {:>7.3} ms, max {:>7.3} ms",
-            summary.case, summary.avg_ms, summary.p95_ms, summary.max_ms
+            "{:<36} avg {:>7.3} ms, p95 {:>7.3} ms, max {:>7.3} ms{}",
+            summary.case, summary.avg_ms, summary.p95_ms, summary.max_ms, creation_note
         );
     }
 }

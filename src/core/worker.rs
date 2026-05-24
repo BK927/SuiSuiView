@@ -658,6 +658,7 @@ struct OrientationTransform {
     flip_vertical: bool,
 }
 
+#[cfg(test)]
 fn orient_color_image(image: &ColorImage, orientation: Orientation) -> ColorImage {
     transform_color_image(image, orientation_transform(orientation))
 }
@@ -698,6 +699,7 @@ fn orientation_transform(orientation: Orientation) -> OrientationTransform {
     }
 }
 
+#[cfg(test)]
 fn transform_color_image(image: &ColorImage, transform: OrientationTransform) -> ColorImage {
     if transform == OrientationTransform::default() {
         return image.clone();
