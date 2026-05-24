@@ -2,7 +2,8 @@ use super::ui::{dialog, icons, theme};
 use super::{apply_window_level, cache_budget_bytes, SuiSuiViewApp};
 use crate::core::state::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, DecodeMode,
-    DisplayUpscaler, EdgePageAction, GpuEffectMode, LargeImageAnchor, ResizeFilter, WheelMode,
+    DisplayUpscaler, EdgePageAction, GpuEffectMode, LargeImageAnchor, PageTransitionStyle,
+    ResizeFilter, WheelMode,
 };
 use eframe::egui::{self, RichText};
 use rfd::FileDialog;
@@ -172,7 +173,6 @@ impl SuiSuiViewApp {
         let previous_display_upscaler = self.settings.display_upscaler;
 
         self.settings = settings;
-        self.transition_effect = self.settings.transition_effect;
         self.store.update_settings(self.settings.clone());
         self.pending_state_save_at = None;
         apply_window_level(ctx, self.settings.always_on_top);
@@ -202,10 +202,11 @@ impl SuiSuiViewApp {
             self.textures.clear();
             self.upscale_generation = self.upscale_generation.wrapping_add(1);
             self.upscale_inflight = None;
-            self.ai_upscale_queue.clear();
+            self.clear_queued_ai_upscale_pages();
+            self.ai_upscale_manual_requests.clear();
             self.ai_upscale_failures.clear();
         } else if ai_prefetch_changed {
-            self.ai_upscale_queue.clear();
+            self.clear_queued_ai_upscale_pages();
         }
         if previous_gpu_effect_mode != self.settings.gpu_effect_mode
             || previous_display_upscaler != self.settings.display_upscaler
@@ -276,6 +277,12 @@ fn show_general_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed: &m
                 "하단 상태바 표시",
                 "창 아래쪽에 현재 상태와 짧은 안내 문구를 표시합니다.",
             );
+            *changed |= checkbox_with_help(
+                ui,
+                &mut draft.top_bar_pinned,
+                "상단 도구막대 고정",
+                "끄면 마우스를 창 위쪽으로 가져갈 때만 상단 도구막대가 나타납니다.",
+            );
             ui.add_space(6.0);
             egui::Grid::new("settings_general_grid")
                 .num_columns(2)
@@ -311,12 +318,28 @@ fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, ch
         "화면 표시",
         "페이지 전환, 보간, 실시간 업스케일 설정입니다.",
         |ui| {
-            *changed |= checkbox_with_help(
-                ui,
-                &mut draft.transition_effect,
-                "페이지 전환 효과",
-                "페이지를 넘길 때 짧은 슬라이드/페이드 효과를 사용합니다.",
-            );
+            egui::Grid::new("settings_transition_grid")
+                .num_columns(2)
+                .spacing([14.0, 8.0])
+                .show(ui, |ui| {
+                    grid_label_with_help(
+                        ui,
+                        "페이지 전환",
+                        "페이지를 넘길 때 사용할 가벼운 화면 전환 효과입니다.",
+                    );
+                    let mut transition_style = draft.effective_page_transition_style();
+                    egui::ComboBox::from_id_salt("page_transition_style")
+                        .selected_text(transition_style.label())
+                        .show_ui(ui, |ui| {
+                            for style in PageTransitionStyle::ALL {
+                                *changed |= ui
+                                    .selectable_value(&mut transition_style, style, style.label())
+                                    .changed();
+                            }
+                        });
+                    draft.set_page_transition_style(transition_style);
+                    ui.end_row();
+                });
             ui.add_space(6.0);
             egui::Grid::new("settings_image_processing_grid")
                 .num_columns(2)

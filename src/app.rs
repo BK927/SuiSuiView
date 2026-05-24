@@ -9,8 +9,8 @@ use crate::core::source::{
 };
 use crate::core::state::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, BookmarkInput, CacheMemoryMode,
-    DecodeMode, DisplayUpscaler, EdgePageAction, FitMode, LargeImageAnchor, ReadingDirection,
-    StateStore, WheelMode,
+    DecodeMode, DisplayUpscaler, EdgePageAction, FitMode, LargeImageAnchor, PageTransitionStyle,
+    ReadingDirection, StateStore, WheelMode,
 };
 use crate::core::upscale::{AiUpscaleWorker, UpscaleEvent, UpscaleRequest};
 use crate::core::worker::{
@@ -117,7 +117,8 @@ struct Transition {
     from_indices: Vec<usize>,
     target_long_edge: u32,
     started_at: Instant,
-    direction: NavigationDirection,
+    screen_sign: f32,
+    style: PageTransitionStyle,
 }
 
 struct SpreadPaint<'a> {
@@ -125,6 +126,7 @@ struct SpreadPaint<'a> {
     indices: &'a [usize],
     target_long_edge: u32,
     offset: Vec2,
+    scale: Vec2,
     alpha: f32,
 }
 
@@ -161,6 +163,19 @@ struct PendingBookmarkJump {
     book_id: String,
     path: PathBuf,
     page: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowTitleSnapshot {
+    title: String,
+    page: usize,
+    total_pages: usize,
+}
+
+impl WindowTitleSnapshot {
+    fn matches(&self, title: &str, page: usize, total_pages: usize) -> bool {
+        self.title == title && self.page == page && self.total_pages == total_pages
+    }
 }
 
 pub struct SuiSuiViewApp {
@@ -205,9 +220,9 @@ pub struct SuiSuiViewApp {
     upscale_generation: u64,
     upscale_inflight: Option<(u64, usize)>,
     ai_upscale_queue: VecDeque<usize>,
+    ai_upscale_manual_requests: HashSet<usize>,
     ai_upscale_failures: HashSet<PageCacheKey>,
     last_nav_direction: NavigationDirection,
-    transition_effect: bool,
     transition: Option<Transition>,
     fullscreen: bool,
     maximized: bool,
@@ -216,8 +231,12 @@ pub struct SuiSuiViewApp {
     window_size_save_block_until: Option<Instant>,
     window_dpi_size_guard: Option<window::WindowDpiSizeGuard>,
     window_stable_inner_size: Option<[f32; 2]>,
+    window_title: Option<WindowTitleSnapshot>,
+    top_bar_auto_hide_until: Option<Instant>,
     status: String,
     status_updated_at: Instant,
+    toast: String,
+    toast_updated_at: Instant,
     pending_state_save_at: Option<Instant>,
     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
     page_turn_started_at: Option<(usize, Instant)>,
@@ -287,9 +306,9 @@ impl SuiSuiViewApp {
             upscale_generation: 0,
             upscale_inflight: None,
             ai_upscale_queue: VecDeque::new(),
+            ai_upscale_manual_requests: HashSet::new(),
             ai_upscale_failures: HashSet::new(),
             last_nav_direction: NavigationDirection::Forward,
-            transition_effect: settings.transition_effect,
             transition: None,
             fullscreen: false,
             maximized: false,
@@ -298,8 +317,12 @@ impl SuiSuiViewApp {
             window_size_save_block_until: None,
             window_dpi_size_guard: None,
             window_stable_inner_size: initial_window_size,
-            status: "Open a folder, ZIP, or CBZ file. Drag-and-drop works too.".to_owned(),
+            window_title: None,
+            top_bar_auto_hide_until: None,
+            status: String::new(),
             status_updated_at: Instant::now(),
+            toast: String::new(),
+            toast_updated_at: Instant::now(),
             pending_state_save_at: None,
             #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
             page_turn_started_at: None,
@@ -321,6 +344,14 @@ impl SuiSuiViewApp {
     fn set_status(&mut self, status: impl Into<String>) {
         self.status = status.into();
         self.status_updated_at = Instant::now();
+    }
+
+    fn notify(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        self.status = message.clone();
+        self.status_updated_at = Instant::now();
+        self.toast = message;
+        self.toast_updated_at = Instant::now();
     }
 
     fn open_path(&mut self, path: PathBuf) {
@@ -357,7 +388,7 @@ impl SuiSuiViewApp {
                 let tx = self.loader_tx.clone();
                 let ctx = self.egui_ctx.clone();
                 let load_path = path.clone();
-                self.set_status(format!("Indexing {} ...", path.display()));
+                self.set_status("파일을 여는 중입니다...");
 
                 let _ = thread::Builder::new()
                     .name("suisuiview-source-loader".to_owned())
@@ -376,7 +407,7 @@ impl SuiSuiViewApp {
                     });
             }
             SourceKind::UnsupportedRar => {
-                self.set_status(
+                self.notify(
                     "CBR/RAR requires the restricted read-only archive backend before it can be opened.",
                 );
             }
@@ -385,7 +416,7 @@ impl SuiSuiViewApp {
                     .extension()
                     .and_then(|extension| extension.to_str())
                     .unwrap_or_default();
-                self.set_status(
+                self.notify(
                     unsupported_message_for_extension(extension)
                         .unwrap_or_else(|| format!("Unsupported file type: {}", path.display())),
                 );
@@ -415,7 +446,7 @@ impl SuiSuiViewApp {
                     {
                         self.open_to_first_visible_trace = None;
                     }
-                    self.set_status(format!(
+                    self.notify(format!(
                         "Could not open {}: {message}",
                         event.path.display()
                     ));
@@ -481,6 +512,7 @@ impl SuiSuiViewApp {
         self.upscale_generation = self.upscale_generation.wrapping_add(1);
         self.upscale_inflight = None;
         self.ai_upscale_queue.clear();
+        self.ai_upscale_manual_requests.clear();
         self.ai_upscale_failures.clear();
         self.transition = None;
         self.last_nav_direction = NavigationDirection::Forward;
@@ -493,10 +525,10 @@ impl SuiSuiViewApp {
             self.worker_options(),
         );
         self.set_status(format!(
-            "{} - {} pages - state: {}",
+            "열림: {} [{} / {}]",
             source.title(),
-            page_count,
-            self.store.path().display()
+            self.current_page + 1,
+            page_count
         ));
         self.persist_current_bookmark();
         self.refresh_ai_prefetch_queue();
@@ -647,6 +679,7 @@ impl SuiSuiViewApp {
                         continue;
                     }
                     self.upscale_inflight = None;
+                    self.ai_upscale_manual_requests.remove(&page_index);
                     let key = PageCacheKey {
                         index: page_index,
                         target_long_edge: page.target_long_edge,
@@ -677,15 +710,19 @@ impl SuiSuiViewApp {
                         continue;
                     }
                     self.upscale_inflight = None;
+                    let was_manual = self.ai_upscale_manual_requests.remove(&page_index);
                     self.ai_upscale_failures.insert(PageCacheKey {
                         index: page_index,
                         target_long_edge,
                         decode,
                     });
-                    self.set_status(format!(
-                        "AI upscale failed for page {}: {message}",
-                        page_index + 1
-                    ));
+                    let message =
+                        format!("AI upscale failed for page {}: {message}", page_index + 1);
+                    if was_manual {
+                        self.notify(message);
+                    } else {
+                        self.set_status(message);
+                    }
                     self.refresh_ai_prefetch_queue();
                 }
             }
@@ -901,7 +938,7 @@ impl SuiSuiViewApp {
                 if self.settings.esc_to_quit {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 } else {
-                    self.set_status("ESC exit is disabled in settings.");
+                    self.notify("ESC exit is disabled in settings.");
                 }
             }
             AppCommand::ToggleFullscreen => self.toggle_fullscreen(ctx),
@@ -971,7 +1008,7 @@ impl SuiSuiViewApp {
             AppCommand::ToggleCurrentPageBookmark => self.toggle_current_page_bookmark(),
             AppCommand::ToggleBookmarkPopover => self.toggle_bookmark_popover(ctx),
             AppCommand::Unsupported(feature) => {
-                self.set_status(format!("{feature} is planned for a later version."));
+                self.notify(format!("{feature} is planned for a later version."));
             }
         }
     }
@@ -1022,6 +1059,7 @@ impl SuiSuiViewApp {
         self.upscale_generation = self.upscale_generation.wrapping_add(1);
         self.upscale_inflight = None;
         self.ai_upscale_queue.clear();
+        self.ai_upscale_manual_requests.clear();
         self.ai_upscale_failures.clear();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         {
@@ -1160,12 +1198,14 @@ impl SuiSuiViewApp {
             self.page_turn_started_at = Some((target, turn_started));
         }
 
-        if self.transition_effect {
+        let transition_style = self.active_page_transition_style();
+        if transition_style != PageTransitionStyle::None {
             self.transition = Some(Transition {
                 from_indices: previous_indices,
                 target_long_edge: self.target_long_edge,
                 started_at: Instant::now(),
-                direction,
+                screen_sign: transition_screen_sign(self.reading_direction, direction),
+                style: transition_style,
             });
         } else {
             self.transition = None;
@@ -1180,6 +1220,10 @@ impl SuiSuiViewApp {
         );
         self.persist_current_bookmark_deferred();
         self.refresh_ai_prefetch_queue();
+    }
+
+    fn active_page_transition_style(&self) -> PageTransitionStyle {
+        self.settings.effective_page_transition_style()
     }
 
     fn adjust_zoom(&mut self, factor: f32) {
@@ -1280,7 +1324,7 @@ impl SuiSuiViewApp {
 
     fn delete_current_file(&mut self, mode: DeleteMode) {
         let Some(target) = self.current_delete_target() else {
-            self.set_status("No current file to delete.");
+            self.notify("No current file to delete.");
             return;
         };
 
@@ -1311,7 +1355,7 @@ impl SuiSuiViewApp {
         }
 
         if !self.worker.clear_book_blocking() {
-            self.set_status(
+            self.notify(
                 "Background decode is still finishing; deletion was not attempted. Try again soon.",
             );
             return;
@@ -1322,7 +1366,7 @@ impl SuiSuiViewApp {
             DeleteMode::Permanent => fs::remove_file(&target).map_err(|error| error.to_string()),
         };
 
-        self.set_status(match result {
+        self.notify(match result {
             Ok(()) => match mode {
                 DeleteMode::Recycle => format!("Moved to Recycle Bin: {}", target.display()),
                 DeleteMode::Permanent => format!("Permanently deleted: {}", target.display()),
@@ -1338,15 +1382,15 @@ impl SuiSuiViewApp {
 
     fn open_current_in_file_manager(&mut self) {
         let Some(target) = self.current_file_manager_target() else {
-            self.set_status("No current file to reveal.");
+            self.notify("No current file to reveal.");
             return;
         };
         match reveal_in_file_manager(&target) {
             Ok(()) => {
-                self.set_status(format!("Opened file location: {}", target.display()));
+                self.notify(format!("Opened file location: {}", target.display()));
             }
             Err(error) => {
-                self.set_status(format!("Could not open file location: {error}"));
+                self.notify(format!("Could not open file location: {error}"));
             }
         }
     }
@@ -1363,45 +1407,45 @@ impl SuiSuiViewApp {
 
     fn copy_current_path(&mut self) {
         let Some(source) = self.source.as_ref() else {
-            self.set_status("No current page path to copy.");
+            self.notify("No current page path to copy.");
             return;
         };
         let Some(text) = source.page_display_path(self.current_page) else {
-            self.set_status("No current page path to copy.");
+            self.notify("No current page path to copy.");
             return;
         };
         match copy_text_to_clipboard(&text) {
-            Ok(()) => self.set_status("Copied current path."),
-            Err(error) => self.set_status(format!("Could not copy path: {error}")),
+            Ok(()) => self.notify("Copied current path."),
+            Err(error) => self.notify(format!("Could not copy path: {error}")),
         }
     }
 
     fn copy_current_page_image(&mut self) {
         let Some(image) = self.effected_page_image(self.current_page, self.target_long_edge) else {
-            self.set_status("Current page is not ready to copy.");
+            self.notify("Current page is not ready to copy.");
             return;
         };
         match copy_color_image_to_clipboard(&image) {
-            Ok(()) => self.set_status("Copied current page image."),
-            Err(error) => self.set_status(format!("Could not copy image: {error}")),
+            Ok(()) => self.notify("Copied current page image."),
+            Err(error) => self.notify(format!("Could not copy image: {error}")),
         }
     }
 
     fn copy_current_spread_image(&mut self) {
         let indices = self.spread_indices();
         let Some(image) = self.compose_spread_image(&indices, self.target_long_edge) else {
-            self.set_status("Current spread is not ready to copy.");
+            self.notify("Current spread is not ready to copy.");
             return;
         };
         match copy_color_image_to_clipboard(&image) {
-            Ok(()) => self.set_status("Copied visible spread image."),
-            Err(error) => self.set_status(format!("Could not copy spread: {error}")),
+            Ok(()) => self.notify("Copied visible spread image."),
+            Err(error) => self.notify(format!("Could not copy spread: {error}")),
         }
     }
 
     fn upscale_current_page(&mut self) {
         if self.settings.ai_upscale.backend != AiUpscaleBackend::RealEsrganNcnn {
-            self.set_status("AI upscale is disabled in settings.");
+            self.notify("AI upscale is disabled in settings.");
             return;
         }
         if self
@@ -1412,11 +1456,11 @@ impl SuiSuiViewApp {
             .trim()
             .is_empty()
         {
-            self.set_status("Set the Real-ESRGAN executable path in settings first.");
+            self.notify("Set the Real-ESRGAN executable path in settings first.");
             return;
         }
         if self.source.is_none() || self.book_id.is_none() {
-            self.set_status("Open a book before using AI upscale.");
+            self.notify("Open a book before using AI upscale.");
             return;
         }
 
@@ -1442,6 +1486,7 @@ impl SuiSuiViewApp {
         self.ai_upscale_queue.retain(|queued| *queued != page_index);
         let key = self.ai_page_key(page_index);
         self.ai_upscale_failures.remove(&key);
+        self.ai_upscale_manual_requests.insert(page_index);
         self.enqueue_ai_upscale_page(page_index, true);
         self.pump_ai_upscale_queue();
         if self
@@ -1458,12 +1503,12 @@ impl SuiSuiViewApp {
     fn refresh_ai_prefetch_queue(&mut self) {
         let mode = self.settings.ai_upscale.prefetch_mode;
         if mode == AiUpscalePrefetchMode::Off || !self.ai_upscale_can_run() {
-            self.ai_upscale_queue.clear();
+            self.clear_queued_ai_upscale_pages();
             return;
         }
 
         let Some(source) = self.source.as_ref() else {
-            self.ai_upscale_queue.clear();
+            self.clear_queued_ai_upscale_pages();
             return;
         };
         let desired_pages = ai_prefetch_pages_for(
@@ -1473,11 +1518,17 @@ impl SuiSuiViewApp {
             self.last_nav_direction,
             mode,
         );
-        self.ai_upscale_queue.clear();
+        self.clear_queued_ai_upscale_pages();
         for page_index in desired_pages {
             self.enqueue_ai_upscale_page(page_index, false);
         }
         self.pump_ai_upscale_queue();
+    }
+
+    fn clear_queued_ai_upscale_pages(&mut self) {
+        for page_index in self.ai_upscale_queue.drain(..) {
+            self.ai_upscale_manual_requests.remove(&page_index);
+        }
     }
 
     fn ai_upscale_can_run(&self) -> bool {
@@ -1869,18 +1920,10 @@ impl SuiSuiViewApp {
         }
 
         let current_indices = self.spread_indices();
-        if let Some(transition) = self.transition.as_ref() {
+        if let Some(transition) = self.transition.take() {
             let elapsed_ms = transition.started_at.elapsed().as_secs_f32() * 1000.0;
             let t = (elapsed_ms / TRANSITION_MS).clamp(0.0, 1.0);
-            let sign = match transition.direction {
-                NavigationDirection::Forward => -1.0,
-                NavigationDirection::Backward => 1.0,
-            };
-            let distance = rect.width() * 0.08;
-            let from_offset = Vec2::new(sign * distance * t, 0.0);
-            let to_offset = Vec2::new(-sign * distance * (1.0 - t), 0.0);
-            let from_indices = transition.from_indices.clone();
-            let from_target_long_edge = transition.target_long_edge;
+            let paint = transition_paint_params(transition.style, t, transition.screen_sign, rect);
             let current_target_long_edge = self.target_long_edge;
 
             self.paint_spread(
@@ -1888,12 +1931,16 @@ impl SuiSuiViewApp {
                 &painter,
                 SpreadPaint {
                     viewport: rect,
-                    indices: &from_indices,
-                    target_long_edge: from_target_long_edge,
-                    offset: from_offset,
-                    alpha: 1.0 - t,
+                    indices: &transition.from_indices,
+                    target_long_edge: transition.target_long_edge,
+                    offset: paint.from_offset,
+                    scale: paint.from_scale,
+                    alpha: paint.from_alpha,
                 },
             );
+            if transition.style == PageTransitionStyle::BookFlip2d {
+                paint_book_flip_shadow(&painter, rect, transition.screen_sign, t);
+            }
             self.paint_spread(
                 ctx,
                 &painter,
@@ -1901,13 +1948,14 @@ impl SuiSuiViewApp {
                     viewport: rect,
                     indices: &current_indices,
                     target_long_edge: current_target_long_edge,
-                    offset: to_offset,
-                    alpha: t,
+                    offset: paint.to_offset,
+                    scale: paint.to_scale,
+                    alpha: paint.to_alpha,
                 },
             );
 
-            if t >= 1.0 {
-                self.transition = None;
+            if t < 1.0 {
+                self.transition = Some(transition);
             }
         } else {
             self.paint_spread(
@@ -1918,6 +1966,7 @@ impl SuiSuiViewApp {
                     indices: &current_indices,
                     target_long_edge: self.target_long_edge,
                     offset: Vec2::ZERO,
+                    scale: Vec2::splat(1.0),
                     alpha: 1.0,
                 },
             );
@@ -2454,8 +2503,8 @@ impl SuiSuiViewApp {
             request.viewport.size(),
             Vec2::new(natural_width, natural_height),
         );
-        let spread_width = natural_width * scale;
-        let spread_height = natural_height * scale;
+        let spread_width = natural_width * scale * request.scale.x;
+        let spread_height = natural_height * scale * request.scale.y;
         let mut cursor = self.spread_origin(
             request.viewport,
             Vec2::new(spread_width, spread_height),
@@ -2464,7 +2513,10 @@ impl SuiSuiViewApp {
         let tint = Color32::from_white_alpha((request.alpha.clamp(0.0, 1.0) * 255.0) as u8);
 
         for (visual, size) in pages {
-            let page_size = size * scale;
+            let page_size = Vec2::new(
+                size.x * scale * request.scale.x,
+                size.y * scale * request.scale.y,
+            );
             let top = cursor.y + (spread_height - page_size.y) * 0.5;
             let page_rect = Rect::from_min_size(Pos2::new(cursor.x, top), page_size);
 
@@ -2595,6 +2647,7 @@ impl eframe::App for SuiSuiViewApp {
         self.handle_dropped_files(ctx);
         self.handle_keyboard(ctx);
         self.maintain_native_window_state(ctx);
+        self.update_window_title(ctx);
         self.flush_deferred_state_save_if_due();
 
         self.show_top_bar(ctx);
@@ -2654,6 +2707,47 @@ fn apply_window_level(ctx: &egui::Context, always_on_top: bool) {
         egui::WindowLevel::Normal
     };
     ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+}
+
+impl SuiSuiViewApp {
+    fn update_window_title(&mut self, ctx: &egui::Context) {
+        let Some(source) = self.source.as_ref() else {
+            if self
+                .window_title
+                .as_ref()
+                .is_some_and(|title| title.matches("", 0, 0))
+            {
+                return;
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title("SuiSuiView".to_owned()));
+            self.window_title = Some(WindowTitleSnapshot {
+                title: String::new(),
+                page: 0,
+                total_pages: 0,
+            });
+            return;
+        };
+
+        let title = source.title();
+        let page = self.current_page + 1;
+        let total_pages = source.page_count();
+        if self
+            .window_title
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.matches(title, page, total_pages))
+        {
+            return;
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+            "SuiSuiView - {} [{} / {}]",
+            title, page, total_pages
+        )));
+        self.window_title = Some(WindowTitleSnapshot {
+            title: title.to_owned(),
+            page,
+            total_pages,
+        });
+    }
 }
 
 fn cache_budget_bytes(settings: &AppSettings) -> usize {
@@ -2752,6 +2846,119 @@ fn random_offset(max: usize) -> usize {
         .map(|duration| duration.as_nanos() as usize)
         .unwrap_or(1);
     nanos % max + 1
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TransitionPaintParams {
+    from_offset: Vec2,
+    from_scale: Vec2,
+    from_alpha: f32,
+    to_offset: Vec2,
+    to_scale: Vec2,
+    to_alpha: f32,
+}
+
+fn transition_screen_sign(reading: ReadingDirection, direction: NavigationDirection) -> f32 {
+    let forward_sign = match reading {
+        ReadingDirection::LeftToRight => 1.0,
+        ReadingDirection::RightToLeft => -1.0,
+    };
+    match direction {
+        NavigationDirection::Forward => forward_sign,
+        NavigationDirection::Backward => -forward_sign,
+    }
+}
+
+fn transition_paint_params(
+    style: PageTransitionStyle,
+    t: f32,
+    sign: f32,
+    viewport: Rect,
+) -> TransitionPaintParams {
+    let t = t.clamp(0.0, 1.0);
+    match style {
+        PageTransitionStyle::None => TransitionPaintParams {
+            from_offset: Vec2::ZERO,
+            from_scale: Vec2::splat(1.0),
+            from_alpha: 0.0,
+            to_offset: Vec2::ZERO,
+            to_scale: Vec2::splat(1.0),
+            to_alpha: 1.0,
+        },
+        PageTransitionStyle::SlideFade => {
+            let distance = viewport.width() * 0.08;
+            TransitionPaintParams {
+                from_offset: Vec2::new(sign * distance * t, 0.0),
+                from_scale: Vec2::splat(1.0),
+                from_alpha: 1.0 - t,
+                to_offset: Vec2::new(-sign * distance * (1.0 - t), 0.0),
+                to_scale: Vec2::splat(1.0),
+                to_alpha: t,
+            }
+        }
+        PageTransitionStyle::Fade => TransitionPaintParams {
+            from_offset: Vec2::ZERO,
+            from_scale: Vec2::splat(1.0),
+            from_alpha: 1.0 - t,
+            to_offset: Vec2::ZERO,
+            to_scale: Vec2::splat(1.0),
+            to_alpha: t,
+        },
+        PageTransitionStyle::Push => {
+            let distance = viewport.width();
+            TransitionPaintParams {
+                from_offset: Vec2::new(sign * distance * t, 0.0),
+                from_scale: Vec2::splat(1.0),
+                from_alpha: 1.0,
+                to_offset: Vec2::new(-sign * distance * (1.0 - t), 0.0),
+                to_scale: Vec2::splat(1.0),
+                to_alpha: 1.0,
+            }
+        }
+        PageTransitionStyle::ZoomFade => TransitionPaintParams {
+            from_offset: Vec2::ZERO,
+            from_scale: Vec2::splat(1.0 + 0.04 * t),
+            from_alpha: 1.0 - t,
+            to_offset: Vec2::ZERO,
+            to_scale: Vec2::splat(0.96 + 0.04 * t),
+            to_alpha: t,
+        },
+        PageTransitionStyle::BookFlip2d => {
+            let distance = viewport.width() * 0.14;
+            TransitionPaintParams {
+                from_offset: Vec2::new(sign * distance * t, 0.0),
+                from_scale: Vec2::new(1.0 - 0.18 * t, 1.0),
+                from_alpha: 1.0 - 0.35 * t,
+                to_offset: Vec2::new(-sign * distance * 0.5 * (1.0 - t), 0.0),
+                to_scale: Vec2::new(0.92 + 0.08 * t, 1.0),
+                to_alpha: t,
+            }
+        }
+    }
+}
+
+fn paint_book_flip_shadow(painter: &egui::Painter, viewport: Rect, sign: f32, t: f32) {
+    let strength = 1.0 - (t * 2.0 - 1.0).abs();
+    if strength <= 0.0 {
+        return;
+    }
+
+    let travel = 0.15 + 0.65 * t;
+    let x = if sign >= 0.0 {
+        viewport.left() + viewport.width() * travel
+    } else {
+        viewport.right() - viewport.width() * travel
+    };
+    let width = (viewport.width() * 0.035).clamp(18.0, 54.0);
+    let shadow = Rect::from_min_max(
+        Pos2::new(x - width * 0.5, viewport.top()),
+        Pos2::new(x + width * 0.5, viewport.bottom()),
+    );
+    painter.rect_filled(
+        shadow,
+        0.0,
+        Color32::from_black_alpha((80.0 * strength) as u8),
+    );
 }
 
 fn ai_prefetch_pages_for(
@@ -2935,25 +3142,57 @@ mod tests {
         ai_prefetch_pages_for, apply_effects_to_image, best_page_key_at_or_below_in_cache,
         best_page_key_in_cache, command_for_shortcut, delete_target_for, korean_font_candidates,
         load_first_existing_font, page_cache_state_from_hit, preferred_page_key_in_cache,
-        sanitize_font_name, sibling_book_path, transformed_page_size, AppCommand, DeleteMode,
-        ImageFilter, OpenOrigin, PageCacheKey, Shortcut, TextureCacheKey, ViewEffects,
-        ViewTransform,
+        sanitize_font_name, sibling_book_path, transformed_page_size, transition_paint_params,
+        transition_screen_sign, AppCommand, DeleteMode, ImageFilter, OpenOrigin, PageCacheKey,
+        Shortcut, TextureCacheKey, ViewEffects, ViewTransform,
     };
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
-        AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, FitMode, ReadingDirection,
+        AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, FitMode, PageTransitionStyle,
+        ReadingDirection,
     };
     use crate::core::worker::{
         DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PreparedPage,
         PREVIEW_TARGET_LONG_EDGE,
     };
-    use eframe::egui::{Color32, ColorImage, Key};
+    use eframe::egui::{Color32, ColorImage, Key, Pos2, Rect, Vec2};
     use lru::LruCache;
     use std::fs;
     use std::num::NonZeroUsize;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn transition_screen_sign_follows_reading_direction() {
+        assert_eq!(
+            transition_screen_sign(ReadingDirection::LeftToRight, NavigationDirection::Forward),
+            1.0
+        );
+        assert_eq!(
+            transition_screen_sign(ReadingDirection::LeftToRight, NavigationDirection::Backward),
+            -1.0
+        );
+        assert_eq!(
+            transition_screen_sign(ReadingDirection::RightToLeft, NavigationDirection::Forward),
+            -1.0
+        );
+        assert_eq!(
+            transition_screen_sign(ReadingDirection::RightToLeft, NavigationDirection::Backward),
+            1.0
+        );
+    }
+
+    #[test]
+    fn book_flip_transition_keeps_target_page_moving_in_flow_direction() {
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 800.0));
+        let paint = transition_paint_params(PageTransitionStyle::BookFlip2d, 0.5, 1.0, viewport);
+
+        assert!(paint.from_offset.x > 0.0);
+        assert!(paint.to_offset.x < 0.0);
+        assert!(paint.from_scale.x < 1.0);
+        assert!(paint.to_scale.x < 1.0);
+    }
 
     #[test]
     fn best_page_key_uses_preview_until_exact_target_arrives() {

@@ -317,6 +317,39 @@ impl AiUpscalePrefetchMode {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PageTransitionStyle {
+    None,
+    #[default]
+    SlideFade,
+    Fade,
+    Push,
+    ZoomFade,
+    BookFlip2d,
+}
+
+impl PageTransitionStyle {
+    pub const ALL: [Self; 6] = [
+        Self::None,
+        Self::SlideFade,
+        Self::Fade,
+        Self::Push,
+        Self::ZoomFade,
+        Self::BookFlip2d,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "없음",
+            Self::SlideFade => "슬라이드 + 페이드",
+            Self::Fade => "페이드",
+            Self::Push => "밀기",
+            Self::ZoomFade => "줌 페이드",
+            Self::BookFlip2d => "책장 넘김",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NcnnRealEsrganSettings {
     #[serde(default)]
@@ -376,6 +409,8 @@ pub struct AppSettings {
     pub always_on_top: bool,
     #[serde(default)]
     pub show_status_bar: bool,
+    #[serde(default = "default_true")]
+    pub top_bar_pinned: bool,
     #[serde(default)]
     pub edge_page_action: EdgePageAction,
 
@@ -399,6 +434,8 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub transition_effect: bool,
     #[serde(default)]
+    pub page_transition_style: PageTransitionStyle,
+    #[serde(default)]
     pub large_image_anchor: LargeImageAnchor,
     #[serde(default = "default_true")]
     pub double_click_maximize: bool,
@@ -414,6 +451,23 @@ pub struct AppSettings {
 
     #[serde(default)]
     pub ai_upscale: AiUpscaleSettings,
+}
+
+impl AppSettings {
+    pub fn effective_page_transition_style(&self) -> PageTransitionStyle {
+        if self.transition_effect {
+            self.page_transition_style
+        } else {
+            PageTransitionStyle::None
+        }
+    }
+
+    pub fn set_page_transition_style(&mut self, style: PageTransitionStyle) {
+        self.transition_effect = style != PageTransitionStyle::None;
+        if self.transition_effect {
+            self.page_transition_style = style;
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -433,6 +487,7 @@ impl Default for AppSettings {
             esc_to_quit: true,
             always_on_top: false,
             show_status_bar: false,
+            top_bar_pinned: true,
             edge_page_action: EdgePageAction::Stop,
             decode_mode: DecodeMode::AutoFast,
             resize_filter: ResizeFilter::Bicubic,
@@ -443,6 +498,7 @@ impl Default for AppSettings {
             cache_memory_mode: CacheMemoryMode::Auto,
             manual_cache_mb: default_manual_cache_mb(),
             transition_effect: true,
+            page_transition_style: PageTransitionStyle::SlideFade,
             large_image_anchor: LargeImageAnchor::Center,
             double_click_maximize: true,
             middle_click_fullscreen: true,

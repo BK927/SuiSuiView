@@ -214,7 +214,7 @@ impl SuiSuiViewApp {
                     self.prune_decoded_cache();
                 }
                 Err(message) if self.debug_compare.enabled => {
-                    self.set_status(format!(
+                    self.notify(format!(
                         "비교 이미지 준비 실패 p.{}: {message}",
                         event.page_index + 1
                     ));

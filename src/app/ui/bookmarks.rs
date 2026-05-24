@@ -119,14 +119,14 @@ impl SuiSuiViewApp {
     pub(in crate::app) fn toggle_current_page_bookmark(&mut self) {
         self.bookmark_clear_confirming = false;
         let Some(book_id) = self.book_id.clone() else {
-            self.set_status("북마크할 책이 열려 있지 않습니다.");
+            self.notify("북마크할 책이 열려 있지 않습니다.");
             return;
         };
         let page = self.current_page;
         if self.store.has_page_bookmark(&book_id, page) {
             self.store.remove_page_bookmark(&book_id, page);
             self.bookmark_rows.clear();
-            self.set_status(format!("p.{} 북마크를 삭제했습니다.", page + 1));
+            self.notify(format!("p.{} 북마크를 삭제했습니다.", page + 1));
             return;
         }
 
@@ -140,7 +140,7 @@ impl SuiSuiViewApp {
         self.store
             .upsert_page_bookmark(&book_id, page, title, page_name);
         self.bookmark_rows.clear();
-        self.set_status(format!("p.{} 북마크를 추가했습니다.", page + 1));
+        self.notify(format!("p.{} 북마크를 추가했습니다.", page + 1));
     }
 
     fn show_bookmark_popover_contents(&mut self, ui: &mut egui::Ui) {
@@ -398,7 +398,7 @@ impl SuiSuiViewApp {
             BookmarkFilter::ThisBook => {
                 let Some(book_id) = self.book_id.clone() else {
                     self.bookmark_clear_confirming = false;
-                    self.set_status("삭제할 북마크가 없습니다.");
+                    self.notify("삭제할 북마크가 없습니다.");
                     return;
                 };
                 self.store.clear_page_bookmarks(&book_id)
@@ -406,7 +406,7 @@ impl SuiSuiViewApp {
         };
         self.bookmark_clear_confirming = false;
         if removed == 0 {
-            self.set_status("삭제할 북마크가 없습니다.");
+            self.notify("삭제할 북마크가 없습니다.");
         } else {
             self.bookmark_thumbnails.clear();
             let scope = if self.bookmark_filter == BookmarkFilter::ThisBook {
@@ -414,7 +414,7 @@ impl SuiSuiViewApp {
             } else {
                 "전체"
             };
-            self.set_status(format!("{scope} 북마크 {removed}개를 삭제했습니다."));
+            self.notify(format!("{scope} 북마크 {removed}개를 삭제했습니다."));
             self.bookmark_rows.clear();
         }
     }
@@ -487,7 +487,7 @@ impl SuiSuiViewApp {
                 row.bookmark.page,
             );
         } else {
-            self.set_status("북마크 경로를 찾을 수 없습니다.");
+            self.notify("북마크 경로를 찾을 수 없습니다.");
         }
         self.close_bookmark_popover();
     }

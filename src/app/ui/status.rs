@@ -36,14 +36,20 @@ impl SuiSuiViewApp {
     }
 
     fn show_status_toast(&self, ctx: &egui::Context) {
-        let elapsed = self.status_updated_at.elapsed();
-        if self.status.is_empty() || elapsed > TOAST_VISIBLE_FOR {
+        let elapsed = self.toast_updated_at.elapsed();
+        if self.toast.is_empty() || elapsed > TOAST_VISIBLE_FOR {
             return;
         }
         ctx.request_repaint_after(TOAST_VISIBLE_FOR - elapsed);
 
+        let top_offset = if self.top_bar_is_visible(ctx) {
+            58.0
+        } else {
+            16.0
+        };
+
         egui::Area::new(egui::Id::new("status_toast"))
-            .anchor(Align2::RIGHT_TOP, egui::vec2(-16.0, 58.0))
+            .anchor(Align2::RIGHT_TOP, egui::vec2(-16.0, top_offset))
             .order(egui::Order::Foreground)
             .interactable(false)
             .show(ctx, |ui| {
@@ -53,7 +59,7 @@ impl SuiSuiViewApp {
                     .corner_radius(CornerRadius::same(6))
                     .inner_margin(Margin::symmetric(10, 7))
                     .show(ui, |ui| {
-                        ui.label(&self.status);
+                        ui.label(&self.toast);
                     });
             });
     }

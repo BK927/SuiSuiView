@@ -3,11 +3,12 @@ use super::super::debug_compare::DebugCompareTarget;
 use super::super::{SuiSuiViewApp, ViewMode};
 use super::{icons, path_labels, theme};
 use crate::core::effects::ImageFilter;
-use crate::core::state::{AiUpscaleBackend, FitMode, ReadingDirection};
+use crate::core::state::{AiUpscaleBackend, FitMode, PageTransitionStyle, ReadingDirection};
 use eframe::egui::{
     self, Align2, Button, Color32, FontId, Frame, Margin, RichText, Sense, Stroke, Vec2,
 };
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 const OPEN_MENU_MIN_WIDTH: f32 = 560.0;
 const OPEN_MENU_MAX_VIEWPORT_FRACTION: f32 = 0.8;
@@ -17,9 +18,14 @@ const RECENT_ROW_VERTICAL_PADDING: f32 = 3.0;
 const RECENT_ROW_LINE_GAP: f32 = 3.0;
 const RECENT_ROW_CORNER_RADIUS: u8 = 5;
 const RECENT_ROW_HOVER_FILL: Color32 = Color32::from_rgb(38, 41, 47);
+const TOP_BAR_HIDE_DELAY: Duration = Duration::from_millis(350);
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn show_top_bar(&mut self, ctx: &egui::Context) {
+        if !self.update_top_bar_visibility(ctx) {
+            return;
+        }
+
         egui::TopBottomPanel::top("focus_bar")
             .exact_height(theme::TOP_BAR_HEIGHT)
             .frame(
@@ -60,9 +66,72 @@ impl SuiSuiViewApp {
                         {
                             self.settings_open = true;
                         }
+                        self.show_top_bar_pin_button(ui);
                     });
                 });
             });
+    }
+
+    pub(in crate::app) fn top_bar_is_visible(&self, ctx: &egui::Context) -> bool {
+        if self.top_bar_is_forced_visible(ctx) || pointer_is_near_top_bar(ctx) {
+            return true;
+        }
+
+        self.top_bar_auto_hide_until
+            .is_some_and(|hide_at| Instant::now() < hide_at)
+    }
+
+    fn update_top_bar_visibility(&mut self, ctx: &egui::Context) -> bool {
+        if self.top_bar_is_forced_visible(ctx) {
+            self.top_bar_auto_hide_until = None;
+            return true;
+        }
+
+        if pointer_is_near_top_bar(ctx) {
+            self.top_bar_auto_hide_until = Some(Instant::now() + TOP_BAR_HIDE_DELAY);
+            return true;
+        }
+
+        let Some(hide_at) = self.top_bar_auto_hide_until else {
+            return false;
+        };
+        let now = Instant::now();
+        if now >= hide_at {
+            self.top_bar_auto_hide_until = None;
+            return false;
+        }
+
+        ctx.request_repaint_after(hide_at - now);
+        true
+    }
+
+    fn top_bar_is_forced_visible(&self, ctx: &egui::Context) -> bool {
+        self.settings.top_bar_pinned
+            || self.bookmark_popover_open
+            || self.settings_open
+            || self.about_open
+            || ctx.is_popup_open()
+    }
+
+    fn show_top_bar_pin_button(&mut self, ui: &mut egui::Ui) {
+        let style = if self.settings.top_bar_pinned {
+            icons::IconStyle::Filled
+        } else {
+            icons::IconStyle::Regular
+        };
+        let tooltip = if self.settings.top_bar_pinned {
+            "상단 도구막대 고정 해제"
+        } else {
+            "상단 도구막대 고정"
+        };
+        if ui
+            .add(icon_button(icons::PIN, style, 18.0))
+            .on_hover_text(tooltip)
+            .clicked()
+        {
+            self.settings.top_bar_pinned = !self.settings.top_bar_pinned;
+            self.store.update_settings(self.settings.clone());
+        }
     }
 
     fn show_open_group(&mut self, ui: &mut egui::Ui) {
@@ -231,14 +300,19 @@ impl SuiSuiViewApp {
                 }
             });
 
-            let mut transition_effect = self.settings.transition_effect;
-            if ui
-                .checkbox(&mut transition_effect, "페이지 전환 효과")
-                .changed()
-            {
-                let mut settings = self.settings.clone();
-                settings.transition_effect = transition_effect;
-                self.apply_settings(ctx, settings);
+            ui.separator();
+            ui.label("페이지 전환");
+            let active_transition = self.settings.effective_page_transition_style();
+            for style in PageTransitionStyle::ALL {
+                if ui
+                    .selectable_label(active_transition == style, style.label())
+                    .clicked()
+                {
+                    let mut settings = self.settings.clone();
+                    settings.set_page_transition_style(style);
+                    self.apply_settings(ctx, settings);
+                    ui.close();
+                }
             }
 
             ui.separator();
@@ -327,6 +401,15 @@ fn recent_open_menu_width(ui: &egui::Ui, recent_books: &[crate::core::state::Boo
         .map(|path| text_width(ui, path, &font_id))
         .fold(0.0_f32, f32::max);
     recent_menu_width_for(longest_path_width, viewport_width)
+}
+
+fn pointer_is_near_top_bar(ctx: &egui::Context) -> bool {
+    ctx.input(|input| {
+        input
+            .pointer
+            .hover_pos()
+            .is_some_and(|pos| pos.y <= theme::TOP_BAR_HEIGHT + 8.0)
+    })
 }
 
 fn recent_menu_width_for(longest_path_width: f32, viewport_width: f32) -> f32 {

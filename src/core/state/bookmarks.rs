@@ -273,6 +273,20 @@ mod tests {
         assert!(!AppSettings::default().show_status_bar);
     }
 
+    #[test]
+    fn settings_default_pins_top_bar() {
+        assert!(AppSettings::default().top_bar_pinned);
+    }
+
+    #[test]
+    fn settings_default_uses_slide_fade_transition() {
+        assert!(AppSettings::default().transition_effect);
+        assert_eq!(
+            AppSettings::default().page_transition_style,
+            super::super::PageTransitionStyle::SlideFade
+        );
+    }
+
     fn test_store(name: &str) -> StateStore {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)

@@ -47,7 +47,11 @@ impl AboutSection {
 
 impl SuiSuiViewApp {
     pub(super) fn open_about_window(&mut self) {
-        self.about_section = AboutSection::Image;
+        self.about_section = if self.has_image_info_target() {
+            AboutSection::Image
+        } else {
+            AboutSection::App
+        };
         self.about_open = true;
     }
 
@@ -58,6 +62,10 @@ impl SuiSuiViewApp {
 
         let mut open = self.about_open;
         let mut active_section = self.about_section;
+        let image_section_enabled = self.has_image_info_target();
+        if !image_section_enabled && active_section == AboutSection::Image {
+            active_section = AboutSection::App;
+        }
         let dialog_size = dialog::bounded_dialog_size(
             ctx,
             dialog::ABOUT_DIALOG_SIZE,
@@ -90,15 +98,25 @@ impl SuiSuiViewApp {
                             ui.add_space(8.0);
                             for section in AboutSection::ALL {
                                 let (icon, icon_style) = section.icon();
-                                if dialog::nav_button(
-                                    ui,
-                                    active_section == section,
-                                    icon,
-                                    icon_style,
-                                    section.label(),
-                                )
-                                .clicked()
-                                {
+                                let enabled =
+                                    section != AboutSection::Image || image_section_enabled;
+                                let response = ui
+                                    .add_enabled_ui(enabled, |ui| {
+                                        dialog::nav_button(
+                                            ui,
+                                            active_section == section,
+                                            icon,
+                                            icon_style,
+                                            section.label(),
+                                        )
+                                    })
+                                    .inner;
+                                let response = if enabled {
+                                    response
+                                } else {
+                                    response.on_hover_text("이미지를 열면 사용할 수 있습니다.")
+                                };
+                                if response.clicked() {
                                     active_section = section;
                                 }
                                 ui.add_space(4.0);
@@ -138,6 +156,14 @@ impl SuiSuiViewApp {
 
         self.about_section = active_section;
         self.about_open = open;
+    }
+
+    fn has_image_info_target(&self) -> bool {
+        self.book_id.is_some()
+            && self
+                .source
+                .as_ref()
+                .is_some_and(|source| self.current_page < source.page_count())
     }
 }
 
@@ -443,6 +469,7 @@ fn info_card(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui
 }
 
 fn info_grid(ui: &mut egui::Ui, id: &'static str, rows: &[(&str, String)]) {
+    let value_width = (ui.available_width() - 132.0).max(160.0);
     egui::Grid::new(id)
         .num_columns(2)
         .spacing([16.0, 8.0])
@@ -450,7 +477,7 @@ fn info_grid(ui: &mut egui::Ui, id: &'static str, rows: &[(&str, String)]) {
         .show(ui, |ui| {
             for (label, value) in rows {
                 ui.label(RichText::new(*label).color(theme::TEXT_MUTED));
-                ui.add(egui::Label::new(value.as_str()).selectable(true));
+                wrapped_selectable_label(ui, value, value_width);
                 ui.end_row();
             }
         });
@@ -462,6 +489,7 @@ fn show_tag_grid(ui: &mut egui::Ui, id: &'static str, tags: &[ImageExifTag]) {
         return;
     }
 
+    let value_width = (ui.available_width() - 220.0).max(160.0);
     egui::Grid::new(id)
         .num_columns(3)
         .spacing([12.0, 6.0])
@@ -470,10 +498,25 @@ fn show_tag_grid(ui: &mut egui::Ui, id: &'static str, tags: &[ImageExifTag]) {
             for tag in tags {
                 ui.label(RichText::new(&tag.ifd).color(theme::TEXT_MUTED));
                 ui.label(&tag.tag);
-                ui.add(egui::Label::new(tag.value.as_str()).selectable(true));
+                truncated_selectable_label(ui, &tag.value, value_width);
                 ui.end_row();
             }
         });
+}
+
+fn wrapped_selectable_label(ui: &mut egui::Ui, value: impl AsRef<str>, max_width: f32) {
+    ui.scope(|ui| {
+        ui.set_max_width(max_width);
+        ui.add(egui::Label::new(value.as_ref()).selectable(true).wrap());
+    });
+}
+
+fn truncated_selectable_label(ui: &mut egui::Ui, value: &str, max_width: f32) {
+    ui.scope(|ui| {
+        ui.set_max_width(max_width);
+        ui.add(egui::Label::new(value).selectable(true).truncate())
+            .on_hover_text(value);
+    });
 }
 
 fn bytes_label(bytes: usize) -> String {
