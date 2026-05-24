@@ -4,12 +4,9 @@ use crate::core::source::SharedSource;
 use crate::core::state::ResizeFilter;
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use eframe::egui::{ColorImage, Context};
-use image::{
-    imageops::FilterType, metadata::Orientation, ImageDecoder, ImageReader, Limits, RgbaImage,
-};
-use lcms2::{Intent, PixelFormat as LcmsPixelFormat, Profile, Transform};
+use image::{imageops::FilterType, ImageReader, Limits, RgbaImage};
 use lru::LruCache;
-use std::io::{BufReader, Cursor};
+use std::io::Cursor;
 use std::num::NonZeroUsize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -21,9 +18,11 @@ use std::time::{Duration, Instant};
 mod bmp;
 mod gif;
 mod jpeg;
+mod metadata;
 mod png;
 mod scheduler;
 
+use metadata::{apply_embedded_icc_to_rgba, apply_exif_orientation_to_page, read_image_metadata};
 use scheduler::prioritized_jobs;
 
 const WORKER_CACHE_BYTES: usize = 96 * 1024 * 1024;
@@ -46,7 +45,7 @@ pub enum NavigationDirection {
 
 #[derive(Clone)]
 pub struct PreparedPage {
-    pub image: Arc<ColorImage>,
+    pub rgba: Arc<[u8]>,
     pub original_width: usize,
     pub original_height: usize,
     pub display_width: usize,
@@ -55,6 +54,16 @@ pub struct PreparedPage {
     pub target_long_edge: u32,
     pub decode_backend: DecodeBackend,
     pub notice: Option<String>,
+}
+
+impl PreparedPage {
+    pub fn image_size(&self) -> [usize; 2] {
+        [self.display_width, self.display_height]
+    }
+
+    pub fn color_image(&self) -> ColorImage {
+        ColorImage::from_rgba_unmultiplied(self.image_size(), &self.rgba)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -507,12 +516,11 @@ fn prepared_page_from_rgba(
     target_long_edge: u32,
     decode_backend: DecodeBackend,
 ) -> Result<PreparedPage, String> {
-    let byte_size = decoded_byte_size(display_width, display_height)?;
-    let color_image =
-        ColorImage::from_rgba_unmultiplied([display_width as usize, display_height as usize], &raw);
+    let rgba = Arc::<[u8]>::from(raw.into_boxed_slice());
+    let byte_size = prepared_page_byte_size(rgba.len())?;
 
     Ok(PreparedPage {
-        image: Arc::new(color_image),
+        rgba,
         original_width: original_width as usize,
         original_height: original_height as usize,
         display_width: display_width as usize,
@@ -548,185 +556,6 @@ fn image_filter_type(resize_filter: ResizeFilter) -> FilterType {
         ResizeFilter::FastTriangle => FilterType::Triangle,
         ResizeFilter::Nearest => FilterType::Nearest,
     }
-}
-
-struct ImageMetadata {
-    icc_profile: Result<Option<Vec<u8>>, String>,
-    orientation: Option<Orientation>,
-}
-
-fn read_image_metadata(bytes: &[u8], need_icc: bool, need_orientation: bool) -> ImageMetadata {
-    let mut metadata = ImageMetadata {
-        icc_profile: Ok(None),
-        orientation: None,
-    };
-    if !need_icc && !need_orientation {
-        return metadata;
-    }
-
-    match image_reader(bytes)
-        .and_then(|reader| reader.into_decoder().map_err(|error| error.to_string()))
-    {
-        Ok(mut decoder) => {
-            if need_icc {
-                metadata.icc_profile = decoder.icc_profile().map_err(|error| error.to_string());
-            }
-            if need_orientation {
-                metadata.orientation = decoder
-                    .orientation()
-                    .ok()
-                    .filter(|orientation| *orientation != Orientation::NoTransforms);
-            }
-        }
-        Err(error) => {
-            if need_icc {
-                metadata.icc_profile = Err(error);
-            }
-        }
-    }
-
-    if need_orientation && metadata.orientation.is_none() && jpeg::is_jpeg(bytes) {
-        metadata.orientation = exif_orientation_from_container(bytes)
-            .filter(|orientation| *orientation != Orientation::NoTransforms);
-    }
-
-    metadata
-}
-
-fn exif_orientation_from_container(bytes: &[u8]) -> Option<Orientation> {
-    let mut reader = BufReader::new(Cursor::new(bytes));
-    let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
-    let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
-    let value = field.value.get_uint(0)?;
-    Orientation::from_exif(u8::try_from(value).ok()?)
-}
-
-fn apply_embedded_icc_to_rgba(raw: &mut [u8], profile: &[u8]) -> Result<(), String> {
-    if raw.is_empty() {
-        return Ok(());
-    }
-    let source = Profile::new_icc(profile).map_err(|error| error.to_string())?;
-    let srgb = Profile::new_srgb();
-    let transform = Transform::<u8, u8>::new(
-        &source,
-        LcmsPixelFormat::RGBA_8,
-        &srgb,
-        LcmsPixelFormat::RGBA_8,
-        Intent::Perceptual,
-    )
-    .map_err(|error| error.to_string())?;
-    transform.transform_in_place(raw);
-    Ok(())
-}
-
-fn apply_exif_orientation_to_page(
-    mut page: PreparedPage,
-    orientation: Orientation,
-) -> PreparedPage {
-    if orientation == Orientation::NoTransforms {
-        return page;
-    }
-
-    let oriented = orient_color_image(&page.image, orientation);
-    page.image = Arc::new(oriented);
-    if orientation_swaps_dimensions(orientation) {
-        std::mem::swap(&mut page.original_width, &mut page.original_height);
-        std::mem::swap(&mut page.display_width, &mut page.display_height);
-    }
-    page
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct OrientationTransform {
-    rotation_quadrants: u8,
-    flip_horizontal: bool,
-    flip_vertical: bool,
-}
-
-fn orient_color_image(image: &ColorImage, orientation: Orientation) -> ColorImage {
-    let transform = match orientation {
-        Orientation::NoTransforms => OrientationTransform::default(),
-        Orientation::Rotate90 => OrientationTransform {
-            rotation_quadrants: 1,
-            ..OrientationTransform::default()
-        },
-        Orientation::Rotate180 => OrientationTransform {
-            rotation_quadrants: 2,
-            ..OrientationTransform::default()
-        },
-        Orientation::Rotate270 => OrientationTransform {
-            rotation_quadrants: 3,
-            ..OrientationTransform::default()
-        },
-        Orientation::FlipHorizontal => OrientationTransform {
-            flip_horizontal: true,
-            ..OrientationTransform::default()
-        },
-        Orientation::FlipVertical => OrientationTransform {
-            flip_vertical: true,
-            ..OrientationTransform::default()
-        },
-        Orientation::Rotate90FlipH => OrientationTransform {
-            rotation_quadrants: 1,
-            flip_horizontal: true,
-            ..OrientationTransform::default()
-        },
-        Orientation::Rotate270FlipH => OrientationTransform {
-            rotation_quadrants: 3,
-            flip_horizontal: true,
-            ..OrientationTransform::default()
-        },
-    };
-    transform_color_image(image, transform)
-}
-
-fn transform_color_image(image: &ColorImage, transform: OrientationTransform) -> ColorImage {
-    if transform == OrientationTransform::default() {
-        return image.clone();
-    }
-
-    let [width, height] = image.size;
-    let rotation = transform.rotation_quadrants % 4;
-    let output_size = if rotation % 2 == 1 {
-        [height, width]
-    } else {
-        [width, height]
-    };
-    let [out_width, out_height] = output_size;
-    let mut pixels = Vec::with_capacity(out_width * out_height);
-    for dst_y in 0..out_height {
-        for dst_x in 0..out_width {
-            let rotated_x = if transform.flip_horizontal {
-                out_width - 1 - dst_x
-            } else {
-                dst_x
-            };
-            let rotated_y = if transform.flip_vertical {
-                out_height - 1 - dst_y
-            } else {
-                dst_y
-            };
-            let (src_x, src_y) = match rotation {
-                0 => (rotated_x, rotated_y),
-                1 => (rotated_y, height - 1 - rotated_x),
-                2 => (width - 1 - rotated_x, height - 1 - rotated_y),
-                3 => (width - 1 - rotated_y, rotated_x),
-                _ => unreachable!(),
-            };
-            pixels.push(image.pixels[src_y * width + src_x]);
-        }
-    }
-    ColorImage::new(output_size, pixels)
-}
-
-fn orientation_swaps_dimensions(orientation: Orientation) -> bool {
-    matches!(
-        orientation,
-        Orientation::Rotate90
-            | Orientation::Rotate270
-            | Orientation::Rotate90FlipH
-            | Orientation::Rotate270FlipH
-    )
 }
 
 fn decode_limits() -> Limits {
@@ -1050,6 +879,21 @@ fn decoded_byte_size(width: u32, height: u32) -> Result<usize, String> {
         .ok_or_else(|| "Decoded image dimensions overflow memory limits".to_owned())
 }
 
+fn prepared_page_byte_size(upload_bytes: usize) -> Result<usize, String> {
+    let byte_size = upload_bytes;
+    if byte_size > MAX_DECODED_PAGE_BYTES {
+        return Err(format!(
+            "Prepared page is too large: {:.1} MB",
+            byte_size as f32 / (1024.0 * 1024.0)
+        ));
+    }
+    Ok(byte_size)
+}
+
+fn retained_page_byte_size(upload_bytes: usize) -> usize {
+    upload_bytes
+}
+
 fn clear_cache_on_book_or_decode_change(
     source: &Option<SharedSource>,
     previous_book_id: Option<&str>,
@@ -1167,16 +1011,15 @@ fn page_cache_key(
 #[cfg(test)]
 mod tests {
     use super::{
-        display_dimensions, display_dimensions_with_upscale, image_filter_type, orient_color_image,
-        orientation_swaps_dimensions, page_cache_key, prepare_image, prepare_image_with_strategy,
-        run_worker, DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection,
-        WorkerCommand, WorkerEvent, WorkerOptions, MAX_TARGET_LONG_EDGE,
+        display_dimensions, display_dimensions_with_upscale, image_filter_type, page_cache_key,
+        prepare_image, prepare_image_with_strategy, run_worker, DecodeBackend, DecodeOptions,
+        DecodeStrategy, NavigationDirection, WorkerCommand, WorkerEvent, WorkerOptions,
+        MAX_TARGET_LONG_EDGE,
     };
     use crate::core::source::{BookSource, SharedSource, SourceError};
     use crate::core::state::ResizeFilter;
     use crossbeam_channel::unbounded;
-    use eframe::egui::{Color32, ColorImage};
-    use image::{metadata::Orientation, DynamicImage, ImageFormat, Rgb, RgbImage};
+    use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
     use std::io::Cursor;
     use std::path::{Path, PathBuf};
     use std::sync::{
@@ -1207,6 +1050,17 @@ mod tests {
             assert_eq!(page.display_width, 48);
             assert_eq!(page.display_height, 32);
         }
+    }
+
+    #[test]
+    fn prepared_page_retains_single_rgba_buffer_budget() {
+        let bytes = encoded_test_image(ImageFormat::Png);
+        let page = prepare_image(&bytes, 1024).unwrap();
+
+        assert_eq!(page.image_size(), [48, 32]);
+        assert_eq!(page.rgba.len(), 48 * 32 * 4);
+        assert_eq!(page.byte_size, page.rgba.len());
+        assert_eq!(page.color_image().size, [48, 32]);
     }
 
     #[test]
@@ -1429,23 +1283,6 @@ mod tests {
         assert_ne!(normal, icc);
         assert_ne!(normal, lanczos);
         assert_ne!(normal, upscaled);
-    }
-
-    #[test]
-    fn exif_orientation_swaps_and_rotates_pixels() {
-        let image = ColorImage::new(
-            [2, 1],
-            vec![Color32::from_rgb(10, 20, 30), Color32::from_rgb(200, 0, 10)],
-        );
-
-        let output = orient_color_image(&image, Orientation::Rotate90);
-
-        assert_eq!(output.size, [1, 2]);
-        assert_eq!(output.pixels[0], Color32::from_rgb(10, 20, 30));
-        assert_eq!(output.pixels[1], Color32::from_rgb(200, 0, 10));
-        assert!(orientation_swaps_dimensions(Orientation::Rotate90));
-        assert!(orientation_swaps_dimensions(Orientation::Rotate270));
-        assert!(!orientation_swaps_dimensions(Orientation::Rotate180));
     }
 
     fn encoded_test_image(format: ImageFormat) -> Vec<u8> {

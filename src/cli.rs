@@ -17,6 +17,7 @@ Usage:
   suisuiview-cli --effect-bench <path> [--target-long-edge <px>] [--effect-report <report.json>] [--effect-report-default]
   suisuiview-cli --upscale-bench <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-report <report.json>] [--upscale-report-default]
   suisuiview-cli --upscale-quality-scan <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-quality-report <report.json>] [--upscale-quality-report-default] [--upscale-quality-visuals <dir>]
+  suisuiview-cli --gpu-copy-bench <path> [--target-long-edge <px>] [--gpu-copy-iterations <count>] [--gpu-copy-max-pages <count>] [--gpu-copy-report <report.json>] [--gpu-copy-report-default]
 
 Options:
   -h, --help    Show this help.
@@ -58,6 +59,13 @@ pub enum CliCommand {
         target_long_edge: u32,
         report_path: Option<PathBuf>,
         visual_dir: Option<PathBuf>,
+    },
+    GpuCopyBench {
+        path: PathBuf,
+        target_long_edge: u32,
+        iterations: usize,
+        max_pages: usize,
+        report_path: Option<PathBuf>,
     },
 }
 
@@ -124,6 +132,9 @@ pub fn parse_args(args: Vec<OsString>) -> Result<CliAction, CliError> {
     if first == "--upscale-quality-scan" {
         return parse_upscale_quality_scan(args).map(CliAction::Command);
     }
+    if first == "--gpu-copy-bench" {
+        return parse_gpu_copy_bench(args).map(CliAction::Command);
+    }
 
     Err(CliError::new(format!(
         "unknown {CLI_NAME} command: {}",
@@ -145,6 +156,7 @@ fn is_cli_command_arg(arg: &OsString) -> bool {
         || arg == "--effect-bench"
         || arg == "--upscale-bench"
         || arg == "--upscale-quality-scan"
+        || arg == "--gpu-copy-bench"
 }
 
 impl CliCommand {
@@ -208,6 +220,20 @@ impl CliCommand {
                 target_long_edge,
             )
             .map_err(|error| format!("upscale quality scan failed: {error}")),
+            Self::GpuCopyBench {
+                path,
+                target_long_edge,
+                iterations,
+                max_pages,
+                report_path,
+            } => crate::core::gpu_copy_bench::run_gpu_copy_bench(
+                &path,
+                report_path.as_deref(),
+                target_long_edge,
+                iterations,
+                max_pages,
+            )
+            .map_err(|error| format!("gpu copy bench failed: {error}")),
         }
     }
 }
@@ -370,6 +396,41 @@ fn parse_upscale_quality_scan(
     })
 }
 
+fn parse_gpu_copy_bench(mut args: impl Iterator<Item = OsString>) -> Result<CliCommand, CliError> {
+    let path = required_path(&mut args, "usage: suisuiview-cli --gpu-copy-bench <path>")?;
+    let mut target_long_edge = DEFAULT_TARGET_LONG_EDGE;
+    let mut iterations = crate::core::gpu_copy_bench::default_gpu_copy_iterations();
+    let mut max_pages = crate::core::gpu_copy_bench::default_gpu_copy_max_pages();
+    let mut report_path = None;
+
+    while let Some(arg) = args.next() {
+        if arg == "--target-long-edge" {
+            target_long_edge = required_u32(&mut args, "--target-long-edge")?;
+        } else if arg == "--gpu-copy-iterations" {
+            iterations = required_usize(&mut args, "--gpu-copy-iterations")?;
+        } else if arg == "--gpu-copy-max-pages" {
+            max_pages = required_usize(&mut args, "--gpu-copy-max-pages")?;
+        } else if arg == "--gpu-copy-report" {
+            report_path = Some(required_path(
+                &mut args,
+                "--gpu-copy-report requires a path",
+            )?);
+        } else if arg == "--gpu-copy-report-default" {
+            report_path = Some(crate::core::gpu_copy_bench::default_gpu_copy_report_path());
+        } else {
+            return Err(unknown_arg(arg));
+        }
+    }
+
+    Ok(CliCommand::GpuCopyBench {
+        path,
+        target_long_edge,
+        iterations: iterations.max(1),
+        max_pages: max_pages.max(1),
+        report_path,
+    })
+}
+
 fn required_path(
     args: &mut impl Iterator<Item = OsString>,
     message: &'static str,
@@ -383,6 +444,15 @@ fn required_u32(
     args: &mut impl Iterator<Item = OsString>,
     flag: &'static str,
 ) -> Result<u32, CliError> {
+    args.next()
+        .and_then(|value| value.to_string_lossy().parse().ok())
+        .ok_or_else(|| CliError::new(format!("{flag} requires a positive integer")))
+}
+
+fn required_usize(
+    args: &mut impl Iterator<Item = OsString>,
+    flag: &'static str,
+) -> Result<usize, CliError> {
     args.next()
         .and_then(|value| value.to_string_lossy().parse().ok())
         .ok_or_else(|| CliError::new(format!("{flag} requires a positive integer")))
@@ -457,9 +527,44 @@ mod tests {
     #[test]
     fn gui_redirect_matches_existing_cli_entrypoints() {
         assert!(is_gui_cli_redirect_arg(&OsString::from("--perf-scan")));
+        assert!(is_gui_cli_redirect_arg(&OsString::from("--gpu-copy-bench")));
         assert!(is_gui_cli_redirect_arg(&OsString::from("--help")));
         assert!(!is_gui_cli_redirect_arg(&OsString::from(
             "C:/books/book.cbz"
         )));
+    }
+
+    #[test]
+    fn gpu_copy_bench_preserves_iteration_flags() {
+        let action = parse_args(vec![
+            OsString::from("--gpu-copy-bench"),
+            OsString::from("book.cbz"),
+            OsString::from("--target-long-edge"),
+            OsString::from("4096"),
+            OsString::from("--gpu-copy-iterations"),
+            OsString::from("7"),
+            OsString::from("--gpu-copy-max-pages"),
+            OsString::from("3"),
+            OsString::from("--gpu-copy-report"),
+            OsString::from("gpu-copy.json"),
+        ])
+        .unwrap();
+
+        let CliAction::Command(CliCommand::GpuCopyBench {
+            path,
+            target_long_edge,
+            iterations,
+            max_pages,
+            report_path,
+        }) = action
+        else {
+            panic!("expected gpu copy bench command");
+        };
+
+        assert_eq!(path, PathBuf::from("book.cbz"));
+        assert_eq!(target_long_edge, 4096);
+        assert_eq!(iterations, 7);
+        assert_eq!(max_pages, 3);
+        assert_eq!(report_path, Some(PathBuf::from("gpu-copy.json")));
     }
 }

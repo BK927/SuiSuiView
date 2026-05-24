@@ -1,9 +1,10 @@
 use super::ui::{dialog, icons, theme};
-use super::{apply_window_level, cache_budget_bytes, SuiSuiViewApp};
-use super::{settings_bookmarks, settings_input};
+use super::{
+    apply_window_level, settings_bookmarks, settings_input, settings_performance, SuiSuiViewApp,
+};
 use crate::core::state::{
-    AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, DecodeMode,
-    DisplayUpscaler, EdgePageAction, GpuEffectMode, PageTransitionStyle, ResizeFilter,
+    AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, DisplayUpscaler, EdgePageAction,
+    GpuEffectMode, PageTransitionStyle, ResizeFilter,
 };
 use eframe::egui::{self, RichText};
 use rfd::FileDialog;
@@ -162,7 +163,13 @@ impl SuiSuiViewApp {
                                         );
                                     }
                                     SettingsSection::Performance => {
-                                        show_performance_settings(ui, &mut draft, &mut changed);
+                                        settings_performance::show_performance_settings(
+                                            ui,
+                                            &mut draft,
+                                            self.target_long_edge,
+                                            self.visible_page_count(),
+                                            &mut changed,
+                                        );
                                     }
                                     SettingsSection::Bookmarks => {
                                         self.show_bookmark_settings(ui, &mut draft, &mut changed);
@@ -532,104 +539,6 @@ fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, ch
         .show(ui, |ui| {
             show_ai_settings(ui, draft, changed);
         });
-}
-
-fn show_performance_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed: &mut bool) {
-    setting_group(
-        ui,
-        "이미지 읽기",
-        "페이지 파일을 읽고 표시용 이미지로 준비하는 방식입니다.",
-        |ui| {
-            egui::Grid::new("settings_performance_grid")
-            .num_columns(2)
-            .spacing([14.0, 8.0])
-            .show(ui, |ui| {
-                grid_label_with_help(
-                    ui,
-                    "디코딩 모드",
-                    "이미지를 읽는 내부 방식입니다. 자동 모드는 가능한 경우 빠른 경로를 사용합니다.",
-                );
-                egui::ComboBox::from_id_salt("decode_mode")
-                    .selected_text(draft.decode_mode.label())
-                    .show_ui(ui, |ui| {
-                        for mode in DecodeMode::ALL {
-                            *changed |= ui
-                                .selectable_value(&mut draft.decode_mode, mode, mode.label())
-                                .changed();
-                        }
-                    });
-                ui.end_row();
-            });
-        },
-    );
-
-    ui.add_space(8.0);
-    setting_group(
-        ui,
-        "미리 불러오기",
-        "페이지 넘김을 부드럽게 하기 위해 주변 페이지를 미리 준비합니다.",
-        |ui| {
-            *changed |= checkbox_with_help(
-                ui,
-                &mut draft.prefetch_enabled,
-                "다음 페이지 미리 캐시",
-                "현재 페이지 주변의 다음 페이지를 미리 읽어 페이지 넘김 대기 시간을 줄입니다.",
-            );
-            *changed |= checkbox_with_help(
-                ui,
-                &mut draft.progressive_preview_enabled,
-                "저해상도 먼저 표시",
-                "큰 이미지를 먼저 낮은 해상도로 보여준 뒤 선명한 이미지로 교체합니다.",
-            );
-        },
-    );
-
-    ui.add_space(8.0);
-    setting_group(
-        ui,
-        "메모리",
-        "준비된 페이지 이미지를 얼마나 오래 보관할지 정합니다.",
-        |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("페이지 캐시 메모리");
-                info_icon(
-                    ui,
-                    "캐시가 클수록 다시 보는 페이지가 빨리 뜨지만 메모리를 더 사용합니다.",
-                );
-                *changed |= ui
-                    .radio_value(&mut draft.cache_memory_mode, CacheMemoryMode::Auto, "자동")
-                    .changed();
-                *changed |= ui
-                    .radio_value(
-                        &mut draft.cache_memory_mode,
-                        CacheMemoryMode::Manual,
-                        "수동",
-                    )
-                    .changed();
-                ui.add_enabled_ui(draft.cache_memory_mode == CacheMemoryMode::Manual, |ui| {
-                    *changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut draft.manual_cache_mb)
-                                .range(64..=2048)
-                                .speed(16)
-                                .suffix(" MB"),
-                        )
-                        .changed();
-                });
-            });
-
-            if draft.cache_memory_mode == CacheMemoryMode::Auto {
-                ui.label(
-                    RichText::new(format!(
-                        "현재 {:.0} MB",
-                        cache_budget_bytes(draft) as f32 / (1024.0 * 1024.0)
-                    ))
-                    .size(12.0)
-                    .color(theme::TEXT_MUTED),
-                );
-            }
-        },
-    );
 }
 
 fn show_ai_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed: &mut bool) {

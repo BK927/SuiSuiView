@@ -79,6 +79,7 @@ fn is_gui_cli_redirect_arg(arg: &std::ffi::OsString) -> bool {
         || arg == "--effect-bench"
         || arg == "--upscale-bench"
         || arg == "--upscale-quality-scan"
+        || arg == "--gpu-copy-bench"
 }
 
 fn startup_open_path() -> Option<PathBuf> {

@@ -137,7 +137,7 @@ fn take_bookmark_display_line<'a>(
         .filter_map(|(index, ch)| {
             matches!(ch, '\\' | '/' | ' ' | '|').then_some(index + ch.len_utf8())
         })
-        .last();
+        .next_back();
     let end = last_break.unwrap_or(last_fit);
 
     (text[..end].trim_end(), &text[end..])

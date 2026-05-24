@@ -153,22 +153,21 @@ pub fn scan_upscale_quality(
 
         match result {
             Ok((input, baseline)) => {
-                let output_size = baseline.image.size;
-                page.source_width = Some(input.image.size[0]);
-                page.source_height = Some(input.image.size[1]);
+                let input_image = input.color_image();
+                let baseline_image = baseline.color_image();
+                let output_size = baseline_image.size;
+                page.source_width = Some(input_image.size[0]);
+                page.source_height = Some(input_image.size[1]);
                 page.output_width = Some(output_size[0]);
                 page.output_height = Some(output_size[1]);
 
-                let mut visual_images = visual_dir.is_some().then(|| {
-                    vec![(
-                        "reference-lanczos3".to_owned(),
-                        baseline.image.as_ref().clone(),
-                    )]
-                });
+                let mut visual_images = visual_dir
+                    .is_some()
+                    .then(|| vec![("reference-lanczos3".to_owned(), baseline_image.clone())]);
 
                 let bicubic = run_cpu_case(
-                    &input.image,
-                    &baseline.image,
+                    &input_image,
+                    &baseline_image,
                     output_size,
                     "Bicubic",
                     ResizeFilter::Bicubic,
@@ -180,8 +179,8 @@ pub fn scan_upscale_quality(
                 }
 
                 let lanczos3 = run_cpu_case(
-                    &input.image,
-                    &baseline.image,
+                    &input_image,
+                    &baseline_image,
                     output_size,
                     "Lanczos3",
                     ResizeFilter::Lanczos3,
@@ -193,8 +192,8 @@ pub fn scan_upscale_quality(
                 }
 
                 let triangle = run_cpu_case(
-                    &input.image,
-                    &baseline.image,
+                    &input_image,
+                    &baseline_image,
                     output_size,
                     "Fast/Triangle",
                     ResizeFilter::FastTriangle,
@@ -209,8 +208,8 @@ pub fn scan_upscale_quality(
                     for method in DisplayUpscaler::GPU_METHODS {
                         let image = run_gpu_case(
                             gpu,
-                            &input.image,
-                            &baseline.image,
+                            &input_image,
+                            &baseline_image,
                             output_size,
                             method,
                             &mut page,

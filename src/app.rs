@@ -53,6 +53,7 @@ mod platform;
 mod settings;
 mod settings_bookmarks;
 mod settings_input;
+mod settings_performance;
 mod ui;
 mod window;
 
@@ -141,7 +142,8 @@ enum PageVisual {
     },
     ReadyGpu {
         source_key: GpuPaintSourceKey,
-        image: Arc<ColorImage>,
+        image_size: [usize; 2],
+        rgba: Arc<[u8]>,
         size: Vec2,
         effects: ViewEffects,
         display_upscaler: DisplayUpscaler,
@@ -844,7 +846,11 @@ impl SuiSuiViewApp {
     }
 
     fn worker_cache_budget_bytes(&self) -> usize {
-        (self.cpu_cache_budget_bytes() / 2).clamp(32 * 1024 * 1024, 512 * 1024 * 1024)
+        worker_cache_budget_bytes_for(
+            self.cpu_cache_budget_bytes(),
+            self.target_long_edge,
+            self.visible_page_count(),
+        )
     }
 
     fn insert_prepared_page(&mut self, key: PageCacheKey, page: Arc<PreparedPage>) {
@@ -907,7 +913,7 @@ impl SuiSuiViewApp {
         let mut retained = Vec::new();
         let max_pops = self.upscaled_pages.len();
         let mut pops = 0usize;
-        let budget_bytes = (self.cpu_cache_budget_bytes() / 2).max(32 * 1024 * 1024);
+        let budget_bytes = upscaled_cache_budget_bytes_for(self.cpu_cache_budget_bytes());
         while self.upscaled_bytes > budget_bytes && pops < max_pops {
             let Some((key, page)) = self.upscaled_pages.pop_lru() else {
                 break;
@@ -1846,7 +1852,7 @@ impl SuiSuiViewApp {
             let best_key = self.best_page_key(key)?;
             self.decoded_pages.peek(&best_key)?
         };
-        Some(apply_effects_to_image(&page.image, self.effects))
+        Some(apply_effects_to_image(&page.color_image(), self.effects))
     }
 
     fn compose_spread_image(&self, indices: &[usize], target_long_edge: u32) -> Option<ColorImage> {
@@ -1995,7 +2001,8 @@ impl SuiSuiViewApp {
                     upscaled,
                     generation: if upscaled { self.upscale_generation } else { 0 },
                 },
-                image: page.image.clone(),
+                image_size: page.image_size(),
+                rgba: page.rgba.clone(),
                 size: transformed_page_size(
                     page.original_width as f32,
                     page.original_height as f32,
@@ -2006,11 +2013,11 @@ impl SuiSuiViewApp {
             };
         }
         let image = if self.effects == ViewEffects::default() {
-            page.image.clone()
+            Arc::new(page.color_image())
         } else {
             #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
             let effects_started = Instant::now();
-            let image = Arc::new(apply_effects_to_image(&page.image, self.effects));
+            let image = Arc::new(apply_effects_to_image(&page.color_image(), self.effects));
             #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
             perf::record_page_effects_cpu(effects_started, index, best_key.target_long_edge);
             image
@@ -2224,7 +2231,7 @@ impl SuiSuiViewApp {
         if !rect.contains(pointer_pos) {
             return;
         }
-        let zone_width = rect.width().min(96.0).max(56.0);
+        let zone_width = rect.width().clamp(56.0, 96.0);
         let side = if pointer_pos.x <= rect.left() + zone_width {
             Some((ui::icons::CHEVRON_LEFT, NavigationDirection::Backward))
         } else if pointer_pos.x >= rect.right() - zone_width {
@@ -2851,7 +2858,8 @@ impl SuiSuiViewApp {
                 }
                 PageVisual::ReadyGpu {
                     source_key,
-                    image,
+                    image_size,
+                    rgba,
                     effects,
                     display_upscaler,
                     ..
@@ -2861,7 +2869,8 @@ impl SuiSuiViewApp {
                         GpuPaintRequest {
                             rect: page_rect,
                             source_key,
-                            image,
+                            image_size,
+                            rgba,
                             effects,
                             display_upscaler,
                             opacity: request.alpha,
@@ -3136,6 +3145,84 @@ fn automatic_cache_budget_bytes() -> usize {
         let target = total.saturating_mul(3) / 100;
         target.clamp(128 * 1024 * 1024, 768 * 1024 * 1024)
     })
+}
+
+const BYTES_PER_RGBA_PIXEL: usize = 4;
+const MIN_WORKER_CACHE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_WORKER_CACHE_BYTES: usize = 512 * 1024 * 1024;
+const MAX_UPSCALED_CACHE_BYTES: usize = 256 * 1024 * 1024;
+const PREFETCH_FORWARD_PAGES: usize = 3;
+const PREFETCH_BACKWARD_PAGES: usize = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CacheBudgetSummary {
+    pub(super) cpu_prepared_bytes: usize,
+    pub(super) worker_prefetch_bytes: usize,
+    pub(super) upscaled_bytes: usize,
+    pub(super) gpu_source_texture_bytes: usize,
+    pub(super) gpu_intermediate_texture_bytes: usize,
+    pub(super) estimated_page_bytes: usize,
+    pub(super) estimated_cpu_pages: usize,
+    pub(super) estimated_worker_pages: usize,
+}
+
+pub(super) fn cache_budget_summary(
+    settings: &AppSettings,
+    target_long_edge: u32,
+    visible_pages: usize,
+) -> CacheBudgetSummary {
+    let cpu_prepared_bytes = cache_budget_bytes(settings);
+    let estimated_page_bytes = estimated_page_bytes_for_target(target_long_edge);
+    let worker_prefetch_bytes =
+        worker_cache_budget_bytes_for(cpu_prepared_bytes, target_long_edge, visible_pages);
+    let upscaled_bytes = upscaled_cache_budget_bytes_for(cpu_prepared_bytes);
+    CacheBudgetSummary {
+        cpu_prepared_bytes,
+        worker_prefetch_bytes,
+        upscaled_bytes,
+        gpu_source_texture_bytes: gpu_paint::GPU_SOURCE_TEXTURE_BUDGET_BYTES,
+        gpu_intermediate_texture_bytes: gpu_paint::GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES,
+        estimated_page_bytes,
+        estimated_cpu_pages: estimated_page_capacity(cpu_prepared_bytes, estimated_page_bytes),
+        estimated_worker_pages: estimated_page_capacity(
+            worker_prefetch_bytes,
+            estimated_page_bytes,
+        ),
+    }
+}
+
+fn worker_cache_budget_bytes_for(
+    cpu_budget_bytes: usize,
+    target_long_edge: u32,
+    visible_pages: usize,
+) -> usize {
+    let nearby_page_goal = visible_pages
+        .max(1)
+        .saturating_add(PREFETCH_FORWARD_PAGES)
+        .saturating_add(PREFETCH_BACKWARD_PAGES);
+    let desired_prefetch_bytes =
+        estimated_page_bytes_for_target(target_long_edge).saturating_mul(nearby_page_goal);
+    let cpu_bounded_goal = desired_prefetch_bytes.min(cpu_budget_bytes.max(MIN_WORKER_CACHE_BYTES));
+    (cpu_budget_bytes / 2)
+        .max(cpu_bounded_goal)
+        .clamp(MIN_WORKER_CACHE_BYTES, MAX_WORKER_CACHE_BYTES)
+}
+
+fn upscaled_cache_budget_bytes_for(cpu_budget_bytes: usize) -> usize {
+    (cpu_budget_bytes / 2).clamp(MIN_WORKER_CACHE_BYTES, MAX_UPSCALED_CACHE_BYTES)
+}
+
+fn estimated_page_bytes_for_target(target_long_edge: u32) -> usize {
+    let edge = clamp_target_long_edge(target_long_edge) as usize;
+    edge.saturating_mul(edge)
+        .saturating_mul(BYTES_PER_RGBA_PIXEL)
+}
+
+fn estimated_page_capacity(budget_bytes: usize, page_bytes: usize) -> usize {
+    if page_bytes == 0 {
+        return 0;
+    }
+    (budget_bytes / page_bytes).max(1)
 }
 
 fn context_selectable(
@@ -3947,6 +4034,23 @@ mod tests {
     }
 
     #[test]
+    fn cache_budget_summary_uses_rgba_page_estimates() {
+        let settings = AppSettings {
+            cache_memory_mode: CacheMemoryMode::Manual,
+            manual_cache_mb: 160,
+            ..AppSettings::default()
+        };
+
+        let summary = super::cache_budget_summary(&settings, 2048, 1);
+
+        assert_eq!(summary.cpu_prepared_bytes, 160 * 1024 * 1024);
+        assert_eq!(summary.estimated_page_bytes, 2048 * 2048 * 4);
+        assert_eq!(summary.estimated_cpu_pages, 10);
+        assert_eq!(summary.worker_prefetch_bytes, 80 * 1024 * 1024);
+        assert_eq!(summary.estimated_worker_pages, 5);
+    }
+
+    #[test]
     fn delete_target_uses_archive_for_zip_and_page_file_for_folders() {
         let archive = PathBuf::from("book.cbz");
         let page = PathBuf::from("page-001.jpg");
@@ -4020,10 +4124,7 @@ mod tests {
 
     fn dummy_page(target_long_edge: u32) -> Arc<PreparedPage> {
         Arc::new(PreparedPage {
-            image: Arc::new(ColorImage::from_rgba_unmultiplied(
-                [1, 1],
-                &[255, 255, 255, 255],
-            )),
+            rgba: Arc::<[u8]>::from([255, 255, 255, 255]),
             original_width: 1,
             original_height: 1,
             display_width: 1,

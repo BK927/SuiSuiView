@@ -1,13 +1,12 @@
 use super::{PageCacheKey, SuiSuiViewApp};
 use crate::core::effects::ViewEffects;
 use crate::core::gpu_effect::{
-    color_image_to_rgba, output_size_for_effects, params_for_effects,
-    params_for_effects_with_shader_method,
+    output_size_for_effects, params_for_effects, params_for_effects_with_shader_method,
 };
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
 use crate::core::state::{DisplayUpscaler, GpuEffectMode};
-use eframe::egui::{self, ColorImage, PaintCallbackInfo, Rect};
+use eframe::egui::{self, PaintCallbackInfo, Rect};
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use lru::LruCache;
 use std::borrow::Cow;
@@ -18,9 +17,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wgpu::util::DeviceExt;
 
-const GPU_SOURCE_TEXTURE_BUDGET_BYTES: usize = 192 * 1024 * 1024;
+pub(super) const GPU_SOURCE_TEXTURE_BUDGET_BYTES: usize = 192 * 1024 * 1024;
+pub(super) const GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES: usize = 256 * 1024 * 1024;
 const GPU_SOURCE_TEXTURE_CACHE_LIMIT: usize = 32;
 const GPU_DRAW_BIND_GROUP_CACHE_LIMIT: usize = 16;
+const GPU_INTERMEDIATE_TEXTURE_CACHE_LIMIT: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct GpuPaintSourceKey {
@@ -33,7 +34,8 @@ pub(super) struct GpuPaintSourceKey {
 pub(super) struct GpuPaintRequest {
     pub(super) rect: Rect,
     pub(super) source_key: GpuPaintSourceKey,
-    pub(super) image: Arc<ColorImage>,
+    pub(super) image_size: [usize; 2],
+    pub(super) rgba: Arc<[u8]>,
     pub(super) effects: ViewEffects,
     pub(super) display_upscaler: DisplayUpscaler,
     pub(super) opacity: f32,
@@ -81,7 +83,8 @@ impl SuiSuiViewApp {
         };
         let callback = GpuEffectCallback {
             source_key: request.source_key,
-            image: request.image,
+            image_size: request.image_size,
+            rgba: request.rgba,
             effects: request.effects,
             display_upscaler: request.display_upscaler,
             opacity: request.opacity.clamp(0.0, 1.0),
@@ -105,7 +108,8 @@ impl SuiSuiViewApp {
 
 struct GpuEffectCallback {
     source_key: GpuPaintSourceKey,
-    image: Arc<ColorImage>,
+    image_size: [usize; 2],
+    rgba: Arc<[u8]>,
     effects: ViewEffects,
     display_upscaler: DisplayUpscaler,
     opacity: f32,
@@ -132,16 +136,27 @@ impl CallbackTrait for GpuEffectCallback {
         if resources.target_format != self.target_format {
             *resources = GpuPaintResources::new(device, self.target_format);
         }
-        resources.ensure_source_texture(device, queue, self.source_key, &self.image);
+        resources.ensure_source_texture(
+            device,
+            queue,
+            self.source_key,
+            self.image_size,
+            &self.rgba,
+        );
 
-        let output_size = output_size_for_effects(self.image.size, self.effects);
+        let output_size = output_size_for_effects(self.image_size, self.effects);
         let (origin, target_size) = viewport_rect(self.rect, screen_descriptor);
-        if let Some(source) = resources.source_textures.peek(&self.source_key) {
+        if let Some(source_bind_group) = resources
+            .source_textures
+            .peek(&self.source_key)
+            .map(|source| source.bind_group.clone())
+        {
             let draw_state = resources.prepare_draw_state(
                 device,
                 egui_encoder,
-                &source.view,
-                self.image.size,
+                self.source_key,
+                source_bind_group,
+                self.image_size,
                 output_size,
                 self.effects,
                 self.display_upscaler,
@@ -149,7 +164,7 @@ impl CallbackTrait for GpuEffectCallback {
                 target_size,
                 self.opacity,
             );
-            resources.draw_bind_groups.put(self.draw_id, draw_state);
+            resources.insert_draw_state(self.draw_id, draw_state);
         }
         Vec::new()
     }
@@ -167,29 +182,62 @@ impl CallbackTrait for GpuEffectCallback {
             return;
         };
         render_pass.set_pipeline(&resources.pipeline);
-        render_pass.set_bind_group(0, &draw_state.bind_group, &[]);
+        render_pass.set_bind_group(0, draw_state.texture_bind_group.as_ref(), &[]);
+        render_pass.set_bind_group(1, &draw_state.params_bind_group, &[]);
         render_pass.draw(0..3, 0..1);
     }
 }
 
 struct GpuPaintResources {
     target_format: wgpu::TextureFormat,
-    bind_group_layout: wgpu::BindGroupLayout,
+    texture_bind_group_layout: wgpu::BindGroupLayout,
+    params_bind_group_layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
     source_textures: LruCache<GpuPaintSourceKey, GpuSourceTexture>,
     source_texture_bytes: usize,
     draw_bind_groups: LruCache<u64, GpuDrawState>,
+    draw_state_intermediate_bytes: usize,
+    intermediate_textures: LruCache<u64, Arc<GpuIntermediateTexture>>,
+    intermediate_texture_bytes: usize,
 }
 
 struct GpuSourceTexture {
     _texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    _view: wgpu::TextureView,
+    bind_group: Arc<wgpu::BindGroup>,
     byte_size: usize,
 }
 
 struct GpuDrawState {
-    bind_group: wgpu::BindGroup,
-    _intermediate_texture: Option<wgpu::Texture>,
+    texture_bind_group: Arc<wgpu::BindGroup>,
+    params_bind_group: wgpu::BindGroup,
+    _intermediate_pin: Option<Arc<GpuIntermediateTexture>>,
+    intermediate_byte_size: usize,
+}
+
+struct GpuIntermediateTexture {
+    _texture: wgpu::Texture,
+    _view: wgpu::TextureView,
+    bind_group: Arc<wgpu::BindGroup>,
+    byte_size: usize,
+}
+
+impl GpuDrawState {
+    fn new(
+        texture_bind_group: Arc<wgpu::BindGroup>,
+        params_bind_group: wgpu::BindGroup,
+        intermediate_pin: Option<Arc<GpuIntermediateTexture>>,
+    ) -> Self {
+        let intermediate_byte_size = intermediate_pin
+            .as_ref()
+            .map_or(0, |texture| texture.byte_size);
+        Self {
+            texture_bind_group,
+            params_bind_group,
+            _intermediate_pin: intermediate_pin,
+            intermediate_byte_size,
+        }
+    }
 }
 
 impl GpuPaintResources {
@@ -200,10 +248,10 @@ impl GpuPaintResources {
                 "../core/gpu_effect.wgsl"
             ))),
         });
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("suisuiview-gpu-effect-layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("suisuiview-gpu-effect-texture-layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
@@ -212,9 +260,13 @@ impl GpuPaintResources {
                         multisampled: false,
                     },
                     count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
+                }],
+            });
+        let params_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("suisuiview-gpu-effect-params-layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
@@ -222,12 +274,11 @@ impl GpuPaintResources {
                         min_binding_size: None,
                     },
                     count: None,
-                },
-            ],
-        });
+                }],
+            });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("suisuiview-gpu-effect-pipeline-layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[&texture_bind_group_layout, &params_bind_group_layout],
             push_constant_ranges: &[],
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -257,7 +308,8 @@ impl GpuPaintResources {
         });
         Self {
             target_format,
-            bind_group_layout,
+            texture_bind_group_layout,
+            params_bind_group_layout,
             pipeline,
             source_textures: LruCache::new(
                 NonZeroUsize::new(GPU_SOURCE_TEXTURE_CACHE_LIMIT).unwrap(),
@@ -266,6 +318,11 @@ impl GpuPaintResources {
             draw_bind_groups: LruCache::new(
                 NonZeroUsize::new(GPU_DRAW_BIND_GROUP_CACHE_LIMIT).unwrap(),
             ),
+            draw_state_intermediate_bytes: 0,
+            intermediate_textures: LruCache::new(
+                NonZeroUsize::new(GPU_INTERMEDIATE_TEXTURE_CACHE_LIMIT).unwrap(),
+            ),
+            intermediate_texture_bytes: 0,
         }
     }
 
@@ -274,15 +331,19 @@ impl GpuPaintResources {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         key: GpuPaintSourceKey,
-        image: &ColorImage,
+        image_size: [usize; 2],
+        rgba: &[u8],
     ) {
         if self.source_textures.get(&key).is_some() {
             return;
         }
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let upload_started = Instant::now();
-        let [width, height] = image.size;
+        let [width, height] = image_size;
         let byte_size = width.saturating_mul(height).saturating_mul(4);
+        if rgba.len() != byte_size {
+            return;
+        }
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("suisuiview-gpu-effect-source"),
             size: wgpu::Extent3d {
@@ -297,7 +358,6 @@ impl GpuPaintResources {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let bytes = color_image_to_rgba(image);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -305,7 +365,7 @@ impl GpuPaintResources {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &bytes,
+            rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some((width * 4) as u32),
@@ -318,11 +378,13 @@ impl GpuPaintResources {
             },
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        if let Some(old_texture) = self.source_textures.put(
+        let bind_group = Arc::new(self.texture_bind_group_for(device, &view));
+        if let Some((_old_key, old_texture)) = self.source_textures.push(
             key,
             GpuSourceTexture {
                 _texture: texture,
-                view,
+                _view: view,
+                bind_group,
                 byte_size,
             },
         ) {
@@ -347,10 +409,11 @@ impl GpuPaintResources {
 
     #[allow(clippy::too_many_arguments)]
     fn prepare_draw_state(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        source_view: &wgpu::TextureView,
+        source_key: GpuPaintSourceKey,
+        source_bind_group: Arc<wgpu::BindGroup>,
         source_size: [usize; 2],
         output_size: [usize; 2],
         effects: ViewEffects,
@@ -363,23 +426,22 @@ impl GpuPaintResources {
             .resolve_for_render(output_size, target_size)
             .unwrap_or(DisplayUpscaler::None);
         if let Some(rcas_method) = effective_upscaler.rcas_shader_method_id() {
-            let intermediate_texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("suisuiview-gpu-upscale-intermediate"),
-                size: wgpu::Extent3d {
-                    width: target_size[0],
-                    height: target_size[1],
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            let intermediate_view =
-                intermediate_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let intermediate_key = intermediate_texture_key(
+                source_key,
+                source_size,
+                output_size,
+                effects,
+                effective_upscaler,
+                target_size,
+            );
+            self.ensure_intermediate_texture(device, intermediate_key, target_size);
+            let intermediate = self
+                .intermediate_textures
+                .peek(&intermediate_key)
+                .expect("intermediate texture should be cached before rendering")
+                .clone();
+            let intermediate_bind_group = intermediate.bind_group.clone();
+            let intermediate_view = &intermediate._view;
             let easu_params = params_for_effects(
                 source_size,
                 output_size,
@@ -389,8 +451,13 @@ impl GpuPaintResources {
                 target_size,
                 1.0,
             );
-            let easu_bind_group = self.bind_group_for(device, source_view, easu_params);
-            self.render_fullscreen(encoder, &intermediate_view, &easu_bind_group);
+            let easu_params_bind_group = self.params_bind_group_for(device, easu_params);
+            self.render_fullscreen(
+                encoder,
+                intermediate_view,
+                &source_bind_group,
+                &easu_params_bind_group,
+            );
 
             let rcas_params = params_for_effects_with_shader_method(
                 [target_size[0] as usize, target_size[1] as usize],
@@ -401,11 +468,12 @@ impl GpuPaintResources {
                 target_size,
                 opacity,
             );
-            let bind_group = self.bind_group_for(device, &intermediate_view, rcas_params);
-            return GpuDrawState {
-                bind_group,
-                _intermediate_texture: Some(intermediate_texture),
-            };
+            let params_bind_group = self.params_bind_group_for(device, rcas_params);
+            return GpuDrawState::new(
+                intermediate_bind_group,
+                params_bind_group,
+                Some(intermediate),
+            );
         }
 
         let params = params_for_effects(
@@ -417,16 +485,88 @@ impl GpuPaintResources {
             target_size,
             opacity,
         );
-        GpuDrawState {
-            bind_group: self.bind_group_for(device, source_view, params),
-            _intermediate_texture: None,
-        }
+        GpuDrawState::new(
+            source_bind_group,
+            self.params_bind_group_for(device, params),
+            None,
+        )
     }
 
-    fn bind_group_for(
+    fn ensure_intermediate_texture(
+        &mut self,
+        device: &wgpu::Device,
+        key: u64,
+        target_size: [u32; 2],
+    ) {
+        if self.intermediate_textures.get(&key).is_some() {
+            return;
+        }
+        let byte_size = (target_size[0] as usize)
+            .saturating_mul(target_size[1] as usize)
+            .saturating_mul(4);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("suisuiview-gpu-upscale-intermediate"),
+            size: wgpu::Extent3d {
+                width: target_size[0],
+                height: target_size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = Arc::new(self.texture_bind_group_for(device, &view));
+        if let Some((_old_key, old_texture)) = self.intermediate_textures.push(
+            key,
+            Arc::new(GpuIntermediateTexture {
+                _texture: texture,
+                _view: view,
+                bind_group,
+                byte_size,
+            }),
+        ) {
+            self.intermediate_texture_bytes = self
+                .intermediate_texture_bytes
+                .saturating_sub(old_texture.byte_size);
+        }
+        self.intermediate_texture_bytes = self.intermediate_texture_bytes.saturating_add(byte_size);
+        self.prune_intermediate_textures();
+    }
+
+    fn insert_draw_state(&mut self, key: u64, draw_state: GpuDrawState) {
+        let byte_size = draw_state.intermediate_byte_size;
+        if let Some((_old_key, old_state)) = self.draw_bind_groups.push(key, draw_state) {
+            self.draw_state_intermediate_bytes = self
+                .draw_state_intermediate_bytes
+                .saturating_sub(old_state.intermediate_byte_size);
+        }
+        self.draw_state_intermediate_bytes =
+            self.draw_state_intermediate_bytes.saturating_add(byte_size);
+        self.prune_draw_states();
+    }
+
+    fn texture_bind_group_for(
         &self,
         device: &wgpu::Device,
         source_view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("suisuiview-gpu-effect-texture-bind-group"),
+            layout: &self.texture_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(source_view),
+            }],
+        })
+    }
+
+    fn params_bind_group_for(
+        &self,
+        device: &wgpu::Device,
         params: crate::core::gpu_effect::EffectParams,
     ) -> wgpu::BindGroup {
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -435,18 +575,12 @@ impl GpuPaintResources {
             usage: wgpu::BufferUsages::UNIFORM,
         });
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("suisuiview-gpu-effect-bind-group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(source_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
+            label: Some("suisuiview-gpu-effect-params-bind-group"),
+            layout: &self.params_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            }],
         })
     }
 
@@ -454,7 +588,8 @@ impl GpuPaintResources {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         output_view: &wgpu::TextureView,
-        bind_group: &wgpu::BindGroup,
+        texture_bind_group: &wgpu::BindGroup,
+        params_bind_group: &wgpu::BindGroup,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("suisuiview-gpu-upscale-intermediate-pass"),
@@ -471,7 +606,8 @@ impl GpuPaintResources {
             occlusion_query_set: None,
         });
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, bind_group, &[]);
+        pass.set_bind_group(0, texture_bind_group, &[]);
+        pass.set_bind_group(1, params_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 
@@ -483,6 +619,32 @@ impl GpuPaintResources {
                 break;
             };
             self.source_texture_bytes = self.source_texture_bytes.saturating_sub(texture.byte_size);
+        }
+    }
+
+    fn prune_intermediate_textures(&mut self) {
+        while self.intermediate_texture_bytes > GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES
+            && self.intermediate_textures.len() > 1
+        {
+            let Some((_key, texture)) = self.intermediate_textures.pop_lru() else {
+                break;
+            };
+            self.intermediate_texture_bytes = self
+                .intermediate_texture_bytes
+                .saturating_sub(texture.byte_size);
+        }
+    }
+
+    fn prune_draw_states(&mut self) {
+        while self.draw_state_intermediate_bytes > GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES
+            && self.draw_bind_groups.len() > 1
+        {
+            let Some((_key, draw_state)) = self.draw_bind_groups.pop_lru() else {
+                break;
+            };
+            self.draw_state_intermediate_bytes = self
+                .draw_state_intermediate_bytes
+                .saturating_sub(draw_state.intermediate_byte_size);
         }
     }
 }
@@ -534,4 +696,62 @@ fn viewport_rect(rect: Rect, screen_descriptor: &ScreenDescriptor) -> ([u32; 2],
             bottom.saturating_sub(top).max(1),
         ],
     )
+}
+
+fn intermediate_texture_key(
+    source_key: GpuPaintSourceKey,
+    source_size: [usize; 2],
+    output_size: [usize; 2],
+    effects: ViewEffects,
+    display_upscaler: DisplayUpscaler,
+    target_size: [u32; 2],
+) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source_key.hash(&mut hasher);
+    source_size.hash(&mut hasher);
+    output_size.hash(&mut hasher);
+    effects.hash(&mut hasher);
+    display_upscaler.token().hash(&mut hasher);
+    target_size.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::worker::DecodeOptions;
+    use eframe::egui::{pos2, vec2};
+
+    #[test]
+    fn draw_id_separates_same_page_in_different_panes() {
+        let source_key = GpuPaintSourceKey {
+            book: 7,
+            page: PageCacheKey {
+                index: 3,
+                target_long_edge: 2048,
+                decode: DecodeOptions::default(),
+            },
+            upscaled: false,
+            generation: 1,
+        };
+        let left = Rect::from_min_size(pos2(0.0, 0.0), vec2(640.0, 900.0));
+        let right = Rect::from_min_size(pos2(640.0, 0.0), vec2(640.0, 900.0));
+
+        assert_ne!(
+            draw_id(
+                source_key,
+                ViewEffects::default(),
+                DisplayUpscaler::WgslFsr1Style,
+                left,
+                1.0,
+            ),
+            draw_id(
+                source_key,
+                ViewEffects::default(),
+                DisplayUpscaler::WgslFsr1Style,
+                right,
+                1.0,
+            )
+        );
+    }
 }
