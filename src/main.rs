@@ -95,6 +95,25 @@ fn main() -> eframe::Result<()> {
                 }
                 return Ok(());
             }
+            CliCommand::GpuCopyBench {
+                path,
+                target_long_edge,
+                iterations,
+                max_pages,
+                report_path,
+            } => {
+                if let Err(error) = core::gpu_copy_bench::run_gpu_copy_bench(
+                    &path,
+                    report_path.as_deref(),
+                    target_long_edge,
+                    iterations,
+                    max_pages,
+                ) {
+                    eprintln!("gpu copy bench failed: {error}");
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
         }
     }
 
@@ -192,6 +211,13 @@ enum CliCommand {
         report_path: Option<PathBuf>,
         visual_dir: Option<PathBuf>,
     },
+    GpuCopyBench {
+        path: PathBuf,
+        target_long_edge: u32,
+        iterations: usize,
+        max_pages: usize,
+        report_path: Option<PathBuf>,
+    },
 }
 
 impl CliCommand {
@@ -212,6 +238,9 @@ impl CliCommand {
         }
         if first == "--upscale-quality-scan" {
             return Some(Self::parse_upscale_quality_scan(args));
+        }
+        if first == "--gpu-copy-bench" {
+            return Some(Self::parse_gpu_copy_bench(args));
         }
 
         None
@@ -448,6 +477,65 @@ impl CliCommand {
             target_long_edge,
             report_path,
             visual_dir,
+        }
+    }
+
+    fn parse_gpu_copy_bench(mut args: impl Iterator<Item = OsString>) -> Self {
+        let path = args.next().map(PathBuf::from).unwrap_or_else(|| {
+            eprintln!(
+                "usage: suisuiview --gpu-copy-bench <path> [--target-long-edge <px>] [--gpu-copy-iterations <count>] [--gpu-copy-max-pages <count>] [--gpu-copy-report <report.json>]"
+            );
+            std::process::exit(2);
+        });
+
+        let mut target_long_edge = DEFAULT_TARGET_LONG_EDGE;
+        let mut iterations = core::gpu_copy_bench::default_gpu_copy_iterations();
+        let mut max_pages = core::gpu_copy_bench::default_gpu_copy_max_pages();
+        let mut report_path = None;
+        while let Some(arg) = args.next() {
+            if arg == "--target-long-edge" {
+                target_long_edge = args
+                    .next()
+                    .and_then(|value| value.to_string_lossy().parse().ok())
+                    .unwrap_or_else(|| {
+                        eprintln!("--target-long-edge requires a positive integer");
+                        std::process::exit(2);
+                    });
+            } else if arg == "--gpu-copy-iterations" {
+                iterations = args
+                    .next()
+                    .and_then(|value| value.to_string_lossy().parse().ok())
+                    .unwrap_or_else(|| {
+                        eprintln!("--gpu-copy-iterations requires a positive integer");
+                        std::process::exit(2);
+                    });
+            } else if arg == "--gpu-copy-max-pages" {
+                max_pages = args
+                    .next()
+                    .and_then(|value| value.to_string_lossy().parse().ok())
+                    .unwrap_or_else(|| {
+                        eprintln!("--gpu-copy-max-pages requires a positive integer");
+                        std::process::exit(2);
+                    });
+            } else if arg == "--gpu-copy-report" {
+                report_path = Some(args.next().map(PathBuf::from).unwrap_or_else(|| {
+                    eprintln!("--gpu-copy-report requires a path");
+                    std::process::exit(2);
+                }));
+            } else if arg == "--gpu-copy-report-default" {
+                report_path = Some(core::gpu_copy_bench::default_gpu_copy_report_path());
+            } else {
+                eprintln!("unknown argument: {}", arg.to_string_lossy());
+                std::process::exit(2);
+            }
+        }
+
+        Self::GpuCopyBench {
+            path,
+            target_long_edge,
+            iterations: iterations.max(1),
+            max_pages: max_pages.max(1),
+            report_path,
         }
     }
 }

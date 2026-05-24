@@ -456,7 +456,7 @@ fn take_wrapped_line<'a>(
         .filter_map(|(index, ch)| {
             matches!(ch, '\\' | '/' | ' ' | '|').then_some(index + ch.len_utf8())
         })
-        .last();
+        .next_back();
     let end = last_break.unwrap_or(last_fit);
 
     (text[..end].trim_end(), &text[end..])
@@ -492,32 +492,6 @@ fn text_width(ui: &egui::Ui, text: &str, font_id: &FontId) -> f32 {
         .layout_no_wrap(text.to_owned(), font_id.clone(), theme::TEXT_PRIMARY)
         .size()
         .x
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{recent_menu_width_for, recent_row_height, OPEN_MENU_MIN_WIDTH};
-
-    #[test]
-    fn recent_menu_width_uses_minimum_for_short_paths() {
-        assert_eq!(recent_menu_width_for(180.0, 1600.0), OPEN_MENU_MIN_WIDTH);
-    }
-
-    #[test]
-    fn recent_menu_width_can_grow_to_viewport_cap() {
-        assert_eq!(recent_menu_width_for(3000.0, 1600.0), 1280.0);
-    }
-
-    #[test]
-    fn recent_menu_width_uses_full_path_width_before_cap() {
-        assert_eq!(recent_menu_width_for(700.0, 1600.0), 744.0);
-    }
-
-    #[test]
-    fn recent_row_height_uses_single_line_when_possible() {
-        assert_eq!(recent_row_height(1, 18.0), 27.0);
-        assert_eq!(recent_row_height(2, 18.0), 48.0);
-    }
 }
 
 fn compare_target_combo(
@@ -633,5 +607,31 @@ fn view_mode_label(mode: ViewMode) -> &'static str {
     match mode {
         ViewMode::Single => "1장",
         ViewMode::Double => "2장",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{recent_menu_width_for, recent_row_height, OPEN_MENU_MIN_WIDTH};
+
+    #[test]
+    fn recent_menu_width_uses_minimum_for_short_paths() {
+        assert_eq!(recent_menu_width_for(180.0, 1600.0), OPEN_MENU_MIN_WIDTH);
+    }
+
+    #[test]
+    fn recent_menu_width_can_grow_to_viewport_cap() {
+        assert_eq!(recent_menu_width_for(3000.0, 1600.0), 1280.0);
+    }
+
+    #[test]
+    fn recent_menu_width_uses_full_path_width_before_cap() {
+        assert_eq!(recent_menu_width_for(700.0, 1600.0), 744.0);
+    }
+
+    #[test]
+    fn recent_row_height_uses_single_line_when_possible() {
+        assert_eq!(recent_row_height(1, 18.0), 27.0);
+        assert_eq!(recent_row_height(2, 18.0), 48.0);
     }
 }

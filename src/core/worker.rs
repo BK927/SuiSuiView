@@ -47,6 +47,7 @@ pub enum NavigationDirection {
 #[derive(Clone)]
 pub struct PreparedPage {
     pub image: Arc<ColorImage>,
+    pub upload_rgba: Arc<[u8]>,
     pub original_width: usize,
     pub original_height: usize,
     pub display_width: usize,
@@ -507,12 +508,16 @@ fn prepared_page_from_rgba(
     target_long_edge: u32,
     decode_backend: DecodeBackend,
 ) -> Result<PreparedPage, String> {
-    let byte_size = decoded_byte_size(display_width, display_height)?;
-    let color_image =
-        ColorImage::from_rgba_unmultiplied([display_width as usize, display_height as usize], &raw);
+    let upload_rgba = Arc::<[u8]>::from(raw.into_boxed_slice());
+    let byte_size = prepared_page_byte_size(upload_rgba.len())?;
+    let color_image = ColorImage::from_rgba_unmultiplied(
+        [display_width as usize, display_height as usize],
+        &upload_rgba,
+    );
 
     Ok(PreparedPage {
         image: Arc::new(color_image),
+        upload_rgba,
         original_width: original_width as usize,
         original_height: original_height as usize,
         display_width: display_width as usize,
@@ -628,6 +633,11 @@ fn apply_exif_orientation_to_page(
     }
 
     let oriented = orient_color_image(&page.image, orientation);
+    let upload_rgba = Arc::<[u8]>::from(
+        crate::core::gpu_effect::color_image_to_rgba(&oriented).into_boxed_slice(),
+    );
+    page.byte_size = retained_page_byte_size(upload_rgba.len());
+    page.upload_rgba = upload_rgba;
     page.image = Arc::new(oriented);
     if orientation_swaps_dimensions(orientation) {
         std::mem::swap(&mut page.original_width, &mut page.original_height);
@@ -1048,6 +1058,23 @@ fn decoded_byte_size(width: u32, height: u32) -> Result<usize, String> {
         .checked_mul(height as usize)
         .and_then(|pixels| pixels.checked_mul(4))
         .ok_or_else(|| "Decoded image dimensions overflow memory limits".to_owned())
+}
+
+fn prepared_page_byte_size(upload_bytes: usize) -> Result<usize, String> {
+    let byte_size = upload_bytes
+        .checked_mul(2)
+        .ok_or_else(|| "Prepared image dimensions overflow memory limits".to_owned())?;
+    if byte_size > MAX_DECODED_PAGE_BYTES {
+        return Err(format!(
+            "Prepared page is too large: {:.1} MB",
+            byte_size as f32 / (1024.0 * 1024.0)
+        ));
+    }
+    Ok(byte_size)
+}
+
+fn retained_page_byte_size(upload_bytes: usize) -> usize {
+    upload_bytes.saturating_mul(2)
 }
 
 fn clear_cache_on_book_or_decode_change(

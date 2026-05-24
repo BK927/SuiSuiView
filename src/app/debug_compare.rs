@@ -294,6 +294,7 @@ impl SuiSuiViewApp {
             PageVisual::ReadyGpu {
                 source_key,
                 image,
+                upload_rgba,
                 effects,
                 display_upscaler,
                 ..
@@ -304,6 +305,7 @@ impl SuiSuiViewApp {
                         rect: page_rect,
                         source_key,
                         image,
+                        upload_rgba,
                         effects,
                         display_upscaler,
                         opacity: 1.0,
@@ -402,6 +404,7 @@ impl SuiSuiViewApp {
                 generation: 0,
             },
             image: page.image.clone(),
+            upload_rgba: page.upload_rgba.clone(),
             size: page_natural_size(&page),
             effects: ViewEffects::default(),
             display_upscaler,

@@ -136,6 +136,7 @@ enum PageVisual {
     ReadyGpu {
         source_key: GpuPaintSourceKey,
         image: Arc<ColorImage>,
+        upload_rgba: Arc<[u8]>,
         size: Vec2,
         effects: ViewEffects,
         display_upscaler: DisplayUpscaler,
@@ -1751,6 +1752,7 @@ impl SuiSuiViewApp {
                     generation: if upscaled { self.upscale_generation } else { 0 },
                 },
                 image: page.image.clone(),
+                upload_rgba: page.upload_rgba.clone(),
                 size: transformed_page_size(
                     page.original_width as f32,
                     page.original_height as f32,
@@ -2480,6 +2482,7 @@ impl SuiSuiViewApp {
                 PageVisual::ReadyGpu {
                     source_key,
                     image,
+                    upload_rgba,
                     effects,
                     display_upscaler,
                     ..
@@ -2490,6 +2493,7 @@ impl SuiSuiViewApp {
                             rect: page_rect,
                             source_key,
                             image,
+                            upload_rgba,
                             effects,
                             display_upscaler,
                             opacity: request.alpha,
@@ -3399,6 +3403,7 @@ mod tests {
                 [1, 1],
                 &[255, 255, 255, 255],
             )),
+            upload_rgba: Arc::<[u8]>::from([255, 255, 255, 255]),
             original_width: 1,
             original_height: 1,
             display_width: 1,
