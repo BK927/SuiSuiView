@@ -18,8 +18,8 @@ const RECENT_ROW_VERTICAL_PADDING: f32 = 3.0;
 const RECENT_ROW_LINE_GAP: f32 = 3.0;
 const RECENT_ROW_CORNER_RADIUS: u8 = 5;
 const RECENT_ROW_HOVER_FILL: Color32 = Color32::from_rgb(38, 41, 47);
-const TOP_BAR_ANIMATION: f32 = 0.15;
-const TOP_BAR_HIDE_DELAY: Duration = Duration::from_millis(350);
+const TOP_BAR_ANIMATION: f32 = 0.10;
+const TOP_BAR_HIDE_DELAY: Duration = Duration::from_millis(80);
 const TOP_BAR_MENU_HOLD_DELAY: Duration = Duration::from_secs(2);
 const TOP_BAR_MIN_INTERACTIVE_ALPHA: f32 = 0.35;
 const TOP_BAR_REVEAL_ZONE: f32 = 12.0;
@@ -164,11 +164,6 @@ impl SuiSuiViewApp {
     }
 
     fn show_top_bar_pin_button(&mut self, ui: &mut egui::Ui) {
-        let style = if self.settings.top_bar_pinned {
-            icons::IconStyle::Filled
-        } else {
-            icons::IconStyle::Regular
-        };
         let color = if self.settings.top_bar_pinned {
             theme::ACCENT_HOVER
         } else {
@@ -180,7 +175,12 @@ impl SuiSuiViewApp {
             "상단 도구막대 고정"
         };
         if ui
-            .add(icon_button_colored(icons::PIN, style, 18.0, color))
+            .add(icon_button_colored(
+                icons::PIN,
+                icons::IconStyle::Regular,
+                18.0,
+                color,
+            ))
             .on_hover_text(tooltip)
             .clicked()
         {
