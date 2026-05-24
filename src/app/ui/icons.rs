@@ -4,7 +4,8 @@ use eframe::egui::{self, text::LayoutJob, Color32, FontFamily, FontId, RichText,
 pub(in crate::app) const REGULAR_FONT: &str = "suisuiview-fluent-icons-regular";
 pub(in crate::app) const FILLED_FONT: &str = "suisuiview-fluent-icons-filled";
 
-// Fluent regular/filled fonts share codepoints; IconStyle selects the glyph shape.
+// Some Fluent regular/filled glyphs share codepoints, but not all of them do.
+// Use the matching filled constant when a glyph has separate regular/filled codes.
 pub(in crate::app) const BOOKMARK: char = '\u{F1F6}';
 pub(in crate::app) const BOOKMARK_FILLED: char = BOOKMARK;
 pub(in crate::app) const CHEVRON_LEFT: char = '\u{F2AB}';
@@ -16,6 +17,7 @@ pub(in crate::app) const EYE: char = '\u{E5F3}';
 pub(in crate::app) const FOLDER_OPEN: char = '\u{F42F}';
 pub(in crate::app) const INFO: char = '\u{F4A4}';
 pub(in crate::app) const PIN: char = '\u{F602}';
+pub(in crate::app) const PIN_FILLED: char = '\u{F60C}';
 pub(in crate::app) const SEARCH: char = '\u{F690}';
 pub(in crate::app) const SETTINGS: char = '\u{F6AA}';
 pub(in crate::app) const WAND: char = '\u{EE38}';

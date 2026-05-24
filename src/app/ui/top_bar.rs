@@ -164,10 +164,14 @@ impl SuiSuiViewApp {
     }
 
     fn show_top_bar_pin_button(&mut self, ui: &mut egui::Ui) {
-        let color = if self.settings.top_bar_pinned {
-            theme::ACCENT_HOVER
+        let (icon, style, color) = if self.settings.top_bar_pinned {
+            (
+                icons::PIN_FILLED,
+                icons::IconStyle::Filled,
+                theme::ACCENT_HOVER,
+            )
         } else {
-            theme::TEXT_PRIMARY
+            (icons::PIN, icons::IconStyle::Regular, theme::TEXT_PRIMARY)
         };
         let tooltip = if self.settings.top_bar_pinned {
             "상단 도구막대 고정 해제"
@@ -175,12 +179,7 @@ impl SuiSuiViewApp {
             "상단 도구막대 고정"
         };
         if ui
-            .add(icon_button_colored(
-                icons::PIN,
-                icons::IconStyle::Regular,
-                18.0,
-                color,
-            ))
+            .add(icon_button_colored(icon, style, 18.0, color))
             .on_hover_text(tooltip)
             .clicked()
         {
