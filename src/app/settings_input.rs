@@ -37,9 +37,22 @@ impl SuiSuiViewApp {
         setting_group(
             ui,
             "단축키",
-            "실제로 구현된 명령만 표시합니다. 새 키가 이미 쓰이는 경우 기존 명령에서 제거한 뒤 옮길 수 있습니다.",
+            "단축키를 먼저 보고 어떤 기능에 연결할지 고릅니다. 새 키가 이미 쓰이는 경우 기존 행에서 제거한 뒤 옮길 수 있습니다.",
             |ui| {
                 ui.horizontal_wrapped(|ui| {
+                    ui.label("새 단축키 동작");
+                    if let Some(command) =
+                        command_combo(ui, "new_shortcut_command", self.shortcut_new_command, 220.0)
+                    {
+                        self.shortcut_new_command = command;
+                    }
+                    if ui.button("단축키 추가").clicked() {
+                        self.shortcut_capture = Some(ShortcutCapture {
+                            command: self.shortcut_new_command,
+                            replace_index: None,
+                        });
+                        self.shortcut_conflict = None;
+                    }
                     if ui.button("전체 기본값 초기화").clicked() {
                         draft.key_bindings = default_key_bindings();
                         self.shortcut_capture = None;
@@ -54,88 +67,93 @@ impl SuiSuiViewApp {
                     }
                 });
                 ui.add_space(8.0);
-
-                let mut current_group = "";
-                for command in CommandId::ALL {
-                    if current_group != command.group() {
-                        current_group = command.group();
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(current_group)
-                                .strong()
-                                .color(theme::TEXT_PRIMARY),
-                        );
-                    }
-                    self.shortcut_command_row(ui, draft, changed, command);
-                }
+                self.shortcut_binding_table(ui, draft, changed);
             },
         );
     }
 
-    fn shortcut_command_row(
+    fn shortcut_binding_table(
         &mut self,
         ui: &mut egui::Ui,
         draft: &mut AppSettings,
         changed: &mut bool,
-        command: CommandId,
     ) {
-        let indices = key_binding_indices(&draft.key_bindings, command);
-        dialog::setting_card(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new(command.label())
-                        .color(theme::TEXT_PRIMARY)
-                        .strong(),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("초기화").clicked() {
-                        reset_command_shortcuts(&mut draft.key_bindings, command);
-                        *changed = true;
-                    }
-                    if ui.small_button("추가").clicked() {
-                        self.shortcut_capture = Some(ShortcutCapture {
-                            command,
-                            replace_index: None,
-                        });
-                        self.shortcut_conflict = None;
-                    }
-                });
-            });
-            ui.add_space(4.0);
-            if indices.is_empty() {
+        if draft.key_bindings.is_empty() {
+            dialog::setting_card(ui, |ui| {
                 ui.label(RichText::new("등록된 단축키 없음").color(theme::TEXT_MUTED));
-                return;
-            }
-            let mut remove_index = None;
-            for index in indices {
-                let Some(binding) = draft.key_bindings.get(index) else {
-                    continue;
-                };
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(binding.shortcut.label())
-                            .monospace()
-                            .color(theme::TEXT_PRIMARY),
-                    );
-                    if ui.small_button("변경").clicked() {
-                        self.shortcut_capture = Some(ShortcutCapture {
-                            command,
-                            replace_index: Some(index),
+            });
+            return;
+        }
+
+        let mut rows: Vec<(usize, KeyBinding)> =
+            draft.key_bindings.iter().cloned().enumerate().collect();
+        rows.sort_by_cached_key(|(_, binding)| shortcut_sort_key(binding));
+
+        let mut remove_index = None;
+        dialog::setting_card(ui, |ui| {
+            egui::Grid::new("settings_key_binding_grid")
+                .num_columns(4)
+                .spacing([12.0, 8.0])
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label(RichText::new("단축키").strong().color(theme::TEXT_MUTED));
+                    ui.label(RichText::new("기능").strong().color(theme::TEXT_MUTED));
+                    ui.label("");
+                    ui.label("");
+                    ui.end_row();
+
+                    for (index, binding) in rows {
+                        ui.label(
+                            RichText::new(binding.shortcut.label())
+                                .monospace()
+                                .color(theme::TEXT_PRIMARY),
+                        );
+                        if let Some(command) = command_combo(
+                            ui,
+                            ("key_binding_command", index),
+                            binding.command,
+                            260.0,
+                        ) {
+                            if let Some(existing) = draft.key_bindings.get_mut(index) {
+                                existing.command = command;
+                                *changed = true;
+                            }
+                        }
+                        if ui.small_button("키 변경").clicked() {
+                            self.shortcut_capture = Some(ShortcutCapture {
+                                command: binding.command,
+                                replace_index: Some(index),
+                            });
+                            self.shortcut_conflict = None;
+                        }
+                        ui.horizontal(|ui| {
+                            let default_command = default_command_for_shortcut(binding.shortcut);
+                            let reset = ui
+                                .add_enabled(default_command.is_some(), egui::Button::new("기본값"))
+                                .on_disabled_hover_text("기본 단축키에 없는 사용자 추가 행입니다.");
+                            if reset.clicked() {
+                                if let Some(command) = default_command {
+                                    if let Some(existing) = draft.key_bindings.get_mut(index) {
+                                        existing.command = command;
+                                        *changed = true;
+                                    }
+                                }
+                            }
+                            if ui.small_button("삭제").clicked() {
+                                remove_index = Some(index);
+                            }
                         });
-                        self.shortcut_conflict = None;
-                    }
-                    if ui.small_button("삭제").clicked() {
-                        remove_index = Some(index);
+                        ui.end_row();
                     }
                 });
-            }
-            if let Some(index) = remove_index {
-                draft.key_bindings.remove(index);
-                self.shortcut_capture = None;
-                self.shortcut_conflict = None;
-                *changed = true;
-            }
         });
+
+        if let Some(index) = remove_index {
+            draft.key_bindings.remove(index);
+            self.shortcut_capture = None;
+            self.shortcut_conflict = None;
+            *changed = true;
+        }
     }
 
     fn handle_shortcut_capture(
@@ -211,9 +229,7 @@ impl SuiSuiViewApp {
             .iter()
             .enumerate()
             .find(|(index, binding)| {
-                binding.shortcut == shortcut
-                    && Some(*index) != capture.replace_index
-                    && binding.command != capture.command
+                binding.shortcut == shortcut && Some(*index) != capture.replace_index
             })
             .map(|(index, binding)| (index, binding.command))
         {
@@ -371,14 +387,6 @@ pub(in crate::app) fn show_mouse_settings(
     );
 }
 
-fn key_binding_indices(bindings: &[KeyBinding], command: CommandId) -> Vec<usize> {
-    bindings
-        .iter()
-        .enumerate()
-        .filter_map(|(index, binding)| (binding.command == command).then_some(index))
-        .collect()
-}
-
 fn set_shortcut_binding(
     bindings: &mut Vec<KeyBinding>,
     command: CommandId,
@@ -396,13 +404,37 @@ fn set_shortcut_binding(
     bindings.push(KeyBinding { command, shortcut });
 }
 
-fn reset_command_shortcuts(bindings: &mut Vec<KeyBinding>, command: CommandId) {
-    bindings.retain(|binding| binding.command != command);
-    bindings.extend(
-        default_key_bindings()
-            .into_iter()
-            .filter(|binding| binding.command == command),
-    );
+fn shortcut_sort_key(binding: &KeyBinding) -> (u8, String) {
+    let shortcut = binding.shortcut;
+    let modifier_rank =
+        u8::from(shortcut.ctrl) + u8::from(shortcut.alt) * 2 + u8::from(shortcut.shift) * 4;
+    (modifier_rank, shortcut.label())
+}
+
+fn default_command_for_shortcut(shortcut: KeyShortcut) -> Option<CommandId> {
+    default_key_bindings()
+        .into_iter()
+        .find(|binding| binding.shortcut == shortcut)
+        .map(|binding| binding.command)
+}
+
+fn command_combo(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    current: CommandId,
+    width: f32,
+) -> Option<CommandId> {
+    let mut selected = current;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(current.label())
+        .width(width)
+        .show_ui(ui, |ui| {
+            for command in CommandId::ALL {
+                let label = format!("{} / {}", command.group(), command.label());
+                ui.selectable_value(&mut selected, command, label);
+            }
+        });
+    (selected != current).then_some(selected)
 }
 
 fn mouse_command_combo(

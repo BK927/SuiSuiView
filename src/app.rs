@@ -9,8 +9,8 @@ use crate::core::source::{
 };
 use crate::core::state::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, BookmarkInput, CacheMemoryMode,
-    DecodeMode, DisplayUpscaler, EdgePageAction, FitMode, LargeImageAnchor, MouseGesture,
-    PageTransitionStyle, ReadingDirection, StateStore, WheelMode,
+    CommandId, DecodeMode, DisplayUpscaler, EdgePageAction, FitMode, LargeImageAnchor,
+    MouseGesture, PageTransitionStyle, ReadingDirection, StateStore, WheelMode,
 };
 use crate::core::upscale::{AiUpscaleWorker, UpscaleEvent, UpscaleRequest};
 use crate::core::worker::{
@@ -23,8 +23,8 @@ use commands::{collect_keyboard_commands, command_for_mouse_gesture, AppCommand,
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use debug_compare::{DebugCompareState, DebugCompareWorker};
 use eframe::egui::{
-    self, Align2, Color32, ColorImage, FontId, ImageData, Pos2, Rect, Sense, Stroke, StrokeKind,
-    TextureHandle, TextureOptions, Vec2,
+    self, Align2, Color32, ColorImage, FontId, ImageData, Pos2, Rect, RichText, Sense, Stroke,
+    StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
 use gpu_paint::{GpuPaintRequest, GpuPaintSourceKey};
 use image_info::ImageInfoState;
@@ -182,6 +182,12 @@ impl WindowTitleSnapshot {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EdgePrompt {
+    direction: NavigationDirection,
+    page_count: usize,
+}
+
 pub struct SuiSuiViewApp {
     egui_ctx: egui::Context,
     store: StateStore,
@@ -190,6 +196,7 @@ pub struct SuiSuiViewApp {
     settings_section: settings::SettingsSection,
     shortcut_capture: Option<settings_input::ShortcutCapture>,
     shortcut_conflict: Option<settings_input::ShortcutConflict>,
+    shortcut_new_command: CommandId,
     about_open: bool,
     about_section: about::AboutSection,
     image_info: ImageInfoState,
@@ -257,6 +264,7 @@ pub struct SuiSuiViewApp {
     bookmark_clear_confirming: bool,
     bookmark_rows: BookmarkRowsCache,
     pending_bookmark_jump: Option<PendingBookmarkJump>,
+    edge_prompt: Option<EdgePrompt>,
 }
 
 impl SuiSuiViewApp {
@@ -281,6 +289,7 @@ impl SuiSuiViewApp {
             settings_section: settings::SettingsSection::default(),
             shortcut_capture: None,
             shortcut_conflict: None,
+            shortcut_new_command: CommandId::NextPage,
             about_open: false,
             about_section: about::AboutSection::default(),
             image_info: ImageInfoState::new(),
@@ -351,6 +360,7 @@ impl SuiSuiViewApp {
             bookmark_clear_confirming: false,
             bookmark_rows: BookmarkRowsCache::default(),
             pending_bookmark_jump: None,
+            edge_prompt: None,
         };
         if let Some(path) = startup_open_path {
             app.open_path(path);
@@ -544,6 +554,7 @@ impl SuiSuiViewApp {
         self.ai_upscale_queue.clear();
         self.ai_upscale_manual_requests.clear();
         self.ai_upscale_failures.clear();
+        self.edge_prompt = None;
         self.transition = None;
         self.last_nav_direction = NavigationDirection::Forward;
         self.worker.load_book(
@@ -981,6 +992,10 @@ impl SuiSuiViewApp {
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
+        if self.edge_prompt.is_some() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.edge_prompt = None;
+            return;
+        }
         let commands = ctx.input(|input| collect_keyboard_commands(input, &self.settings));
         for command in commands {
             self.apply_command(ctx, command);
@@ -1106,6 +1121,7 @@ impl SuiSuiViewApp {
         self.pan = Vec2::ZERO;
         self.manual_zoom = 1.0;
         self.effects = ViewEffects::default();
+        self.edge_prompt = None;
         self.decoded_pages.clear();
         self.decoded_bytes = 0;
         self.upscaled_pages.clear();
@@ -1192,9 +1208,7 @@ impl SuiSuiViewApp {
         match self.edge_page_action_for_current_book() {
             EdgePageAction::Stop => {}
             EdgePageAction::Ask => {
-                if self.confirm_edge_wrap(direction) {
-                    self.wrap_edge_page(direction);
-                }
+                self.open_edge_prompt(direction);
             }
             EdgePageAction::Wrap => {
                 self.wrap_edge_page(direction);
@@ -1204,6 +1218,16 @@ impl SuiSuiViewApp {
                 NavigationDirection::Backward => self.open_sibling_book(-1),
             },
         }
+    }
+
+    fn open_edge_prompt(&mut self, direction: NavigationDirection) {
+        let Some(source) = self.source.as_ref() else {
+            return;
+        };
+        self.edge_prompt = Some(EdgePrompt {
+            direction,
+            page_count: source.page_count(),
+        });
     }
 
     fn edge_page_action_for_current_book(&self) -> EdgePageAction {
@@ -1227,20 +1251,118 @@ impl SuiSuiViewApp {
         self.set_page(target, direction);
     }
 
-    fn confirm_edge_wrap(&self, direction: NavigationDirection) -> bool {
-        let description = match direction {
-            NavigationDirection::Forward => "마지막 페이지입니다. 처음 페이지로 돌아갈까요?",
-            NavigationDirection::Backward => "첫 페이지입니다. 마지막 페이지로 이동할까요?",
+    fn show_edge_prompt(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = self.edge_prompt else {
+            return;
         };
-        matches!(
-            MessageDialog::new()
-                .set_title("페이지 끝")
-                .set_description(description)
-                .set_level(MessageLevel::Info)
-                .set_buttons(MessageButtons::YesNo)
-                .show(),
-            MessageDialogResult::Yes
+        if self.source.is_none() {
+            self.edge_prompt = None;
+            return;
+        }
+        if self.settings_open || self.about_open || self.bookmark_popover_open {
+            self.edge_prompt = None;
+            return;
+        }
+
+        let screen = ctx.screen_rect();
+        let available_width = (screen.width() - 32.0).max(280.0);
+        let width = available_width.min(560.0).max(available_width.min(360.0));
+        let pos = Pos2::new(
+            screen.center().x - width * 0.5,
+            (screen.bottom() - 164.0).max(screen.top() + 80.0),
+        );
+        let response = egui::Area::new("edge_page_prompt".into())
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(8, 9, 11))
+                    .stroke(Stroke::new(1.2, ui::theme::SUBTLE_STROKE))
+                    .corner_radius(egui::CornerRadius::same(14))
+                    .shadow(egui::epaint::Shadow {
+                        offset: [0, 10],
+                        blur: 22,
+                        spread: 0,
+                        color: Color32::from_black_alpha(150),
+                    })
+                    .inner_margin(egui::Margin::symmetric(22, 20))
+                    .show(ui, |ui| {
+                        ui.set_width(width - 44.0);
+                        ui.vertical_centered(|ui| {
+                            let title = match prompt.direction {
+                                NavigationDirection::Forward => "마지막 이미지입니다.",
+                                NavigationDirection::Backward => "첫 번째 이미지입니다.",
+                            };
+                            ui.label(
+                                RichText::new(title)
+                                    .size(24.0)
+                                    .color(ui::theme::TEXT_PRIMARY)
+                                    .strong(),
+                            );
+                            ui.add_space(18.0);
+                            ui.horizontal_centered(|ui| match prompt.direction {
+                                NavigationDirection::Forward => {
+                                    let wrap_label =
+                                        self.edge_action_button_text("처음으로", CommandId::Home);
+                                    if edge_prompt_button(ui, &wrap_label).clicked() {
+                                        self.edge_prompt = None;
+                                        self.set_page(0, NavigationDirection::Backward);
+                                    }
+                                    let next_label = self
+                                        .edge_action_button_text("다음 파일", CommandId::NextBook);
+                                    if edge_prompt_button(ui, &next_label).clicked() {
+                                        self.edge_prompt = None;
+                                        self.open_sibling_book(1);
+                                    }
+                                }
+                                NavigationDirection::Backward => {
+                                    let previous_label = self.edge_action_button_text(
+                                        "이전 파일",
+                                        CommandId::PreviousBook,
+                                    );
+                                    if edge_prompt_button(ui, &previous_label).clicked() {
+                                        self.edge_prompt = None;
+                                        self.open_sibling_book(-1);
+                                    }
+                                    let wrap_label =
+                                        self.edge_action_button_text("마지막으로", CommandId::End);
+                                    if edge_prompt_button(ui, &wrap_label).clicked() {
+                                        self.edge_prompt = None;
+                                        let target = prompt.page_count.saturating_sub(1);
+                                        self.set_page(target, NavigationDirection::Forward);
+                                    }
+                                }
+                            });
+                        });
+                    });
+            });
+
+        let prompt_rect = response.response.rect;
+        let clicked_outside = ctx.input(|input| {
+            input.pointer.any_click()
+                && input
+                    .pointer
+                    .interact_pos()
+                    .is_some_and(|pos| !prompt_rect.contains(pos))
+        });
+        if clicked_outside {
+            self.edge_prompt = None;
+        }
+    }
+
+    fn edge_action_button_text(&self, label: &str, command: CommandId) -> String {
+        self.shortcut_hint_for_command(command).map_or_else(
+            || label.to_owned(),
+            |shortcut| format!("{label} ({shortcut})"),
         )
+    }
+
+    fn shortcut_hint_for_command(&self, command: CommandId) -> Option<String> {
+        self.settings
+            .key_bindings
+            .iter()
+            .find(|binding| binding.command == command)
+            .map(|binding| binding.shortcut.label())
     }
 
     fn random_page(&mut self, direction: NavigationDirection) {
@@ -1267,6 +1389,7 @@ impl SuiSuiViewApp {
         if target == self.current_page {
             return;
         }
+        self.edge_prompt = None;
 
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let turn_started = Instant::now();
@@ -2882,6 +3005,7 @@ impl eframe::App for SuiSuiViewApp {
             .show(ctx, |ui| self.show_viewer(ui, ctx));
 
         self.show_bookmark_popover(ctx);
+        self.show_edge_prompt(ctx);
 
         if self.transition.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));
@@ -2919,6 +3043,20 @@ fn context_button(ui: &mut egui::Ui, label: &str, shortcut: &str, enabled: bool)
     ui.add_enabled(
         enabled,
         egui::Button::new(label).shortcut_text(shortcut.to_owned()),
+    )
+}
+
+fn edge_prompt_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(
+            RichText::new(label)
+                .size(16.0)
+                .color(ui::theme::TEXT_PRIMARY)
+                .strong(),
+        )
+        .min_size(Vec2::new(220.0, 34.0))
+        .fill(Color32::from_rgb(5, 6, 8))
+        .stroke(Stroke::new(1.0, Color32::from_rgb(52, 55, 60))),
     )
 }
 
