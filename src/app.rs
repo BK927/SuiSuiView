@@ -2748,9 +2748,7 @@ fn worker_cache_budget_bytes_for(
 }
 
 fn upscaled_cache_budget_bytes_for(cpu_budget_bytes: usize) -> usize {
-    (cpu_budget_bytes / 2)
-        .max(MIN_WORKER_CACHE_BYTES)
-        .min(MAX_UPSCALED_CACHE_BYTES)
+    (cpu_budget_bytes / 2).clamp(MIN_WORKER_CACHE_BYTES, MAX_UPSCALED_CACHE_BYTES)
 }
 
 fn estimated_page_bytes_for_target(target_long_edge: u32) -> usize {
