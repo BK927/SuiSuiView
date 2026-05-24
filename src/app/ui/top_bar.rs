@@ -21,8 +21,8 @@ const RECENT_ROW_HOVER_FILL: Color32 = Color32::from_rgb(38, 41, 47);
 const TOP_BAR_ANIMATION: f32 = 0.10;
 const TOP_BAR_HIDE_DELAY: Duration = Duration::from_millis(80);
 const TOP_BAR_MENU_HOLD_DELAY: Duration = Duration::from_secs(2);
+const TOP_BAR_HOVER_ZONE_EXTRA: f32 = 8.0;
 const TOP_BAR_MIN_INTERACTIVE_ALPHA: f32 = 0.35;
-const TOP_BAR_REVEAL_ZONE: f32 = 12.0;
 const TOP_BAR_SLIDE_DISTANCE: f32 = 10.0;
 
 impl SuiSuiViewApp {
@@ -81,13 +81,13 @@ impl SuiSuiViewApp {
             return true;
         }
 
-        let held = self
-            .top_bar_auto_hide_until
-            .is_some_and(|hide_at| Instant::now() < hide_at);
-        if pointer_is_near_top_bar(ctx, held) {
+        if pointer_is_near_top_bar(ctx) {
             return true;
         }
 
+        let held = self
+            .top_bar_auto_hide_until
+            .is_some_and(|hide_at| Instant::now() < hide_at);
         held
     }
 
@@ -97,10 +97,7 @@ impl SuiSuiViewApp {
             return true;
         }
 
-        let held = self
-            .top_bar_auto_hide_until
-            .is_some_and(|hide_at| Instant::now() < hide_at);
-        if pointer_is_near_top_bar(ctx, held) {
+        if pointer_is_near_top_bar(ctx) {
             self.top_bar_auto_hide_until = Some(Instant::now() + TOP_BAR_HIDE_DELAY);
             return true;
         }
@@ -486,16 +483,12 @@ fn top_bar_overlay_is_interactive(target_visible: bool, alpha: f32) -> bool {
     target_visible || alpha >= TOP_BAR_MIN_INTERACTIVE_ALPHA
 }
 
-fn top_bar_pointer_limit(expanded: bool) -> f32 {
-    if expanded {
-        theme::TOP_BAR_HEIGHT + 8.0
-    } else {
-        TOP_BAR_REVEAL_ZONE
-    }
+fn top_bar_pointer_limit() -> f32 {
+    theme::TOP_BAR_HEIGHT + TOP_BAR_HOVER_ZONE_EXTRA
 }
 
-fn pointer_is_near_top_bar(ctx: &egui::Context, expanded: bool) -> bool {
-    let limit = top_bar_pointer_limit(expanded);
+fn pointer_is_near_top_bar(ctx: &egui::Context) -> bool {
+    let limit = top_bar_pointer_limit();
     ctx.input(|input| input.pointer.hover_pos().is_some_and(|pos| pos.y <= limit))
 }
 
@@ -668,8 +661,8 @@ fn text_width(ui: &egui::Ui, text: &str, font_id: &FontId) -> f32 {
 mod tests {
     use super::{
         ease_out_cubic, recent_menu_width_for, recent_row_height, top_bar_overlay_is_interactive,
-        top_bar_pointer_limit, top_bar_slide_offset, OPEN_MENU_MIN_WIDTH,
-        TOP_BAR_MIN_INTERACTIVE_ALPHA, TOP_BAR_REVEAL_ZONE, TOP_BAR_SLIDE_DISTANCE,
+        top_bar_pointer_limit, top_bar_slide_offset, OPEN_MENU_MIN_WIDTH, TOP_BAR_HOVER_ZONE_EXTRA,
+        TOP_BAR_MIN_INTERACTIVE_ALPHA, TOP_BAR_SLIDE_DISTANCE,
     };
     use crate::app::ui::theme;
 
@@ -695,9 +688,11 @@ mod tests {
     }
 
     #[test]
-    fn top_bar_reveal_zone_is_small_until_visible() {
-        assert_eq!(top_bar_pointer_limit(false), TOP_BAR_REVEAL_ZONE);
-        assert_eq!(top_bar_pointer_limit(true), theme::TOP_BAR_HEIGHT + 8.0);
+    fn top_bar_uses_same_pointer_zone_for_reveal_and_hide() {
+        assert_eq!(
+            top_bar_pointer_limit(),
+            theme::TOP_BAR_HEIGHT + TOP_BAR_HOVER_ZONE_EXTRA
+        );
     }
 
     #[test]
