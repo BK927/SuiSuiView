@@ -19,6 +19,7 @@ const RECENT_ROW_LINE_GAP: f32 = 3.0;
 const RECENT_ROW_CORNER_RADIUS: u8 = 5;
 const RECENT_ROW_HOVER_FILL: Color32 = Color32::from_rgb(38, 41, 47);
 const TOP_BAR_HIDE_DELAY: Duration = Duration::from_millis(350);
+const TOP_BAR_MENU_HOLD_DELAY: Duration = Duration::from_secs(2);
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn show_top_bar(&mut self, ctx: &egui::Context) {
@@ -114,10 +115,10 @@ impl SuiSuiViewApp {
     }
 
     fn show_top_bar_pin_button(&mut self, ui: &mut egui::Ui) {
-        let style = if self.settings.top_bar_pinned {
-            icons::IconStyle::Filled
+        let color = if self.settings.top_bar_pinned {
+            theme::ACCENT_HOVER
         } else {
-            icons::IconStyle::Regular
+            theme::TEXT_PRIMARY
         };
         let tooltip = if self.settings.top_bar_pinned {
             "상단 도구막대 고정 해제"
@@ -125,7 +126,12 @@ impl SuiSuiViewApp {
             "상단 도구막대 고정"
         };
         if ui
-            .add(icon_button(icons::PIN, style, 18.0))
+            .add(icon_button_colored(
+                icons::PIN,
+                icons::IconStyle::Regular,
+                18.0,
+                color,
+            ))
             .on_hover_text(tooltip)
             .clicked()
         {
@@ -134,8 +140,13 @@ impl SuiSuiViewApp {
         }
     }
 
+    fn hold_top_bar_open_for_menu(&mut self) {
+        self.top_bar_auto_hide_until = Some(Instant::now() + TOP_BAR_MENU_HOLD_DELAY);
+    }
+
     fn show_open_group(&mut self, ui: &mut egui::Ui) {
         ui.menu_button(icons::icon_text(icons::FOLDER_OPEN, "열기"), |ui| {
+            self.hold_top_bar_open_for_menu();
             let recent_books = self.store.recent_books(8);
             let menu_width = recent_open_menu_width(ui, &recent_books);
             ui.set_min_width(menu_width);
@@ -225,6 +236,7 @@ impl SuiSuiViewApp {
     fn show_view_group(&mut self, ui: &mut egui::Ui) {
         let label = format!("보기: {}", self.fit_mode.label());
         ui.menu_button(icons::icon_text(icons::EYE, &label), |ui| {
+            self.hold_top_bar_open_for_menu();
             ui.set_min_width(260.0);
             ui.label("레이아웃");
             ui.horizontal(|ui| {
@@ -281,6 +293,7 @@ impl SuiSuiViewApp {
 
     fn show_correction_group(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         ui.menu_button(icons::icon_text(icons::WAND, "보정"), |ui| {
+            self.hold_top_bar_open_for_menu();
             ui.set_min_width(220.0);
             let ai_enabled = self.settings.ai_upscale.backend == AiUpscaleBackend::RealEsrganNcnn;
             if ui
@@ -626,7 +639,16 @@ fn toolbar_separator(ui: &mut egui::Ui) {
 }
 
 fn icon_button(code: char, style: icons::IconStyle, size: f32) -> Button<'static> {
-    Button::new(icons::icon(code, style, size, theme::TEXT_PRIMARY))
+    icon_button_colored(code, style, size, theme::TEXT_PRIMARY)
+}
+
+fn icon_button_colored(
+    code: char,
+    style: icons::IconStyle,
+    size: f32,
+    color: Color32,
+) -> Button<'static> {
+    Button::new(icons::icon(code, style, size, color))
         .min_size(egui::vec2(36.0, 34.0))
         .fill(theme::CONTROL_FILL)
         .stroke(theme::subtle_stroke())
