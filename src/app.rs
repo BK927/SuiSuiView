@@ -185,7 +185,6 @@ impl WindowTitleSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EdgePrompt {
     direction: NavigationDirection,
-    page_count: usize,
 }
 
 pub struct SuiSuiViewApp {
@@ -1221,13 +1220,10 @@ impl SuiSuiViewApp {
     }
 
     fn open_edge_prompt(&mut self, direction: NavigationDirection) {
-        let Some(source) = self.source.as_ref() else {
+        if self.source.is_none() {
             return;
-        };
-        self.edge_prompt = Some(EdgePrompt {
-            direction,
-            page_count: source.page_count(),
-        });
+        }
+        self.edge_prompt = Some(EdgePrompt { direction });
     }
 
     fn edge_page_action_for_current_book(&self) -> EdgePageAction {
@@ -1300,37 +1296,19 @@ impl SuiSuiViewApp {
                                     .strong(),
                             );
                             ui.add_space(18.0);
-                            ui.horizontal_centered(|ui| match prompt.direction {
-                                NavigationDirection::Forward => {
-                                    let wrap_label =
-                                        self.edge_action_button_text("처음으로", CommandId::Home);
-                                    if edge_prompt_button(ui, &wrap_label).clicked() {
-                                        self.edge_prompt = None;
-                                        self.set_page(0, NavigationDirection::Backward);
-                                    }
-                                    let next_label = self
-                                        .edge_action_button_text("다음 파일", CommandId::NextBook);
-                                    if edge_prompt_button(ui, &next_label).clicked() {
-                                        self.edge_prompt = None;
-                                        self.open_sibling_book(1);
-                                    }
+                            ui.horizontal_centered(|ui| {
+                                let previous_label = self
+                                    .edge_action_button_text("이전 파일", CommandId::PreviousBook);
+                                if edge_prompt_button(ui, &previous_label).clicked() {
+                                    self.edge_prompt = None;
+                                    self.open_sibling_book(-1);
                                 }
-                                NavigationDirection::Backward => {
-                                    let previous_label = self.edge_action_button_text(
-                                        "이전 파일",
-                                        CommandId::PreviousBook,
-                                    );
-                                    if edge_prompt_button(ui, &previous_label).clicked() {
-                                        self.edge_prompt = None;
-                                        self.open_sibling_book(-1);
-                                    }
-                                    let wrap_label =
-                                        self.edge_action_button_text("마지막으로", CommandId::End);
-                                    if edge_prompt_button(ui, &wrap_label).clicked() {
-                                        self.edge_prompt = None;
-                                        let target = prompt.page_count.saturating_sub(1);
-                                        self.set_page(target, NavigationDirection::Forward);
-                                    }
+
+                                let next_label =
+                                    self.edge_action_button_text("다음 파일", CommandId::NextBook);
+                                if edge_prompt_button(ui, &next_label).clicked() {
+                                    self.edge_prompt = None;
+                                    self.open_sibling_book(1);
                                 }
                             });
                         });
