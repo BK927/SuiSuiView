@@ -121,7 +121,7 @@ impl ThumbnailWorkerState {
         let page = prepare_image_with_options(&bytes, PREVIEW_TARGET_LONG_EDGE, key.decode)
             .map_err(|_| ())?;
         let original_size = egui::vec2(page.original_width as f32, page.original_height as f32);
-        let image = thumbnail_color_image(&page.image);
+        let image = thumbnail_color_image(&page.color_image());
         let _ = store_cached_thumbnail(&disk_entry, &image, self.should_prune_after_store());
         Ok((Arc::new(image), original_size))
     }

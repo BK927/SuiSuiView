@@ -122,13 +122,14 @@ pub fn scan_effects(path: &Path, target_long_edge: u32) -> Result<EffectBenchRep
                 page.prepare_ms = millis(prepare_elapsed);
                 page.display_width = Some(prepared.display_width);
                 page.display_height = Some(prepared.display_height);
+                let prepared_image = prepared.color_image();
                 for case in &cases {
                     let cpu_started = Instant::now();
-                    let cpu_image = apply_effects_to_image(&prepared.image, case.effects);
+                    let cpu_image = apply_effects_to_image(&prepared_image, case.effects);
                     let cpu_elapsed = cpu_started.elapsed();
 
                     let (gpu_ms, diff, gpu_error) = if let Some(gpu) = &gpu {
-                        match gpu.apply(&prepared.image, case.effects) {
+                        match gpu.apply(&prepared_image, case.effects) {
                             Ok(output) => (
                                 Some(millis(output.elapsed)),
                                 Some(image_diff(&cpu_image, &output.image)),

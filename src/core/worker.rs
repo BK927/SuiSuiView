@@ -46,8 +46,7 @@ pub enum NavigationDirection {
 
 #[derive(Clone)]
 pub struct PreparedPage {
-    pub image: Arc<ColorImage>,
-    pub upload_rgba: Arc<[u8]>,
+    pub rgba: Arc<[u8]>,
     pub original_width: usize,
     pub original_height: usize,
     pub display_width: usize,
@@ -56,6 +55,16 @@ pub struct PreparedPage {
     pub target_long_edge: u32,
     pub decode_backend: DecodeBackend,
     pub notice: Option<String>,
+}
+
+impl PreparedPage {
+    pub fn image_size(&self) -> [usize; 2] {
+        [self.display_width, self.display_height]
+    }
+
+    pub fn color_image(&self) -> ColorImage {
+        ColorImage::from_rgba_unmultiplied(self.image_size(), &self.rgba)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -508,16 +517,11 @@ fn prepared_page_from_rgba(
     target_long_edge: u32,
     decode_backend: DecodeBackend,
 ) -> Result<PreparedPage, String> {
-    let upload_rgba = Arc::<[u8]>::from(raw.into_boxed_slice());
-    let byte_size = prepared_page_byte_size(upload_rgba.len())?;
-    let color_image = ColorImage::from_rgba_unmultiplied(
-        [display_width as usize, display_height as usize],
-        &upload_rgba,
-    );
+    let rgba = Arc::<[u8]>::from(raw.into_boxed_slice());
+    let byte_size = prepared_page_byte_size(rgba.len())?;
 
     Ok(PreparedPage {
-        image: Arc::new(color_image),
-        upload_rgba,
+        rgba,
         original_width: original_width as usize,
         original_height: original_height as usize,
         display_width: display_width as usize,
@@ -632,13 +636,13 @@ fn apply_exif_orientation_to_page(
         return page;
     }
 
-    let oriented = orient_color_image(&page.image, orientation);
-    let upload_rgba = Arc::<[u8]>::from(
+    let source = page.color_image();
+    let oriented = orient_color_image(&source, orientation);
+    let rgba = Arc::<[u8]>::from(
         crate::core::gpu_effect::color_image_to_rgba(&oriented).into_boxed_slice(),
     );
-    page.byte_size = retained_page_byte_size(upload_rgba.len());
-    page.upload_rgba = upload_rgba;
-    page.image = Arc::new(oriented);
+    page.byte_size = retained_page_byte_size(rgba.len());
+    page.rgba = rgba;
     if orientation_swaps_dimensions(orientation) {
         std::mem::swap(&mut page.original_width, &mut page.original_height);
         std::mem::swap(&mut page.display_width, &mut page.display_height);
@@ -1061,9 +1065,7 @@ fn decoded_byte_size(width: u32, height: u32) -> Result<usize, String> {
 }
 
 fn prepared_page_byte_size(upload_bytes: usize) -> Result<usize, String> {
-    let byte_size = upload_bytes
-        .checked_mul(2)
-        .ok_or_else(|| "Prepared image dimensions overflow memory limits".to_owned())?;
+    let byte_size = upload_bytes;
     if byte_size > MAX_DECODED_PAGE_BYTES {
         return Err(format!(
             "Prepared page is too large: {:.1} MB",
@@ -1074,7 +1076,7 @@ fn prepared_page_byte_size(upload_bytes: usize) -> Result<usize, String> {
 }
 
 fn retained_page_byte_size(upload_bytes: usize) -> usize {
-    upload_bytes.saturating_mul(2)
+    upload_bytes
 }
 
 fn clear_cache_on_book_or_decode_change(
@@ -1234,6 +1236,17 @@ mod tests {
             assert_eq!(page.display_width, 48);
             assert_eq!(page.display_height, 32);
         }
+    }
+
+    #[test]
+    fn prepared_page_retains_single_rgba_buffer_budget() {
+        let bytes = encoded_test_image(ImageFormat::Png);
+        let page = prepare_image(&bytes, 1024).unwrap();
+
+        assert_eq!(page.image_size(), [48, 32]);
+        assert_eq!(page.rgba.len(), 48 * 32 * 4);
+        assert_eq!(page.byte_size, page.rgba.len());
+        assert_eq!(page.color_image().size, [48, 32]);
     }
 
     #[test]

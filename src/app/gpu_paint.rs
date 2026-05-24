@@ -6,7 +6,7 @@ use crate::core::gpu_effect::{
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
 use crate::core::state::{DisplayUpscaler, GpuEffectMode};
-use eframe::egui::{self, ColorImage, PaintCallbackInfo, Rect};
+use eframe::egui::{self, PaintCallbackInfo, Rect};
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use lru::LruCache;
 use std::borrow::Cow;
@@ -17,8 +17,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wgpu::util::DeviceExt;
 
-const GPU_SOURCE_TEXTURE_BUDGET_BYTES: usize = 192 * 1024 * 1024;
-const GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+pub(super) const GPU_SOURCE_TEXTURE_BUDGET_BYTES: usize = 192 * 1024 * 1024;
+pub(super) const GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES: usize = 256 * 1024 * 1024;
 const GPU_SOURCE_TEXTURE_CACHE_LIMIT: usize = 32;
 const GPU_DRAW_BIND_GROUP_CACHE_LIMIT: usize = 16;
 const GPU_INTERMEDIATE_TEXTURE_CACHE_LIMIT: usize = 16;
@@ -34,8 +34,8 @@ pub(super) struct GpuPaintSourceKey {
 pub(super) struct GpuPaintRequest {
     pub(super) rect: Rect,
     pub(super) source_key: GpuPaintSourceKey,
-    pub(super) image: Arc<ColorImage>,
-    pub(super) upload_rgba: Arc<[u8]>,
+    pub(super) image_size: [usize; 2],
+    pub(super) rgba: Arc<[u8]>,
     pub(super) effects: ViewEffects,
     pub(super) display_upscaler: DisplayUpscaler,
     pub(super) opacity: f32,
@@ -83,8 +83,8 @@ impl SuiSuiViewApp {
         };
         let callback = GpuEffectCallback {
             source_key: request.source_key,
-            image: request.image,
-            upload_rgba: request.upload_rgba,
+            image_size: request.image_size,
+            rgba: request.rgba,
             effects: request.effects,
             display_upscaler: request.display_upscaler,
             opacity: request.opacity.clamp(0.0, 1.0),
@@ -108,8 +108,8 @@ impl SuiSuiViewApp {
 
 struct GpuEffectCallback {
     source_key: GpuPaintSourceKey,
-    image: Arc<ColorImage>,
-    upload_rgba: Arc<[u8]>,
+    image_size: [usize; 2],
+    rgba: Arc<[u8]>,
     effects: ViewEffects,
     display_upscaler: DisplayUpscaler,
     opacity: f32,
@@ -140,11 +140,11 @@ impl CallbackTrait for GpuEffectCallback {
             device,
             queue,
             self.source_key,
-            self.image.size,
-            &self.upload_rgba,
+            self.image_size,
+            &self.rgba,
         );
 
-        let output_size = output_size_for_effects(self.image.size, self.effects);
+        let output_size = output_size_for_effects(self.image_size, self.effects);
         let (origin, target_size) = viewport_rect(self.rect, screen_descriptor);
         if let Some(source_view) = resources
             .source_textures
@@ -156,7 +156,7 @@ impl CallbackTrait for GpuEffectCallback {
                 egui_encoder,
                 self.source_key,
                 &source_view,
-                self.image.size,
+                self.image_size,
                 output_size,
                 self.effects,
                 self.display_upscaler,
@@ -321,7 +321,7 @@ impl GpuPaintResources {
         queue: &wgpu::Queue,
         key: GpuPaintSourceKey,
         image_size: [usize; 2],
-        upload_rgba: &[u8],
+        rgba: &[u8],
     ) {
         if self.source_textures.get(&key).is_some() {
             return;
@@ -330,7 +330,7 @@ impl GpuPaintResources {
         let upload_started = Instant::now();
         let [width, height] = image_size;
         let byte_size = width.saturating_mul(height).saturating_mul(4);
-        if upload_rgba.len() != byte_size {
+        if rgba.len() != byte_size {
             return;
         }
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -354,7 +354,7 @@ impl GpuPaintResources {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            upload_rgba,
+            rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some((width * 4) as u32),

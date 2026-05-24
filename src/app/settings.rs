@@ -1,5 +1,5 @@
 use super::ui::{dialog, icons, theme};
-use super::{apply_window_level, cache_budget_bytes, SuiSuiViewApp};
+use super::{apply_window_level, cache_budget_summary, SuiSuiViewApp};
 use crate::core::state::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, DecodeMode,
     DisplayUpscaler, EdgePageAction, GpuEffectMode, LargeImageAnchor, ResizeFilter, WheelMode,
@@ -139,7 +139,13 @@ impl SuiSuiViewApp {
                                         );
                                     }
                                     SettingsSection::Performance => {
-                                        show_performance_settings(ui, &mut draft, &mut changed);
+                                        show_performance_settings(
+                                            ui,
+                                            &mut draft,
+                                            self.target_long_edge,
+                                            self.visible_page_count(),
+                                            &mut changed,
+                                        );
                                     }
                                     SettingsSection::Mouse => {
                                         show_mouse_settings(ui, &mut draft, &mut changed);
@@ -422,7 +428,13 @@ fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, ch
         });
 }
 
-fn show_performance_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed: &mut bool) {
+fn show_performance_settings(
+    ui: &mut egui::Ui,
+    draft: &mut AppSettings,
+    target_long_edge: u32,
+    visible_pages: usize,
+    changed: &mut bool,
+) {
     setting_group(
         ui,
         "이미지 읽기",
@@ -506,18 +518,36 @@ fn show_performance_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed
                 });
             });
 
-            if draft.cache_memory_mode == CacheMemoryMode::Auto {
-                ui.label(
-                    RichText::new(format!(
-                        "현재 {:.0} MB",
-                        cache_budget_bytes(draft) as f32 / (1024.0 * 1024.0)
-                    ))
-                    .size(12.0)
-                    .color(theme::TEXT_MUTED),
-                );
-            }
+            let summary = cache_budget_summary(draft, target_long_edge, visible_pages);
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(format!(
+                    "CPU 페이지 캐시 {:.0} MB · worker 미리읽기 {:.0} MB · AI 결과 {:.0} MB",
+                    mib(summary.cpu_prepared_bytes),
+                    mib(summary.worker_prefetch_bytes),
+                    mib(summary.upscaled_bytes)
+                ))
+                .size(12.0)
+                .color(theme::TEXT_MUTED),
+            );
+            ui.label(
+                RichText::new(format!(
+                    "GPU 표시 캐시 source {:.0} MB · intermediate {:.0} MB · 현재 target 기준 페이지당 최대 약 {:.0} MB, CPU 약 {}장 / worker 약 {}장",
+                    mib(summary.gpu_source_texture_bytes),
+                    mib(summary.gpu_intermediate_texture_bytes),
+                    mib(summary.estimated_page_bytes),
+                    summary.estimated_cpu_pages,
+                    summary.estimated_worker_pages
+                ))
+                .size(12.0)
+                .color(theme::TEXT_MUTED),
+            );
         },
     );
+}
+
+fn mib(bytes: usize) -> f32 {
+    bytes as f32 / (1024.0 * 1024.0)
 }
 
 fn show_mouse_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed: &mut bool) {

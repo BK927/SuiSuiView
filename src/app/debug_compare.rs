@@ -293,8 +293,8 @@ impl SuiSuiViewApp {
             }
             PageVisual::ReadyGpu {
                 source_key,
-                image,
-                upload_rgba,
+                image_size,
+                rgba,
                 effects,
                 display_upscaler,
                 ..
@@ -304,8 +304,8 @@ impl SuiSuiViewApp {
                     GpuPaintRequest {
                         rect: page_rect,
                         source_key,
-                        image,
-                        upload_rgba,
+                        image_size,
+                        rgba,
                         effects,
                         display_upscaler,
                         opacity: 1.0,
@@ -403,8 +403,8 @@ impl SuiSuiViewApp {
                 upscaled: false,
                 generation: 0,
             },
-            image: page.image.clone(),
-            upload_rgba: page.upload_rgba.clone(),
+            image_size: page.image_size(),
+            rgba: page.rgba.clone(),
             size: page_natural_size(&page),
             effects: ViewEffects::default(),
             display_upscaler,
@@ -489,7 +489,7 @@ impl SuiSuiViewApp {
                 best_key.target_long_edge,
                 if upscaled { "ai" } else { "base" }
             ),
-            ImageData::Color(page.image.clone()),
+            ImageData::Color(Arc::new(page.color_image())),
             TextureOptions::LINEAR,
         );
         self.textures.put(

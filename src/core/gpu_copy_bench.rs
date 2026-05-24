@@ -124,7 +124,7 @@ pub fn scan_gpu_copy_costs(
 
         match result {
             Ok(prepared) => {
-                let [width, height] = prepared.image.size;
+                let [width, height] = prepared.image_size();
                 page.width = Some(width);
                 page.height = Some(height);
                 page.bytes = Some(width.saturating_mul(height).saturating_mul(4));
@@ -304,8 +304,8 @@ impl GpuCopyBench {
         page: &PreparedPage,
         iterations: usize,
     ) -> Result<Vec<GpuCopyBenchCase>, String> {
-        let image = &page.image;
-        let bytes = &page.upload_rgba;
+        let image = page.color_image();
+        let bytes = &page.rgba;
         let [width, height] = image.size;
         if width == 0 || height == 0 {
             return Err("cannot benchmark an empty image".to_owned());
@@ -315,7 +315,7 @@ impl GpuCopyBench {
 
         cases.push(
             self.measure_case("color_image_to_rgba", byte_size, iterations, || {
-                let bytes = color_image_to_rgba(image);
+                let bytes = color_image_to_rgba(&image);
                 std::hint::black_box(bytes.len());
             })?,
         );
@@ -349,7 +349,7 @@ impl GpuCopyBench {
         cases.push(
             self.measure_case("current_first_upload", byte_size, iterations, || {
                 let texture = self.create_source_texture(width, height);
-                let bytes = color_image_to_rgba(image);
+                let bytes = color_image_to_rgba(&image);
                 self.write_texture(&texture, width, height, &bytes);
                 let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
                 std::hint::black_box(&view);
