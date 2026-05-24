@@ -138,13 +138,15 @@ impl SuiSuiViewApp {
             egui::Label::new(RichText::new(command.label()).color(theme::TEXT_PRIMARY)).truncate(),
         )
         .on_hover_text(command.group());
+        let parent_clip = ui.clip_rect();
         ui.scope_builder(egui::UiBuilder::new().max_rect(key_rect), |ui| {
-            ui.set_clip_rect(key_rect);
+            ui.set_clip_rect(key_rect.intersect(parent_clip));
             shortcut_chips(ui, &draft.key_bindings, &indices);
         })
         .response
         .on_hover_text(command_shortcut_hover(&draft.key_bindings, &indices));
         ui.scope_builder(egui::UiBuilder::new().max_rect(action_rect), |ui| {
+            ui.set_clip_rect(action_rect.intersect(parent_clip));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let replace_index = indices.first().copied();
                 let edit_hint = if replace_index.is_some() {
