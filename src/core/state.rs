@@ -7,7 +7,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod bookmarks;
+mod input;
+#[cfg(test)]
+mod tests;
 pub use bookmarks::{PageBookmark, PageBookmarkEntry};
+pub use input::{
+    default_key_bindings, default_mouse_bindings, CommandId, KeyBinding, KeyCode, KeyShortcut,
+    MouseBinding, MouseGesture,
+};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReadingDirection {
@@ -59,18 +66,20 @@ impl FitMode {
 pub enum EdgePageAction {
     #[default]
     Stop,
+    Ask,
     Wrap,
     NextBook,
 }
 
 impl EdgePageAction {
-    pub const ALL: [Self; 3] = [Self::Stop, Self::Wrap, Self::NextBook];
+    pub const ALL: [Self; 4] = [Self::Stop, Self::Ask, Self::Wrap, Self::NextBook];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Stop => "Stop",
-            Self::Wrap => "Loop",
-            Self::NextBook => "Next book",
+            Self::Stop => "아무것도 하지 않음",
+            Self::Ask => "무엇을 할지 물어보기",
+            Self::Wrap => "다시 처음으로 돌아가기",
+            Self::NextBook => "다음/이전 폴더/파일로 넘어가기",
         }
     }
 }
@@ -407,12 +416,28 @@ pub struct AppSettings {
     pub esc_to_quit: bool,
     #[serde(default)]
     pub always_on_top: bool,
+    #[serde(default = "default_true")]
+    pub show_toasts: bool,
+    #[serde(default = "default_true")]
+    pub remember_recent_locations: bool,
+    #[serde(default)]
+    pub single_instance: bool,
     #[serde(default)]
     pub show_status_bar: bool,
     #[serde(default = "default_true")]
     pub top_bar_pinned: bool,
     #[serde(default)]
+    pub show_filename_overlay: bool,
+    #[serde(default = "default_true")]
+    pub show_main_border: bool,
+    #[serde(default = "default_true")]
+    pub show_page_arrows: bool,
+    #[serde(default)]
     pub edge_page_action: EdgePageAction,
+    #[serde(default = "default_image_edge_page_action")]
+    pub image_edge_page_action: EdgePageAction,
+    #[serde(default = "default_archive_edge_page_action")]
+    pub archive_edge_page_action: EdgePageAction,
 
     #[serde(default)]
     pub decode_mode: DecodeMode,
@@ -437,6 +462,8 @@ pub struct AppSettings {
     pub page_transition_style: PageTransitionStyle,
     #[serde(default)]
     pub large_image_anchor: LargeImageAnchor,
+    #[serde(default)]
+    pub remember_zoom_per_book: bool,
     #[serde(default = "default_true")]
     pub double_click_maximize: bool,
     #[serde(default = "default_true")]
@@ -448,6 +475,19 @@ pub struct AppSettings {
     pub apply_exif_orientation: bool,
     #[serde(default)]
     pub apply_embedded_icc: bool,
+
+    #[serde(default = "default_true")]
+    pub auto_save_reading_position: bool,
+    #[serde(default = "default_true")]
+    pub share_state_between_instances: bool,
+    #[serde(default = "default_max_remembered_books")]
+    pub max_remembered_books: usize,
+    #[serde(default = "default_true")]
+    pub remember_archive_page_name: bool,
+    #[serde(default = "default_key_bindings")]
+    pub key_bindings: Vec<KeyBinding>,
+    #[serde(default = "default_mouse_bindings")]
+    pub mouse_bindings: Vec<MouseBinding>,
 
     #[serde(default)]
     pub ai_upscale: AiUpscaleSettings,
@@ -486,9 +526,17 @@ impl Default for AppSettings {
             confirm_delete: true,
             esc_to_quit: true,
             always_on_top: false,
+            show_toasts: true,
+            remember_recent_locations: true,
+            single_instance: false,
             show_status_bar: false,
             top_bar_pinned: true,
+            show_filename_overlay: false,
+            show_main_border: true,
+            show_page_arrows: true,
             edge_page_action: EdgePageAction::Stop,
+            image_edge_page_action: EdgePageAction::Wrap,
+            archive_edge_page_action: default_archive_edge_page_action(),
             decode_mode: DecodeMode::AutoFast,
             resize_filter: ResizeFilter::Bicubic,
             gpu_effect_mode: GpuEffectMode::Auto,
@@ -500,11 +548,18 @@ impl Default for AppSettings {
             transition_effect: true,
             page_transition_style: PageTransitionStyle::SlideFade,
             large_image_anchor: LargeImageAnchor::Center,
+            remember_zoom_per_book: false,
             double_click_maximize: true,
             middle_click_fullscreen: true,
             wheel_mode: WheelMode::PageTurn,
             apply_exif_orientation: true,
             apply_embedded_icc: false,
+            auto_save_reading_position: true,
+            share_state_between_instances: true,
+            max_remembered_books: default_max_remembered_books(),
+            remember_archive_page_name: true,
+            key_bindings: default_key_bindings(),
+            mouse_bindings: default_mouse_bindings(),
             ai_upscale: AiUpscaleSettings::default(),
         }
     }
@@ -515,10 +570,14 @@ pub struct Bookmark {
     pub book_id: String,
     pub title: String,
     pub last_page: usize,
+    #[serde(default)]
+    pub last_page_name: Option<String>,
     pub total_pages: usize,
     pub known_paths: Vec<String>,
     pub reading_direction: ReadingDirection,
     pub fit_mode: FitMode,
+    #[serde(default)]
+    pub manual_zoom: Option<f32>,
     #[serde(default)]
     pub page_bookmarks: Vec<PageBookmark>,
     pub updated_at: u64,
@@ -575,6 +634,28 @@ impl StateStore {
         let _ = self.save();
     }
 
+    pub fn reload_from_disk(&mut self) -> bool {
+        let Ok(text) = fs::read_to_string(&self.path) else {
+            return false;
+        };
+        let Ok(state) = serde_json::from_str::<PersistedState>(&text) else {
+            return false;
+        };
+        self.state = state;
+        true
+    }
+
+    pub fn reload_books_from_disk(&mut self) -> bool {
+        let Ok(text) = fs::read_to_string(&self.path) else {
+            return false;
+        };
+        let Ok(state) = serde_json::from_str::<PersistedState>(&text) else {
+            return false;
+        };
+        self.state.books = state.books;
+        true
+    }
+
     pub fn window_placement(&self) -> &WindowPlacement {
         &self.state.window
     }
@@ -598,6 +679,51 @@ impl StateStore {
         self.update_bookmark(input, false)
     }
 
+    pub fn prune_auto_bookmarks(&mut self, max_books: usize) -> usize {
+        if max_books == 0 {
+            return 0;
+        }
+
+        let mut removable: Vec<_> = self
+            .state
+            .books
+            .values()
+            .filter(|book| book.page_bookmarks.is_empty())
+            .map(|book| (book.book_id.clone(), book.updated_at))
+            .collect();
+        let keep_non_removable = self.state.books.len().saturating_sub(removable.len());
+        let removable_to_keep = max_books.saturating_sub(keep_non_removable);
+        if removable.len() <= removable_to_keep {
+            return 0;
+        }
+
+        removable.sort_by_key(|(_, updated_at)| *updated_at);
+        let remove_count = removable.len() - removable_to_keep;
+        for (book_id, _) in removable.into_iter().take(remove_count) {
+            self.state.books.remove(&book_id);
+        }
+        self.state.version = 4;
+        let _ = self.save();
+        remove_count
+    }
+
+    pub fn clear_archive_page_names(&mut self) -> usize {
+        let mut cleared = 0;
+        for bookmark in self.state.books.values_mut() {
+            if bookmark.last_page_name.is_none() || !looks_like_archive_book(bookmark) {
+                continue;
+            }
+            bookmark.last_page_name = None;
+            bookmark.updated_at = now_unix_seconds();
+            cleared += 1;
+        }
+        if cleared > 0 {
+            self.state.version = 4;
+            let _ = self.save();
+        }
+        cleared
+    }
+
     fn update_bookmark(&mut self, input: BookmarkInput<'_>, touch: bool) -> bool {
         self.state.version = 4;
         let path_text = input.path.to_string_lossy().to_string();
@@ -611,28 +737,35 @@ impl StateStore {
                 book_id: input.book_id.to_owned(),
                 title: input.title.to_owned(),
                 last_page: 0,
+                last_page_name: None,
                 total_pages: input.total_pages,
                 known_paths: Vec::new(),
                 reading_direction: input.reading_direction,
                 fit_mode: input.fit_mode,
+                manual_zoom: None,
                 page_bookmarks: Vec::new(),
                 updated_at: now,
             });
 
         let title = input.title.to_owned();
         let last_page = input.last_page.min(input.total_pages.saturating_sub(1));
+        let last_page_name = input.last_page_name.map(ToOwned::to_owned);
         let mut changed = is_new
             || entry.title != title
             || entry.last_page != last_page
+            || entry.last_page_name != last_page_name
             || entry.total_pages != input.total_pages
             || entry.reading_direction != input.reading_direction
-            || entry.fit_mode != input.fit_mode;
+            || entry.fit_mode != input.fit_mode
+            || entry.manual_zoom != input.manual_zoom;
 
         entry.title = title;
         entry.last_page = last_page;
+        entry.last_page_name = last_page_name;
         entry.total_pages = input.total_pages;
         entry.reading_direction = input.reading_direction;
         entry.fit_mode = input.fit_mode;
+        entry.manual_zoom = input.manual_zoom;
 
         if !entry.known_paths.iter().any(|known| known == &path_text) {
             entry.known_paths.push(path_text);
@@ -677,10 +810,22 @@ pub struct BookmarkInput<'a> {
     pub book_id: &'a str,
     pub title: &'a str,
     pub last_page: usize,
+    pub last_page_name: Option<&'a str>,
     pub total_pages: usize,
     pub path: &'a Path,
     pub reading_direction: ReadingDirection,
     pub fit_mode: FitMode,
+    pub manual_zoom: Option<f32>,
+}
+
+fn looks_like_archive_book(bookmark: &Bookmark) -> bool {
+    bookmark.known_paths.iter().any(|path| {
+        Path::new(path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| matches!(extension.to_ascii_lowercase().as_str(), "zip" | "cbz"))
+            .unwrap_or(false)
+    })
 }
 
 fn state_file_path() -> PathBuf {
@@ -700,8 +845,20 @@ fn default_true() -> bool {
     true
 }
 
+fn default_image_edge_page_action() -> EdgePageAction {
+    EdgePageAction::Wrap
+}
+
+fn default_archive_edge_page_action() -> EdgePageAction {
+    EdgePageAction::Ask
+}
+
 fn default_manual_cache_mb() -> u32 {
     160
+}
+
+fn default_max_remembered_books() -> usize {
+    30
 }
 
 fn default_realesrgan_model_name() -> String {
@@ -714,70 +871,4 @@ fn default_realesrgan_scale() -> u32 {
 
 fn default_realesrgan_output_format() -> String {
     "png".to_owned()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, DecodeMode,
-        DisplayUpscaler, EdgePageAction, GpuEffectMode, PersistedState, ResizeFilter, WheelMode,
-        WindowPlacement,
-    };
-
-    #[test]
-    fn old_state_without_settings_loads_defaults() {
-        let state: PersistedState = serde_json::from_str(r#"{"version":1,"books":{}}"#).unwrap();
-
-        assert_eq!(state.settings, AppSettings::default());
-        assert_eq!(state.window, WindowPlacement::default());
-        assert!(state.books.is_empty());
-    }
-
-    #[test]
-    fn settings_defaults_match_viewer_policy() {
-        let settings = AppSettings::default();
-
-        assert!(settings.confirm_delete);
-        assert!(settings.esc_to_quit);
-        assert_eq!(settings.edge_page_action, EdgePageAction::Stop);
-        assert_eq!(settings.decode_mode, DecodeMode::AutoFast);
-        assert_eq!(settings.resize_filter, ResizeFilter::Bicubic);
-        assert_eq!(settings.gpu_effect_mode, GpuEffectMode::Auto);
-        assert_eq!(settings.display_upscaler, DisplayUpscaler::Auto);
-        assert_eq!(settings.cache_memory_mode, CacheMemoryMode::Auto);
-        assert_eq!(settings.manual_cache_mb, 160);
-        assert!(settings.apply_exif_orientation);
-        assert!(!settings.apply_embedded_icc);
-        assert_eq!(settings.wheel_mode, WheelMode::PageTurn);
-        assert_eq!(settings.ai_upscale.backend, AiUpscaleBackend::Off);
-        assert_eq!(
-            settings.ai_upscale.prefetch_mode,
-            AiUpscalePrefetchMode::Off
-        );
-        assert_eq!(
-            settings.ai_upscale.ncnn.model_name,
-            "realesrgan-x4plus-anime"
-        );
-        assert_eq!(settings.ai_upscale.ncnn.scale, 4);
-    }
-
-    #[test]
-    fn automatic_display_upscaler_only_uses_heavy_shader_for_actual_upscale() {
-        assert_eq!(
-            DisplayUpscaler::Auto.resolve_for_render([1600, 2400], [800, 1200]),
-            None
-        );
-        assert_eq!(
-            DisplayUpscaler::Auto.resolve_for_render([800, 1200], [1600, 2400]),
-            Some(DisplayUpscaler::WgslFsr1EasuRcas)
-        );
-        assert_eq!(
-            DisplayUpscaler::Auto.resolve_for_render([1400, 2100], [2000, 3000]),
-            Some(DisplayUpscaler::WgslFsr1Style)
-        );
-        assert_eq!(
-            DisplayUpscaler::WgslNisStyle.resolve_for_render([1600, 2400], [800, 1200]),
-            Some(DisplayUpscaler::WgslNisStyle)
-        );
-    }
 }

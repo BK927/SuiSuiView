@@ -3,9 +3,12 @@
 mod app;
 #[allow(dead_code)]
 mod core;
+mod single_instance;
 
+use crate::core::source::{classify_path, SourceKind};
 use crate::core::state::{StateStore, WindowPlacement};
 use app::SuiSuiViewApp;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 const DEFAULT_WINDOW_SIZE: [f32; 2] = [1280.0, 820.0];
@@ -22,6 +25,16 @@ fn main() -> eframe::Result<()> {
     }
 
     let store = StateStore::load();
+    let startup_open_path = startup_open_path();
+    let ipc_rx = if store.settings().single_instance {
+        let pipe_name = single_instance::pipe_name_for_key(&store.path().display().to_string());
+        if single_instance::send_open_request(&pipe_name, startup_open_path.as_deref()) {
+            return Ok(());
+        }
+        Some(single_instance::start_listener(pipe_name))
+    } else {
+        None
+    };
     let options = eframe::NativeOptions {
         viewport: initial_viewport(&store, window_icon()),
         renderer: eframe::Renderer::Wgpu,
@@ -32,7 +45,14 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "SuiSuiView",
         options,
-        Box::new(|cc| Ok(Box::new(SuiSuiViewApp::new(cc, store)))),
+        Box::new(|cc| {
+            Ok(Box::new(SuiSuiViewApp::new(
+                cc,
+                store,
+                ipc_rx,
+                startup_open_path,
+            )))
+        }),
     )
 }
 
@@ -59,6 +79,15 @@ fn is_gui_cli_redirect_arg(arg: &std::ffi::OsString) -> bool {
         || arg == "--effect-bench"
         || arg == "--upscale-bench"
         || arg == "--upscale-quality-scan"
+}
+
+fn startup_open_path() -> Option<PathBuf> {
+    std::env::args_os().skip(1).map(PathBuf::from).find(|path| {
+        matches!(
+            classify_path(path),
+            SourceKind::Folder | SourceKind::ZipCbz | SourceKind::SingleImage
+        )
+    })
 }
 
 fn initial_viewport(

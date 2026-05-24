@@ -216,10 +216,12 @@ mod tests {
             book_id: "book-1",
             title: "Book One",
             last_page: 0,
+            last_page_name: None,
             total_pages: 20,
             path: Path::new("C:/books/book-1"),
             reading_direction: ReadingDirection::RightToLeft,
             fit_mode: FitMode::FitPage,
+            manual_zoom: None,
         });
 
         store.upsert_page_bookmark("book-1", 4, "Middle", Some("page-005.jpg".to_owned()));
@@ -250,10 +252,12 @@ mod tests {
                 book_id,
                 title: book_id,
                 last_page: 0,
+                last_page_name: None,
                 total_pages: 20,
                 path: Path::new(path),
                 reading_direction: ReadingDirection::RightToLeft,
                 fit_mode: FitMode::FitPage,
+                manual_zoom: None,
             });
         }
         store.upsert_page_bookmark("book-1", 0, "Cover", Some("cover.png".to_owned()));
@@ -266,6 +270,32 @@ mod tests {
         assert!(store.all_page_bookmarks().is_empty());
         assert!(store.bookmark("book-1").is_some());
         assert_eq!(store.clear_all_page_bookmarks(), 0);
+    }
+
+    #[test]
+    fn pruning_auto_bookmarks_preserves_manual_page_bookmarks() {
+        let mut store = test_store("prune-auto-bookmarks");
+        for index in 0..3 {
+            let book_id = format!("book-{index}");
+            store.upsert_bookmark(BookmarkInput {
+                book_id: &book_id,
+                title: &book_id,
+                last_page: index,
+                last_page_name: None,
+                total_pages: 10,
+                path: Path::new("C:/books/book.zip"),
+                reading_direction: ReadingDirection::LeftToRight,
+                fit_mode: FitMode::FitPage,
+                manual_zoom: None,
+            });
+        }
+        store.upsert_page_bookmark("book-0", 2, "manual", Some("002.png".to_owned()));
+
+        let removed = store.prune_auto_bookmarks(1);
+
+        assert_eq!(removed, 2);
+        assert!(store.bookmark("book-0").is_some());
+        assert_eq!(store.all_page_bookmark_count(), 1);
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use crate::core::effects::ImageFilter;
-use crate::core::state::{FitMode, ReadingDirection};
+use crate::core::state::{
+    AppSettings, CommandId, FitMode, KeyCode, KeyShortcut, MouseGesture, ReadingDirection,
+};
 use eframe::egui::{self, Key};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -46,7 +48,6 @@ pub(super) enum AppCommand {
     UpscaleCurrentPage,
     ToggleCurrentPageBookmark,
     ToggleBookmarkPopover,
-    Unsupported(&'static str),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,339 +56,326 @@ pub(super) enum DeleteMode {
     Permanent,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Shortcut {
-    pub(super) key: ShortcutKey,
-    pub(super) ctrl: bool,
-    pub(super) alt: bool,
-    pub(super) shift: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ShortcutKey {
-    Egui(Key),
-}
-
-impl Shortcut {
-    fn egui(key: Key, modifiers: egui::Modifiers) -> Self {
-        Self {
-            key: ShortcutKey::Egui(key),
-            ctrl: modifiers.ctrl,
-            alt: modifiers.alt,
-            shift: modifiers.shift,
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn key(key: Key) -> Self {
-        Self {
-            key: ShortcutKey::Egui(key),
-            ctrl: false,
-            alt: false,
-            shift: false,
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn ctrl(key: Key) -> Self {
-        Self {
-            key: ShortcutKey::Egui(key),
-            ctrl: true,
-            alt: false,
-            shift: false,
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn alt(key: Key) -> Self {
-        Self {
-            key: ShortcutKey::Egui(key),
-            ctrl: false,
-            alt: true,
-            shift: false,
-        }
-    }
-}
-
-pub(super) fn collect_keyboard_commands(input: &egui::InputState) -> Vec<AppCommand> {
+pub(super) fn collect_keyboard_commands(
+    input: &egui::InputState,
+    settings: &AppSettings,
+) -> Vec<AppCommand> {
     let mut commands = Vec::new();
-    for key in TRACKED_KEYS {
-        if input.key_pressed(*key) {
-            let shortcut = Shortcut::egui(*key, input.modifiers);
-            if let Some(command) = command_for_shortcut(shortcut) {
+    for binding in &settings.key_bindings {
+        if shortcut_pressed(input, binding.shortcut) {
+            if let Some(command) = app_command_for_id(binding.command) {
                 commands.push(command);
-            }
-        }
-    }
-    for event in &input.events {
-        if let egui::Event::Text(text) = event {
-            for ch in text.chars() {
-                if ch == '*' {
-                    commands.push(AppCommand::SetFitMode(FitMode::Original));
-                }
             }
         }
     }
     commands
 }
 
-const TRACKED_KEYS: &[Key] = &[
-    Key::F1,
-    Key::F2,
-    Key::F3,
-    Key::F4,
-    Key::F5,
-    Key::F11,
-    Key::O,
-    Key::F,
-    Key::Escape,
-    Key::X,
-    Key::W,
-    Key::Enter,
-    Key::N,
-    Key::M,
-    Key::Q,
-    Key::PageDown,
-    Key::PageUp,
-    Key::ArrowDown,
-    Key::ArrowRight,
-    Key::ArrowUp,
-    Key::ArrowLeft,
-    Key::Space,
-    Key::Backspace,
-    Key::Home,
-    Key::End,
-    Key::OpenBracket,
-    Key::CloseBracket,
-    Key::Num0,
-    Key::Num1,
-    Key::Num2,
-    Key::Num3,
-    Key::Num4,
-    Key::Num5,
-    Key::Num6,
-    Key::Num7,
-    Key::Num8,
-    Key::Num9,
-    Key::Z,
-    Key::Plus,
-    Key::Equals,
-    Key::Minus,
-    Key::I,
-    Key::G,
-    Key::L,
-    Key::R,
-    Key::U,
-    Key::S,
-    Key::Delete,
-    Key::C,
-    Key::Tab,
-    Key::Insert,
-    Key::E,
-    Key::P,
-    Key::K,
-    Key::Slash,
-    Key::B,
-    Key::A,
-    Key::Backtick,
-    Key::T,
-];
+#[cfg(test)]
+pub(super) fn command_for_shortcut(
+    shortcut: KeyShortcut,
+    settings: &AppSettings,
+) -> Option<AppCommand> {
+    settings
+        .key_bindings
+        .iter()
+        .find(|binding| binding.shortcut == shortcut)
+        .and_then(|binding| app_command_for_id(binding.command))
+}
 
-pub(super) fn command_for_shortcut(shortcut: Shortcut) -> Option<AppCommand> {
-    let Shortcut {
-        key,
-        ctrl,
-        alt,
-        shift,
-    } = shortcut;
-    let plain = !ctrl && !alt && !shift;
+pub(super) fn command_for_mouse_gesture(
+    gesture: MouseGesture,
+    settings: &AppSettings,
+) -> Option<AppCommand> {
+    settings
+        .mouse_bindings
+        .iter()
+        .find(|binding| binding.gesture == gesture)
+        .and_then(|binding| app_command_for_id(binding.command))
+}
 
-    match key {
-        ShortcutKey::Egui(Key::F2) if plain => Some(AppCommand::OpenFile),
-        ShortcutKey::Egui(Key::O) if ctrl && !alt && !shift => Some(AppCommand::OpenFile),
-        ShortcutKey::Egui(Key::F) if plain => Some(AppCommand::OpenFolder),
-        ShortcutKey::Egui(Key::F4) if plain => Some(AppCommand::CloseBook),
-        ShortcutKey::Egui(Key::Escape) if plain => Some(AppCommand::QuitFromEsc),
-        ShortcutKey::Egui(Key::X) if plain => Some(AppCommand::Quit),
-        ShortcutKey::Egui(Key::W) if ctrl && !alt && !shift => Some(AppCommand::Quit),
-        ShortcutKey::Egui(Key::F11) if plain => Some(AppCommand::ToggleFullscreen),
-        ShortcutKey::Egui(Key::Enter) if alt && !ctrl && !shift => {
-            Some(AppCommand::ToggleFullscreen)
-        }
-        ShortcutKey::Egui(Key::N) if plain => Some(AppCommand::ToggleFullscreen),
-        ShortcutKey::Egui(Key::M) if plain => Some(AppCommand::ToggleMaximized),
-        ShortcutKey::Egui(Key::Q) if plain => Some(AppCommand::Minimize),
-        ShortcutKey::Egui(Key::Enter) if ctrl && !alt && !shift => Some(AppCommand::OpenExplorer),
-        ShortcutKey::Egui(Key::Enter) if plain => Some(AppCommand::Unsupported("Image selection")),
+pub(super) fn app_command_for_id(command: CommandId) -> Option<AppCommand> {
+    Some(match command {
+        CommandId::OpenFile => AppCommand::OpenFile,
+        CommandId::OpenFolder => AppCommand::OpenFolder,
+        CommandId::CloseBook => AppCommand::CloseBook,
+        CommandId::Quit => AppCommand::Quit,
+        CommandId::QuitFromEsc => AppCommand::QuitFromEsc,
+        CommandId::ToggleFullscreen => AppCommand::ToggleFullscreen,
+        CommandId::ToggleMaximized => AppCommand::ToggleMaximized,
+        CommandId::Minimize => AppCommand::Minimize,
+        CommandId::OpenSettings => AppCommand::OpenSettings,
+        CommandId::OpenAbout => AppCommand::OpenAbout,
+        CommandId::ToggleAlwaysOnTop => AppCommand::ToggleAlwaysOnTop,
+        CommandId::NextPage => AppCommand::NextPage,
+        CommandId::PreviousPage => AppCommand::PreviousPage,
+        CommandId::MoveForward10 => AppCommand::MovePages(10),
+        CommandId::MoveBackward10 => AppCommand::MovePages(-10),
+        CommandId::MoveForward100 => AppCommand::MovePages(100),
+        CommandId::MoveBackward100 => AppCommand::MovePages(-100),
+        CommandId::ForceNextPage => AppCommand::ForceMovePages(1),
+        CommandId::ForcePreviousPage => AppCommand::ForceMovePages(-1),
+        CommandId::Home => AppCommand::Home,
+        CommandId::End => AppCommand::End,
+        CommandId::RandomForward => AppCommand::RandomForward,
+        CommandId::RandomBackward => AppCommand::RandomBackward,
+        CommandId::NextBook => AppCommand::NextBook,
+        CommandId::PreviousBook => AppCommand::PreviousBook,
+        CommandId::FitOriginal => AppCommand::SetFitMode(FitMode::Original),
+        CommandId::FitPage => AppCommand::SetFitMode(FitMode::FitPage),
+        CommandId::FitWidth => AppCommand::SetFitMode(FitMode::FitWidth),
+        CommandId::FitHeight => AppCommand::SetFitMode(FitMode::FitHeight),
+        CommandId::SetDoubleLeftToRight => AppCommand::SetDouble(ReadingDirection::LeftToRight),
+        CommandId::SetDoubleRightToLeft => AppCommand::SetDouble(ReadingDirection::RightToLeft),
+        CommandId::ToggleDouble => AppCommand::ToggleDouble,
+        CommandId::ZoomIn => AppCommand::Zoom(1.1),
+        CommandId::ZoomOut => AppCommand::Zoom(0.9),
+        CommandId::ZoomFineIn => AppCommand::ZoomFine(0.01),
+        CommandId::ZoomFineOut => AppCommand::ZoomFine(-0.01),
+        CommandId::RotateClockwise => AppCommand::RotateClockwise,
+        CommandId::RotateCounterClockwise => AppCommand::RotateCounterClockwise,
+        CommandId::Rotate0 => AppCommand::SetRotation(0),
+        CommandId::Rotate90 => AppCommand::SetRotation(1),
+        CommandId::Rotate180 => AppCommand::SetRotation(2),
+        CommandId::Rotate270 => AppCommand::SetRotation(3),
+        CommandId::FlipHorizontal => AppCommand::ToggleFlipHorizontal,
+        CommandId::FlipVertical => AppCommand::ToggleFlipVertical,
+        CommandId::ToggleInvert => AppCommand::ToggleInvert,
+        CommandId::FilterNone => AppCommand::SetFilter(ImageFilter::None),
+        CommandId::FilterSmooth => AppCommand::SetFilter(ImageFilter::Smooth),
+        CommandId::FilterSmoothSharpen => AppCommand::SetFilter(ImageFilter::SmoothSharpen),
+        CommandId::ToggleGamma => AppCommand::ToggleGamma,
+        CommandId::DeleteRecycle => AppCommand::Delete(DeleteMode::Recycle),
+        CommandId::DeletePermanent => AppCommand::Delete(DeleteMode::Permanent),
+        CommandId::OpenExplorer => AppCommand::OpenExplorer,
+        CommandId::CopyPageImage => AppCommand::CopyPageImage,
+        CommandId::CopyDisplayImage => AppCommand::CopyDisplayImage,
+        CommandId::CopyPath => AppCommand::CopyPath,
+        CommandId::UpscaleCurrentPage => AppCommand::UpscaleCurrentPage,
+        CommandId::ToggleCurrentPageBookmark => AppCommand::ToggleCurrentPageBookmark,
+        CommandId::ToggleBookmarkPopover => AppCommand::ToggleBookmarkPopover,
+    })
+}
 
-        ShortcutKey::Egui(Key::PageDown) if ctrl && alt && !shift => {
-            Some(AppCommand::RandomForward)
-        }
-        ShortcutKey::Egui(Key::PageUp) if ctrl && alt && !shift => Some(AppCommand::RandomBackward),
-        ShortcutKey::Egui(Key::ArrowRight) if ctrl && shift && !alt => {
-            Some(AppCommand::MovePages(100))
-        }
-        ShortcutKey::Egui(Key::ArrowLeft) if ctrl && shift && !alt => {
-            Some(AppCommand::MovePages(-100))
-        }
-        ShortcutKey::Egui(Key::PageDown) if ctrl && !alt && !shift => {
-            Some(AppCommand::MovePages(10))
-        }
-        ShortcutKey::Egui(Key::PageUp) if ctrl && !alt && !shift => {
-            Some(AppCommand::MovePages(-10))
-        }
-        ShortcutKey::Egui(Key::PageDown) if shift && !ctrl && !alt => {
-            Some(AppCommand::ForceMovePages(1))
-        }
-        ShortcutKey::Egui(Key::PageUp) if shift && !ctrl && !alt => {
-            Some(AppCommand::ForceMovePages(-1))
-        }
-        ShortcutKey::Egui(Key::PageDown | Key::ArrowDown | Key::ArrowRight) if plain => {
-            Some(AppCommand::NextPage)
-        }
-        ShortcutKey::Egui(Key::Space) if shift && !ctrl && !alt => Some(AppCommand::PreviousPage),
-        ShortcutKey::Egui(Key::Space) if plain => Some(AppCommand::NextPage),
-        ShortcutKey::Egui(Key::PageUp | Key::ArrowUp | Key::ArrowLeft | Key::Backspace)
-            if plain =>
-        {
-            Some(AppCommand::PreviousPage)
-        }
-        ShortcutKey::Egui(Key::Home) if plain => Some(AppCommand::Home),
-        ShortcutKey::Egui(Key::End) if plain => Some(AppCommand::End),
-        ShortcutKey::Egui(Key::CloseBracket) if plain => Some(AppCommand::NextBook),
-        ShortcutKey::Egui(Key::OpenBracket) if plain => Some(AppCommand::PreviousBook),
-
-        ShortcutKey::Egui(Key::Num0) if plain => Some(AppCommand::SetFitMode(FitMode::Original)),
-        ShortcutKey::Egui(Key::Num1 | Key::Num9 | Key::Z) if plain => {
-            Some(AppCommand::SetFitMode(FitMode::FitPage))
-        }
-        ShortcutKey::Egui(Key::Num8) if plain => Some(AppCommand::SetFitMode(FitMode::FitWidth)),
-        ShortcutKey::Egui(Key::Num7) if plain => {
-            Some(AppCommand::SetDouble(ReadingDirection::LeftToRight))
-        }
-        ShortcutKey::Egui(Key::Num6) if plain => {
-            Some(AppCommand::SetDouble(ReadingDirection::RightToLeft))
-        }
-        ShortcutKey::Egui(Key::Num2) if plain => Some(AppCommand::ToggleDouble),
-        ShortcutKey::Egui(Key::Plus | Key::Equals) if ctrl && !alt && !shift => {
-            Some(AppCommand::ZoomFine(0.01))
-        }
-        ShortcutKey::Egui(Key::Minus) if ctrl && !alt && !shift => {
-            Some(AppCommand::ZoomFine(-0.01))
-        }
-        ShortcutKey::Egui(Key::Plus | Key::Equals) if plain || shift && !ctrl && !alt => {
-            Some(AppCommand::Zoom(1.1))
-        }
-        ShortcutKey::Egui(Key::Minus) if plain => Some(AppCommand::Zoom(0.9)),
-        ShortcutKey::Egui(Key::I) if ctrl && !alt && !shift => Some(AppCommand::ToggleInvert),
-        ShortcutKey::Egui(Key::M) if ctrl && !alt && !shift => {
-            Some(AppCommand::ToggleFlipHorizontal)
-        }
-        ShortcutKey::Egui(Key::F) if ctrl && !alt && !shift => Some(AppCommand::ToggleFlipVertical),
-        ShortcutKey::Egui(Key::L) if ctrl && !alt && !shift => {
-            Some(AppCommand::RotateCounterClockwise)
-        }
-        ShortcutKey::Egui(Key::R) if ctrl && !alt && !shift => Some(AppCommand::RotateClockwise),
-        ShortcutKey::Egui(Key::ArrowUp) if alt && !ctrl && !shift => {
-            Some(AppCommand::SetRotation(0))
-        }
-        ShortcutKey::Egui(Key::ArrowLeft) if alt && !ctrl && !shift => {
-            Some(AppCommand::SetRotation(3))
-        }
-        ShortcutKey::Egui(Key::ArrowRight) if alt && !ctrl && !shift => {
-            Some(AppCommand::SetRotation(1))
-        }
-        ShortcutKey::Egui(Key::ArrowDown) if alt && !ctrl && !shift => {
-            Some(AppCommand::SetRotation(2))
-        }
-        ShortcutKey::Egui(Key::U) if plain => Some(AppCommand::SetFilter(ImageFilter::None)),
-        ShortcutKey::Egui(Key::I) if plain => Some(AppCommand::SetFilter(ImageFilter::Smooth)),
-        ShortcutKey::Egui(Key::S) if plain => {
-            Some(AppCommand::SetFilter(ImageFilter::SmoothSharpen))
-        }
-        ShortcutKey::Egui(Key::G) if ctrl && !alt && !shift => Some(AppCommand::ToggleGamma),
-
-        ShortcutKey::Egui(Key::Delete) if shift && !ctrl && !alt => {
-            Some(AppCommand::Delete(DeleteMode::Permanent))
-        }
-        ShortcutKey::Egui(Key::Delete) if plain => Some(AppCommand::Delete(DeleteMode::Recycle)),
-        ShortcutKey::Egui(Key::C) if ctrl && alt && shift => Some(AppCommand::CopyPath),
-        ShortcutKey::Egui(Key::C) if ctrl && alt && !shift => Some(AppCommand::CopyDisplayImage),
-        ShortcutKey::Egui(Key::C) if ctrl && !alt && !shift => Some(AppCommand::CopyPageImage),
-
-        ShortcutKey::Egui(Key::Tab) if plain => Some(AppCommand::Unsupported("EXIF/file info")),
-        ShortcutKey::Egui(Key::W) if ctrl && alt && !shift => {
-            Some(AppCommand::Unsupported("Wallpaper"))
-        }
-        ShortcutKey::Egui(Key::Insert) if plain => {
-            Some(AppCommand::Unsupported("Photo storage copy"))
-        }
-        ShortcutKey::Egui(Key::Insert) if ctrl && !alt && !shift => {
-            Some(AppCommand::Unsupported("Photo storage move"))
-        }
-        ShortcutKey::Egui(Key::Insert) if shift && !ctrl && !alt => {
-            Some(AppCommand::Unsupported("Secondary photo storage copy"))
-        }
-        ShortcutKey::Egui(Key::E) if ctrl && !alt && !shift => {
-            Some(AppCommand::Unsupported("External editor"))
-        }
-        ShortcutKey::Egui(Key::P) if ctrl && !alt && !shift => {
-            Some(AppCommand::Unsupported("Print"))
-        }
-        ShortcutKey::Egui(Key::F5) if plain => Some(AppCommand::OpenSettings),
-        ShortcutKey::Egui(Key::F1) if plain => Some(AppCommand::OpenAbout),
-        ShortcutKey::Egui(Key::K) if ctrl && !alt && !shift => {
-            Some(AppCommand::Unsupported("Zoom lock"))
-        }
-        ShortcutKey::Egui(Key::Slash) if plain => Some(AppCommand::Unsupported("Zoom preview")),
-        ShortcutKey::Egui(Key::PageDown) if alt && !ctrl && !shift => {
-            Some(AppCommand::Unsupported("Next image in multi-image file"))
-        }
-        ShortcutKey::Egui(Key::PageUp) if alt && !ctrl && !shift => Some(AppCommand::Unsupported(
-            "Previous image in multi-image file",
+pub(super) fn shortcut_from_input_event(
+    event: &egui::Event,
+    modifiers: egui::Modifiers,
+) -> Option<KeyShortcut> {
+    match event {
+        egui::Event::Key {
+            key, pressed: true, ..
+        } => key_code_from_egui(*key).map(|key| shortcut_from_parts(key, modifiers)),
+        egui::Event::Text(text) if text == "*" => Some(shortcut_from_parts(
+            KeyCode::Asterisk,
+            egui::Modifiers::default(),
         )),
-        ShortcutKey::Egui(Key::Num0) if ctrl && !alt && !shift => {
-            Some(AppCommand::Unsupported("Stop slideshow"))
-        }
-        ShortcutKey::Egui(
-            Key::Num1
-            | Key::Num2
-            | Key::Num3
-            | Key::Num4
-            | Key::Num5
-            | Key::Num6
-            | Key::Num7
-            | Key::Num8
-            | Key::Num9,
-        ) if ctrl && !alt && !shift => Some(AppCommand::Unsupported("Slideshow")),
-        ShortcutKey::Egui(Key::B) if plain => Some(AppCommand::ToggleCurrentPageBookmark),
-        ShortcutKey::Egui(Key::F3) if plain => Some(AppCommand::Unsupported("Bookmark edit")),
-        ShortcutKey::Egui(Key::B) if ctrl && !alt && !shift => {
-            Some(AppCommand::ToggleBookmarkPopover)
-        }
-        ShortcutKey::Egui(Key::A) if ctrl && !alt && !shift => Some(AppCommand::ToggleAlwaysOnTop),
-        ShortcutKey::Egui(Key::Backtick) if plain => Some(AppCommand::Unsupported("Pin top menu")),
-        ShortcutKey::Egui(Key::Backtick) if shift && !ctrl && !alt => {
-            Some(AppCommand::Unsupported("Pin bottom menu"))
-        }
-        ShortcutKey::Egui(Key::F5) if ctrl && !alt && !shift => {
-            Some(AppCommand::Unsupported("Reload skin"))
-        }
-        ShortcutKey::Egui(Key::N) if ctrl && !alt && !shift => {
-            Some(AppCommand::Unsupported("New window"))
-        }
-        ShortcutKey::Egui(Key::F5) if shift && !ctrl && !alt => {
-            Some(AppCommand::Unsupported("Window border"))
-        }
-        ShortcutKey::Egui(Key::C) if ctrl && shift && !alt => {
-            Some(AppCommand::Unsupported("Copy EXIF"))
-        }
-        ShortcutKey::Egui(Key::G) if ctrl && shift && !alt => {
-            Some(AppCommand::Unsupported("Open EXIF map"))
-        }
-        ShortcutKey::Egui(Key::T) if ctrl && !alt && !shift => {
-            Some(AppCommand::Unsupported("Image conversion"))
-        }
         _ => None,
+    }
+}
+
+pub(super) fn shortcut_pressed(input: &egui::InputState, shortcut: KeyShortcut) -> bool {
+    if shortcut.key == KeyCode::Asterisk {
+        return input.events.iter().any(|event| {
+            matches!(event, egui::Event::Text(text) if text == "*")
+                && modifiers_match(input.modifiers, shortcut)
+        });
+    }
+
+    let Some(key) = key_code_to_egui(shortcut.key) else {
+        return false;
+    };
+    input.key_pressed(key) && modifiers_match(input.modifiers, shortcut)
+}
+
+pub(super) fn key_code_from_egui(key: Key) -> Option<KeyCode> {
+    Some(match key {
+        Key::F1 => KeyCode::F1,
+        Key::F2 => KeyCode::F2,
+        Key::F3 => KeyCode::F3,
+        Key::F4 => KeyCode::F4,
+        Key::F5 => KeyCode::F5,
+        Key::F11 => KeyCode::F11,
+        Key::A => KeyCode::A,
+        Key::B => KeyCode::B,
+        Key::C => KeyCode::C,
+        Key::E => KeyCode::E,
+        Key::F => KeyCode::F,
+        Key::G => KeyCode::G,
+        Key::I => KeyCode::I,
+        Key::K => KeyCode::K,
+        Key::L => KeyCode::L,
+        Key::M => KeyCode::M,
+        Key::N => KeyCode::N,
+        Key::O => KeyCode::O,
+        Key::P => KeyCode::P,
+        Key::Q => KeyCode::Q,
+        Key::R => KeyCode::R,
+        Key::S => KeyCode::S,
+        Key::T => KeyCode::T,
+        Key::U => KeyCode::U,
+        Key::W => KeyCode::W,
+        Key::X => KeyCode::X,
+        Key::Z => KeyCode::Z,
+        Key::Escape => KeyCode::Escape,
+        Key::Enter => KeyCode::Enter,
+        Key::Space => KeyCode::Space,
+        Key::Backspace => KeyCode::Backspace,
+        Key::Delete => KeyCode::Delete,
+        Key::Insert => KeyCode::Insert,
+        Key::Tab => KeyCode::Tab,
+        Key::PageDown => KeyCode::PageDown,
+        Key::PageUp => KeyCode::PageUp,
+        Key::ArrowDown => KeyCode::ArrowDown,
+        Key::ArrowLeft => KeyCode::ArrowLeft,
+        Key::ArrowRight => KeyCode::ArrowRight,
+        Key::ArrowUp => KeyCode::ArrowUp,
+        Key::Home => KeyCode::Home,
+        Key::End => KeyCode::End,
+        Key::OpenBracket => KeyCode::OpenBracket,
+        Key::CloseBracket => KeyCode::CloseBracket,
+        Key::Backtick => KeyCode::Backtick,
+        Key::Slash => KeyCode::Slash,
+        Key::Plus => KeyCode::Plus,
+        Key::Equals => KeyCode::Equals,
+        Key::Minus => KeyCode::Minus,
+        Key::Num0 => KeyCode::Num0,
+        Key::Num1 => KeyCode::Num1,
+        Key::Num2 => KeyCode::Num2,
+        Key::Num3 => KeyCode::Num3,
+        Key::Num4 => KeyCode::Num4,
+        Key::Num5 => KeyCode::Num5,
+        Key::Num6 => KeyCode::Num6,
+        Key::Num7 => KeyCode::Num7,
+        Key::Num8 => KeyCode::Num8,
+        Key::Num9 => KeyCode::Num9,
+        _ => return None,
+    })
+}
+
+fn key_code_to_egui(key: KeyCode) -> Option<Key> {
+    Some(match key {
+        KeyCode::F1 => Key::F1,
+        KeyCode::F2 => Key::F2,
+        KeyCode::F3 => Key::F3,
+        KeyCode::F4 => Key::F4,
+        KeyCode::F5 => Key::F5,
+        KeyCode::F11 => Key::F11,
+        KeyCode::A => Key::A,
+        KeyCode::B => Key::B,
+        KeyCode::C => Key::C,
+        KeyCode::E => Key::E,
+        KeyCode::F => Key::F,
+        KeyCode::G => Key::G,
+        KeyCode::I => Key::I,
+        KeyCode::K => Key::K,
+        KeyCode::L => Key::L,
+        KeyCode::M => Key::M,
+        KeyCode::N => Key::N,
+        KeyCode::O => Key::O,
+        KeyCode::P => Key::P,
+        KeyCode::Q => Key::Q,
+        KeyCode::R => Key::R,
+        KeyCode::S => Key::S,
+        KeyCode::T => Key::T,
+        KeyCode::U => Key::U,
+        KeyCode::W => Key::W,
+        KeyCode::X => Key::X,
+        KeyCode::Z => Key::Z,
+        KeyCode::Escape => Key::Escape,
+        KeyCode::Enter => Key::Enter,
+        KeyCode::Space => Key::Space,
+        KeyCode::Backspace => Key::Backspace,
+        KeyCode::Delete => Key::Delete,
+        KeyCode::Insert => Key::Insert,
+        KeyCode::Tab => Key::Tab,
+        KeyCode::PageDown => Key::PageDown,
+        KeyCode::PageUp => Key::PageUp,
+        KeyCode::ArrowDown => Key::ArrowDown,
+        KeyCode::ArrowLeft => Key::ArrowLeft,
+        KeyCode::ArrowRight => Key::ArrowRight,
+        KeyCode::ArrowUp => Key::ArrowUp,
+        KeyCode::Home => Key::Home,
+        KeyCode::End => Key::End,
+        KeyCode::OpenBracket => Key::OpenBracket,
+        KeyCode::CloseBracket => Key::CloseBracket,
+        KeyCode::Backtick => Key::Backtick,
+        KeyCode::Slash => Key::Slash,
+        KeyCode::Plus => Key::Plus,
+        KeyCode::Equals => Key::Equals,
+        KeyCode::Minus => Key::Minus,
+        KeyCode::Num0 => Key::Num0,
+        KeyCode::Num1 => Key::Num1,
+        KeyCode::Num2 => Key::Num2,
+        KeyCode::Num3 => Key::Num3,
+        KeyCode::Num4 => Key::Num4,
+        KeyCode::Num5 => Key::Num5,
+        KeyCode::Num6 => Key::Num6,
+        KeyCode::Num7 => Key::Num7,
+        KeyCode::Num8 => Key::Num8,
+        KeyCode::Num9 => Key::Num9,
+        KeyCode::Asterisk => return None,
+    })
+}
+
+fn shortcut_from_parts(key: KeyCode, modifiers: egui::Modifiers) -> KeyShortcut {
+    KeyShortcut {
+        key,
+        ctrl: modifiers.ctrl,
+        alt: modifiers.alt,
+        shift: modifiers.shift,
+    }
+}
+
+fn modifiers_match(modifiers: egui::Modifiers, shortcut: KeyShortcut) -> bool {
+    modifiers.ctrl == shortcut.ctrl
+        && modifiers.alt == shortcut.alt
+        && modifiers.shift == shortcut.shift
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::state::{default_key_bindings, default_mouse_bindings};
+
+    #[test]
+    fn default_shortcuts_match_existing_core_commands() {
+        let settings = AppSettings {
+            key_bindings: default_key_bindings(),
+            ..AppSettings::default()
+        };
+
+        assert_eq!(
+            command_for_shortcut(KeyShortcut::new(KeyCode::F2), &settings),
+            Some(AppCommand::OpenFile)
+        );
+        assert_eq!(
+            command_for_shortcut(KeyShortcut::new(KeyCode::PageDown), &settings),
+            Some(AppCommand::NextPage)
+        );
+        assert_eq!(
+            command_for_shortcut(KeyShortcut::ctrl(KeyCode::B), &settings),
+            Some(AppCommand::ToggleBookmarkPopover)
+        );
+        assert_eq!(
+            command_for_shortcut(KeyShortcut::ctrl(KeyCode::A), &settings),
+            Some(AppCommand::ToggleAlwaysOnTop)
+        );
+    }
+
+    #[test]
+    fn default_mouse_bindings_cover_primary_viewer_gestures() {
+        let settings = AppSettings {
+            mouse_bindings: default_mouse_bindings(),
+            ..AppSettings::default()
+        };
+
+        assert_eq!(
+            command_for_mouse_gesture(MouseGesture::DoubleClick, &settings),
+            Some(AppCommand::ToggleMaximized)
+        );
+        assert_eq!(
+            command_for_mouse_gesture(MouseGesture::WheelDown, &settings),
+            Some(AppCommand::NextPage)
+        );
     }
 }

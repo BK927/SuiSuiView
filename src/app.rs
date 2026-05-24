@@ -9,8 +9,8 @@ use crate::core::source::{
 };
 use crate::core::state::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, BookmarkInput, CacheMemoryMode,
-    DecodeMode, DisplayUpscaler, EdgePageAction, FitMode, LargeImageAnchor, PageTransitionStyle,
-    ReadingDirection, StateStore, WheelMode,
+    DecodeMode, DisplayUpscaler, EdgePageAction, FitMode, LargeImageAnchor, MouseGesture,
+    PageTransitionStyle, ReadingDirection, StateStore, WheelMode,
 };
 use crate::core::upscale::{AiUpscaleWorker, UpscaleEvent, UpscaleRequest};
 use crate::core::worker::{
@@ -19,7 +19,7 @@ use crate::core::worker::{
     MIN_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
 use arboard::{Clipboard, ImageData as ClipboardImageData};
-use commands::{collect_keyboard_commands, AppCommand, DeleteMode};
+use commands::{collect_keyboard_commands, command_for_mouse_gesture, AppCommand, DeleteMode};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use debug_compare::{DebugCompareState, DebugCompareWorker};
 use eframe::egui::{
@@ -51,13 +51,15 @@ mod image_info;
 mod perf;
 mod platform;
 mod settings;
+mod settings_bookmarks;
+mod settings_input;
 mod ui;
 mod window;
 
 #[cfg(test)]
 use crate::core::effects::ViewTransform;
 #[cfg(test)]
-use commands::{command_for_shortcut, Shortcut, ShortcutKey};
+use commands::command_for_shortcut;
 #[cfg(test)]
 use platform::{korean_font_candidates, load_first_existing_font, sanitize_font_name};
 const TRANSITION_MS: f32 = 120.0;
@@ -186,12 +188,15 @@ pub struct SuiSuiViewApp {
     settings: AppSettings,
     settings_open: bool,
     settings_section: settings::SettingsSection,
+    shortcut_capture: Option<settings_input::ShortcutCapture>,
+    shortcut_conflict: Option<settings_input::ShortcutConflict>,
     about_open: bool,
     about_section: about::AboutSection,
     image_info: ImageInfoState,
     worker: PageWorker,
     loader_tx: Sender<LoaderEvent>,
     loader_rx: Receiver<LoaderEvent>,
+    ipc_rx: Option<Receiver<Option<PathBuf>>>,
     loader_generation: u64,
     source: Option<SharedSource>,
     book_id: Option<String>,
@@ -255,7 +260,12 @@ pub struct SuiSuiViewApp {
 }
 
 impl SuiSuiViewApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, store: StateStore) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        store: StateStore,
+        ipc_rx: Option<Receiver<Option<PathBuf>>>,
+        startup_open_path: Option<PathBuf>,
+    ) -> Self {
         let app_started = Instant::now();
         platform::install_app_fonts(&cc.egui_ctx);
         ui::apply_app_theme(&cc.egui_ctx);
@@ -263,12 +273,14 @@ impl SuiSuiViewApp {
         let settings = store.settings().clone();
         let initial_window_size = store.window_placement().inner_size;
         apply_window_level(&cc.egui_ctx, settings.always_on_top);
-        let app = Self {
+        let mut app = Self {
             egui_ctx: cc.egui_ctx.clone(),
             store,
             settings: settings.clone(),
             settings_open: false,
             settings_section: settings::SettingsSection::default(),
+            shortcut_capture: None,
+            shortcut_conflict: None,
             about_open: false,
             about_section: about::AboutSection::default(),
             image_info: ImageInfoState::new(),
@@ -276,6 +288,7 @@ impl SuiSuiViewApp {
             upscale_worker: AiUpscaleWorker::new(cc.egui_ctx.clone()),
             loader_tx,
             loader_rx,
+            ipc_rx,
             loader_generation: 0,
             source: None,
             book_id: None,
@@ -339,6 +352,9 @@ impl SuiSuiViewApp {
             bookmark_rows: BookmarkRowsCache::default(),
             pending_bookmark_jump: None,
         };
+        if let Some(path) = startup_open_path {
+            app.open_path(path);
+        }
         perf::record_app_new(app_started);
         app
     }
@@ -352,8 +368,10 @@ impl SuiSuiViewApp {
         let message = message.into();
         self.status = message.clone();
         self.status_updated_at = Instant::now();
-        self.toast = message;
-        self.toast_updated_at = Instant::now();
+        if self.settings.show_toasts {
+            self.toast = message;
+            self.toast_updated_at = Instant::now();
+        }
     }
 
     fn open_path(&mut self, path: PathBuf) {
@@ -477,13 +495,24 @@ impl SuiSuiViewApp {
             .as_ref()
             .map(|bookmark| bookmark.fit_mode)
             .unwrap_or_default();
+        self.manual_zoom = bookmark
+            .as_ref()
+            .and_then(|bookmark| bookmark.manual_zoom)
+            .filter(|_| self.settings.remember_zoom_per_book)
+            .unwrap_or(1.0);
 
         let pending_page = self
             .pending_bookmark_jump
             .as_ref()
             .filter(|pending| pending.book_id == book_id)
             .map(|pending| pending.page);
-        let bookmarked_page = bookmark.map(|bookmark| bookmark.last_page);
+        let bookmarked_page = bookmark.as_ref().and_then(|bookmark| {
+            bookmark
+                .last_page_name
+                .as_deref()
+                .and_then(|page_name| page_index_for_name(source.as_ref(), page_name))
+                .or(Some(bookmark.last_page))
+        });
         self.current_page = pending_page
             .or(forced_page)
             .or(bookmarked_page)
@@ -502,7 +531,6 @@ impl SuiSuiViewApp {
         self.open_origin = Some(origin);
         self.opened_path = Some(opened_path);
         self.pan = Vec2::ZERO;
-        self.manual_zoom = 1.0;
         self.effects = ViewEffects::default();
         self.decoded_pages.clear();
         self.decoded_bytes = 0;
@@ -541,15 +569,22 @@ impl SuiSuiViewApp {
             return;
         };
         let path = self.current_bookmark_path(source.as_ref()).to_path_buf();
+        if self.settings.share_state_between_instances {
+            self.store.reload_books_from_disk();
+        }
         self.store.upsert_bookmark(BookmarkInput {
             book_id: source.book_id(),
             title: source.title(),
             last_page: self.current_page,
+            last_page_name: self.current_bookmark_page_name(source.as_ref()),
             total_pages: source.page_count(),
             path: &path,
             reading_direction: self.reading_direction,
             fit_mode: self.fit_mode,
+            manual_zoom: self.current_bookmark_manual_zoom(),
         });
+        self.store
+            .prune_auto_bookmarks(self.settings.max_remembered_books);
         self.bookmark_rows.clear();
         self.pending_state_save_at = None;
     }
@@ -558,17 +593,27 @@ impl SuiSuiViewApp {
         let Some(source) = self.source.as_ref() else {
             return;
         };
+        if !self.settings.auto_save_reading_position {
+            return;
+        }
         let path = self.current_bookmark_path(source.as_ref()).to_path_buf();
+        if self.settings.share_state_between_instances {
+            self.store.reload_books_from_disk();
+        }
         let changed = self.store.upsert_bookmark_deferred(BookmarkInput {
             book_id: source.book_id(),
             title: source.title(),
             last_page: self.current_page,
+            last_page_name: self.current_bookmark_page_name(source.as_ref()),
             total_pages: source.page_count(),
             path: &path,
             reading_direction: self.reading_direction,
             fit_mode: self.fit_mode,
+            manual_zoom: self.current_bookmark_manual_zoom(),
         });
         if changed {
+            self.store
+                .prune_auto_bookmarks(self.settings.max_remembered_books);
             self.bookmark_rows.clear();
             self.pending_state_save_at = Some(Instant::now() + STATE_SAVE_DEBOUNCE);
             self.egui_ctx.request_repaint_after(STATE_SAVE_DEBOUNCE);
@@ -583,6 +628,20 @@ impl SuiSuiViewApp {
                 .unwrap_or_else(|| source.source_path());
         }
         source.source_path()
+    }
+
+    fn current_bookmark_page_name<'a>(&self, source: &'a dyn BookSource) -> Option<&'a str> {
+        if self.open_origin == Some(OpenOrigin::ZipCbz) && self.settings.remember_archive_page_name
+        {
+            source.page_name(self.current_page)
+        } else {
+            None
+        }
+    }
+
+    fn current_bookmark_manual_zoom(&self) -> Option<f32> {
+        (self.settings.remember_zoom_per_book && self.fit_mode == FitMode::Manual)
+            .then_some(self.manual_zoom)
     }
 
     fn flush_deferred_state_save_if_due(&mut self) {
@@ -922,7 +981,7 @@ impl SuiSuiViewApp {
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
-        let commands = ctx.input(collect_keyboard_commands);
+        let commands = ctx.input(|input| collect_keyboard_commands(input, &self.settings));
         for command in commands {
             self.apply_command(ctx, command);
         }
@@ -1009,9 +1068,6 @@ impl SuiSuiViewApp {
             AppCommand::UpscaleCurrentPage => self.upscale_current_page(),
             AppCommand::ToggleCurrentPageBookmark => self.toggle_current_page_bookmark(),
             AppCommand::ToggleBookmarkPopover => self.toggle_bookmark_popover(ctx),
-            AppCommand::Unsupported(feature) => {
-                self.notify(format!("{feature} is planned for a later version."));
-            }
         }
     }
 
@@ -1133,23 +1189,58 @@ impl SuiSuiViewApp {
     }
 
     fn handle_edge_page(&mut self, direction: NavigationDirection) {
-        match self.settings.edge_page_action {
+        match self.edge_page_action_for_current_book() {
             EdgePageAction::Stop => {}
+            EdgePageAction::Ask => {
+                if self.confirm_edge_wrap(direction) {
+                    self.wrap_edge_page(direction);
+                }
+            }
             EdgePageAction::Wrap => {
-                let Some(source) = self.source.as_ref() else {
-                    return;
-                };
-                let target = match direction {
-                    NavigationDirection::Forward => 0,
-                    NavigationDirection::Backward => source.page_count().saturating_sub(1),
-                };
-                self.set_page(target, direction);
+                self.wrap_edge_page(direction);
             }
             EdgePageAction::NextBook => match direction {
                 NavigationDirection::Forward => self.open_sibling_book(1),
                 NavigationDirection::Backward => self.open_sibling_book(-1),
             },
         }
+    }
+
+    fn edge_page_action_for_current_book(&self) -> EdgePageAction {
+        match self.open_origin {
+            Some(OpenOrigin::ZipCbz) => self.settings.archive_edge_page_action,
+            Some(OpenOrigin::Folder | OpenOrigin::SingleImage) => {
+                self.settings.image_edge_page_action
+            }
+            None => self.settings.edge_page_action,
+        }
+    }
+
+    fn wrap_edge_page(&mut self, direction: NavigationDirection) {
+        let Some(source) = self.source.as_ref() else {
+            return;
+        };
+        let target = match direction {
+            NavigationDirection::Forward => 0,
+            NavigationDirection::Backward => source.page_count().saturating_sub(1),
+        };
+        self.set_page(target, direction);
+    }
+
+    fn confirm_edge_wrap(&self, direction: NavigationDirection) -> bool {
+        let description = match direction {
+            NavigationDirection::Forward => "마지막 페이지입니다. 처음 페이지로 돌아갈까요?",
+            NavigationDirection::Backward => "첫 페이지입니다. 마지막 페이지로 이동할까요?",
+        };
+        matches!(
+            MessageDialog::new()
+                .set_title("페이지 끝")
+                .set_description(description)
+                .set_level(MessageLevel::Info)
+                .set_buttons(MessageButtons::YesNo)
+                .show(),
+            MessageDialogResult::Yes
+        )
     }
 
     fn random_page(&mut self, direction: NavigationDirection) {
@@ -1899,6 +1990,14 @@ impl SuiSuiViewApp {
         let painter = ui.painter_at(rect);
 
         painter.rect_filled(rect, 0.0, ui::theme::VIEWER_BG);
+        if self.settings.show_main_border {
+            painter.rect_stroke(
+                rect.shrink(0.5),
+                0.0,
+                Stroke::new(1.0, ui::theme::SUBTLE_STROKE),
+                StrokeKind::Inside,
+            );
+        }
         self.show_context_menu(ctx, &response);
 
         if self.source.is_none() {
@@ -1972,6 +2071,104 @@ impl SuiSuiViewApp {
                     alpha: 1.0,
                 },
             );
+        }
+        self.paint_filename_overlay(ctx, &painter, rect);
+        self.paint_page_arrows(ctx, &painter, rect);
+    }
+
+    fn paint_filename_overlay(&self, ctx: &egui::Context, painter: &egui::Painter, rect: Rect) {
+        if !self.settings.show_filename_overlay || self.settings.top_bar_pinned {
+            return;
+        }
+        if self.top_bar_is_visible(ctx) {
+            return;
+        }
+        let Some(source) = self.source.as_ref() else {
+            return;
+        };
+        let text = source
+            .page_display_path(self.current_page)
+            .or_else(|| source.page_name(self.current_page).map(ToOwned::to_owned))
+            .unwrap_or_else(|| source.title().to_owned());
+        let font = FontId::proportional(13.0);
+        let galley = painter.layout_no_wrap(text, font, ui::theme::TEXT_PRIMARY);
+        let max_width = (rect.width() - 36.0).max(80.0);
+        let overlay_rect = Rect::from_min_size(
+            rect.min + egui::vec2(14.0, 12.0),
+            egui::vec2(galley.size().x.min(max_width) + 18.0, 30.0),
+        );
+        painter.rect_filled(
+            overlay_rect,
+            6.0,
+            Color32::from_rgba_unmultiplied(14, 16, 20, 208),
+        );
+        let clipped = painter.with_clip_rect(overlay_rect.shrink2(egui::vec2(9.0, 0.0)));
+        clipped.galley(
+            egui::pos2(
+                overlay_rect.left() + 9.0,
+                overlay_rect.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+            ui::theme::TEXT_PRIMARY,
+        );
+    }
+
+    fn paint_page_arrows(&mut self, ctx: &egui::Context, painter: &egui::Painter, rect: Rect) {
+        if !self.settings.show_page_arrows || self.source.is_none() {
+            return;
+        }
+        let Some(pointer_pos) = ctx.pointer_hover_pos() else {
+            return;
+        };
+        if !rect.contains(pointer_pos) {
+            return;
+        }
+        let zone_width = rect.width().min(96.0).max(56.0);
+        let side = if pointer_pos.x <= rect.left() + zone_width {
+            Some((ui::icons::CHEVRON_LEFT, NavigationDirection::Backward))
+        } else if pointer_pos.x >= rect.right() - zone_width {
+            Some((ui::icons::CHEVRON_RIGHT, NavigationDirection::Forward))
+        } else {
+            None
+        };
+        let Some((icon, direction)) = side else {
+            return;
+        };
+        let button_rect = Rect::from_center_size(
+            egui::pos2(
+                if direction == NavigationDirection::Backward {
+                    rect.left() + 42.0
+                } else {
+                    rect.right() - 42.0
+                },
+                rect.center().y,
+            ),
+            egui::vec2(52.0, 76.0),
+        );
+        painter.rect_filled(
+            button_rect,
+            8.0,
+            Color32::from_rgba_unmultiplied(18, 20, 24, 180),
+        );
+        painter.text(
+            button_rect.center(),
+            Align2::CENTER_CENTER,
+            icon,
+            ui::icons::icon_font(ui::icons::IconStyle::Regular, 32.0),
+            ui::theme::TEXT_PRIMARY,
+        );
+        let clicked_arrow_zone = ctx.input(|input| {
+            input.pointer.primary_released()
+                && input
+                    .pointer
+                    .press_origin()
+                    .is_some_and(|origin| button_rect.contains(origin))
+        });
+        if clicked_arrow_zone {
+            match direction {
+                NavigationDirection::Forward => self.next_page(),
+                NavigationDirection::Backward => self.previous_page(),
+            }
         }
     }
 
@@ -2433,15 +2630,22 @@ impl SuiSuiViewApp {
     }
 
     fn handle_viewer_pointer(&mut self, ui: &egui::Ui, response: &egui::Response) {
-        if self.settings.double_click_maximize && response.double_clicked() {
-            self.toggle_maximized(ui.ctx());
+        if response.double_clicked() {
+            if let Some(command) =
+                command_for_mouse_gesture(MouseGesture::DoubleClick, &self.settings)
+            {
+                self.apply_command(ui.ctx(), command);
+            }
         }
 
         if response.middle_clicked() {
-            if ui.input(|input| input.modifiers.ctrl) {
-                self.set_fit_mode(FitMode::Original);
-            } else if self.settings.middle_click_fullscreen {
-                self.toggle_fullscreen(ui.ctx());
+            let gesture = if ui.input(|input| input.modifiers.ctrl) {
+                MouseGesture::CtrlMiddleClick
+            } else {
+                MouseGesture::MiddleClick
+            };
+            if let Some(command) = command_for_mouse_gesture(gesture, &self.settings) {
+                self.apply_command(ui.ctx(), command);
             }
         }
 
@@ -2459,17 +2663,30 @@ impl SuiSuiViewApp {
         }
 
         if ctrl {
-            let factor = (1.0 + scroll_y * 0.0015).clamp(0.75, 1.25);
-            self.adjust_zoom(factor);
+            let gesture = if scroll_y > 0.0 {
+                MouseGesture::CtrlWheelUp
+            } else {
+                MouseGesture::CtrlWheelDown
+            };
+            if let Some(command) = command_for_mouse_gesture(gesture, &self.settings) {
+                self.apply_command(ui.ctx(), command);
+            }
         } else if self.settings.wheel_mode == WheelMode::ScrollWhenZoomed
             && self.fit_mode == FitMode::Manual
             && self.manual_zoom > 1.01
         {
             self.pan.y += scroll_y;
         } else if scroll_y < -30.0 {
-            self.next_page();
+            if let Some(command) =
+                command_for_mouse_gesture(MouseGesture::WheelDown, &self.settings)
+            {
+                self.apply_command(ui.ctx(), command);
+            }
         } else if scroll_y > 30.0 {
-            self.previous_page();
+            if let Some(command) = command_for_mouse_gesture(MouseGesture::WheelUp, &self.settings)
+            {
+                self.apply_command(ui.ctx(), command);
+            }
         }
     }
 
@@ -2641,13 +2858,16 @@ impl eframe::App for SuiSuiViewApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let update_started = Instant::now();
+        self.drain_ipc_open_requests(ctx);
         self.drain_loader_events();
         self.drain_worker_events();
         self.drain_debug_compare_events();
         self.drain_upscale_events();
         self.bookmark_thumbnails.drain(ctx);
         self.handle_dropped_files(ctx);
-        self.handle_keyboard(ctx);
+        if !self.settings_is_capturing_keyboard() {
+            self.handle_keyboard(ctx);
+        }
         self.maintain_native_window_state(ctx);
         self.update_window_title(ctx);
         self.flush_deferred_state_save_if_due();
@@ -2712,6 +2932,34 @@ fn apply_window_level(ctx: &egui::Context, always_on_top: bool) {
 }
 
 impl SuiSuiViewApp {
+    fn drain_ipc_open_requests(&mut self, ctx: &egui::Context) {
+        let Some(request) = self.ipc_rx.as_ref().and_then(|rx| rx.try_iter().last()) else {
+            return;
+        };
+        if let Some(path) = request {
+            self.open_path(path);
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        ctx.request_repaint();
+    }
+
+    fn refresh_single_instance_listener(&mut self) {
+        if !self.settings.single_instance {
+            self.ipc_rx = None;
+            return;
+        }
+        if self.ipc_rx.is_none() {
+            let pipe_name =
+                crate::single_instance::pipe_name_for_key(&self.store.path().display().to_string());
+            self.ipc_rx = Some(crate::single_instance::start_listener(pipe_name));
+        }
+    }
+
+    fn settings_is_capturing_keyboard(&self) -> bool {
+        self.settings_open && self.shortcut_capture.is_some()
+    }
+
     fn update_window_title(&mut self, ctx: &egui::Context) {
         let Some(source) = self.source.as_ref() else {
             if self
@@ -3051,6 +3299,10 @@ fn delete_target_for(
     }
 }
 
+fn page_index_for_name(source: &dyn BookSource, page_name: &str) -> Option<usize> {
+    (0..source.page_count()).find(|index| source.page_name(*index) == Some(page_name))
+}
+
 fn page_visual_size(visual: &PageVisual) -> Vec2 {
     match visual {
         PageVisual::Ready { size, .. } => *size,
@@ -3154,18 +3406,18 @@ mod tests {
         load_first_existing_font, page_cache_state_from_hit, preferred_page_key_in_cache,
         sanitize_font_name, sibling_book_path, transformed_page_size, transition_paint_params,
         transition_screen_sign, AppCommand, DeleteMode, ImageFilter, OpenOrigin, PageCacheKey,
-        Shortcut, TextureCacheKey, ViewEffects, ViewTransform,
+        TextureCacheKey, ViewEffects, ViewTransform,
     };
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
-        AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, FitMode, PageTransitionStyle,
-        ReadingDirection,
+        AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, FitMode, KeyCode, KeyShortcut,
+        PageTransitionStyle, ReadingDirection,
     };
     use crate::core::worker::{
         DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PreparedPage,
         PREVIEW_TARGET_LONG_EDGE,
     };
-    use eframe::egui::{Color32, ColorImage, Key, Pos2, Rect, Vec2};
+    use eframe::egui::{Color32, ColorImage, Pos2, Rect, Vec2};
     use lru::LruCache;
     use std::fs;
     use std::num::NonZeroUsize;
@@ -3341,73 +3593,70 @@ mod tests {
 
     #[test]
     fn shortcut_conflicts_follow_honeyview_defaults() {
+        let settings = AppSettings::default();
         assert_eq!(
-            command_for_shortcut(Shortcut::key(Key::F)),
+            command_for_shortcut(KeyShortcut::new(KeyCode::F), &settings),
             Some(AppCommand::OpenFolder)
         );
         assert_eq!(
-            command_for_shortcut(Shortcut::key(Key::F11)),
+            command_for_shortcut(KeyShortcut::new(KeyCode::F11), &settings),
             Some(AppCommand::ToggleFullscreen)
         );
         assert_eq!(
-            command_for_shortcut(Shortcut::alt(Key::Enter)),
+            command_for_shortcut(KeyShortcut::alt(KeyCode::Enter), &settings),
             Some(AppCommand::ToggleFullscreen)
         );
         assert_eq!(
-            command_for_shortcut(Shortcut::key(Key::N)),
+            command_for_shortcut(KeyShortcut::new(KeyCode::N), &settings),
             Some(AppCommand::ToggleFullscreen)
         );
         assert_eq!(
-            command_for_shortcut(Shortcut::ctrl(Key::F)),
+            command_for_shortcut(KeyShortcut::ctrl(KeyCode::F), &settings),
             Some(AppCommand::ToggleFlipVertical)
         );
         assert_eq!(
-            command_for_shortcut(Shortcut::key(Key::F5)),
+            command_for_shortcut(KeyShortcut::new(KeyCode::F5), &settings),
             Some(AppCommand::OpenSettings)
         );
         assert_eq!(
-            command_for_shortcut(Shortcut::key(Key::F1)),
+            command_for_shortcut(KeyShortcut::new(KeyCode::F1), &settings),
             Some(AppCommand::OpenAbout)
         );
         assert_eq!(
-            command_for_shortcut(Shortcut::ctrl(Key::A)),
+            command_for_shortcut(KeyShortcut::ctrl(KeyCode::A), &settings),
             Some(AppCommand::ToggleAlwaysOnTop)
         );
         assert_eq!(
-            command_for_shortcut(Shortcut::key(Key::B)),
+            command_for_shortcut(KeyShortcut::new(KeyCode::B), &settings),
             Some(AppCommand::ToggleCurrentPageBookmark)
         );
         assert_eq!(
-            command_for_shortcut(Shortcut::ctrl(Key::B)),
+            command_for_shortcut(KeyShortcut::ctrl(KeyCode::B), &settings),
             Some(AppCommand::ToggleBookmarkPopover)
         );
     }
 
     #[test]
     fn shortcut_maps_view_modes_and_delete_modes() {
+        let settings = AppSettings::default();
         assert_eq!(
-            command_for_shortcut(Shortcut::key(Key::Z)),
+            command_for_shortcut(KeyShortcut::new(KeyCode::Z), &settings),
             Some(AppCommand::SetFitMode(FitMode::FitPage))
         );
         assert_eq!(
-            command_for_shortcut(Shortcut::key(Key::Num7)),
+            command_for_shortcut(KeyShortcut::new(KeyCode::Num7), &settings),
             Some(AppCommand::SetDouble(ReadingDirection::LeftToRight))
         );
         assert_eq!(
-            command_for_shortcut(Shortcut::key(Key::Num6)),
+            command_for_shortcut(KeyShortcut::new(KeyCode::Num6), &settings),
             Some(AppCommand::SetDouble(ReadingDirection::RightToLeft))
         );
         assert_eq!(
-            command_for_shortcut(Shortcut::key(Key::Delete)),
+            command_for_shortcut(KeyShortcut::new(KeyCode::Delete), &settings),
             Some(AppCommand::Delete(DeleteMode::Recycle))
         );
         assert_eq!(
-            command_for_shortcut(Shortcut {
-                key: super::ShortcutKey::Egui(Key::Delete),
-                ctrl: false,
-                alt: false,
-                shift: true,
-            }),
+            command_for_shortcut(KeyShortcut::shift(KeyCode::Delete), &settings),
             Some(AppCommand::Delete(DeleteMode::Permanent))
         );
     }

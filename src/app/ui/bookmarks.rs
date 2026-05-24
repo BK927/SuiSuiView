@@ -122,6 +122,9 @@ impl SuiSuiViewApp {
             self.notify("북마크할 책이 열려 있지 않습니다.");
             return;
         };
+        if self.settings.share_state_between_instances {
+            self.store.reload_books_from_disk();
+        }
         let page = self.current_page;
         if self.store.has_page_bookmark(&book_id, page) {
             self.store.remove_page_bookmark(&book_id, page);

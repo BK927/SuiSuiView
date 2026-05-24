@@ -192,7 +192,11 @@ impl SuiSuiViewApp {
     fn show_open_group(&mut self, ui: &mut egui::Ui) {
         ui.menu_button(icons::icon_text(icons::FOLDER_OPEN, "열기"), |ui| {
             self.hold_top_bar_open_for_menu();
-            let recent_books = self.store.recent_books(8);
+            let recent_books = if self.settings.remember_recent_locations {
+                self.store.recent_books(8)
+            } else {
+                Vec::new()
+            };
             let menu_width = recent_open_menu_width(ui, &recent_books);
             ui.set_min_width(menu_width);
             ui.set_max_width(menu_width);
@@ -214,6 +218,10 @@ impl SuiSuiViewApp {
 
             ui.separator();
             ui.label(RichText::new("최근").color(theme::TEXT_MUTED));
+            if !self.settings.remember_recent_locations {
+                ui.add_enabled(false, egui::Label::new("최근 위치 저장이 꺼져 있습니다."));
+                return;
+            }
             if recent_books.is_empty() {
                 ui.add_enabled(false, egui::Label::new("최근 책 없음"));
                 return;

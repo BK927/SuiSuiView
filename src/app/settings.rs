@@ -1,9 +1,9 @@
 use super::ui::{dialog, icons, theme};
 use super::{apply_window_level, cache_budget_bytes, SuiSuiViewApp};
+use super::{settings_bookmarks, settings_input};
 use crate::core::state::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, DecodeMode,
-    DisplayUpscaler, EdgePageAction, GpuEffectMode, LargeImageAnchor, PageTransitionStyle,
-    ResizeFilter, WheelMode,
+    DisplayUpscaler, EdgePageAction, GpuEffectMode, PageTransitionStyle, ResizeFilter,
 };
 use eframe::egui::{self, RichText};
 use rfd::FileDialog;
@@ -12,33 +12,45 @@ use rfd::FileDialog;
 pub(super) enum SettingsSection {
     #[default]
     General,
+    View,
     ImageProcessing,
     Performance,
+    Bookmarks,
+    Keyboard,
     Mouse,
 }
 
 impl SettingsSection {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 7] = [
         Self::General,
+        Self::View,
         Self::ImageProcessing,
         Self::Performance,
+        Self::Bookmarks,
+        Self::Keyboard,
         Self::Mouse,
     ];
 
     fn label(self) -> &'static str {
         match self {
             Self::General => "일반",
+            Self::View => "보기",
             Self::ImageProcessing => "영상 처리",
             Self::Performance => "성능",
+            Self::Bookmarks => "책갈피",
+            Self::Keyboard => "키보드",
             Self::Mouse => "마우스",
         }
     }
 
     fn description(self) -> &'static str {
         match self {
-            Self::General => "삭제 확인, 창 표시, 상태바 같은 기본 동작",
+            Self::General => "삭제 확인, 창 표시, 페이지 끝 동작",
+            Self::View => "상단 도구막대, 상태바, 뷰어 보조 표시",
             Self::ImageProcessing => "보간, 실시간 업스케일, 색상 보정",
             Self::Performance => "디코딩, 미리보기, 프리로드, 캐시 정책",
+            Self::Bookmarks => "이어보기, 책갈피 저장 범위와 기록 정리",
+            Self::Keyboard => "현재 단축키 확인, 추가, 변경, 초기화",
             Self::Mouse => "더블클릭, 가운데 버튼, 휠 조작",
         }
     }
@@ -46,8 +58,11 @@ impl SettingsSection {
     fn icon(self) -> (char, icons::IconStyle) {
         match self {
             Self::General => (icons::SETTINGS, icons::IconStyle::Regular),
+            Self::View => (icons::EYE, icons::IconStyle::Regular),
             Self::ImageProcessing => (icons::WAND, icons::IconStyle::Regular),
             Self::Performance => (icons::DOCUMENT, icons::IconStyle::Regular),
+            Self::Bookmarks => (icons::BOOKMARK, icons::IconStyle::Regular),
+            Self::Keyboard => (icons::DOCUMENT, icons::IconStyle::Regular),
             Self::Mouse => (icons::PIN, icons::IconStyle::Regular),
         }
     }
@@ -132,6 +147,13 @@ impl SuiSuiViewApp {
                                     SettingsSection::General => {
                                         show_general_settings(ui, &mut draft, &mut changed);
                                     }
+                                    SettingsSection::View => {
+                                        settings_bookmarks::show_view_settings(
+                                            ui,
+                                            &mut draft,
+                                            &mut changed,
+                                        );
+                                    }
                                     SettingsSection::ImageProcessing => {
                                         show_image_processing_settings(
                                             ui,
@@ -142,8 +164,23 @@ impl SuiSuiViewApp {
                                     SettingsSection::Performance => {
                                         show_performance_settings(ui, &mut draft, &mut changed);
                                     }
+                                    SettingsSection::Bookmarks => {
+                                        self.show_bookmark_settings(ui, &mut draft, &mut changed);
+                                    }
+                                    SettingsSection::Keyboard => {
+                                        self.show_keyboard_settings(
+                                            ctx,
+                                            ui,
+                                            &mut draft,
+                                            &mut changed,
+                                        );
+                                    }
                                     SettingsSection::Mouse => {
-                                        show_mouse_settings(ui, &mut draft, &mut changed);
+                                        settings_input::show_mouse_settings(
+                                            ui,
+                                            &mut draft,
+                                            &mut changed,
+                                        );
                                     }
                                 });
                         });
@@ -153,6 +190,10 @@ impl SuiSuiViewApp {
 
         self.settings_section = active_section;
         self.settings_open = open;
+        if !self.settings_open {
+            self.shortcut_capture = None;
+            self.shortcut_conflict = None;
+        }
         if changed {
             draft.manual_cache_mb = draft.manual_cache_mb.clamp(64, 2048);
             draft.ai_upscale.ncnn.scale = draft.ai_upscale.ncnn.scale.clamp(2, 4);
@@ -171,9 +212,11 @@ impl SuiSuiViewApp {
         let previous_ai = self.settings.ai_upscale.clone();
         let previous_gpu_effect_mode = self.settings.gpu_effect_mode;
         let previous_display_upscaler = self.settings.display_upscaler;
+        let previous_max_remembered_books = self.settings.max_remembered_books;
 
         self.settings = settings;
         self.store.update_settings(self.settings.clone());
+        self.refresh_single_instance_listener();
         self.pending_state_save_at = None;
         apply_window_level(ctx, self.settings.always_on_top);
 
@@ -232,6 +275,10 @@ impl SuiSuiViewApp {
         if ai_output_changed || ai_prefetch_changed {
             self.refresh_ai_prefetch_queue();
         }
+        if previous_max_remembered_books != self.settings.max_remembered_books {
+            self.store
+                .prune_auto_bookmarks(self.settings.max_remembered_books);
+        }
         if !(ai_output_changed || ai_prefetch_changed) || self.upscale_inflight.is_none() {
             self.set_status("Settings saved.");
         }
@@ -262,44 +309,80 @@ fn show_general_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed: &m
                 "항상 위에 표시 (Ctrl+A)",
                 "다른 창을 선택해도 SuiSuiView 창이 앞쪽에 남아 있게 합니다.",
             );
+            *changed |= checkbox_with_help(
+                ui,
+                &mut draft.remember_recent_locations,
+                "최근 위치 저장",
+                "열기 메뉴와 파일 대화상자에서 최근 위치를 다시 찾기 쉽게 보관합니다.",
+            );
+            #[cfg(target_os = "windows")]
+            {
+                *changed |= checkbox_with_help(
+                    ui,
+                    &mut draft.single_instance,
+                    "한 개의 프로그램만 실행",
+                    "새로 실행된 SuiSuiView가 받은 파일을 이미 열린 창으로 전달합니다.",
+                );
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                ui.add_enabled(
+                    false,
+                    egui::Checkbox::new(&mut draft.single_instance, "한 개의 프로그램만 실행"),
+                )
+                .on_hover_text("이 옵션은 Windows에서만 사용할 수 있습니다.");
+            }
+            *changed |= checkbox_with_help(
+                ui,
+                &mut draft.show_toasts,
+                "중요 알림을 화면 구석에 표시",
+                "끄면 오류와 작업 결과는 상태바 문구로만 남기고 토스트 알림은 띄우지 않습니다.",
+            );
         },
     );
 
     ui.add_space(8.0);
     setting_group(
         ui,
-        "표시와 페이지 끝",
-        "창의 보조 표시와 책 끝에서의 동작입니다.",
+        "페이지 끝 동작",
+        "일반 이미지/폴더와 압축파일에서 끝 페이지를 만났을 때의 동작입니다.",
         |ui| {
-            *changed |= checkbox_with_help(
-                ui,
-                &mut draft.show_status_bar,
-                "하단 상태바 표시",
-                "창 아래쪽에 현재 상태와 짧은 안내 문구를 표시합니다.",
-            );
-            *changed |= checkbox_with_help(
-                ui,
-                &mut draft.top_bar_pinned,
-                "상단 도구막대 고정",
-                "끄면 마우스를 창 위쪽으로 가져갈 때만 상단 도구막대가 나타납니다.",
-            );
-            ui.add_space(6.0);
-            egui::Grid::new("settings_general_grid")
+            egui::Grid::new("settings_edge_page_grid")
                 .num_columns(2)
                 .spacing([14.0, 8.0])
                 .show(ui, |ui| {
                     grid_label_with_help(
-                    ui,
-                    "마지막/처음 페이지",
-                    "책의 끝이나 처음에서 다음/이전 페이지를 누를 때 어떤 동작을 할지 정합니다.",
-                );
-                    egui::ComboBox::from_id_salt("edge_page_action")
-                        .selected_text(draft.edge_page_action.label())
+                        ui,
+                        "이미지/폴더",
+                        "일반 이미지 파일이나 폴더를 볼 때 처음/마지막 페이지에서의 동작입니다.",
+                    );
+                    egui::ComboBox::from_id_salt("image_edge_page_action")
+                        .selected_text(draft.image_edge_page_action.label())
                         .show_ui(ui, |ui| {
                             for action in EdgePageAction::ALL {
                                 *changed |= ui
                                     .selectable_value(
-                                        &mut draft.edge_page_action,
+                                        &mut draft.image_edge_page_action,
+                                        action,
+                                        action.label(),
+                                    )
+                                    .changed();
+                            }
+                        });
+                    ui.end_row();
+
+                    grid_label_with_help(
+                        ui,
+                        "압축파일",
+                        "ZIP/CBZ 안의 이미지를 볼 때 처음/마지막 페이지에서의 동작입니다.",
+                    );
+                    egui::ComboBox::from_id_salt("archive_edge_page_action")
+                        .selected_text(draft.archive_edge_page_action.label())
+                        .show_ui(ui, |ui| {
+                            for action in EdgePageAction::ALL {
+                                *changed |= ui
+                                    .selectable_value(
+                                        &mut draft.archive_edge_page_action,
                                         action,
                                         action.label(),
                                     )
@@ -543,77 +626,6 @@ fn show_performance_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed
     );
 }
 
-fn show_mouse_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed: &mut bool) {
-    setting_group(
-        ui,
-        "클릭 동작",
-        "마우스 버튼으로 창 상태를 바꾸는 설정입니다.",
-        |ui| {
-            *changed |= checkbox_with_help(
-                ui,
-                &mut draft.double_click_maximize,
-                "더블클릭으로 최대화/복원",
-                "뷰어 영역을 두 번 클릭하면 창을 최대화하거나 이전 크기로 되돌립니다.",
-            );
-            *changed |= checkbox_with_help(
-                ui,
-                &mut draft.middle_click_fullscreen,
-                "가운데 버튼으로 전체화면",
-                "마우스 가운데 버튼을 눌렀을 때 전체화면으로 전환합니다.",
-            );
-        },
-    );
-
-    ui.add_space(8.0);
-    setting_group(
-        ui,
-        "이동과 큰 이미지",
-        "큰 이미지의 시작 위치와 휠 조작 방식을 정합니다.",
-        |ui| {
-            egui::Grid::new("settings_mouse_grid")
-                .num_columns(2)
-                .spacing([14.0, 8.0])
-                .show(ui, |ui| {
-                    grid_label_with_help(
-                        ui,
-                        "큰 이미지 시작 위치",
-                        "화면보다 큰 이미지를 처음 열 때 어느 위치부터 보여줄지 정합니다.",
-                    );
-                    egui::ComboBox::from_id_salt("large_image_anchor")
-                        .selected_text(draft.large_image_anchor.label())
-                        .show_ui(ui, |ui| {
-                            for anchor in LargeImageAnchor::ALL {
-                                *changed |= ui
-                                    .selectable_value(
-                                        &mut draft.large_image_anchor,
-                                        anchor,
-                                        anchor.label(),
-                                    )
-                                    .changed();
-                            }
-                        });
-                    ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        "휠 동작",
-                        "마우스 휠을 굴렸을 때 페이지를 넘길지, 화면을 움직일지 정합니다.",
-                    );
-                    egui::ComboBox::from_id_salt("wheel_mode")
-                        .selected_text(draft.wheel_mode.label())
-                        .show_ui(ui, |ui| {
-                            for mode in WheelMode::ALL {
-                                *changed |= ui
-                                    .selectable_value(&mut draft.wheel_mode, mode, mode.label())
-                                    .changed();
-                            }
-                        });
-                    ui.end_row();
-                });
-        },
-    );
-}
-
 fn show_ai_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed: &mut bool) {
     setting_group(
         ui,
@@ -800,7 +812,7 @@ fn show_ai_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed: &mut bo
     );
 }
 
-fn setting_group(
+pub(in crate::app) fn setting_group(
     ui: &mut egui::Ui,
     title: &str,
     description: &str,
@@ -824,7 +836,7 @@ fn setting_group(
     });
 }
 
-fn checkbox_with_help(
+pub(in crate::app) fn checkbox_with_help(
     ui: &mut egui::Ui,
     value: &mut bool,
     label: &str,
@@ -838,14 +850,14 @@ fn checkbox_with_help(
     changed
 }
 
-fn grid_label_with_help(ui: &mut egui::Ui, label: &str, help: &'static str) {
+pub(in crate::app) fn grid_label_with_help(ui: &mut egui::Ui, label: &str, help: &'static str) {
     ui.horizontal(|ui| {
         ui.label(label).on_hover_text(help);
         info_icon(ui, help);
     });
 }
 
-fn info_icon(ui: &mut egui::Ui, help: &'static str) {
+pub(in crate::app) fn info_icon(ui: &mut egui::Ui, help: &'static str) {
     ui.label(icons::icon(
         icons::INFO,
         icons::IconStyle::Regular,
