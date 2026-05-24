@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u16)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandId {
-    OpenFile,
+    OpenFile = 800,
     OpenFolder,
     CloseBook,
     Quit,
@@ -249,6 +250,10 @@ impl CommandId {
             | Self::ToggleCurrentPageBookmark
             | Self::ToggleBookmarkPopover => "작업",
         }
+    }
+
+    pub fn id(self) -> u16 {
+        self as u16
     }
 }
 
