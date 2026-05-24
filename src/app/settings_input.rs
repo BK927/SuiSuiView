@@ -50,17 +50,12 @@ impl SuiSuiViewApp {
                         self.shortcut_conflict = None;
                         *changed = true;
                     }
-                    if self.shortcut_capture.is_some() {
-                        ui.label(
-                            RichText::new("키 입력 대기 중... Esc 취소, Delete/Backspace 삭제")
-                                .color(theme::ACCENT),
-                        );
-                    }
                 });
                 ui.add_space(8.0);
                 self.shortcut_binding_table(ui, draft, changed);
             },
         );
+        self.show_shortcut_capture_dialog(ctx, draft);
     }
 
     fn shortcut_binding_table(
@@ -244,6 +239,68 @@ impl SuiSuiViewApp {
                 }
             }
         }
+    }
+
+    fn show_shortcut_capture_dialog(&mut self, ctx: &egui::Context, draft: &AppSettings) {
+        let Some(capture) = self.shortcut_capture else {
+            return;
+        };
+        let indices = key_binding_indices(&draft.key_bindings, capture.command);
+        let current = command_shortcut_label(&draft.key_bindings, &indices);
+        let title = if capture.replace_index.is_some() {
+            "단축키 변경"
+        } else {
+            "단축키 추가"
+        };
+        let help = if capture.replace_index.is_some() {
+            "Esc 취소 · Delete/Backspace 선택 단축키 삭제"
+        } else {
+            "Esc 취소 · 원하는 키를 누르면 추가"
+        };
+
+        egui::Window::new(title)
+            .id(egui::Id::new("shortcut_capture_dialog"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .fixed_size(egui::vec2(360.0, 170.0))
+            .collapsible(false)
+            .order(egui::Order::Foreground)
+            .resizable(false)
+            .show(ctx, |ui| {
+                dialog::setting_card(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            RichText::new(capture.command.label())
+                                .size(18.0)
+                                .strong()
+                                .color(theme::TEXT_PRIMARY),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("등록할 키를 누르세요")
+                                .size(14.0)
+                                .color(theme::ACCENT),
+                        );
+                    });
+                    ui.add_space(10.0);
+                    ui.add_sized(
+                        [ui.available_width(), 20.0],
+                        egui::Label::new(
+                            RichText::new(format!("현재 단축키: {current}"))
+                                .monospace()
+                                .color(theme::TEXT_MUTED),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(current);
+                    ui.label(RichText::new(help).size(12.5).color(theme::TEXT_MUTED));
+                    ui.add_space(8.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("취소").clicked() {
+                            self.shortcut_capture = None;
+                        }
+                    });
+                });
+            });
     }
 
     fn capture_shortcut(

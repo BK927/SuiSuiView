@@ -188,6 +188,12 @@ impl SuiSuiViewApp {
                 });
             });
 
+        if self.settings_section == SettingsSection::Keyboard
+            && active_section != SettingsSection::Keyboard
+        {
+            self.shortcut_capture = None;
+            self.shortcut_conflict = None;
+        }
         self.settings_section = active_section;
         self.settings_open = open;
         if !self.settings_open {
