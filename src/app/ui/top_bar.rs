@@ -18,68 +18,77 @@ const RECENT_ROW_VERTICAL_PADDING: f32 = 3.0;
 const RECENT_ROW_LINE_GAP: f32 = 3.0;
 const RECENT_ROW_CORNER_RADIUS: u8 = 5;
 const RECENT_ROW_HOVER_FILL: Color32 = Color32::from_rgb(38, 41, 47);
+const TOP_BAR_ANIMATION: f32 = 0.15;
 const TOP_BAR_HIDE_DELAY: Duration = Duration::from_millis(350);
 const TOP_BAR_MENU_HOLD_DELAY: Duration = Duration::from_secs(2);
+const TOP_BAR_MIN_INTERACTIVE_ALPHA: f32 = 0.35;
+const TOP_BAR_REVEAL_ZONE: f32 = 12.0;
+const TOP_BAR_SLIDE_DISTANCE: f32 = 10.0;
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn show_top_bar(&mut self, ctx: &egui::Context) {
-        if !self.update_top_bar_visibility(ctx) {
+        if self.settings.top_bar_pinned {
+            self.show_pinned_top_bar(ctx);
             return;
         }
 
+        self.show_overlay_top_bar(ctx);
+    }
+
+    fn show_pinned_top_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("focus_bar")
             .exact_height(theme::TOP_BAR_HEIGHT)
-            .frame(
-                Frame::new()
-                    .fill(theme::TOOLBAR_FILL)
-                    .stroke(Stroke::new(1.0, theme::SUBTLE_STROKE))
-                    .inner_margin(Margin::symmetric(14, 7)),
-            )
+            .frame(top_bar_frame(1.0))
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
-                ui.horizontal_centered(|ui| {
-                    self.show_open_group(ui);
-                    toolbar_separator(ui);
-                    self.show_page_group(ui);
-                    toolbar_separator(ui);
-                    self.show_view_group(ui);
-                    self.show_correction_group(ctx, ui);
-                    toolbar_separator(ui);
-                    self.show_debug_compare_group(ui);
-                    toolbar_separator(ui);
-                    self.show_bookmark_group(ctx, ui);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(icon_button(icons::INFO, icons::IconStyle::Regular, 19.0))
-                            .on_hover_text("정보")
-                            .clicked()
-                        {
-                            self.open_about_window();
-                        }
-                        if ui
-                            .add(icon_button(
-                                icons::SETTINGS,
-                                icons::IconStyle::Regular,
-                                20.0,
-                            ))
-                            .on_hover_text("환경설정")
-                            .clicked()
-                        {
-                            self.settings_open = true;
-                        }
-                        self.show_top_bar_pin_button(ui);
-                    });
+                self.show_top_bar_contents(ctx, ui);
+            });
+    }
+
+    fn show_overlay_top_bar(&mut self, ctx: &egui::Context) {
+        let target_visible = self.update_top_bar_visibility(ctx);
+        let progress = ctx.animate_bool_with_time(
+            egui::Id::new("top_bar_overlay_visible"),
+            target_visible,
+            TOP_BAR_ANIMATION,
+        );
+        if progress <= 0.001 {
+            return;
+        }
+        if progress < 0.999 {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
+
+        let alpha = ease_out_cubic(progress);
+        let y_offset = top_bar_slide_offset(alpha);
+        let screen = ctx.screen_rect();
+        egui::Area::new(egui::Id::new("focus_bar_overlay"))
+            .fixed_pos(egui::pos2(screen.left(), screen.top() + y_offset))
+            .order(egui::Order::Foreground)
+            .interactable(top_bar_overlay_is_interactive(target_visible, alpha))
+            .show(ctx, |ui| {
+                ui.set_min_width(screen.width());
+                ui.set_max_width(screen.width());
+                top_bar_frame(alpha).show(ui, |ui| {
+                    ui.set_min_height(theme::TOP_BAR_HEIGHT - 14.0);
+                    ui.set_opacity(alpha);
+                    self.show_top_bar_contents(ctx, ui);
                 });
             });
     }
 
     pub(in crate::app) fn top_bar_is_visible(&self, ctx: &egui::Context) -> bool {
-        if self.top_bar_is_forced_visible(ctx) || pointer_is_near_top_bar(ctx) {
+        if self.top_bar_is_forced_visible(ctx) {
             return true;
         }
 
-        self.top_bar_auto_hide_until
-            .is_some_and(|hide_at| Instant::now() < hide_at)
+        let held = self
+            .top_bar_auto_hide_until
+            .is_some_and(|hide_at| Instant::now() < hide_at);
+        if pointer_is_near_top_bar(ctx, held) {
+            return true;
+        }
+
+        held
     }
 
     fn update_top_bar_visibility(&mut self, ctx: &egui::Context) -> bool {
@@ -88,7 +97,10 @@ impl SuiSuiViewApp {
             return true;
         }
 
-        if pointer_is_near_top_bar(ctx) {
+        let held = self
+            .top_bar_auto_hide_until
+            .is_some_and(|hide_at| Instant::now() < hide_at);
+        if pointer_is_near_top_bar(ctx, held) {
             self.top_bar_auto_hide_until = Some(Instant::now() + TOP_BAR_HIDE_DELAY);
             return true;
         }
@@ -114,7 +126,49 @@ impl SuiSuiViewApp {
             || ctx.is_popup_open()
     }
 
+    fn show_top_bar_contents(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+        ui.horizontal_centered(|ui| {
+            self.show_open_group(ui);
+            toolbar_separator(ui);
+            self.show_page_group(ui);
+            toolbar_separator(ui);
+            self.show_view_group(ui);
+            self.show_correction_group(ctx, ui);
+            toolbar_separator(ui);
+            self.show_debug_compare_group(ui);
+            toolbar_separator(ui);
+            self.show_bookmark_group(ctx, ui);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(icon_button(icons::INFO, icons::IconStyle::Regular, 19.0))
+                    .on_hover_text("정보")
+                    .clicked()
+                {
+                    self.open_about_window();
+                }
+                if ui
+                    .add(icon_button(
+                        icons::SETTINGS,
+                        icons::IconStyle::Regular,
+                        20.0,
+                    ))
+                    .on_hover_text("환경설정")
+                    .clicked()
+                {
+                    self.settings_open = true;
+                }
+                self.show_top_bar_pin_button(ui);
+            });
+        });
+    }
+
     fn show_top_bar_pin_button(&mut self, ui: &mut egui::Ui) {
+        let style = if self.settings.top_bar_pinned {
+            icons::IconStyle::Filled
+        } else {
+            icons::IconStyle::Regular
+        };
         let color = if self.settings.top_bar_pinned {
             theme::ACCENT_HOVER
         } else {
@@ -126,12 +180,7 @@ impl SuiSuiViewApp {
             "상단 도구막대 고정"
         };
         if ui
-            .add(icon_button_colored(
-                icons::PIN,
-                icons::IconStyle::Regular,
-                18.0,
-                color,
-            ))
+            .add(icon_button_colored(icons::PIN, style, 18.0, color))
             .on_hover_text(tooltip)
             .clicked()
         {
@@ -416,13 +465,39 @@ fn recent_open_menu_width(ui: &egui::Ui, recent_books: &[crate::core::state::Boo
     recent_menu_width_for(longest_path_width, viewport_width)
 }
 
-fn pointer_is_near_top_bar(ctx: &egui::Context) -> bool {
-    ctx.input(|input| {
-        input
-            .pointer
-            .hover_pos()
-            .is_some_and(|pos| pos.y <= theme::TOP_BAR_HEIGHT + 8.0)
-    })
+fn top_bar_frame(alpha: f32) -> Frame {
+    Frame::new()
+        .fill(theme::TOOLBAR_FILL.linear_multiply(alpha))
+        .stroke(Stroke::new(
+            1.0,
+            theme::SUBTLE_STROKE.linear_multiply(alpha),
+        ))
+        .inner_margin(Margin::symmetric(14, 7))
+}
+
+fn ease_out_cubic(t: f32) -> f32 {
+    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
+}
+
+fn top_bar_slide_offset(alpha: f32) -> f32 {
+    -TOP_BAR_SLIDE_DISTANCE * (1.0 - alpha.clamp(0.0, 1.0))
+}
+
+fn top_bar_overlay_is_interactive(target_visible: bool, alpha: f32) -> bool {
+    target_visible || alpha >= TOP_BAR_MIN_INTERACTIVE_ALPHA
+}
+
+fn top_bar_pointer_limit(expanded: bool) -> f32 {
+    if expanded {
+        theme::TOP_BAR_HEIGHT + 8.0
+    } else {
+        TOP_BAR_REVEAL_ZONE
+    }
+}
+
+fn pointer_is_near_top_bar(ctx: &egui::Context, expanded: bool) -> bool {
+    let limit = top_bar_pointer_limit(expanded);
+    ctx.input(|input| input.pointer.hover_pos().is_some_and(|pos| pos.y <= limit))
 }
 
 fn recent_menu_width_for(longest_path_width: f32, viewport_width: f32) -> f32 {
@@ -592,7 +667,12 @@ fn text_width(ui: &egui::Ui, text: &str, font_id: &FontId) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{recent_menu_width_for, recent_row_height, OPEN_MENU_MIN_WIDTH};
+    use super::{
+        ease_out_cubic, recent_menu_width_for, recent_row_height, top_bar_overlay_is_interactive,
+        top_bar_pointer_limit, top_bar_slide_offset, OPEN_MENU_MIN_WIDTH,
+        TOP_BAR_MIN_INTERACTIVE_ALPHA, TOP_BAR_REVEAL_ZONE, TOP_BAR_SLIDE_DISTANCE,
+    };
+    use crate::app::ui::theme;
 
     #[test]
     fn recent_menu_width_uses_minimum_for_short_paths() {
@@ -613,6 +693,39 @@ mod tests {
     fn recent_row_height_uses_single_line_when_possible() {
         assert_eq!(recent_row_height(1, 18.0), 27.0);
         assert_eq!(recent_row_height(2, 18.0), 48.0);
+    }
+
+    #[test]
+    fn top_bar_reveal_zone_is_small_until_visible() {
+        assert_eq!(top_bar_pointer_limit(false), TOP_BAR_REVEAL_ZONE);
+        assert_eq!(top_bar_pointer_limit(true), theme::TOP_BAR_HEIGHT + 8.0);
+    }
+
+    #[test]
+    fn top_bar_overlay_slides_from_above() {
+        assert_eq!(top_bar_slide_offset(0.0), -TOP_BAR_SLIDE_DISTANCE);
+        assert_eq!(top_bar_slide_offset(1.0), 0.0);
+        assert!(top_bar_slide_offset(0.5) < 0.0);
+    }
+
+    #[test]
+    fn top_bar_overlay_uses_ease_out_curve() {
+        assert_eq!(ease_out_cubic(0.0), 0.0);
+        assert_eq!(ease_out_cubic(1.0), 1.0);
+        assert!(ease_out_cubic(0.5) > 0.5);
+    }
+
+    #[test]
+    fn top_bar_overlay_stops_intercepting_clicks_while_fading_out() {
+        assert!(top_bar_overlay_is_interactive(true, 0.0));
+        assert!(top_bar_overlay_is_interactive(
+            false,
+            TOP_BAR_MIN_INTERACTIVE_ALPHA
+        ));
+        assert!(!top_bar_overlay_is_interactive(
+            false,
+            TOP_BAR_MIN_INTERACTIVE_ALPHA - 0.01
+        ));
     }
 }
 
