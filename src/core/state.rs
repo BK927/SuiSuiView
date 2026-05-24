@@ -155,23 +155,35 @@ pub enum DisplayUpscaler {
     WgslFsr1Style,
     WgslFsr1EasuRcas,
     WgslNisStyle,
+    WgslArtCnnC4F16Style,
+    WgslArtCnnC4F32Style,
+    WgslAnime4KStyle,
+    WgslAcNetStyle,
 }
 
 impl DisplayUpscaler {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 10] = [
         Self::Auto,
         Self::None,
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
         Self::WgslNisStyle,
+        Self::WgslArtCnnC4F16Style,
+        Self::WgslArtCnnC4F32Style,
+        Self::WgslAnime4KStyle,
+        Self::WgslAcNetStyle,
     ];
 
-    pub const GPU_METHODS: [Self; 4] = [
+    pub const GPU_METHODS: [Self; 8] = [
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
         Self::WgslNisStyle,
+        Self::WgslArtCnnC4F16Style,
+        Self::WgslArtCnnC4F32Style,
+        Self::WgslAnime4KStyle,
+        Self::WgslAcNetStyle,
     ];
 
     pub fn label(self) -> &'static str {
@@ -182,6 +194,10 @@ impl DisplayUpscaler {
             Self::WgslFsr1Style => "WGSL FSR-style",
             Self::WgslFsr1EasuRcas => "WGSL FSR1 EASU+RCAS",
             Self::WgslNisStyle => "WGSL NIS-style",
+            Self::WgslArtCnnC4F16Style => "WGSL ArtCNN C4F16-style",
+            Self::WgslArtCnnC4F32Style => "WGSL ArtCNN C4F32-style",
+            Self::WgslAnime4KStyle => "WGSL Anime4K-style",
+            Self::WgslAcNetStyle => "WGSL ACNet-style",
         }
     }
 
@@ -193,6 +209,10 @@ impl DisplayUpscaler {
             Self::WgslFsr1Style => "wgsl_fsr1_style",
             Self::WgslFsr1EasuRcas => "wgsl_fsr1_easu_rcas",
             Self::WgslNisStyle => "wgsl_nis_style",
+            Self::WgslArtCnnC4F16Style => "wgsl_artcnn_c4f16_style",
+            Self::WgslArtCnnC4F32Style => "wgsl_artcnn_c4f32_style",
+            Self::WgslAnime4KStyle => "wgsl_anime4k_style",
+            Self::WgslAcNetStyle => "wgsl_acnet_style",
         }
     }
 
@@ -223,6 +243,10 @@ impl DisplayUpscaler {
             Self::WgslFsr1Style => 2,
             Self::WgslNisStyle => 3,
             Self::WgslFsr1EasuRcas => 4,
+            Self::WgslArtCnnC4F16Style => 6,
+            Self::WgslArtCnnC4F32Style => 7,
+            Self::WgslAnime4KStyle => 8,
+            Self::WgslAcNetStyle => 9,
         }
     }
 

@@ -100,6 +100,11 @@ fn contrast_sharpen(color: vec4<f32>, coord: vec2<f32>, amount: f32) -> vec4<f32
     return vec4<f32>(clamp(color.rgb + (color.rgb - average) * adaptive, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
 }
 
+fn contrast_sharpen_from_stats(color: vec4<f32>, average: vec3<f32>, contrast: f32, amount: f32) -> vec4<f32> {
+    let adaptive = amount * (0.65 + (1.0 - contrast) * 0.35);
+    return vec4<f32>(clamp(color.rgb + (color.rgb - average) * adaptive, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
+}
+
 fn fsr1_style_sample(coord: vec2<f32>) -> vec4<f32> {
     let base = catmull_rom_sample(coord);
     return contrast_sharpen(base, coord, 0.20);
@@ -110,6 +115,60 @@ fn nis_style_sample(coord: vec2<f32>) -> vec4<f32> {
     let cubic = catmull_rom_sample(coord);
     let mixed = mix(base, cubic, 0.65);
     return contrast_sharpen(mixed, coord, 0.34);
+}
+
+fn source_cross_average(coord: vec2<f32>) -> vec3<f32> {
+    let p = vec2<i32>(floor(coord));
+    return (
+        pixel(p.x - 1, p.y).rgb +
+        pixel(p.x + 1, p.y).rgb +
+        pixel(p.x, p.y - 1).rgb +
+        pixel(p.x, p.y + 1).rgb
+    ) * 0.25;
+}
+
+fn set_luma_rgb(rgb: vec3<f32>, target_luma: f32) -> vec3<f32> {
+    let current = luma(rgb);
+    return clamp(rgb + vec3<f32>(target_luma - current), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn artcnn_style_sample(coord: vec2<f32>, detail_amount: f32, cleanup: f32) -> vec4<f32> {
+    let base = catmull_rom_sample(coord);
+    let average = source_cross_average(coord);
+    let edge = local_contrast(coord);
+    let base_luma = luma(base.rgb);
+    let average_luma = luma(average);
+    let detail = base_luma - average_luma;
+    let boosted_luma = base_luma + detail * detail_amount;
+    let boosted = set_luma_rgb(base.rgb, boosted_luma);
+    let cleaned = mix(boosted, average, cleanup * (1.0 - edge));
+    return contrast_sharpen_from_stats(vec4<f32>(cleaned, base.a), average, edge, detail_amount * 0.20);
+}
+
+fn anime4k_style_sample(coord: vec2<f32>) -> vec4<f32> {
+    let base = catmull_rom_sample(coord);
+    let soft_sample = bilinear_sample(coord);
+    let average = source_cross_average(coord);
+    let edge = local_contrast(coord);
+    let line_gain = clamp(edge * 2.6, 0.0, 1.0);
+    let restored = vec4<f32>(
+        clamp(base.rgb + (base.rgb - soft_sample.rgb) * (0.30 + line_gain * 0.30), vec3<f32>(0.0), vec3<f32>(1.0)),
+        base.a,
+    );
+    return contrast_sharpen_from_stats(mix(base, restored, 0.75), average, edge, 0.38);
+}
+
+fn acnet_style_sample(coord: vec2<f32>) -> vec4<f32> {
+    let base = catmull_rom_sample(coord);
+    let average = source_cross_average(coord);
+    let edge = local_contrast(coord);
+    let clean = mix(base.rgb, average, 0.12 * (1.0 - edge));
+    let detail = base.rgb - average;
+    let restored = vec4<f32>(
+        clamp(clean + detail * (0.24 + edge * 0.46), vec3<f32>(0.0), vec3<f32>(1.0)),
+        base.a,
+    );
+    return contrast_sharpen_from_stats(restored, average, edge, 0.26);
 }
 
 fn safe_rcp(value: f32) -> f32 {
@@ -293,6 +352,18 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     }
     if params.method.x == 5u {
         return fsr_rcas_sample(coord);
+    }
+    if params.method.x == 6u {
+        return artcnn_style_sample(coord, 0.48, 0.05);
+    }
+    if params.method.x == 7u {
+        return artcnn_style_sample(coord, 0.74, 0.03);
+    }
+    if params.method.x == 8u {
+        return anime4k_style_sample(coord);
+    }
+    if params.method.x == 9u {
+        return acnet_style_sample(coord);
     }
     return bilinear_sample(coord);
 }
