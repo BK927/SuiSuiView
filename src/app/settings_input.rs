@@ -65,88 +65,126 @@ impl SuiSuiViewApp {
         draft: &mut AppSettings,
         changed: &mut bool,
     ) {
-        let mut clear_command = None;
-        let mut reset_command = None;
         dialog::setting_card(ui, |ui| {
-            egui::Grid::new("settings_key_binding_grid")
-                .num_columns(3)
-                .spacing([14.0, 5.0])
-                .striped(true)
-                .show(ui, |ui| {
-                    ui.label(RichText::new("명령").strong().color(theme::TEXT_MUTED));
-                    ui.label(RichText::new("키").strong().color(theme::TEXT_MUTED));
-                    ui.label(RichText::new("편집").strong().color(theme::TEXT_MUTED));
-                    ui.end_row();
-
-                    for command in CommandId::ALL {
-                        let indices = key_binding_indices(&draft.key_bindings, command);
-                        let key_label = command_shortcut_label(&draft.key_bindings, &indices);
-                        ui.add_sized(
-                            [230.0, 20.0],
-                            egui::Label::new(
-                                RichText::new(command.label()).color(theme::TEXT_PRIMARY),
-                            )
-                            .truncate(),
-                        )
-                        .on_hover_text(command.group());
-                        ui.add_sized(
-                            [260.0, 20.0],
-                            egui::Label::new(RichText::new(key_label).monospace().color(
-                                if indices.is_empty() {
-                                    theme::TEXT_MUTED
-                                } else {
-                                    theme::TEXT_PRIMARY
-                                },
-                            ))
-                            .truncate(),
-                        )
-                        .on_hover_text(command_shortcut_hover(&draft.key_bindings, &indices));
-                        ui.horizontal(|ui| {
-                            if ui.small_button("추가").clicked() {
-                                self.shortcut_capture = Some(ShortcutCapture {
-                                    command,
-                                    replace_index: None,
-                                });
-                                self.shortcut_conflict = None;
-                            }
-                            let change = ui
-                                .add_enabled(!indices.is_empty(), egui::Button::new("변경"))
-                                .on_disabled_hover_text("먼저 단축키를 추가해야 합니다.");
-                            if change.clicked() {
-                                self.shortcut_capture = Some(ShortcutCapture {
-                                    command,
-                                    replace_index: indices.first().copied(),
-                                });
-                                self.shortcut_conflict = None;
-                            }
-                            let delete = ui
-                                .add_enabled(!indices.is_empty(), egui::Button::new("삭제"))
-                                .on_disabled_hover_text("등록된 단축키가 없습니다.");
-                            if delete.clicked() {
-                                clear_command = Some(command);
-                            }
-                            if ui.small_button("기본값").clicked() {
-                                reset_command = Some(command);
-                            }
-                        });
-                        ui.end_row();
-                    }
-                });
+            keyboard_table_header(ui);
+            for group in shortcut_groups() {
+                self.shortcut_group_table(ui, draft, changed, group);
+            }
         });
+    }
 
-        if let Some(command) = clear_command {
-            draft
-                .key_bindings
-                .retain(|binding| binding.command != command);
-            self.shortcut_capture = None;
-            self.shortcut_conflict = None;
-            *changed = true;
+    fn shortcut_group_table(
+        &mut self,
+        ui: &mut egui::Ui,
+        draft: &mut AppSettings,
+        changed: &mut bool,
+        group: ShortcutGroup,
+    ) {
+        shortcut_group_header(ui, group);
+        let expanded = self.shortcut_expanded_groups.contains(group.title);
+        for command in group.visible_commands(expanded) {
+            self.shortcut_command_row(ui, draft, changed, *command);
         }
-        if let Some(command) = reset_command {
-            reset_command_shortcuts(&mut draft.key_bindings, command);
-            self.shortcut_capture = None;
+        if group.hidden_count() > 0
+            && shortcut_more_row(ui, group.hidden_count(), expanded).clicked()
+        {
+            if expanded {
+                self.shortcut_expanded_groups.remove(group.title);
+            } else {
+                self.shortcut_expanded_groups.insert(group.title);
+            }
+        }
+    }
+
+    fn shortcut_command_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        draft: &mut AppSettings,
+        changed: &mut bool,
+        command: CommandId,
+    ) {
+        let indices = key_binding_indices(&draft.key_bindings, command);
+        let row_height = 34.0;
+        let row_width = ui.available_width();
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(row_width, row_height), egui::Sense::click());
+        let fill = if response.hovered() {
+            theme::ROW_FILL_SELECTED
+        } else {
+            theme::ROW_FILL
+        };
+        ui.painter().rect_filled(rect, 0.0, fill);
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom(),
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(44, 48, 54)),
+        );
+
+        let command_rect = egui::Rect::from_min_max(
+            rect.min + egui::vec2(56.0, 0.0),
+            egui::pos2(rect.left() + row_width * 0.55, rect.bottom()),
+        );
+        let key_rect = egui::Rect::from_min_max(
+            egui::pos2(command_rect.right() + 12.0, rect.top()),
+            egui::pos2(rect.right() - 116.0, rect.bottom()),
+        );
+        let action_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.right() - 104.0, rect.top()),
+            rect.right_bottom(),
+        );
+
+        ui.put(
+            command_rect,
+            egui::Label::new(RichText::new(command.label()).color(theme::TEXT_PRIMARY)).truncate(),
+        )
+        .on_hover_text(command.group());
+        ui.scope_builder(egui::UiBuilder::new().max_rect(key_rect), |ui| {
+            ui.set_clip_rect(key_rect);
+            shortcut_chips(ui, &draft.key_bindings, &indices);
+        })
+        .response
+        .on_hover_text(command_shortcut_hover(&draft.key_bindings, &indices));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(action_rect), |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let replace_index = indices.first().copied();
+                let edit_hint = if replace_index.is_some() {
+                    "첫 번째 단축키 변경"
+                } else {
+                    "단축키 추가"
+                };
+                if edit_action_button(ui, edit_hint).clicked() {
+                    self.shortcut_capture = Some(ShortcutCapture {
+                        command,
+                        replace_index,
+                    });
+                    self.shortcut_conflict = None;
+                }
+                let reset = ui.small_button("기본값");
+                if reset.clicked() {
+                    reset_command_shortcuts(&mut draft.key_bindings, command);
+                    self.shortcut_capture = None;
+                    self.shortcut_conflict = None;
+                    *changed = true;
+                }
+                let delete = ui
+                    .add_enabled(!indices.is_empty(), egui::Button::new("삭제"))
+                    .on_disabled_hover_text("등록된 단축키가 없습니다.");
+                if delete.clicked() {
+                    draft
+                        .key_bindings
+                        .retain(|binding| binding.command != command);
+                    self.shortcut_capture = None;
+                    self.shortcut_conflict = None;
+                    *changed = true;
+                }
+            });
+        });
+        if response.double_clicked() {
+            self.shortcut_capture = Some(ShortcutCapture {
+                command,
+                replace_index: indices.first().copied(),
+            });
             self.shortcut_conflict = None;
-            *changed = true;
         }
     }
 
@@ -381,6 +419,246 @@ pub(in crate::app) fn show_mouse_settings(
     );
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ShortcutGroup {
+    title: &'static str,
+    icon: &'static str,
+    commands: &'static [CommandId],
+    preview_count: usize,
+}
+
+impl ShortcutGroup {
+    fn visible_commands(self, expanded: bool) -> &'static [CommandId] {
+        if expanded {
+            self.commands
+        } else {
+            let count = self.preview_count.min(self.commands.len());
+            &self.commands[..count]
+        }
+    }
+
+    fn hidden_count(self) -> usize {
+        self.commands.len().saturating_sub(self.preview_count)
+    }
+}
+
+const FILE_SHORTCUTS: &[CommandId] = &[
+    CommandId::OpenFile,
+    CommandId::OpenFolder,
+    CommandId::CloseBook,
+    CommandId::Quit,
+    CommandId::QuitFromEsc,
+    CommandId::OpenExplorer,
+    CommandId::CopyPath,
+];
+
+const VIEW_SHORTCUTS: &[CommandId] = &[
+    CommandId::ToggleFullscreen,
+    CommandId::ToggleMaximized,
+    CommandId::Minimize,
+    CommandId::ToggleAlwaysOnTop,
+    CommandId::FitOriginal,
+    CommandId::FitPage,
+    CommandId::FitWidth,
+    CommandId::FitHeight,
+    CommandId::SetDoubleLeftToRight,
+    CommandId::SetDoubleRightToLeft,
+    CommandId::ToggleDouble,
+    CommandId::ZoomIn,
+    CommandId::ZoomOut,
+    CommandId::ZoomFineIn,
+    CommandId::ZoomFineOut,
+];
+
+const NAVIGATION_SHORTCUTS: &[CommandId] = &[
+    CommandId::NextPage,
+    CommandId::PreviousPage,
+    CommandId::Home,
+    CommandId::End,
+    CommandId::MoveForward10,
+    CommandId::MoveBackward10,
+    CommandId::MoveForward100,
+    CommandId::MoveBackward100,
+    CommandId::ForceNextPage,
+    CommandId::ForcePreviousPage,
+    CommandId::RandomForward,
+    CommandId::RandomBackward,
+    CommandId::NextBook,
+    CommandId::PreviousBook,
+];
+
+const IMAGE_SHORTCUTS: &[CommandId] = &[
+    CommandId::RotateClockwise,
+    CommandId::RotateCounterClockwise,
+    CommandId::Rotate0,
+    CommandId::Rotate90,
+    CommandId::Rotate180,
+    CommandId::Rotate270,
+    CommandId::FlipHorizontal,
+    CommandId::FlipVertical,
+    CommandId::ToggleInvert,
+    CommandId::FilterNone,
+    CommandId::FilterSmooth,
+    CommandId::FilterSmoothSharpen,
+    CommandId::ToggleGamma,
+    CommandId::UpscaleCurrentPage,
+];
+
+const ACTION_SHORTCUTS: &[CommandId] = &[
+    CommandId::DeleteRecycle,
+    CommandId::DeletePermanent,
+    CommandId::CopyPageImage,
+    CommandId::CopyDisplayImage,
+    CommandId::ToggleCurrentPageBookmark,
+    CommandId::ToggleBookmarkPopover,
+    CommandId::OpenSettings,
+    CommandId::OpenAbout,
+];
+
+fn shortcut_groups() -> [ShortcutGroup; 5] {
+    [
+        ShortcutGroup {
+            title: "파일",
+            icon: "□",
+            commands: FILE_SHORTCUTS,
+            preview_count: 4,
+        },
+        ShortcutGroup {
+            title: "보기",
+            icon: "◉",
+            commands: VIEW_SHORTCUTS,
+            preview_count: 3,
+        },
+        ShortcutGroup {
+            title: "탐색",
+            icon: "▷",
+            commands: NAVIGATION_SHORTCUTS,
+            preview_count: 3,
+        },
+        ShortcutGroup {
+            title: "영상 처리",
+            icon: "✦",
+            commands: IMAGE_SHORTCUTS,
+            preview_count: 4,
+        },
+        ShortcutGroup {
+            title: "작업",
+            icon: "◇",
+            commands: ACTION_SHORTCUTS,
+            preview_count: 4,
+        },
+    ]
+}
+
+fn keyboard_table_header(ui: &mut egui::Ui) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 38.0), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, 6.0, egui::Color32::from_rgb(21, 25, 30));
+    ui.painter().rect_stroke(
+        rect,
+        6.0,
+        egui::Stroke::new(1.0, theme::SUBTLE_STROKE),
+        egui::StrokeKind::Inside,
+    );
+    let command_x = rect.left() + 20.0;
+    let key_x = rect.left() + width * 0.56;
+    let action_x = rect.right() - 120.0;
+    let y = rect.center().y;
+    let font = egui::FontId::proportional(14.0);
+    ui.painter().text(
+        egui::pos2(command_x, y),
+        egui::Align2::LEFT_CENTER,
+        "명령",
+        font.clone(),
+        theme::TEXT_MUTED,
+    );
+    ui.painter().text(
+        egui::pos2(key_x, y),
+        egui::Align2::LEFT_CENTER,
+        "현재 단축키",
+        font.clone(),
+        theme::TEXT_MUTED,
+    );
+    ui.painter().text(
+        egui::pos2(action_x, y),
+        egui::Align2::LEFT_CENTER,
+        "작업",
+        font,
+        theme::TEXT_MUTED,
+    );
+}
+
+fn shortcut_group_header(ui: &mut egui::Ui, group: ShortcutGroup) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 38.0), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, 0.0, egui::Color32::from_rgb(17, 22, 27));
+    ui.painter().vline(
+        rect.left(),
+        rect.y_range(),
+        egui::Stroke::new(2.0, theme::SELECT_STROKE),
+    );
+    ui.painter().hline(
+        rect.x_range(),
+        rect.bottom(),
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(39, 44, 50)),
+    );
+    let y = rect.center().y;
+    ui.painter().text(
+        egui::pos2(rect.left() + 22.0, y),
+        egui::Align2::LEFT_CENTER,
+        group.icon,
+        egui::FontId::proportional(18.0),
+        theme::SELECT_STROKE,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 54.0, y),
+        egui::Align2::LEFT_CENTER,
+        group.title,
+        egui::FontId::proportional(16.0),
+        theme::TEXT_PRIMARY,
+    );
+    ui.painter().text(
+        egui::pos2(rect.right() - 96.0, y),
+        egui::Align2::LEFT_CENTER,
+        group.commands.len().to_string(),
+        egui::FontId::monospace(14.0),
+        theme::TEXT_MUTED,
+    );
+}
+
+fn shortcut_more_row(ui: &mut egui::Ui, count: usize, expanded: bool) -> egui::Response {
+    let width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 34.0), egui::Sense::click());
+    let fill = if response.hovered() {
+        theme::ROW_FILL_SELECTED
+    } else {
+        theme::ROW_FILL
+    };
+    ui.painter().rect_filled(rect, 0.0, fill);
+    let text = if expanded {
+        "접기".to_owned()
+    } else {
+        format!("더보기 {count}개")
+    };
+    ui.painter().text(
+        egui::pos2(rect.left() + 56.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::proportional(14.0),
+        theme::TEXT_MUTED,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 150.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        if expanded { "⌃" } else { "⌄" },
+        egui::FontId::proportional(16.0),
+        theme::TEXT_MUTED,
+    );
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 fn set_shortcut_binding(
     bindings: &mut Vec<KeyBinding>,
     command: CommandId,
@@ -424,6 +702,50 @@ fn command_shortcut_hover(bindings: &[KeyBinding], indices: &[usize]) -> String 
     } else {
         command_shortcut_label(bindings, indices)
     }
+}
+
+fn shortcut_chips(ui: &mut egui::Ui, bindings: &[KeyBinding], indices: &[usize]) {
+    if indices.is_empty() {
+        ui.label(RichText::new("-").monospace().color(theme::TEXT_MUTED));
+        return;
+    }
+
+    ui.horizontal(|ui| {
+        for (shown, index) in indices.iter().enumerate() {
+            if shown >= 3 {
+                let remaining = indices.len() - shown;
+                ui.label(
+                    RichText::new(format!("+{remaining}"))
+                        .monospace()
+                        .color(theme::TEXT_MUTED),
+                );
+                break;
+            }
+            let Some(binding) = bindings.get(*index) else {
+                continue;
+            };
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(39, 44, 50))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 66, 74)))
+                .corner_radius(egui::CornerRadius::same(5))
+                .inner_margin(egui::Margin::symmetric(7, 2))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(binding.shortcut.label())
+                            .monospace()
+                            .color(theme::TEXT_PRIMARY),
+                    );
+                });
+        }
+    });
+}
+
+fn edit_action_button(ui: &mut egui::Ui, help: &'static str) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new("✎").size(15.0).color(theme::TEXT_PRIMARY))
+            .min_size(egui::vec2(26.0, 24.0)),
+    )
+    .on_hover_text(help)
 }
 
 fn reset_command_shortcuts(bindings: &mut Vec<KeyBinding>, command: CommandId) {
