@@ -3085,7 +3085,8 @@ impl SuiSuiViewApp {
                     display_upscaler,
                     ..
                 } => {
-                    if !self.paint_wgsl_effects(
+                    if !self.paint_ready_gpu_visual(
+                        ctx,
                         painter,
                         GpuPaintRequest {
                             rect: page_rect,
@@ -3096,6 +3097,7 @@ impl SuiSuiViewApp {
                             display_upscaler,
                             opacity: request.alpha,
                         },
+                        tint,
                     ) {
                         self.paint_placeholder(
                             painter,
@@ -3147,6 +3149,81 @@ impl SuiSuiViewApp {
             FontId::proportional(16.0),
             color.gamma_multiply(tint.a() as f32 / 255.0),
         );
+    }
+
+    fn paint_ready_gpu_visual(
+        &mut self,
+        ctx: &egui::Context,
+        painter: &egui::Painter,
+        request: GpuPaintRequest,
+        tint: Color32,
+    ) -> bool {
+        let target_size = rect_target_size(request.rect);
+        if !gpu_visual_needs_wgsl(
+            request.image_size,
+            target_size,
+            request.effects,
+            request.display_upscaler,
+        ) {
+            let texture = self.texture_for_gpu_fallback(
+                ctx,
+                request.source_key,
+                request.image_size,
+                &request.rgba,
+                request.effects,
+            );
+            painter.image(
+                texture.id(),
+                request.rect,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                tint,
+            );
+            return true;
+        }
+
+        self.paint_wgsl_effects(painter, request)
+    }
+
+    fn texture_for_gpu_fallback(
+        &mut self,
+        ctx: &egui::Context,
+        source_key: GpuPaintSourceKey,
+        image_size: [usize; 2],
+        rgba: &[u8],
+        effects: ViewEffects,
+    ) -> TextureHandle {
+        let texture_key = TextureCacheKey {
+            page: source_key.page,
+            effects,
+            upscaled: source_key.upscaled,
+        };
+        if let Some(texture) = self
+            .textures
+            .get(&texture_key)
+            .map(|entry| entry.texture.clone())
+        {
+            return texture;
+        }
+
+        let image = Arc::new(ColorImage::from_rgba_unmultiplied(image_size, rgba));
+        let texture = ctx.load_texture(
+            format!(
+                "page-{}-{}-{}-{:?}",
+                source_key.page.index,
+                source_key.page.target_long_edge,
+                if source_key.upscaled { "ai" } else { "base" },
+                effects
+            ),
+            ImageData::Color(image),
+            TextureOptions::LINEAR,
+        );
+        self.textures.put(
+            texture_key,
+            TextureEntry {
+                texture: texture.clone(),
+            },
+        );
+        texture
     }
 
     fn spread_origin(&self, viewport: Rect, spread_size: Vec2, offset: Vec2) -> Pos2 {
@@ -3369,6 +3446,25 @@ fn should_allow_cpu_display_upscale(
         FitMode::Manual => manual_zoom > 1.0,
         FitMode::Original => false,
     }
+}
+
+fn gpu_visual_needs_wgsl(
+    image_size: [usize; 2],
+    target_size: [u32; 2],
+    effects: ViewEffects,
+    display_upscaler: DisplayUpscaler,
+) -> bool {
+    effects != ViewEffects::default()
+        || display_upscaler
+            .resolve_for_render(image_size, target_size)
+            .is_some()
+}
+
+fn rect_target_size(rect: Rect) -> [u32; 2] {
+    [
+        rect.width().round().max(1.0) as u32,
+        rect.height().round().max(1.0) as u32,
+    ]
 }
 
 fn automatic_cache_budget_bytes() -> usize {
@@ -3843,18 +3939,18 @@ mod tests {
     use super::{
         ai_prefetch_pages_for, apply_effects_to_image, best_page_key_at_or_below_in_cache,
         best_page_key_in_cache, command_for_shortcut, delete_target_for, double_spread_indices,
-        korean_font_candidates, load_first_existing_font, ordered_spread_indices,
-        page_cache_state_from_hit, preferred_page_key_in_cache, relative_difference,
-        sanitize_font_name, should_allow_cpu_display_upscale, sibling_book_path,
-        smart_spread_indices_for_metrics, transformed_page_size, transition_paint_params,
-        transition_screen_sign, worker_center_page_for_mode, AppCommand, DeleteMode, ImageFilter,
-        OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey, ViewEffects, ViewMode,
-        ViewTransform,
+        gpu_visual_needs_wgsl, korean_font_candidates, load_first_existing_font,
+        ordered_spread_indices, page_cache_state_from_hit, preferred_page_key_in_cache,
+        relative_difference, sanitize_font_name, should_allow_cpu_display_upscale,
+        sibling_book_path, smart_spread_indices_for_metrics, transformed_page_size,
+        transition_paint_params, transition_screen_sign, worker_center_page_for_mode, AppCommand,
+        DeleteMode, ImageFilter, OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey,
+        ViewEffects, ViewMode, ViewTransform,
     };
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
-        AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, FitMode, KeyCode, KeyShortcut,
-        PageTransitionStyle, ReadingDirection,
+        AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, DisplayUpscaler, FitMode, KeyCode,
+        KeyShortcut, PageTransitionStyle, ReadingDirection,
     };
     use crate::core::worker::{
         DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PreparedPage,
@@ -4422,6 +4518,41 @@ mod tests {
             FitMode::Original,
             4.0,
             false
+        ));
+    }
+
+    #[test]
+    fn auto_gpu_visual_uses_cpu_texture_path_for_downscale_without_effects() {
+        assert!(!gpu_visual_needs_wgsl(
+            [2000, 3000],
+            [1000, 1500],
+            ViewEffects::default(),
+            DisplayUpscaler::Auto,
+        ));
+    }
+
+    #[test]
+    fn gpu_visual_uses_wgsl_for_auto_upscale_explicit_methods_and_effects() {
+        assert!(gpu_visual_needs_wgsl(
+            [800, 1200],
+            [1600, 2400],
+            ViewEffects::default(),
+            DisplayUpscaler::Auto,
+        ));
+        assert!(gpu_visual_needs_wgsl(
+            [2000, 3000],
+            [1000, 1500],
+            ViewEffects::default(),
+            DisplayUpscaler::WgslNisStyle,
+        ));
+        assert!(gpu_visual_needs_wgsl(
+            [2000, 3000],
+            [1000, 1500],
+            ViewEffects {
+                invert_colors: true,
+                ..ViewEffects::default()
+            },
+            DisplayUpscaler::Auto,
         ));
     }
 
