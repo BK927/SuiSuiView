@@ -159,13 +159,12 @@ pub enum DisplayUpscaler {
 }
 
 impl DisplayUpscaler {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 5] = [
         Self::Auto,
         Self::None,
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
-        Self::WgslNisStyle,
     ];
 
     pub const GPU_METHODS: [Self; 4] = [
