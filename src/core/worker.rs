@@ -25,7 +25,8 @@ mod scheduler;
 use metadata::{apply_embedded_icc_to_rgba, apply_exif_orientation_to_page, read_image_metadata};
 use scheduler::prioritized_jobs;
 
-const WORKER_CACHE_BYTES: usize = 96 * 1024 * 1024;
+const WORKER_CACHE_BYTES: usize = 48 * 1024 * 1024;
+const WORKER_CACHE_ENTRY_LIMIT: usize = 12;
 const MAX_IMAGE_DIMENSION: u32 = 20_000;
 const MAX_DECODED_PAGE_BYTES: usize = 256 * 1024 * 1024;
 const JPEG_SCALED_MIN_RATIO: u32 = 2;
@@ -613,7 +614,7 @@ fn run_worker(
     let mut visible_pages = 1usize;
     let mut options = WorkerOptions::default();
     let mut cache: LruCache<String, Arc<PreparedPage>> =
-        LruCache::new(NonZeroUsize::new(18).unwrap());
+        LruCache::new(NonZeroUsize::new(WORKER_CACHE_ENTRY_LIMIT).unwrap());
     let mut cache_bytes = 0usize;
     let mut book_epoch = 0usize;
 

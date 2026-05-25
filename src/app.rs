@@ -225,10 +225,6 @@ fn worker_center_page_for_mode(current_page: usize, mode: ViewMode) -> usize {
 
 struct TextureEntry {
     texture: TextureHandle,
-    #[cfg_attr(
-        not(any(feature = "perf-dev", feature = "perf-diagnostics")),
-        allow(dead_code)
-    )]
     byte_size: usize,
 }
 
@@ -682,6 +678,8 @@ impl SuiSuiViewApp {
             .as_ref()
             .filter(|pending| pending.book_id == book_id)
             .map(|pending| pending.page);
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let forced_page = forced_page.or_else(perf::forced_start_page_index);
         let bookmarked_page = reading_position.as_ref().and_then(|position| {
             position
                 .last_page_name
@@ -724,6 +722,7 @@ impl SuiSuiViewApp {
         self.edge_prompt = None;
         self.transition = None;
         self.last_nav_direction = NavigationDirection::Forward;
+        self.target_long_edge = PREVIEW_TARGET_LONG_EDGE;
         self.worker.load_book(
             source.clone(),
             self.worker_center_page(),
@@ -1028,6 +1027,7 @@ impl SuiSuiViewApp {
     }
 
     fn insert_prepared_page(&mut self, key: PageCacheKey, page: Arc<PreparedPage>) {
+        self.drop_lower_resolution_pages_for(key);
         if let Some((evicted_key, evicted_page)) = self.decoded_pages.push(key, page.clone()) {
             self.decoded_bytes = self.decoded_bytes.saturating_sub(evicted_page.byte_size);
             self.drop_textures_for_page(evicted_key);
@@ -1052,6 +1052,16 @@ impl SuiSuiViewApp {
             .collect::<Vec<_>>();
         for key in stale_keys {
             let _ = self.textures.pop(&key);
+        }
+    }
+
+    fn drop_lower_resolution_pages_for(&mut self, key: PageCacheKey) {
+        let stale_keys = lower_resolution_page_keys(&self.decoded_pages, key);
+        for stale_key in stale_keys {
+            if let Some(page) = self.decoded_pages.pop(&stale_key) {
+                self.decoded_bytes = self.decoded_bytes.saturating_sub(page.byte_size);
+                self.drop_textures_for_page(stale_key);
+            }
         }
     }
 
@@ -1108,6 +1118,36 @@ impl SuiSuiViewApp {
         }
     }
 
+    fn prune_texture_cache(&mut self) {
+        let budget_bytes = self.texture_cache_budget_bytes();
+        let mut texture_bytes = self.texture_cache_bytes();
+        if texture_bytes <= budget_bytes {
+            return;
+        }
+
+        let pinned_pages = self.pinned_page_indices();
+        let mut retained = Vec::new();
+        let max_pops = self.textures.len();
+        let mut pops = 0usize;
+        while texture_bytes > budget_bytes && pops < max_pops {
+            let Some((key, entry)) = self.textures.pop_lru() else {
+                break;
+            };
+            pops += 1;
+
+            if pinned_pages.contains(&key.page) {
+                retained.push((key, entry));
+                continue;
+            }
+
+            texture_bytes = texture_bytes.saturating_sub(entry.byte_size);
+        }
+
+        for (key, entry) in retained {
+            self.textures.put(key, entry);
+        }
+    }
+
     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
     fn record_cache_snapshot(&self, reason: &'static str) {
         perf::record_app_cache_snapshot(perf::AppCacheSnapshot {
@@ -1125,12 +1165,19 @@ impl SuiSuiViewApp {
         });
     }
 
-    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
     fn texture_cache_bytes(&self) -> usize {
         self.textures
             .iter()
             .map(|(_key, entry)| entry.byte_size)
             .sum()
+    }
+
+    fn texture_cache_budget_bytes(&self) -> usize {
+        texture_cache_budget_bytes_for(
+            self.target_long_edge,
+            self.visible_page_count(),
+            self.transition.is_some(),
+        )
     }
 
     fn pinned_page_indices(&self) -> HashSet<PageCacheKey> {
@@ -2298,6 +2345,7 @@ impl SuiSuiViewApp {
                 byte_size: texture_byte_size,
             },
         );
+        self.prune_texture_cache();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         self.record_cache_snapshot("texture_upload");
 
@@ -2985,10 +3033,13 @@ impl SuiSuiViewApp {
         let viewport_pixels = base_points * ctx.pixels_per_point();
         let zoom_multiplier = match self.fit_mode {
             FitMode::Manual => self.manual_zoom.max(1.0),
-            FitMode::Original => 1.5,
             _ => 1.0,
         };
-        let raw = viewport_pixels * 1.5 * zoom_multiplier;
+        let oversample = match self.fit_mode {
+            FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight => 1.0,
+            FitMode::Manual | FitMode::Original => 1.5,
+        };
+        let raw = viewport_pixels * oversample * zoom_multiplier;
         let quantized = ((raw / 256.0).ceil() * 256.0) as u32;
         clamp_target_long_edge(quantized.clamp(MIN_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE))
     }
@@ -3283,6 +3334,7 @@ impl SuiSuiViewApp {
                 byte_size: texture_byte_size,
             },
         );
+        self.prune_texture_cache();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         self.record_cache_snapshot("gpu_fallback_texture_upload");
         texture
@@ -3519,15 +3571,8 @@ fn should_allow_cpu_display_upscale(
     manual_zoom: f32,
     gpu_display_upscale_can_own_upscale: bool,
 ) -> bool {
-    if gpu_display_upscale_can_own_upscale {
-        return false;
-    }
-
-    match fit_mode {
-        FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight => true,
-        FitMode::Manual => manual_zoom > 1.0,
-        FitMode::Original => false,
-    }
+    let _ = (fit_mode, manual_zoom, gpu_display_upscale_can_own_upscale);
+    false
 }
 
 fn gpu_visual_needs_wgsl(
@@ -3557,15 +3602,21 @@ fn automatic_cache_budget_bytes() -> usize {
                 .with_memory(sysinfo::MemoryRefreshKind::nothing().with_ram()),
         )
         .total_memory() as usize;
-        let target = total.saturating_mul(3) / 100;
-        target.clamp(128 * 1024 * 1024, 768 * 1024 * 1024)
+        automatic_cache_budget_bytes_for_total(total)
     })
+}
+
+fn automatic_cache_budget_bytes_for_total(total_memory_bytes: usize) -> usize {
+    let target = total_memory_bytes / 100;
+    target.clamp(64 * 1024 * 1024, 96 * 1024 * 1024)
 }
 
 const BYTES_PER_RGBA_PIXEL: usize = 4;
 const MIN_WORKER_CACHE_BYTES: usize = 32 * 1024 * 1024;
-const MAX_WORKER_CACHE_BYTES: usize = 512 * 1024 * 1024;
+const MAX_WORKER_CACHE_BYTES: usize = 48 * 1024 * 1024;
 const MAX_UPSCALED_CACHE_BYTES: usize = 256 * 1024 * 1024;
+const MIN_TEXTURE_CACHE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_TEXTURE_CACHE_BYTES: usize = 128 * 1024 * 1024;
 const PREFETCH_FORWARD_PAGES: usize = 3;
 const PREFETCH_BACKWARD_PAGES: usize = 1;
 
@@ -3625,6 +3676,25 @@ fn worker_cache_budget_bytes_for(
 
 fn upscaled_cache_budget_bytes_for(cpu_budget_bytes: usize) -> usize {
     (cpu_budget_bytes / 2).clamp(MIN_WORKER_CACHE_BYTES, MAX_UPSCALED_CACHE_BYTES)
+}
+
+fn texture_cache_budget_bytes_for(
+    target_long_edge: u32,
+    visible_page_count: usize,
+    transition_active: bool,
+) -> usize {
+    let visible_page_count = visible_page_count.max(1);
+    let transition_pages = if transition_active {
+        visible_page_count
+    } else {
+        0
+    };
+    let texture_page_goal = visible_page_count
+        .saturating_add(transition_pages)
+        .saturating_add(1);
+    estimated_page_bytes_for_target(target_long_edge)
+        .saturating_mul(texture_page_goal)
+        .clamp(MIN_TEXTURE_CACHE_BYTES, MAX_TEXTURE_CACHE_BYTES)
 }
 
 fn estimated_page_bytes_for_target(target_long_edge: u32) -> usize {
@@ -3990,6 +4060,21 @@ fn best_page_key_at_or_below_in_cache(
         .max_by_key(|key| key.target_long_edge)
 }
 
+fn lower_resolution_page_keys(
+    cache: &LruCache<PageCacheKey, Arc<PreparedPage>>,
+    inserted: PageCacheKey,
+) -> Vec<PageCacheKey> {
+    cache
+        .iter()
+        .filter_map(|(key, _page)| {
+            (key.index == inserted.index
+                && key.decode == inserted.decode
+                && key.target_long_edge < inserted.target_long_edge)
+                .then_some(*key)
+        })
+        .collect()
+}
+
 #[cfg(any(test, feature = "perf-dev", feature = "perf-diagnostics"))]
 fn page_cache_state_from_hit(
     hit: Option<PageCacheKey>,
@@ -4034,12 +4119,13 @@ mod tests {
         ai_prefetch_pages_for, apply_effects_to_image, best_page_key_at_or_below_in_cache,
         best_page_key_in_cache, command_for_shortcut, delete_target_for, double_spread_indices,
         gpu_visual_needs_wgsl, korean_font_candidates, load_first_existing_font,
-        ordered_spread_indices, page_cache_state_from_hit, preferred_page_key_in_cache,
-        relative_difference, sanitize_font_name, should_allow_cpu_display_upscale,
-        sibling_book_path, smart_spread_indices_for_metrics, transformed_page_size,
-        transition_paint_params, transition_screen_sign, worker_center_page_for_mode, AppCommand,
-        DeleteMode, ImageFilter, OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey,
-        ViewEffects, ViewMode, ViewTransform,
+        lower_resolution_page_keys, ordered_spread_indices, page_cache_state_from_hit,
+        preferred_page_key_in_cache, relative_difference, sanitize_font_name,
+        should_allow_cpu_display_upscale, sibling_book_path, smart_spread_indices_for_metrics,
+        texture_cache_budget_bytes_for, transformed_page_size, transition_paint_params,
+        transition_screen_sign, worker_center_page_for_mode, AppCommand, DeleteMode, ImageFilter,
+        OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey, ViewEffects, ViewMode,
+        ViewTransform,
     };
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
@@ -4195,6 +4281,43 @@ mod tests {
 
         cache.put(exact_key, dummy_page(4096));
         assert_eq!(best_page_key_in_cache(&cache, exact_key), Some(exact_key));
+    }
+
+    #[test]
+    fn lower_resolution_page_keys_only_matches_same_page_and_decode() {
+        let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let decode = DecodeOptions::default();
+        let inserted = PageCacheKey {
+            index: 7,
+            target_long_edge: 4096,
+            decode,
+        };
+        let preview = PageCacheKey {
+            target_long_edge: PREVIEW_TARGET_LONG_EDGE,
+            ..inserted
+        };
+        let other_page = PageCacheKey {
+            index: 8,
+            ..preview
+        };
+        let other_decode = PageCacheKey {
+            decode: DecodeOptions {
+                apply_embedded_icc: true,
+                ..decode
+            },
+            ..preview
+        };
+        let larger = PageCacheKey {
+            target_long_edge: 8192,
+            ..inserted
+        };
+
+        cache.put(preview, dummy_page(PREVIEW_TARGET_LONG_EDGE));
+        cache.put(other_page, dummy_page(PREVIEW_TARGET_LONG_EDGE));
+        cache.put(other_decode, dummy_page(PREVIEW_TARGET_LONG_EDGE));
+        cache.put(larger, dummy_page(8192));
+
+        assert_eq!(lower_resolution_page_keys(&cache, inserted), vec![preview]);
     }
 
     #[test]
@@ -4464,6 +4587,26 @@ mod tests {
     }
 
     #[test]
+    fn texture_cache_budget_keeps_visible_and_transition_pages_bounded() {
+        assert_eq!(
+            texture_cache_budget_bytes_for(1024, 1, false),
+            64 * 1024 * 1024
+        );
+        assert_eq!(
+            texture_cache_budget_bytes_for(4096, 1, false),
+            128 * 1024 * 1024
+        );
+        assert_eq!(
+            texture_cache_budget_bytes_for(4096, 1, true),
+            128 * 1024 * 1024
+        );
+        assert_eq!(
+            texture_cache_budget_bytes_for(8192, 2, true),
+            128 * 1024 * 1024
+        );
+    }
+
+    #[test]
     fn ai_prefetch_pages_follow_mode_and_direction() {
         assert_eq!(
             ai_prefetch_pages_for(
@@ -4551,6 +4694,18 @@ mod tests {
     }
 
     #[test]
+    fn automatic_cache_budget_is_bounded_for_viewer_responsiveness() {
+        assert_eq!(
+            super::automatic_cache_budget_bytes_for_total(8 * 1024 * 1024 * 1024),
+            (8 * 1024 * 1024 * 1024) / 100
+        );
+        assert_eq!(
+            super::automatic_cache_budget_bytes_for_total(64 * 1024 * 1024 * 1024),
+            96 * 1024 * 1024
+        );
+    }
+
+    #[test]
     fn cache_budget_summary_uses_rgba_page_estimates() {
         let settings = AppSettings {
             cache_memory_mode: CacheMemoryMode::Manual,
@@ -4563,8 +4718,8 @@ mod tests {
         assert_eq!(summary.cpu_prepared_bytes, 160 * 1024 * 1024);
         assert_eq!(summary.estimated_page_bytes, 2048 * 2048 * 4);
         assert_eq!(summary.estimated_cpu_pages, 10);
-        assert_eq!(summary.worker_prefetch_bytes, 80 * 1024 * 1024);
-        assert_eq!(summary.estimated_worker_pages, 5);
+        assert_eq!(summary.worker_prefetch_bytes, 48 * 1024 * 1024);
+        assert_eq!(summary.estimated_worker_pages, 3);
     }
 
     #[test]
@@ -4597,13 +4752,23 @@ mod tests {
     }
 
     #[test]
-    fn cpu_prepare_upscale_remains_for_fallback_modes() {
-        assert!(should_allow_cpu_display_upscale(
+    fn cpu_prepare_upscale_stays_disabled_for_display_fit_modes() {
+        assert!(!should_allow_cpu_display_upscale(
             FitMode::FitPage,
             1.0,
             false
         ));
-        assert!(should_allow_cpu_display_upscale(
+        assert!(!should_allow_cpu_display_upscale(
+            FitMode::FitWidth,
+            1.0,
+            false
+        ));
+        assert!(!should_allow_cpu_display_upscale(
+            FitMode::FitHeight,
+            1.0,
+            false
+        ));
+        assert!(!should_allow_cpu_display_upscale(
             FitMode::Manual,
             1.25,
             false

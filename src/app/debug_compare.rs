@@ -499,6 +499,7 @@ impl SuiSuiViewApp {
                 byte_size: page.byte_size,
             },
         );
+        self.prune_texture_cache();
 
         PageVisual::Ready {
             texture,

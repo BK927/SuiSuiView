@@ -1,5 +1,8 @@
 use super::{clamp_target_long_edge, NavigationDirection, PREVIEW_TARGET_LONG_EDGE};
 
+const PREVIEW_PREFETCH_FORWARD_PAGES: usize = 12;
+const PREVIEW_PREFETCH_BACKWARD_PAGES: usize = 2;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PageJob {
     pub(super) index: usize,
@@ -16,19 +19,37 @@ pub(super) fn prioritized_jobs(
     progressive_preview_enabled: bool,
 ) -> Vec<PageJob> {
     let target_long_edge = clamp_target_long_edge(target_long_edge);
-    let mut jobs = Vec::with_capacity(10);
-
-    if progressive_preview_enabled && target_long_edge > PREVIEW_TARGET_LONG_EDGE {
-        for index in visible_indices(center, page_count, visible_pages) {
-            push_job(&mut jobs, index, PREVIEW_TARGET_LONG_EDGE);
-        }
-    }
-
     let full_indices = if prefetch_enabled {
         prioritized_indices(center, page_count, direction)
     } else {
         visible_indices(center, page_count, visible_pages)
     };
+    let preview_capacity = if progressive_preview_enabled
+        && target_long_edge > PREVIEW_TARGET_LONG_EDGE
+        && prefetch_enabled
+    {
+        visible_pages
+            .max(1)
+            .saturating_add(PREVIEW_PREFETCH_FORWARD_PAGES)
+            .saturating_add(PREVIEW_PREFETCH_BACKWARD_PAGES)
+    } else if progressive_preview_enabled && target_long_edge > PREVIEW_TARGET_LONG_EDGE {
+        visible_pages.max(1)
+    } else {
+        0
+    };
+    let mut jobs = Vec::with_capacity(full_indices.len().saturating_add(preview_capacity));
+
+    if progressive_preview_enabled && target_long_edge > PREVIEW_TARGET_LONG_EDGE {
+        let preview_indices = if prefetch_enabled {
+            prioritized_preview_indices(center, page_count, direction, visible_pages)
+        } else {
+            visible_indices(center, page_count, visible_pages)
+        };
+        for index in preview_indices {
+            push_job(&mut jobs, index, PREVIEW_TARGET_LONG_EDGE);
+        }
+    }
+
     for index in full_indices {
         push_job(&mut jobs, index, target_long_edge);
     }
@@ -43,6 +64,56 @@ fn visible_indices(center: usize, page_count: usize, visible_pages: usize) -> Ve
             push_index(&mut indices, index, page_count);
         }
     }
+    indices
+}
+
+fn prioritized_preview_indices(
+    center: usize,
+    page_count: usize,
+    direction: NavigationDirection,
+    visible_pages: usize,
+) -> Vec<usize> {
+    if page_count == 0 {
+        return Vec::new();
+    }
+
+    let mut indices = Vec::with_capacity(
+        visible_pages
+            .max(1)
+            .saturating_add(PREVIEW_PREFETCH_FORWARD_PAGES)
+            .saturating_add(PREVIEW_PREFETCH_BACKWARD_PAGES),
+    );
+    for index in visible_indices(center, page_count, visible_pages) {
+        push_index(&mut indices, index, page_count);
+    }
+
+    match direction {
+        NavigationDirection::Forward => {
+            for offset in 1..=PREVIEW_PREFETCH_FORWARD_PAGES {
+                if let Some(index) = center.checked_add(offset) {
+                    push_index(&mut indices, index, page_count);
+                }
+            }
+            for offset in 1..=PREVIEW_PREFETCH_BACKWARD_PAGES {
+                if let Some(index) = center.checked_sub(offset) {
+                    push_index(&mut indices, index, page_count);
+                }
+            }
+        }
+        NavigationDirection::Backward => {
+            for offset in 1..=PREVIEW_PREFETCH_FORWARD_PAGES {
+                if let Some(index) = center.checked_sub(offset) {
+                    push_index(&mut indices, index, page_count);
+                }
+            }
+            for offset in 1..=PREVIEW_PREFETCH_BACKWARD_PAGES {
+                if let Some(index) = center.checked_add(offset) {
+                    push_index(&mut indices, index, page_count);
+                }
+            }
+        }
+    }
+
     indices
 }
 
@@ -124,7 +195,7 @@ mod tests {
     #[test]
     fn preview_jobs_are_prioritized_for_visible_pages() {
         assert_eq!(
-            prioritized_jobs(5, 12, NavigationDirection::Forward, 2048, 2, true, true),
+            prioritized_jobs(5, 12, NavigationDirection::Forward, 2048, 2, true, true,),
             vec![
                 PageJob {
                     index: 5,
@@ -132,6 +203,34 @@ mod tests {
                 },
                 PageJob {
                     index: 6,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 7,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 8,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 9,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 10,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 11,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 4,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 3,
                     target_long_edge: PREVIEW_TARGET_LONG_EDGE
                 },
                 PageJob {
@@ -168,7 +267,7 @@ mod tests {
                 PREVIEW_TARGET_LONG_EDGE,
                 2,
                 true,
-                true
+                true,
             ),
             prioritized_indices(5, 12, NavigationDirection::Forward)
                 .into_iter()
@@ -183,7 +282,7 @@ mod tests {
     #[test]
     fn preview_and_prefetch_can_be_disabled() {
         assert_eq!(
-            prioritized_jobs(5, 12, NavigationDirection::Forward, 2048, 2, false, false),
+            prioritized_jobs(5, 12, NavigationDirection::Forward, 2048, 2, false, false,),
             vec![
                 PageJob {
                     index: 5,

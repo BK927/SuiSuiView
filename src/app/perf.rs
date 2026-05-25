@@ -21,6 +21,8 @@ const AUTO_PAGE_TURN_INTERVAL_MS_ENV: &str = "SUISUIVIEW_PERF_AUTO_PAGE_TURN_INT
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 const AUTO_PAGE_TURN_CLOSE_DELAY_MS_ENV: &str = "SUISUIVIEW_PERF_AUTO_PAGE_TURN_CLOSE_DELAY_MS";
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+const START_PAGE_INDEX_ENV: &str = "SUISUIVIEW_PERF_START_PAGE_INDEX";
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 const AUTO_PAGE_TURN_INITIAL_DELAY: Duration = Duration::from_millis(1500);
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 const AUTO_PAGE_TURN_DEFAULT_INTERVAL: Duration = Duration::from_millis(220);
@@ -153,6 +155,11 @@ pub(super) fn record_open_source(started: Instant, origin: &'static str, success
             PerfField::Bool("success", success),
         ],
     );
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+pub(super) fn forced_start_page_index() -> Option<usize> {
+    parse_env_usize(START_PAGE_INDEX_ENV)
 }
 
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
