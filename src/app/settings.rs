@@ -472,19 +472,7 @@ fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, ch
                     egui::ComboBox::from_id_salt("display_upscaler")
                         .selected_text(draft.display_upscaler.label())
                         .show_ui(ui, |ui| {
-                            ui.label(RichText::new("기본").size(12.0).color(theme::TEXT_MUTED));
-                            for upscaler in DisplayUpscaler::STABLE_CHOICES {
-                                *changed |= ui
-                                    .selectable_value(
-                                        &mut draft.display_upscaler,
-                                        upscaler,
-                                        upscaler.label(),
-                                    )
-                                    .changed();
-                            }
-                            ui.separator();
-                            ui.label(RichText::new("실험 후보").size(12.0).color(theme::TEXT_MUTED));
-                            for upscaler in DisplayUpscaler::EXPERIMENTAL {
+                            for upscaler in DisplayUpscaler::ALL {
                                 *changed |= ui
                                     .selectable_value(
                                         &mut draft.display_upscaler,
@@ -499,7 +487,7 @@ fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, ch
             ui.add_space(4.0);
             ui.label(
                 RichText::new(
-                    "기본 업스케일러는 캐시 준비와 CPU fallback에 쓰이고, GPU 가속 업스케일러는 확대 표시가 필요할 때 화면에서 적용됩니다. 드롭다운의 실험 후보는 자동 모드에 쓰지 않습니다.",
+                    "기본 업스케일러는 캐시 준비와 CPU fallback에 쓰이고, GPU 가속 업스케일러는 확대 표시가 필요할 때 화면에서 적용됩니다.",
                 )
                 .size(12.0)
                 .color(theme::TEXT_MUTED),
