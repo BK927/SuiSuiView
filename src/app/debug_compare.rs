@@ -496,6 +496,7 @@ impl SuiSuiViewApp {
             texture_key,
             TextureEntry {
                 texture: texture.clone(),
+                byte_size: page.byte_size,
             },
         );
 

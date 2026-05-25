@@ -4,7 +4,11 @@
 )]
 
 use crate::core::perf_trace::{self, PerfField};
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use sysinfo::{ProcessesToUpdate, System};
 
 const SLOW_UI_UPDATE: Duration = Duration::from_millis(50);
 const PERF_FLUSH_TIMEOUT: Duration = Duration::from_millis(200);
@@ -132,6 +136,45 @@ pub(super) fn record_page_turn_ready(
     );
 }
 
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+#[derive(Debug, Clone, Copy)]
+pub(super) struct AppCacheSnapshot {
+    pub(super) reason: &'static str,
+    pub(super) current_page: usize,
+    pub(super) target_long_edge: u32,
+    pub(super) decoded_pages: usize,
+    pub(super) decoded_bytes: usize,
+    pub(super) decoded_budget_bytes: usize,
+    pub(super) upscaled_pages: usize,
+    pub(super) upscaled_bytes: usize,
+    pub(super) upscaled_budget_bytes: usize,
+    pub(super) textures: usize,
+    pub(super) texture_bytes: usize,
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+pub(super) fn record_app_cache_snapshot(snapshot: AppCacheSnapshot) {
+    let process_memory_bytes = process_memory_bytes().unwrap_or(0);
+    perf_trace::record_duration(
+        "app_cache_snapshot",
+        Duration::ZERO,
+        &[
+            PerfField::Str("reason", snapshot.reason),
+            PerfField::Usize("current_page", snapshot.current_page),
+            PerfField::U32("target_long_edge", snapshot.target_long_edge),
+            PerfField::Usize("decoded_pages", snapshot.decoded_pages),
+            PerfField::Usize("decoded_bytes", snapshot.decoded_bytes),
+            PerfField::Usize("decoded_budget_bytes", snapshot.decoded_budget_bytes),
+            PerfField::Usize("upscaled_pages", snapshot.upscaled_pages),
+            PerfField::Usize("upscaled_bytes", snapshot.upscaled_bytes),
+            PerfField::Usize("upscaled_budget_bytes", snapshot.upscaled_budget_bytes),
+            PerfField::Usize("textures", snapshot.textures),
+            PerfField::Usize("texture_bytes", snapshot.texture_bytes),
+            PerfField::Usize("process_memory_bytes", process_memory_bytes),
+        ],
+    );
+}
+
 pub(super) fn record_close_book_worker_clear(started: Instant, completed: bool) {
     perf_trace::record_duration_if_at_least(
         "close_book_worker_clear",
@@ -169,6 +212,20 @@ pub(super) fn record_texture_load(
             PerfField::Bool("upscaled", upscaled),
         ],
     );
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+fn process_memory_bytes() -> Option<usize> {
+    static SYSTEM: OnceLock<Mutex<System>> = OnceLock::new();
+
+    let pid = sysinfo::get_current_pid().ok()?;
+    let mut system = SYSTEM
+        .get_or_init(|| Mutex::new(System::new()))
+        .lock()
+        .ok()?;
+    system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+    let memory = system.process(pid)?.memory();
+    usize::try_from(memory).ok()
 }
 
 pub(super) fn record_ui_update(started: Instant, has_book: bool, transition: bool) {

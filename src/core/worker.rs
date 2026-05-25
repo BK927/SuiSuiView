@@ -724,6 +724,16 @@ fn run_worker(
                             PerfField::Bool("cache_hit", true),
                         ],
                     );
+                    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+                    record_worker_cache_snapshot(
+                        "publish_hit",
+                        job.index,
+                        job.target_long_edge,
+                        cache.len(),
+                        cache_bytes,
+                        options.cache_bytes,
+                        true,
+                    );
                     ctx.request_repaint();
                     continue;
                 }
@@ -807,6 +817,16 @@ fn run_worker(
                                 PerfField::U32("target_long_edge", job.target_long_edge),
                                 PerfField::Bool("cache_hit", false),
                             ],
+                        );
+                        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+                        record_worker_cache_snapshot(
+                            "publish_miss",
+                            job.index,
+                            job.target_long_edge,
+                            cache.len(),
+                            cache_bytes,
+                            options.cache_bytes,
+                            false,
                         );
                         ctx.request_repaint();
 
@@ -931,6 +951,31 @@ fn prune_worker_cache(
         };
         *cache_bytes = (*cache_bytes).saturating_sub(page.byte_size);
     }
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+fn record_worker_cache_snapshot(
+    reason: &'static str,
+    page: usize,
+    target_long_edge: u32,
+    cache_pages: usize,
+    cache_bytes: usize,
+    cache_budget_bytes: usize,
+    cache_hit: bool,
+) {
+    perf_trace::record_duration(
+        "page_worker_cache_snapshot",
+        Duration::ZERO,
+        &[
+            PerfField::Str("reason", reason),
+            PerfField::Usize("page", page),
+            PerfField::U32("target_long_edge", target_long_edge),
+            PerfField::Usize("cache_pages", cache_pages),
+            PerfField::Usize("cache_bytes", cache_bytes),
+            PerfField::Usize("cache_budget_bytes", cache_budget_bytes),
+            PerfField::Bool("cache_hit", cache_hit),
+        ],
+    );
 }
 
 fn apply_command(

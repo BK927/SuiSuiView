@@ -225,6 +225,11 @@ fn worker_center_page_for_mode(current_page: usize, mode: ViewMode) -> usize {
 
 struct TextureEntry {
     texture: TextureHandle,
+    #[cfg_attr(
+        not(any(feature = "perf-dev", feature = "perf-diagnostics")),
+        allow(dead_code)
+    )]
+    byte_size: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -854,6 +859,8 @@ impl SuiSuiViewApp {
                     self.insert_prepared_page(key, page);
                     self.prune_decoded_cache();
                     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+                    self.record_cache_snapshot("page_ready");
+                    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
                     if self
                         .page_turn_started_at
                         .as_ref()
@@ -1095,6 +1102,31 @@ impl SuiSuiViewApp {
         for (key, page) in retained {
             self.upscaled_pages.put(key, page);
         }
+    }
+
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    fn record_cache_snapshot(&self, reason: &'static str) {
+        perf::record_app_cache_snapshot(perf::AppCacheSnapshot {
+            reason,
+            current_page: self.current_page,
+            target_long_edge: self.target_long_edge,
+            decoded_pages: self.decoded_pages.len(),
+            decoded_bytes: self.decoded_bytes,
+            decoded_budget_bytes: self.cpu_cache_budget_bytes(),
+            upscaled_pages: self.upscaled_pages.len(),
+            upscaled_bytes: self.upscaled_bytes,
+            upscaled_budget_bytes: upscaled_cache_budget_bytes_for(self.cpu_cache_budget_bytes()),
+            textures: self.textures.len(),
+            texture_bytes: self.texture_cache_bytes(),
+        });
+    }
+
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    fn texture_cache_bytes(&self) -> usize {
+        self.textures
+            .iter()
+            .map(|(_key, entry)| entry.byte_size)
+            .sum()
     }
 
     fn pinned_page_indices(&self) -> HashSet<PageCacheKey> {
@@ -1580,6 +1612,8 @@ impl SuiSuiViewApp {
         } else {
             self.page_turn_started_at = Some((target, turn_started));
         }
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        self.record_cache_snapshot("page_turn");
 
         let transition_style = self.active_page_transition_style();
         if transition_style != PageTransitionStyle::None {
@@ -2235,6 +2269,12 @@ impl SuiSuiViewApp {
 
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let texture_started = Instant::now();
+        let texture_byte_size = image
+            .size
+            .iter()
+            .copied()
+            .product::<usize>()
+            .saturating_mul(BYTES_PER_RGBA_PIXEL);
         let texture = ctx.load_texture(
             format!(
                 "page-{index}-{}-{}-{:?}",
@@ -2251,8 +2291,11 @@ impl SuiSuiViewApp {
             texture_key,
             TextureEntry {
                 texture: texture.clone(),
+                byte_size: texture_byte_size,
             },
         );
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        self.record_cache_snapshot("texture_upload");
 
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::record_open_to_first_visible_if_pending(
@@ -3217,6 +3260,7 @@ impl SuiSuiViewApp {
         }
 
         let image = Arc::new(ColorImage::from_rgba_unmultiplied(image_size, rgba));
+        let texture_byte_size = rgba.len();
         let texture = ctx.load_texture(
             format!(
                 "page-{}-{}-{}-{:?}",
@@ -3232,8 +3276,11 @@ impl SuiSuiViewApp {
             texture_key,
             TextureEntry {
                 texture: texture.clone(),
+                byte_size: texture_byte_size,
             },
         );
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        self.record_cache_snapshot("gpu_fallback_texture_upload");
         texture
     }
 
