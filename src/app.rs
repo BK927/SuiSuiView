@@ -409,6 +409,8 @@ pub struct SuiSuiViewApp {
     page_turn_started_at: Option<(usize, Instant)>,
     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
     open_to_first_visible_trace: Option<perf::OpenToFirstVisibleTrace>,
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    auto_page_turn_driver: Option<perf::AutoPageTurnDriver>,
     bookmark_popover_open: bool,
     bookmark_popover_pos: Pos2,
     bookmark_popover_anchor: Option<Rect>,
@@ -506,6 +508,8 @@ impl SuiSuiViewApp {
             page_turn_started_at: None,
             #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
             open_to_first_visible_trace: None,
+            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+            auto_page_turn_driver: perf::AutoPageTurnDriver::from_env(),
             bookmark_popover_open: false,
             bookmark_popover_pos: Pos2::new(900.0, 72.0),
             bookmark_popover_anchor: None,
@@ -3318,6 +3322,24 @@ impl SuiSuiViewApp {
         }
         .clamp(0.02, 16.0)
     }
+
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    fn drive_auto_page_turn_diagnostics(&mut self, ctx: &egui::Context) {
+        let Some(driver) = self.auto_page_turn_driver.as_mut() else {
+            return;
+        };
+        match driver.update(self.source.is_some(), Instant::now()) {
+            perf::AutoPageTurnAction::Wait(delay) => ctx.request_repaint_after(delay),
+            perf::AutoPageTurnAction::Turn => {
+                self.next_page();
+                ctx.request_repaint();
+            }
+            perf::AutoPageTurnAction::Close => {
+                self.auto_page_turn_driver = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
 }
 
 impl eframe::App for SuiSuiViewApp {
@@ -3337,6 +3359,8 @@ impl eframe::App for SuiSuiViewApp {
         self.maintain_native_window_state(ctx);
         self.update_window_title(ctx);
         self.flush_deferred_state_save_if_due();
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        self.drive_auto_page_turn_diagnostics(ctx);
 
         self.show_top_bar(ctx);
         self.show_status_surfaces(ctx);

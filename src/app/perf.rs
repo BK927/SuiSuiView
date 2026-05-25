@@ -5,6 +5,8 @@
 
 use crate::core::perf_trace::{self, PerfField};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use std::env;
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -12,6 +14,18 @@ use sysinfo::{ProcessesToUpdate, System};
 
 const SLOW_UI_UPDATE: Duration = Duration::from_millis(50);
 const PERF_FLUSH_TIMEOUT: Duration = Duration::from_millis(200);
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+const AUTO_PAGE_TURNS_ENV: &str = "SUISUIVIEW_PERF_AUTO_PAGE_TURNS";
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+const AUTO_PAGE_TURN_INTERVAL_MS_ENV: &str = "SUISUIVIEW_PERF_AUTO_PAGE_TURN_INTERVAL_MS";
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+const AUTO_PAGE_TURN_CLOSE_DELAY_MS_ENV: &str = "SUISUIVIEW_PERF_AUTO_PAGE_TURN_CLOSE_DELAY_MS";
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+const AUTO_PAGE_TURN_INITIAL_DELAY: Duration = Duration::from_millis(1500);
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+const AUTO_PAGE_TURN_DEFAULT_INTERVAL: Duration = Duration::from_millis(220);
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+const AUTO_PAGE_TURN_DEFAULT_CLOSE_DELAY: Duration = Duration::from_millis(2500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PageCacheState {
@@ -22,6 +36,66 @@ pub(super) enum PageCacheState {
     UpscaledPreview,
     UpscaledFallback,
     Miss,
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+pub(super) struct AutoPageTurnDriver {
+    remaining_turns: usize,
+    interval: Duration,
+    close_delay: Duration,
+    next_turn_at: Option<Instant>,
+    close_at: Option<Instant>,
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+pub(super) enum AutoPageTurnAction {
+    Wait(Duration),
+    Turn,
+    Close,
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+impl AutoPageTurnDriver {
+    pub(super) fn from_env() -> Option<Self> {
+        let remaining_turns = parse_env_usize(AUTO_PAGE_TURNS_ENV)?;
+        if remaining_turns == 0 {
+            return None;
+        }
+        Some(Self {
+            remaining_turns,
+            interval: parse_env_millis(AUTO_PAGE_TURN_INTERVAL_MS_ENV)
+                .unwrap_or(AUTO_PAGE_TURN_DEFAULT_INTERVAL),
+            close_delay: parse_env_millis(AUTO_PAGE_TURN_CLOSE_DELAY_MS_ENV)
+                .unwrap_or(AUTO_PAGE_TURN_DEFAULT_CLOSE_DELAY),
+            next_turn_at: None,
+            close_at: None,
+        })
+    }
+
+    pub(super) fn update(&mut self, has_source: bool, now: Instant) -> AutoPageTurnAction {
+        if !has_source {
+            return AutoPageTurnAction::Wait(Duration::from_millis(50));
+        }
+
+        if self.remaining_turns > 0 {
+            let next_turn_at = *self
+                .next_turn_at
+                .get_or_insert(now + AUTO_PAGE_TURN_INITIAL_DELAY);
+            if now < next_turn_at {
+                return AutoPageTurnAction::Wait(next_turn_at - now);
+            }
+            self.remaining_turns = self.remaining_turns.saturating_sub(1);
+            self.next_turn_at = Some(now + self.interval);
+            return AutoPageTurnAction::Turn;
+        }
+
+        let close_at = *self.close_at.get_or_insert(now + self.close_delay);
+        if now < close_at {
+            AutoPageTurnAction::Wait(close_at - now)
+        } else {
+            AutoPageTurnAction::Close
+        }
+    }
 }
 
 impl PageCacheState {
@@ -226,6 +300,16 @@ fn process_memory_bytes() -> Option<usize> {
     system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
     let memory = system.process(pid)?.memory();
     usize::try_from(memory).ok()
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+fn parse_env_usize(name: &str) -> Option<usize> {
+    env::var(name).ok()?.parse().ok()
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+fn parse_env_millis(name: &str) -> Option<Duration> {
+    parse_env_usize(name).map(|millis| Duration::from_millis(millis as u64))
 }
 
 pub(super) fn record_ui_update(started: Instant, has_book: bool, transition: bool) {
