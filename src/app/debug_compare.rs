@@ -45,15 +45,11 @@ pub(in crate::app) enum DebugCompareTarget {
     WgslFsr1Style,
     WgslFsr1EasuRcas,
     WgslNisStyle,
-    WgslArtCnnC4F16Style,
-    WgslArtCnnC4F32Style,
-    WgslAnime4KStyle,
-    WgslAcNetStyle,
     AiResult,
 }
 
 impl DebugCompareTarget {
-    pub(in crate::app) const ALL: [Self; 14] = [
+    pub(in crate::app) const ALL: [Self; 10] = [
         Self::Current,
         Self::Bicubic,
         Self::Lanczos3,
@@ -63,10 +59,6 @@ impl DebugCompareTarget {
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
         Self::WgslNisStyle,
-        Self::WgslArtCnnC4F16Style,
-        Self::WgslArtCnnC4F32Style,
-        Self::WgslAnime4KStyle,
-        Self::WgslAcNetStyle,
         Self::AiResult,
     ];
 
@@ -81,10 +73,6 @@ impl DebugCompareTarget {
             Self::WgslFsr1Style => "WGSL FSR-style",
             Self::WgslFsr1EasuRcas => "WGSL FSR1 EASU+RCAS",
             Self::WgslNisStyle => "WGSL NIS-style",
-            Self::WgslArtCnnC4F16Style => "WGSL ArtCNN C4F16-style",
-            Self::WgslArtCnnC4F32Style => "WGSL ArtCNN C4F32-style",
-            Self::WgslAnime4KStyle => "WGSL Anime4K-style",
-            Self::WgslAcNetStyle => "WGSL ACNet-style",
             Self::AiResult => "AI 결과",
         }
     }
@@ -99,11 +87,7 @@ impl DebugCompareTarget {
             Self::WgslBilinear
             | Self::WgslFsr1Style
             | Self::WgslFsr1EasuRcas
-            | Self::WgslNisStyle
-            | Self::WgslArtCnnC4F16Style
-            | Self::WgslArtCnnC4F32Style
-            | Self::WgslAnime4KStyle
-            | Self::WgslAcNetStyle => return Some(current),
+            | Self::WgslNisStyle => return Some(current),
             Self::AiResult => return None,
         };
         Some(DecodeOptions {
@@ -118,10 +102,6 @@ impl DebugCompareTarget {
             Self::WgslFsr1Style => Some(DisplayUpscaler::WgslFsr1Style),
             Self::WgslFsr1EasuRcas => Some(DisplayUpscaler::WgslFsr1EasuRcas),
             Self::WgslNisStyle => Some(DisplayUpscaler::WgslNisStyle),
-            Self::WgslArtCnnC4F16Style => Some(DisplayUpscaler::WgslArtCnnC4F16Style),
-            Self::WgslArtCnnC4F32Style => Some(DisplayUpscaler::WgslArtCnnC4F32Style),
-            Self::WgslAnime4KStyle => Some(DisplayUpscaler::WgslAnime4KStyle),
-            Self::WgslAcNetStyle => Some(DisplayUpscaler::WgslAcNetStyle),
             _ => None,
         }
     }
