@@ -6,7 +6,7 @@ mod core;
 mod single_instance;
 
 use crate::core::source::{classify_path, SourceKind};
-use crate::core::state::{StateStore, WindowPlacement};
+use crate::core::state::{AppSettings, RendererMode, StateStore, WindowPlacement};
 use app::SuiSuiViewApp;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,7 +37,7 @@ fn main() -> eframe::Result<()> {
     };
     let options = eframe::NativeOptions {
         viewport: initial_viewport(&store, window_icon()),
-        renderer: eframe::Renderer::Wgpu,
+        renderer: renderer_for_settings(store.settings()),
         persist_window: false,
         ..Default::default()
     };
@@ -124,6 +124,13 @@ fn valid_window_size(placement: &WindowPlacement) -> Option<[f32; 2]> {
 fn valid_window_position(placement: &WindowPlacement) -> Option<[f32; 2]> {
     let [x, y] = placement.outer_position?;
     (x.is_finite() && y.is_finite()).then_some([x, y])
+}
+
+fn renderer_for_settings(settings: &AppSettings) -> eframe::Renderer {
+    match settings.renderer_mode {
+        RendererMode::Wgpu => eframe::Renderer::Wgpu,
+        RendererMode::LowMemoryGlow => eframe::Renderer::Glow,
+    }
 }
 
 fn window_icon() -> eframe::egui::IconData {

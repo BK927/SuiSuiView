@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod bookmarks;
 mod input;
+mod rendering;
 #[cfg(test)]
 mod tests;
 use bookmarks::path_key;
@@ -16,6 +17,7 @@ pub use input::{
     default_key_bindings, default_mouse_bindings, CommandId, KeyBinding, KeyCode, KeyShortcut,
     MouseBinding, MouseGesture,
 };
+pub use rendering::RendererMode;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReadingDirection {
@@ -447,6 +449,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub gpu_effect_mode: GpuEffectMode,
     #[serde(default)]
+    pub renderer_mode: RendererMode,
+    #[serde(default)]
     pub display_upscaler: DisplayUpscaler,
     #[serde(default = "default_true")]
     pub prefetch_enabled: bool,
@@ -543,6 +547,7 @@ impl Default for AppSettings {
             decode_mode: DecodeMode::AutoFast,
             resize_filter: ResizeFilter::Bicubic,
             gpu_effect_mode: GpuEffectMode::Auto,
+            renderer_mode: RendererMode::Wgpu,
             display_upscaler: DisplayUpscaler::Auto,
             prefetch_enabled: true,
             progressive_preview_enabled: true,

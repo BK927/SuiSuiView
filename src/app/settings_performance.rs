@@ -1,7 +1,7 @@
 use super::cache_budget_summary;
 use super::settings::{checkbox_with_help, grid_label_with_help, info_icon, setting_group};
 use super::ui::theme;
-use crate::core::state::{AppSettings, CacheMemoryMode, DecodeMode};
+use crate::core::state::{AppSettings, CacheMemoryMode, DecodeMode, RendererMode};
 use eframe::egui::{self, RichText};
 
 pub(in crate::app) fn show_performance_settings(
@@ -36,6 +36,41 @@ pub(in crate::app) fn show_performance_settings(
                         });
                     ui.end_row();
                 });
+        },
+    );
+
+    ui.add_space(8.0);
+    setting_group(
+        ui,
+        "렌더러",
+        "앱 창을 그리는 백엔드입니다. 변경 사항은 앱을 다시 시작하면 적용됩니다.",
+        |ui| {
+            egui::Grid::new("settings_renderer_grid")
+                .num_columns(2)
+                .spacing([14.0, 8.0])
+                .show(ui, |ui| {
+                    grid_label_with_help(
+                        ui,
+                        "표시 백엔드",
+                        "WGPU는 GPU shader 효과와 표시 업스케일러를 지원하지만 기본 메모리를 더 사용합니다. Glow는 메모리가 낮지만 WGPU 전용 표시 효과는 사용할 수 없습니다.",
+                    );
+                    egui::ComboBox::from_id_salt("renderer_mode")
+                        .selected_text(draft.renderer_mode.label())
+                        .show_ui(ui, |ui| {
+                            for mode in RendererMode::ALL {
+                                *changed |= ui
+                                    .selectable_value(&mut draft.renderer_mode, mode, mode.label())
+                                    .changed();
+                            }
+                        });
+                    ui.end_row();
+                });
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("저메모리 OpenGL을 선택하면 다음 실행부터 메모리 사용량이 크게 줄 수 있지만, GPU 표시 업스케일러는 비활성화됩니다.")
+                    .size(12.0)
+                    .color(theme::TEXT_MUTED),
+            );
         },
     );
 
