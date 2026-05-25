@@ -175,11 +175,27 @@ impl DisplayUpscaler {
         Self::WgslAcNetStyle,
     ];
 
+    pub const STABLE_CHOICES: [Self; 6] = [
+        Self::Auto,
+        Self::None,
+        Self::WgslBilinear,
+        Self::WgslFsr1Style,
+        Self::WgslFsr1EasuRcas,
+        Self::WgslNisStyle,
+    ];
+
     pub const GPU_METHODS: [Self; 8] = [
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
         Self::WgslNisStyle,
+        Self::WgslArtCnnC4F16Style,
+        Self::WgslArtCnnC4F32Style,
+        Self::WgslAnime4KStyle,
+        Self::WgslAcNetStyle,
+    ];
+
+    pub const EXPERIMENTAL: [Self; 4] = [
         Self::WgslArtCnnC4F16Style,
         Self::WgslArtCnnC4F32Style,
         Self::WgslAnime4KStyle,
