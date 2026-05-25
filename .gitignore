@@ -26,6 +26,7 @@ __pycache__/
 /target-avif/
 /validation-reports*/
 /validation-samples*/
+/third_party/pdfium/
 
 # Internal-only benchmark and validation harnesses
 /scripts/fetch_perf_dataset.py

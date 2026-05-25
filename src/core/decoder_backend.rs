@@ -12,7 +12,16 @@ use zune_core::result::DecodingResult;
 use zune_jpeg::JpegDecoder as ZuneJpegDecoder;
 use zune_png::PngDecoder as ZunePngDecoder;
 
+#[cfg(feature = "native-ai")]
+mod pdfium_ai;
+mod psd;
+
+#[cfg(feature = "native-ai")]
+pub use pdfium_ai::decode_pdfium_ai;
+pub use psd::decode_zune_psd;
+
 const MAX_BACKEND_DIMENSION: usize = 20_000;
+const MAX_BACKEND_DECODED_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderFormat {
@@ -24,6 +33,8 @@ pub enum DecoderFormat {
     Ico,
     Avif,
     Svg,
+    Psd,
+    AiPdf,
 }
 
 pub struct DecodedRgba {
@@ -65,6 +76,12 @@ pub fn detect_format(bytes: &[u8]) -> Option<DecoderFormat> {
     }
     if is_avif_signature(bytes) {
         return Some(DecoderFormat::Avif);
+    }
+    if bytes.starts_with(b"8BPS") {
+        return Some(DecoderFormat::Psd);
+    }
+    if is_pdf_signature(bytes) {
+        return Some(DecoderFormat::AiPdf);
     }
     if is_svg_signature(bytes) {
         return Some(DecoderFormat::Svg);
@@ -656,6 +673,17 @@ fn checked_rgba_len(width: u32, height: u32) -> Result<usize, String> {
         .ok_or_else(|| "RGBA buffer length overflows memory limits".to_owned())
 }
 
+fn ensure_backend_rgba_budget(width: u32, height: u32, label: &str) -> Result<(), String> {
+    let bytes = checked_rgba_len(width, height)?;
+    if bytes > MAX_BACKEND_DECODED_BYTES {
+        return Err(format!(
+            "{label} is too large: {:.1} MB",
+            bytes as f32 / (1024.0 * 1024.0)
+        ));
+    }
+    Ok(())
+}
+
 fn expect_len(actual: usize, expected: usize, label: &str) -> Result<(), String> {
     if actual == expected {
         Ok(())
@@ -708,6 +736,10 @@ fn is_avif_signature(bytes: &[u8]) -> bool {
     brands
         .chunks(4)
         .any(|brand| matches!(brand, b"avif" | b"avis"))
+}
+
+fn is_pdf_signature(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF-")
 }
 
 fn is_svg_signature(bytes: &[u8]) -> bool {

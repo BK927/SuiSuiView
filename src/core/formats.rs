@@ -128,6 +128,20 @@ pub const FORMAT_DESCRIPTORS: &[FormatDescriptor] = &[
         note: "decode-only native-avif libavif/dav1d backend; no encoder and no HEVC fallback",
     },
     FormatDescriptor {
+        name: "Photoshop PSD",
+        extensions: &["psd"],
+        policy: FormatPolicy::BuiltIn,
+        current_decode: true,
+        note: "view-only composite/base image preview through zune-psd; layers and effects are not rendered",
+    },
+    FormatDescriptor {
+        name: "Adobe Illustrator AI",
+        extensions: &["ai"],
+        policy: FormatPolicy::ExperimentalBuiltIn,
+        current_decode: cfg!(feature = "native-ai"),
+        note: "PDF-compatible AI first-page preview through bundled app-local PDFium",
+    },
+    FormatDescriptor {
         name: "JPEG XL",
         extensions: &["jxl"],
         policy: FormatPolicy::ExperimentalBuiltIn,
@@ -192,8 +206,8 @@ pub const FORMAT_DESCRIPTORS: &[FormatDescriptor] = &[
 pub const OPENABLE_FILE_EXTENSIONS: &[&str] = &[
     "zip", "cbz", "rar", "cbr", "jpg", "jpeg", "jpe", "jfif", "png", "apng", "webp", "bmp", "dib",
     "gif", "tif", "tiff", "tga", "pnm", "pbm", "pgm", "ppm", "ico", "qoi", "dds", "exr", "hdr",
-    "rgbe", "avif", "jxl", "svg", "svgz", "heic", "heif", "hif", "jxr", "wdp", "hdp", "dng", "cr2",
-    "cr3", "crw", "nef", "nrw", "orf", "rw2", "pef", "sr2", "arw", "raf", "raw",
+    "rgbe", "avif", "psd", "ai", "jxl", "svg", "svgz", "heic", "heif", "hif", "jxr", "wdp", "hdp",
+    "dng", "cr2", "cr3", "crw", "nef", "nrw", "orf", "rw2", "pef", "sr2", "arw", "raf", "raw",
 ];
 
 pub fn descriptor_for_extension(extension: &str) -> Option<&'static FormatDescriptor> {
@@ -246,6 +260,11 @@ pub fn unsupported_message_for_bytes(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"BPG") {
         return Some("BPG is blocked because it is HEVC-based.");
     }
+    if bytes.starts_with(b"%!PS-Adobe") {
+        return Some(
+            "AI/PostScript content requires saving the file with PDF-compatible content before SuiSuiView can preview it.",
+        );
+    }
     None
 }
 
@@ -297,6 +316,14 @@ mod tests {
             descriptor_for_extension("bpg").map(|format| format.policy),
             Some(FormatPolicy::Blocked)
         );
+        assert_eq!(
+            descriptor_for_extension("psd").map(|format| format.policy),
+            Some(FormatPolicy::BuiltIn)
+        );
+        assert_eq!(
+            descriptor_for_extension("ai").map(|format| format.policy),
+            Some(FormatPolicy::ExperimentalBuiltIn)
+        );
     }
 
     #[test]
@@ -304,8 +331,14 @@ mod tests {
         assert!(is_image_page_name("page-001.tiff"));
         assert!(is_image_page_name("texture.dds"));
         assert!(is_image_page_name("plate.exr"));
+        assert!(is_image_page_name("preview.psd"));
         assert!(!is_image_page_name("iphone.heic"));
         assert!(!is_image_page_name("candidate.avif"));
+        assert_eq!(
+            is_image_page_name("candidate.ai"),
+            cfg!(feature = "native-ai")
+        );
+        assert!(!is_image_page_name("document.pdf"));
         assert!(!is_image_page_name("candidate.jxl"));
         assert!(!is_image_page_name("unsafe.svg"));
         assert!(!is_image_page_name("book.cbr"));
@@ -325,5 +358,8 @@ mod tests {
         assert!(unsupported_message_for_extension("clip")
             .unwrap()
             .contains("blocked"));
+        assert!(unsupported_message_for_bytes(b"%!PS-Adobe-3.0")
+            .unwrap()
+            .contains("PDF-compatible"));
     }
 }

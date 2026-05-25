@@ -1,3 +1,4 @@
+use crate::core::decoder_backend::{self, DecoderFormat};
 use crate::core::formats::unsupported_message_for_bytes;
 use crate::core::perf_trace::{self, PerfField};
 use crate::core::source::SharedSource;
@@ -16,6 +17,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 mod bmp;
+#[cfg(test)]
+mod decoder_tests;
 mod gif;
 mod image_crate;
 mod jpeg;
@@ -25,8 +28,8 @@ mod scheduler;
 mod selection;
 
 use image_crate::{prepare_image_with_image_crate, prepare_image_with_image_crate_and_icc};
-use metadata::{apply_exif_orientation_to_page, read_image_metadata};
-use scheduler::prioritized_jobs;
+use metadata::{apply_exif_orientation_to_page, read_image_metadata, ImageMetadata};
+use scheduler::{prioritized_jobs, should_skip_ai_preview_or_prefetch};
 #[cfg(test)]
 use selection::prepare_unavailable_or_image_fallback;
 
@@ -273,6 +276,8 @@ pub enum DecodeBackend {
     BmpFastPath,
     IcoFastPath,
     LibAvifDav1d,
+    ZunePsd,
+    PdfiumAi,
 }
 
 impl DecodeBackend {
@@ -292,6 +297,8 @@ impl DecodeBackend {
             Self::BmpFastPath => "bmp-fast",
             Self::IcoFastPath => "ico-fast",
             Self::LibAvifDav1d => "libavif-dav1d",
+            Self::ZunePsd => "zune-psd",
+            Self::PdfiumAi => "pdfium-ai",
         }
     }
 }
@@ -478,11 +485,16 @@ pub fn prepare_image_with_options(
         return Err(message.to_owned());
     }
 
-    let metadata = read_image_metadata(
-        bytes,
-        options.apply_embedded_icc,
-        options.apply_exif_orientation,
-    );
+    let detected_format = decoder_backend::detect_format(bytes);
+    let metadata = if skips_image_metadata_probe(detected_format) {
+        ImageMetadata::default()
+    } else {
+        read_image_metadata(
+            bytes,
+            options.apply_embedded_icc,
+            options.apply_exif_orientation,
+        )
+    };
     let icc_profile = metadata.icc_profile.as_ref().ok().cloned().flatten();
 
     let mut page = if options.apply_embedded_icc && icc_profile.is_some() {
@@ -494,7 +506,7 @@ pub fn prepare_image_with_options(
             icc_profile.as_deref(),
         )?
     } else {
-        prepare_image_without_metadata(bytes, target_long_edge, options)?
+        prepare_image_without_metadata(bytes, target_long_edge, options, detected_format)?
     };
 
     if let Err(error) = metadata.icc_profile {
@@ -514,15 +526,27 @@ fn prepare_image_without_metadata(
     bytes: &[u8],
     target_long_edge: u32,
     options: DecodeOptions,
+    detected_format: Option<DecoderFormat>,
 ) -> Result<PreparedPage, String> {
     match options.strategy {
         DecodeStrategy::Auto => {
+            selection::prepare_image_with_selected_decoder(bytes, target_long_edge, options)
+        }
+        DecodeStrategy::ImageCrate if requires_specialized_decoder(detected_format) => {
             selection::prepare_image_with_selected_decoder(bytes, target_long_edge, options)
         }
         DecodeStrategy::ImageCrate => {
             prepare_image_with_image_crate(bytes, target_long_edge, options)
         }
     }
+}
+
+fn requires_specialized_decoder(format: Option<DecoderFormat>) -> bool {
+    matches!(format, Some(DecoderFormat::Psd | DecoderFormat::AiPdf))
+}
+
+fn skips_image_metadata_probe(format: Option<DecoderFormat>) -> bool {
+    matches!(format, Some(DecoderFormat::Psd | DecoderFormat::AiPdf))
 }
 
 fn reject_oversized_original(width: u32, height: u32) -> Result<(), String> {
@@ -707,6 +731,15 @@ fn run_worker(
             for job in jobs {
                 if shutdown_requested.load(Ordering::Acquire) {
                     break 'work;
+                }
+                if should_skip_ai_preview_or_prefetch(
+                    active_source.page_name(job.index),
+                    center,
+                    visible_pages,
+                    job.index,
+                    job.target_long_edge,
+                ) {
+                    continue;
                 }
                 if let Some(command) = drain_latest_command(&command_rx) {
                     let previous_book_id =

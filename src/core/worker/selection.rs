@@ -25,6 +25,8 @@ pub(super) fn prepare_image_with_selected_decoder(
         DecoderFormat::Ico => prepare_ico_with_preference(bytes, target_long_edge, options),
         DecoderFormat::Avif => prepare_avif_with_preference(bytes, target_long_edge, options),
         DecoderFormat::Svg => prepare_image_with_image_crate(bytes, target_long_edge, options),
+        DecoderFormat::Psd => prepare_psd_with_preference(bytes, target_long_edge, options),
+        DecoderFormat::AiPdf => prepare_ai_with_preference(bytes, target_long_edge, options),
     }
 }
 
@@ -234,6 +236,28 @@ fn prepare_avif_with_preference(
     }
 }
 
+fn prepare_psd_with_preference(
+    bytes: &[u8],
+    target_long_edge: u32,
+    options: DecodeOptions,
+) -> Result<PreparedPage, String> {
+    prepare_required_direct(
+        bytes,
+        target_long_edge,
+        options,
+        DecodeBackend::ZunePsd,
+        decoder_backend::decode_zune_psd,
+    )
+}
+
+fn prepare_ai_with_preference(
+    bytes: &[u8],
+    target_long_edge: u32,
+    options: DecodeOptions,
+) -> Result<PreparedPage, String> {
+    prepare_pdfium_ai_or_error(bytes, target_long_edge, options)
+}
+
 #[cfg(feature = "native-webp")]
 fn prepare_default_webp_still(
     bytes: &[u8],
@@ -337,6 +361,36 @@ fn prepare_direct_or_image_fallback(
             prepare_unavailable_or_image_fallback(bytes, target_long_edge, options, backend, &error)
         }
     }
+}
+
+fn prepare_required_direct(
+    bytes: &[u8],
+    target_long_edge: u32,
+    options: DecodeOptions,
+    backend: DecodeBackend,
+    decode: fn(&[u8]) -> Result<DecodedRgba, String>,
+) -> Result<PreparedPage, String> {
+    let decoded = decode(bytes)?;
+    prepare_decoded_rgba(decoded, target_long_edge, options, backend)
+}
+
+#[cfg(feature = "native-ai")]
+fn prepare_pdfium_ai_or_error(
+    bytes: &[u8],
+    target_long_edge: u32,
+    options: DecodeOptions,
+) -> Result<PreparedPage, String> {
+    let decoded = decoder_backend::decode_pdfium_ai(bytes, target_long_edge)?;
+    prepare_decoded_rgba(decoded, target_long_edge, options, DecodeBackend::PdfiumAi)
+}
+
+#[cfg(not(feature = "native-ai"))]
+fn prepare_pdfium_ai_or_error(
+    _bytes: &[u8],
+    _target_long_edge: u32,
+    _options: DecodeOptions,
+) -> Result<PreparedPage, String> {
+    Err("PDF-compatible AI preview requires a native-ai build with bundled PDFium".to_owned())
 }
 
 pub(super) fn prepare_unavailable_or_image_fallback(

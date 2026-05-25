@@ -2,6 +2,7 @@ use super::{
     clamp_target_long_edge, preview_prefetch_indices, NavigationDirection,
     PREVIEW_PREFETCH_BACKWARD_PAGES, PREVIEW_PREFETCH_FORWARD_PAGES, PREVIEW_TARGET_LONG_EDGE,
 };
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PageJob {
@@ -57,6 +58,22 @@ pub(super) fn prioritized_jobs(
     jobs
 }
 
+pub(super) fn should_skip_ai_preview_or_prefetch(
+    page_name: Option<&str>,
+    center: usize,
+    visible_pages: usize,
+    index: usize,
+    target_long_edge: u32,
+) -> bool {
+    if !page_name.is_some_and(is_ai_page_name) {
+        return false;
+    }
+    if target_long_edge == PREVIEW_TARGET_LONG_EDGE {
+        return true;
+    }
+    !is_visible_page_index(index, center, visible_pages)
+}
+
 fn visible_indices(center: usize, page_count: usize, visible_pages: usize) -> Vec<usize> {
     let mut indices = Vec::with_capacity(visible_pages.max(1));
     for offset in 0..visible_pages.max(1) {
@@ -65,6 +82,17 @@ fn visible_indices(center: usize, page_count: usize, visible_pages: usize) -> Ve
         }
     }
     indices
+}
+
+fn is_visible_page_index(index: usize, center: usize, visible_pages: usize) -> bool {
+    index >= center && index < center.saturating_add(visible_pages.max(1))
+}
+
+fn is_ai_page_name(name: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ai"))
 }
 
 fn push_job(jobs: &mut Vec<PageJob>, index: usize, target_long_edge: u32) {
@@ -123,7 +151,9 @@ fn push_index(indices: &mut Vec<usize>, index: usize, page_count: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{prioritized_indices, prioritized_jobs, PageJob};
+    use super::{
+        prioritized_indices, prioritized_jobs, should_skip_ai_preview_or_prefetch, PageJob,
+    };
     use crate::core::worker::{NavigationDirection, PREVIEW_TARGET_LONG_EDGE};
 
     #[test]
@@ -244,5 +274,37 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn ai_preview_and_prefetch_jobs_are_skipped() {
+        assert!(should_skip_ai_preview_or_prefetch(
+            Some("art.ai"),
+            1,
+            1,
+            1,
+            PREVIEW_TARGET_LONG_EDGE
+        ));
+        assert!(!should_skip_ai_preview_or_prefetch(
+            Some("art.ai"),
+            1,
+            1,
+            1,
+            2048
+        ));
+        assert!(should_skip_ai_preview_or_prefetch(
+            Some("art.ai"),
+            0,
+            1,
+            1,
+            2048
+        ));
+        assert!(!should_skip_ai_preview_or_prefetch(
+            Some("page-0001.png"),
+            0,
+            1,
+            0,
+            2048
+        ));
     }
 }

@@ -42,6 +42,10 @@ const AVIF_DECODER_OPTIONS: &[DecoderPreference] =
     &[DecoderPreference::Default, DecoderPreference::LibAvifDav1d];
 const SVG_DECODER_OPTIONS: &[DecoderPreference] =
     &[DecoderPreference::Default, DecoderPreference::Resvg];
+const PSD_DECODER_OPTIONS: &[DecoderPreference] =
+    &[DecoderPreference::Default, DecoderPreference::ZunePsd];
+const AI_DECODER_OPTIONS: &[DecoderPreference] =
+    &[DecoderPreference::Default, DecoderPreference::PdfiumAi];
 
 pub(in crate::app) fn show_decoder_settings(
     ui: &mut egui::Ui,
@@ -158,6 +162,24 @@ pub(in crate::app) fn show_decoder_settings(
                         "지원 예정: resvg",
                         &mut draft.decoder_preferences.svg,
                         SVG_DECODER_OPTIONS,
+                    );
+                    decoder_row(
+                        ui,
+                        changed,
+                        enabled,
+                        "PSD",
+                        "기본값: zune-psd 미리보기",
+                        &mut draft.decoder_preferences.psd,
+                        PSD_DECODER_OPTIONS,
+                    );
+                    decoder_row(
+                        ui,
+                        changed,
+                        enabled && cfg!(feature = "native-ai"),
+                        "AI",
+                        ai_default_note(),
+                        &mut draft.decoder_preferences.ai,
+                        AI_DECODER_OPTIONS,
                     );
                 });
 
@@ -337,6 +359,14 @@ fn avif_default_note() -> &'static str {
         "기본값: libavif + dav1d"
     } else {
         "native-avif 빌드에서 사용 가능"
+    }
+}
+
+fn ai_default_note() -> &'static str {
+    if cfg!(feature = "native-ai") {
+        "기본값: PDFium 첫 페이지 미리보기"
+    } else {
+        "native-ai 빌드에서 사용 가능"
     }
 }
 

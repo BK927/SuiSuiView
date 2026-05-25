@@ -33,6 +33,8 @@ pub enum DecoderPreference {
     IcoFastPath,
     LibAvifDav1d,
     Resvg,
+    ZunePsd,
+    PdfiumAi,
 }
 
 impl DecoderPreference {
@@ -50,6 +52,8 @@ impl DecoderPreference {
             Self::IcoFastPath => "ICO fast path",
             Self::LibAvifDav1d => "libavif + dav1d",
             Self::Resvg => "resvg",
+            Self::ZunePsd => "zune-psd",
+            Self::PdfiumAi => "PDFium",
         }
     }
 
@@ -67,6 +71,8 @@ impl DecoderPreference {
             Self::IcoFastPath => "ico-fast",
             Self::LibAvifDav1d => "libavif-dav1d",
             Self::Resvg => "resvg",
+            Self::ZunePsd => "zune-psd",
+            Self::PdfiumAi => "pdfium-ai",
         }
     }
 }
@@ -89,6 +95,10 @@ pub struct DecoderPreferences {
     pub avif: DecoderPreference,
     #[serde(default)]
     pub svg: DecoderPreference,
+    #[serde(default)]
+    pub psd: DecoderPreference,
+    #[serde(default)]
+    pub ai: DecoderPreference,
 }
 
 impl Default for DecoderPreferences {
@@ -102,6 +112,8 @@ impl Default for DecoderPreferences {
             ico: DecoderPreference::Default,
             avif: DecoderPreference::Default,
             svg: DecoderPreference::Default,
+            psd: DecoderPreference::Default,
+            ai: DecoderPreference::Default,
         }
     }
 }
@@ -109,7 +121,7 @@ impl Default for DecoderPreferences {
 impl DecoderPreferences {
     pub fn cache_token(self) -> String {
         format!(
-            "jpeg:{}-png:{}-webp:{}-gif:{}-bmp:{}-ico:{}-avif:{}-svg:{}",
+            "jpeg:{}-png:{}-webp:{}-gif:{}-bmp:{}-ico:{}-avif:{}-svg:{}-psd:{}-ai:{}",
             self.jpeg.token(),
             self.png.token(),
             self.webp.token(),
@@ -117,7 +129,9 @@ impl DecoderPreferences {
             self.bmp.token(),
             self.ico.token(),
             self.avif.token(),
-            self.svg.token()
+            self.svg.token(),
+            self.psd.token(),
+            self.ai.token()
         )
     }
 }

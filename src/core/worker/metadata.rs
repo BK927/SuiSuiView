@@ -11,15 +11,21 @@ pub(super) struct ImageMetadata {
     pub(super) orientation: Option<Orientation>,
 }
 
+impl Default for ImageMetadata {
+    fn default() -> Self {
+        Self {
+            icc_profile: Ok(None),
+            orientation: None,
+        }
+    }
+}
+
 pub(super) fn read_image_metadata(
     bytes: &[u8],
     need_icc: bool,
     need_orientation: bool,
 ) -> ImageMetadata {
-    let mut metadata = ImageMetadata {
-        icc_profile: Ok(None),
-        orientation: None,
-    };
+    let mut metadata = ImageMetadata::default();
     if !need_icc && !need_orientation {
         return metadata;
     }

@@ -24,6 +24,7 @@ full media-management suite.
 | Fast reading | Background decode, display-sized preparation, nearby-page cache, and lightweight transitions. |
 | Comic friendly | Folder, `.zip`, and `.cbz` support with single-page and two-page spread modes. |
 | Stable bookmarks | ZIP/CBZ bookmarks are based on book contents, so moving or renaming a book should keep your place. |
+| Tunable decoders | AutoFast can choose per-format fast paths, while compatible mode keeps the broad `image` baseline. |
 | Safe viewing tools | Rotate, flip, invert, smooth, sharpen, and gamma effects are session-only and never rewrite the source image. |
 | Optional AI upscale | Real-ESRGAN ncnn-vulkan can be used for the current page when you provide your own local executable and models. |
 
@@ -59,8 +60,8 @@ delete, copy, and window actions.
 
 | Tier | Formats |
 | --- | --- |
-| Built in | Folders, single images, `.zip`, `.cbz`, `.jpg`, `.jpeg`, `.png`, `.apng`, `.webp`, `.bmp`, `.gif`, `.tif`, `.tiff`, `.tga`, `.pnm`, `.pbm`, `.pgm`, `.ppm`, `.ico`, `.qoi` |
-| Experimental recognized | `.dds`, `.exr`, `.hdr`, `.rgbe`, `.avif`, `.jxl`, `.svg` |
+| Built in | Folders, single images, `.zip`, `.cbz`, `.jpg`, `.jpeg`, `.png`, `.apng`, `.webp`, `.bmp`, `.gif`, `.tif`, `.tiff`, `.tga`, `.pnm`, `.pbm`, `.pgm`, `.ppm`, `.ico`, `.qoi`, `.psd` |
+| Experimental recognized | `.dds`, `.exr`, `.hdr`, `.rgbe`, `.jxl`, `.svg`; `.avif` is indexed only in `native-avif` builds; `.ai` is indexed only in `native-ai` builds |
 | System-codec-only recognized | `.heic`, `.heif`, `.jxr`, RAW/DNG camera formats |
 
 Some formats are intentionally limited or blocked for commercial-distribution
@@ -68,6 +69,61 @@ safety. CBR/RAR, ONNX/TensorRT AI backends, page-curl animation,
 EXIF/file-info panels, printing, slideshow, external editor integration, and
 photo storage boxes are planned or under evaluation for later versions. BPG and
 full CLIP parsing are intentionally blocked for v1.
+
+PSD support is view-only. SuiSuiView reads the composite/base image preview
+through `zune-psd`; Photoshop layers, blend modes, masks, adjustment layers,
+smart objects, and layer effects are not reconstructed. AI support is also
+preview-only and requires a PDF-compatible `.ai` file plus a `native-ai` build
+with an app-local PDFium library beside the executable. Plain `.pdf`, EPS, PS,
+and non-PDF-compatible Illustrator data are not indexed as pages.
+
+## Decoder Backends
+
+The default build keeps native codec risk low: it uses Rust fast paths where
+they have been validated, and falls back to the broad `image` crate decoder when
+a selected backend cannot decode a page.
+
+AutoFast currently resolves `기본값` like this:
+
+| Format | Default backend |
+| --- | --- |
+| JPEG | target-aware scaled JPEG when useful, then `zune-jpeg` |
+| PNG | large-page sampled PNG when useful, then the `png` crate |
+| WebP | `image-webp`; `libwebp` for still images when built with `native-webp` |
+| GIF | large static GIF sampling when useful, then the `gif` crate first-frame path |
+| BMP | sampled BMP when useful, then direct 24/32-bit BMP fast path |
+| ICO | `image` baseline by default, with an explicit ICO fast-path option |
+| AVIF | `libavif + dav1d` only when built with `native-avif` |
+| SVG | shown in settings as planned, but not enabled for viewing yet |
+| PSD | `zune-psd` composite/base image preview |
+| AI | PDFium first-page preview only when built with `native-ai` |
+
+Optional native features are explicit build choices:
+
+```powershell
+cargo run --release --features native-webp
+uv run --with meson --with ninja cargo run --release --features native-avif
+cargo run --release --features native-ai
+```
+
+Native here means Rust calls an external C/assembly codec library through a Rust
+wrapper. `native-webp` uses libwebp, and `native-avif` uses libavif with dav1d.
+`native-ai` uses `pdfium-render` to call an app-local PDFium dynamic library.
+They are not enabled in the default build, and release bundles that enable them
+must carry the notices and update policy recorded in `THIRD_PARTY_NOTICES.txt`.
+
+For AI preview development builds, fetch a V8/XFA-free PDFium package and copy
+the platform library next to the executable:
+
+```powershell
+uv run python scripts\fetch_pdfium.py --platform windows-x64 --copy-to target\release
+```
+
+For release packaging, pass the expected archive checksum with `--sha256`; the
+script also prints the downloaded archive checksum for provenance records.
+
+Benchmark-only native candidates such as TurboJPEG and Wuffs remain out of the
+production settings.
 
 ## Settings
 
@@ -78,8 +134,10 @@ state file.
   behavior.
 - Image processing: transition effect, CPU resize filter, real-time WGSL
   display upscaling, EXIF orientation, and embedded ICC conversion.
+- Decoders: decode mode and per-format decoder choices. `기본값` is shown as
+  selected text, with the resolved backend summarized beside each format.
 - Performance: automatic or manual page-cache memory, nearby-page prefetch,
-  progressive low-resolution preview, and fast versus compatible decode.
+  and progressive low-resolution preview.
 - View and mouse: large-image starting position, double-click maximize,
   middle-click fullscreen, and wheel behavior.
 - Experimental AI upscale: Real-ESRGAN executable path, model name, optional
@@ -126,6 +184,7 @@ standalone files.
 - [x] Large-image preview, cache, and display preparation policy.
 - [x] Optional Real-ESRGAN current-page upscale.
 - [x] WGSL display effects and real-time upscaler candidates.
+- [x] Per-format decoder benchmarks and user-selectable decoder settings.
 - [ ] CBR/RAR read-only archive support after backend and license review.
 - [ ] EXIF/file-info panels.
 - [ ] Printing, slideshow, and external editor workflows.

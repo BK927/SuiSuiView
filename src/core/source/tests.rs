@@ -49,6 +49,26 @@ fn system_codec_formats_are_not_indexed_without_backend() {
 }
 
 #[test]
+fn psd_is_indexed_and_ai_depends_on_native_feature() {
+    assert_eq!(
+        classify_path(Path::new("preview.psd")),
+        SourceKind::SingleImage
+    );
+    assert_eq!(
+        classify_path(Path::new("document.pdf")),
+        SourceKind::Unsupported
+    );
+    assert_eq!(
+        classify_path(Path::new("art.ai")),
+        if cfg!(feature = "native-ai") {
+            SourceKind::SingleImage
+        } else {
+            SourceKind::Unsupported
+        }
+    );
+}
+
+#[test]
 fn folder_zip_and_cbz_report_same_pages_for_same_set() {
     let dir = temp_test_dir("source-kind-counts");
     let folder = dir.join("pages");

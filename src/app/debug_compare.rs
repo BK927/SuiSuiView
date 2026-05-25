@@ -601,6 +601,7 @@ mod tests {
             allow_display_upscale: true,
             apply_exif_orientation: true,
             apply_embedded_icc: true,
+            ..DecodeOptions::default()
         };
 
         let lanczos = DebugCompareTarget::Lanczos3

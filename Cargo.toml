@@ -24,6 +24,7 @@ bench-all = [
 ]
 native-webp = ["dep:webp"]
 native-avif = ["dep:libavif"]
+native-ai = ["dep:pdfium-render"]
 perf-dev = []
 perf-diagnostics = []
 
@@ -44,6 +45,7 @@ lcms2 = "6.1"
 lru = "0.12"
 png = "0.18"
 pollster = "0.4"
+pdfium-render = { version = "0.9", optional = true, default-features = false, features = ["pdfium_latest", "image_025", "thread_safe"] }
 rfd = "0.15"
 resvg = { version = "0.47", optional = true, default-features = false }
 serde = { version = "1.0", features = ["derive"] }
@@ -60,6 +62,7 @@ zip = "2.2"
 zune-core = "0.5"
 zune-jpeg = "0.5"
 zune-png = "0.5"
+zune-psd = "0.5"
 
 [patch.crates-io]
 wuffs-sys = { path = "third_party/wuffs-sys" }
