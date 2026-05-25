@@ -10,7 +10,8 @@ mod bookmarks;
 mod input;
 #[cfg(test)]
 mod tests;
-pub use bookmarks::{PageBookmark, PageBookmarkEntry};
+use bookmarks::path_key;
+pub use bookmarks::{Bookmark, BookmarkInput, PageBookmark, PageBookmarkEntry, ReadingPosition};
 pub use input::{
     default_key_bindings, default_mouse_bindings, CommandId, KeyBinding, KeyCode, KeyShortcut,
     MouseBinding, MouseGesture,
@@ -479,6 +480,8 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub auto_save_reading_position: bool,
     #[serde(default = "default_true")]
+    pub resume_by_file_identity: bool,
+    #[serde(default = "default_true")]
     pub share_state_between_instances: bool,
     #[serde(default = "default_max_remembered_books")]
     pub max_remembered_books: usize,
@@ -555,6 +558,7 @@ impl Default for AppSettings {
             apply_exif_orientation: true,
             apply_embedded_icc: false,
             auto_save_reading_position: true,
+            resume_by_file_identity: true,
             share_state_between_instances: true,
             max_remembered_books: default_max_remembered_books(),
             remember_archive_page_name: true,
@@ -563,24 +567,6 @@ impl Default for AppSettings {
             ai_upscale: AiUpscaleSettings::default(),
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Bookmark {
-    pub book_id: String,
-    pub title: String,
-    pub last_page: usize,
-    #[serde(default)]
-    pub last_page_name: Option<String>,
-    pub total_pages: usize,
-    pub known_paths: Vec<String>,
-    pub reading_direction: ReadingDirection,
-    pub fit_mode: FitMode,
-    #[serde(default)]
-    pub manual_zoom: Option<f32>,
-    #[serde(default)]
-    pub page_bookmarks: Vec<PageBookmark>,
-    pub updated_at: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -622,6 +608,22 @@ impl StateStore {
 
     pub fn bookmark(&self, book_id: &str) -> Option<&Bookmark> {
         self.state.books.get(book_id)
+    }
+
+    pub fn reading_position(
+        &self,
+        book_id: &str,
+        path: &Path,
+        allow_identity_match: bool,
+    ) -> Option<ReadingPosition> {
+        let bookmark = self.bookmark(book_id)?;
+        if allow_identity_match {
+            return Some(ReadingPosition::from_bookmark(bookmark));
+        }
+        bookmark
+            .path_positions
+            .get(path_key(path).as_str())
+            .cloned()
     }
 
     pub fn settings(&self) -> &AppSettings {
@@ -688,7 +690,11 @@ impl StateStore {
             .state
             .books
             .values()
-            .filter(|book| book.page_bookmarks.is_empty())
+            .filter(|book| {
+                book.page_bookmarks
+                    .iter()
+                    .all(|bookmark| bookmark.source_path.is_empty())
+            })
             .map(|book| (book.book_id.clone(), book.updated_at))
             .collect();
         let keep_non_removable = self.state.books.len().saturating_sub(removable.len());
@@ -710,12 +716,23 @@ impl StateStore {
     pub fn clear_archive_page_names(&mut self) -> usize {
         let mut cleared = 0;
         for bookmark in self.state.books.values_mut() {
-            if bookmark.last_page_name.is_none() || !looks_like_archive_book(bookmark) {
+            if !looks_like_archive_book(bookmark) {
                 continue;
             }
-            bookmark.last_page_name = None;
-            bookmark.updated_at = now_unix_seconds();
-            cleared += 1;
+            let mut bookmark_cleared = false;
+            if bookmark.last_page_name.take().is_some() {
+                bookmark_cleared = true;
+                cleared += 1;
+            }
+            for position in bookmark.path_positions.values_mut() {
+                if position.last_page_name.take().is_some() {
+                    bookmark_cleared = true;
+                    cleared += 1;
+                }
+            }
+            if bookmark_cleared {
+                bookmark.updated_at = now_unix_seconds();
+            }
         }
         if cleared > 0 {
             self.state.version = 4;
@@ -743,6 +760,7 @@ impl StateStore {
                 reading_direction: input.reading_direction,
                 fit_mode: input.fit_mode,
                 manual_zoom: None,
+                path_positions: BTreeMap::new(),
                 page_bookmarks: Vec::new(),
                 updated_at: now,
             });
@@ -750,6 +768,10 @@ impl StateStore {
         let title = input.title.to_owned();
         let last_page = input.last_page.min(input.total_pages.saturating_sub(1));
         let last_page_name = input.last_page_name.map(ToOwned::to_owned);
+        let path_position_changed = entry
+            .path_positions
+            .get(path_text.as_str())
+            .is_none_or(|position| !position.matches_input(&input));
         let mut changed = is_new
             || entry.title != title
             || entry.last_page != last_page
@@ -757,7 +779,8 @@ impl StateStore {
             || entry.total_pages != input.total_pages
             || entry.reading_direction != input.reading_direction
             || entry.fit_mode != input.fit_mode
-            || entry.manual_zoom != input.manual_zoom;
+            || entry.manual_zoom != input.manual_zoom
+            || path_position_changed;
 
         entry.title = title;
         entry.last_page = last_page;
@@ -766,6 +789,11 @@ impl StateStore {
         entry.reading_direction = input.reading_direction;
         entry.fit_mode = input.fit_mode;
         entry.manual_zoom = input.manual_zoom;
+        if path_position_changed || touch {
+            entry
+                .path_positions
+                .insert(path_text.clone(), ReadingPosition::from_input(&input, now));
+        }
 
         if !entry.known_paths.iter().any(|known| known == &path_text) {
             entry.known_paths.push(path_text);
@@ -804,18 +832,6 @@ impl StateStore {
     pub fn path(&self) -> &Path {
         &self.path
     }
-}
-
-pub struct BookmarkInput<'a> {
-    pub book_id: &'a str,
-    pub title: &'a str,
-    pub last_page: usize,
-    pub last_page_name: Option<&'a str>,
-    pub total_pages: usize,
-    pub path: &'a Path,
-    pub reading_direction: ReadingDirection,
-    pub fit_mode: FitMode,
-    pub manual_zoom: Option<f32>,
 }
 
 fn looks_like_archive_book(bookmark: &Bookmark) -> bool {

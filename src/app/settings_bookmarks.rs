@@ -82,6 +82,12 @@ impl SuiSuiViewApp {
                 );
                 *changed |= checkbox_with_help(
                     ui,
+                    &mut draft.resume_by_file_identity,
+                    "경로가 바뀌어도 같은 파일이면 이어보기",
+                    "파일/압축파일/폴더의 식별값이 같으면 위치가 달라져도 마지막으로 보던 페이지를 복원합니다.",
+                );
+                *changed |= checkbox_with_help(
+                    ui,
                     &mut draft.share_state_between_instances,
                     "프로그램이 여러 개 실행중일 때 환경설정/책갈피 공유",
                     "여러 창이 같은 상태 파일을 쓸 때 저장 직전 기록을 다시 읽어 충돌을 줄입니다.",

@@ -113,7 +113,11 @@ impl SuiSuiViewApp {
         let Some(book_id) = self.book_id.as_deref() else {
             return false;
         };
-        self.store.has_page_bookmark(book_id, self.current_page)
+        let Some(source_path) = self.current_bookmark_source_path() else {
+            return false;
+        };
+        self.store
+            .has_page_bookmark(book_id, &source_path, self.current_page)
     }
 
     pub(in crate::app) fn toggle_current_page_bookmark(&mut self) {
@@ -122,12 +126,17 @@ impl SuiSuiViewApp {
             self.notify("북마크할 책이 열려 있지 않습니다.");
             return;
         };
+        let Some(source_path) = self.current_bookmark_source_path() else {
+            self.notify("북마크할 경로를 찾을 수 없습니다.");
+            return;
+        };
         if self.settings.share_state_between_instances {
             self.store.reload_books_from_disk();
         }
         let page = self.current_page;
-        if self.store.has_page_bookmark(&book_id, page) {
-            self.store.remove_page_bookmark(&book_id, page);
+        if self.store.has_page_bookmark(&book_id, &source_path, page) {
+            self.store
+                .remove_page_bookmark(&book_id, &source_path, page);
             self.bookmark_rows.clear();
             self.notify(format!("p.{} 북마크를 삭제했습니다.", page + 1));
             return;
@@ -141,9 +150,14 @@ impl SuiSuiViewApp {
             .and_then(|source| source.page_name(page))
             .map(str::to_owned);
         self.store
-            .upsert_page_bookmark(&book_id, page, title, page_name);
+            .upsert_page_bookmark(&book_id, &source_path, page, title, page_name);
         self.bookmark_rows.clear();
         self.notify(format!("p.{} 북마크를 추가했습니다.", page + 1));
+    }
+
+    fn current_bookmark_source_path(&self) -> Option<std::path::PathBuf> {
+        let source = self.source.as_ref()?;
+        Some(self.current_bookmark_path(source.as_ref()).to_path_buf())
     }
 
     fn show_bookmark_popover_contents(&mut self, ui: &mut egui::Ui) {
@@ -310,7 +324,13 @@ impl SuiSuiViewApp {
     }
 
     fn show_bookmark_row(&mut self, ui: &mut egui::Ui, row: BookmarkRow) {
-        let current_book = self.book_id.as_deref() == Some(row.book_id.as_str());
+        let active_path = self.current_bookmark_source_path();
+        let current_book = self.book_id.as_deref() == Some(row.book_id.as_str())
+            && active_path.as_ref().is_some_and(|path| {
+                row.known_path
+                    .as_deref()
+                    .is_some_and(|row_path| row_path == path.to_string_lossy().as_ref())
+            });
         let current = current_book && row.bookmark.page == self.current_page;
         let frame = Frame::new()
             .fill(if current {
@@ -386,8 +406,13 @@ impl SuiSuiViewApp {
 
         if remove_bookmark {
             self.bookmark_clear_confirming = false;
-            self.store
-                .remove_page_bookmark(&row.book_id, row.bookmark.page);
+            if let Some(path) = row.known_path.as_deref() {
+                self.store.remove_page_bookmark(
+                    &row.book_id,
+                    std::path::Path::new(path),
+                    row.bookmark.page,
+                );
+            }
             self.bookmark_rows.clear();
         } else if jump_to_page {
             self.bookmark_clear_confirming = false;
@@ -404,7 +429,12 @@ impl SuiSuiViewApp {
                     self.notify("삭제할 북마크가 없습니다.");
                     return;
                 };
-                self.store.clear_page_bookmarks(&book_id)
+                let Some(source_path) = self.current_bookmark_source_path() else {
+                    self.bookmark_clear_confirming = false;
+                    self.notify("삭제할 북마크가 없습니다.");
+                    return;
+                };
+                self.store.clear_page_bookmarks(&book_id, &source_path)
             }
         };
         self.bookmark_clear_confirming = false;
@@ -428,7 +458,10 @@ impl SuiSuiViewApp {
             BookmarkFilter::ThisBook => self
                 .book_id
                 .as_deref()
-                .map(|book_id| self.store.page_bookmarks(book_id).len())
+                .and_then(|book_id| {
+                    self.current_bookmark_source_path()
+                        .map(|path| self.store.page_bookmark_entries(book_id, &path).len())
+                })
                 .unwrap_or_default(),
         }
     }
@@ -439,7 +472,10 @@ impl SuiSuiViewApp {
             BookmarkFilter::ThisBook => self
                 .book_id
                 .as_deref()
-                .map(|book_id| self.store.page_bookmark_entries(book_id))
+                .and_then(|book_id| {
+                    self.current_bookmark_source_path()
+                        .map(|path| self.store.page_bookmark_entries(book_id, &path))
+                })
                 .unwrap_or_default(),
         }
     }
@@ -447,14 +483,24 @@ impl SuiSuiViewApp {
     fn refresh_bookmark_rows_if_needed(&mut self) {
         let filter = self.bookmark_filter;
         let book_id = self.book_id.clone();
+        let source_path = self
+            .current_bookmark_source_path()
+            .map(|path| path.to_string_lossy().to_string());
         let query = self.bookmark_search.clone();
-        if self
-            .bookmark_rows
-            .needs_refresh(filter, book_id.as_deref(), &query)
-        {
+        if self.bookmark_rows.needs_refresh(
+            filter,
+            book_id.as_deref(),
+            source_path.as_deref(),
+            &query,
+        ) {
             let entries = self.bookmark_entries_for_active_filter();
-            self.bookmark_rows
-                .refresh(filter, book_id.as_deref(), &query, entries);
+            self.bookmark_rows.refresh(
+                filter,
+                book_id.as_deref(),
+                source_path.as_deref(),
+                &query,
+                entries,
+            );
         }
     }
 
@@ -476,7 +522,13 @@ impl SuiSuiViewApp {
     }
 
     fn jump_to_bookmark(&mut self, row: BookmarkRow) {
-        if self.book_id.as_deref() == Some(row.book_id.as_str()) {
+        let active_path = self.current_bookmark_source_path();
+        let current_bookmark_path = active_path.as_ref().is_some_and(|path| {
+            row.known_path
+                .as_deref()
+                .is_some_and(|row_path| row_path == path.to_string_lossy().as_ref())
+        });
+        if self.book_id.as_deref() == Some(row.book_id.as_str()) && current_bookmark_path {
             let direction = if row.bookmark.page >= self.current_page {
                 super::super::NavigationDirection::Forward
             } else {

@@ -639,21 +639,26 @@ impl SuiSuiViewApp {
         let page_count = source.page_count();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::arm_open_to_first_visible(&mut self.open_to_first_visible_trace, &book_id);
-        let bookmark = self.store.bookmark(&book_id).cloned();
-        self.reading_direction = bookmark
+        let bookmark_path = bookmark_path_for_open(origin, &opened_path, source.as_ref());
+        let reading_position = self.store.reading_position(
+            &book_id,
+            bookmark_path,
+            self.settings.resume_by_file_identity,
+        );
+        self.reading_direction = reading_position
             .as_ref()
-            .map(|bookmark| bookmark.reading_direction)
+            .map(|position| position.reading_direction)
             .unwrap_or_default();
         self.view_mode = self
             .view_mode
             .with_reading_direction(self.reading_direction);
-        self.fit_mode = bookmark
+        self.fit_mode = reading_position
             .as_ref()
-            .map(|bookmark| bookmark.fit_mode)
+            .map(|position| position.fit_mode)
             .unwrap_or_default();
-        self.manual_zoom = bookmark
+        self.manual_zoom = reading_position
             .as_ref()
-            .and_then(|bookmark| bookmark.manual_zoom)
+            .and_then(|position| position.manual_zoom)
             .filter(|_| self.settings.remember_zoom_per_book)
             .unwrap_or(1.0);
 
@@ -662,12 +667,12 @@ impl SuiSuiViewApp {
             .as_ref()
             .filter(|pending| pending.book_id == book_id)
             .map(|pending| pending.page);
-        let bookmarked_page = bookmark.as_ref().and_then(|bookmark| {
-            bookmark
+        let bookmarked_page = reading_position.as_ref().and_then(|position| {
+            position
                 .last_page_name
                 .as_deref()
                 .and_then(|page_name| page_index_for_name(source.as_ref(), page_name))
-                .or(Some(bookmark.last_page))
+                .or(Some(position.last_page))
         });
         self.current_page = pending_page
             .or(forced_page)
@@ -3832,6 +3837,18 @@ fn delete_target_for(
     match origin {
         OpenOrigin::ZipCbz => Some(source.source_path().to_path_buf()),
         OpenOrigin::Folder | OpenOrigin::SingleImage => source.page_file_path(current_page),
+    }
+}
+
+fn bookmark_path_for_open<'a>(
+    origin: OpenOrigin,
+    opened_path: &'a Path,
+    source: &'a dyn BookSource,
+) -> &'a Path {
+    if origin == OpenOrigin::SingleImage {
+        opened_path
+    } else {
+        source.source_path()
     }
 }
 

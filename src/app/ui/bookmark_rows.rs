@@ -30,6 +30,7 @@ pub(in crate::app) struct BookmarkRow {
 struct BookmarkRowsKey {
     filter: BookmarkFilter,
     book_id: Option<String>,
+    source_path: Option<String>,
     query: String,
 }
 
@@ -49,12 +50,14 @@ impl BookmarkRowsCache {
         &self,
         filter: BookmarkFilter,
         book_id: Option<&str>,
+        source_path: Option<&str>,
         query: &str,
     ) -> bool {
         self.key.as_ref()
             != Some(&BookmarkRowsKey {
                 filter,
                 book_id: book_id.map(str::to_owned),
+                source_path: source_path.map(str::to_owned),
                 query: query.to_owned(),
             })
     }
@@ -63,12 +66,14 @@ impl BookmarkRowsCache {
         &mut self,
         filter: BookmarkFilter,
         book_id: Option<&str>,
+        source_path: Option<&str>,
         query: &str,
         entries: Vec<PageBookmarkEntry>,
     ) {
         self.key = Some(BookmarkRowsKey {
             filter,
             book_id: book_id.map(str::to_owned),
+            source_path: source_path.map(str::to_owned),
             query: query.to_owned(),
         });
         self.rows = filtered_bookmark_rows(entries, query, filter);
@@ -176,17 +181,23 @@ mod tests {
             entry(
                 "book-1",
                 "C:/books/book-1",
-                bookmark(5, "Middle", 20, "middle.png"),
+                bookmark("C:/books/book-1", 5, "Middle", 20, "middle.png"),
             ),
             entry(
                 "book-1",
                 "C:/books/book-1",
-                bookmark(0, "Cover", 30, "cover.png"),
+                bookmark("C:/books/book-1", 0, "Cover", 30, "cover.png"),
             ),
             entry(
                 "book-2",
                 "C:/books/book-2.cbz",
-                bookmark(11, "Pinned", 10, "chapter/page-012.jpg"),
+                bookmark(
+                    "C:/books/book-2.cbz",
+                    11,
+                    "Pinned",
+                    10,
+                    "chapter/page-012.jpg",
+                ),
             ),
         ]
     }
@@ -200,9 +211,16 @@ mod tests {
         }
     }
 
-    fn bookmark(page: usize, title: &str, updated_at: u64, page_name: &str) -> PageBookmark {
+    fn bookmark(
+        source_path: &str,
+        page: usize,
+        title: &str,
+        updated_at: u64,
+        page_name: &str,
+    ) -> PageBookmark {
         PageBookmark {
             page,
+            source_path: source_path.to_owned(),
             title: title.to_owned(),
             page_name: Some(page_name.to_owned()),
             pinned: false,
