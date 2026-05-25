@@ -6,6 +6,14 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use wgpu::util::DeviceExt;
 
+mod acnet;
+mod acnet_manifest;
+mod anime4k;
+mod anime4k_m;
+use acnet::AcnetBench;
+use anime4k::Anime4kBench;
+use anime4k_m::Anime4kMBench;
+
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 #[repr(C)]
@@ -20,6 +28,9 @@ pub(crate) struct GpuUpscaleBench {
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
+    anime4k: Option<Anime4kBench>,
+    anime4k_m: Option<Anime4kMBench>,
+    acnet: Option<AcnetBench>,
 }
 
 pub(crate) struct GpuUpscaleOutput {
@@ -46,8 +57,8 @@ impl GpuUpscaleBench {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("suisuiview-upscale-bench-device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits()),
+                // Compute SR candidates use storage textures; WebGL2-style limits report none.
+                required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::Off,
             })
@@ -114,11 +125,18 @@ impl GpuUpscaleBench {
             cache: None,
         });
 
+        let anime4k = Anime4kBench::try_new(&device).await;
+        let anime4k_m = Anime4kMBench::try_new(&device).await;
+        let acnet = AcnetBench::try_new(&device).await;
+
         Ok(Self {
             device,
             queue,
             pipeline,
             bind_group_layout,
+            anime4k,
+            anime4k_m,
+            acnet,
         })
     }
 
@@ -132,6 +150,33 @@ impl GpuUpscaleBench {
         let [output_width, output_height] = output_size;
         if source_width == 0 || source_height == 0 || output_width == 0 || output_height == 0 {
             return Err("cannot upscale an empty image".to_owned());
+        }
+        if method == DisplayUpscaler::WgslAnime4kV32CnnX2S {
+            return self
+                .anime4k
+                .as_ref()
+                .ok_or_else(|| "Anime4K v3.2 CNN x2 S GPU pipelines unavailable".to_owned())?
+                .apply(&self.device, &self.queue, image, output_size);
+        }
+        if method == DisplayUpscaler::WgslAnime4kV32CnnX2M {
+            return self
+                .anime4k_m
+                .as_ref()
+                .ok_or_else(|| "Anime4K v3.2 CNN x2 M GPU pipelines unavailable".to_owned())?
+                .apply(&self.device, &self.queue, image, output_size);
+        }
+        if matches!(
+            method,
+            DisplayUpscaler::WgslAcnetF8B4Luma
+                | DisplayUpscaler::WgslAcnetF8B4BoxLuma
+                | DisplayUpscaler::WgslAcnetF8B4HdnLuma
+                | DisplayUpscaler::WgslAcnetF8B4BoxHdnLuma
+        ) {
+            return self
+                .acnet
+                .as_ref()
+                .ok_or_else(|| "ACNet F8B4 luma GPU pipelines unavailable".to_owned())?
+                .apply(method, &self.device, &self.queue, image, output_size);
         }
 
         let started = Instant::now();

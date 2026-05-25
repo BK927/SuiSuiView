@@ -156,6 +156,12 @@ pub enum DisplayUpscaler {
     WgslFsr1Style,
     WgslFsr1EasuRcas,
     WgslNisStyle,
+    WgslAnime4kV32CnnX2S,
+    WgslAnime4kV32CnnX2M,
+    WgslAcnetF8B4Luma,
+    WgslAcnetF8B4BoxLuma,
+    WgslAcnetF8B4HdnLuma,
+    WgslAcnetF8B4BoxHdnLuma,
 }
 
 impl DisplayUpscaler {
@@ -167,11 +173,17 @@ impl DisplayUpscaler {
         Self::WgslFsr1EasuRcas,
     ];
 
-    pub const GPU_METHODS: [Self; 4] = [
+    pub const GPU_METHODS: [Self; 10] = [
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
         Self::WgslNisStyle,
+        Self::WgslAnime4kV32CnnX2S,
+        Self::WgslAnime4kV32CnnX2M,
+        Self::WgslAcnetF8B4Luma,
+        Self::WgslAcnetF8B4BoxLuma,
+        Self::WgslAcnetF8B4HdnLuma,
+        Self::WgslAcnetF8B4BoxHdnLuma,
     ];
 
     pub fn label(self) -> &'static str {
@@ -182,6 +194,12 @@ impl DisplayUpscaler {
             Self::WgslFsr1Style => "WGSL FSR-style",
             Self::WgslFsr1EasuRcas => "WGSL FSR1 EASU+RCAS",
             Self::WgslNisStyle => "WGSL NIS-style",
+            Self::WgslAnime4kV32CnnX2S => "Anime4K v3.2 CNN x2 S",
+            Self::WgslAnime4kV32CnnX2M => "Anime4K v3.2 CNN x2 M",
+            Self::WgslAcnetF8B4Luma => "ACNet F8B4 Luma",
+            Self::WgslAcnetF8B4BoxLuma => "ACNet F8B4 Box Luma",
+            Self::WgslAcnetF8B4HdnLuma => "ACNet F8B4 HDN Luma",
+            Self::WgslAcnetF8B4BoxHdnLuma => "ACNet F8B4 Box HDN Luma",
         }
     }
 
@@ -193,7 +211,25 @@ impl DisplayUpscaler {
             Self::WgslFsr1Style => "wgsl_fsr1_style",
             Self::WgslFsr1EasuRcas => "wgsl_fsr1_easu_rcas",
             Self::WgslNisStyle => "wgsl_nis_style",
+            Self::WgslAnime4kV32CnnX2S => "anime4k_v32_cnn_x2_s",
+            Self::WgslAnime4kV32CnnX2M => "anime4k_v32_cnn_x2_m",
+            Self::WgslAcnetF8B4Luma => "acnet_f8b4_luma",
+            Self::WgslAcnetF8B4BoxLuma => "acnet_f8b4_box_luma",
+            Self::WgslAcnetF8B4HdnLuma => "acnet_f8b4_hdn_luma",
+            Self::WgslAcnetF8B4BoxHdnLuma => "acnet_f8b4_box_hdn_luma",
         }
+    }
+
+    pub fn is_benchmark_only(self) -> bool {
+        matches!(
+            self,
+            Self::WgslAnime4kV32CnnX2S
+                | Self::WgslAnime4kV32CnnX2M
+                | Self::WgslAcnetF8B4Luma
+                | Self::WgslAcnetF8B4BoxLuma
+                | Self::WgslAcnetF8B4HdnLuma
+                | Self::WgslAcnetF8B4BoxHdnLuma
+        )
     }
 
     pub fn resolve_for_render(
@@ -211,7 +247,14 @@ impl DisplayUpscaler {
                     Some(Self::WgslFsr1Style)
                 }
             }
-            Self::Auto | Self::None => None,
+            Self::Auto
+            | Self::None
+            | Self::WgslAnime4kV32CnnX2S
+            | Self::WgslAnime4kV32CnnX2M
+            | Self::WgslAcnetF8B4Luma
+            | Self::WgslAcnetF8B4BoxLuma
+            | Self::WgslAcnetF8B4HdnLuma
+            | Self::WgslAcnetF8B4BoxHdnLuma => None,
             other => Some(other),
         }
     }
@@ -223,6 +266,12 @@ impl DisplayUpscaler {
             Self::WgslFsr1Style => 2,
             Self::WgslNisStyle => 3,
             Self::WgslFsr1EasuRcas => 4,
+            Self::WgslAnime4kV32CnnX2S
+            | Self::WgslAnime4kV32CnnX2M
+            | Self::WgslAcnetF8B4Luma
+            | Self::WgslAcnetF8B4BoxLuma
+            | Self::WgslAcnetF8B4HdnLuma
+            | Self::WgslAcnetF8B4BoxHdnLuma => 0,
         }
     }
 

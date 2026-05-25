@@ -184,6 +184,23 @@ Note: The `--upscale-bench` experiment includes a WGSL port of the FSR1 EASU
 and RCAS equations for evaluation. It is not exposed as a default user-facing
 display mode yet.
 
+Anime4K
+License: MIT
+Copyright: Copyright (c) 2019-2021 bloc97
+Source: https://github.com/bloc97/Anime4K
+Note: The `--upscale-bench` experiment includes WGSL ports derived from
+`glsl/Upscale/Anime4K_Upscale_CNN_x2_S.glsl` and
+`glsl/Upscale/Anime4K_Upscale_CNN_x2_M.glsl` for evaluation. They are not
+exposed as default user-facing display modes yet.
+
+ACNetGLSL
+License: MIT
+Copyright: Copyright (c) 2020 TianZer
+Source: https://github.com/TianZerL/ACNetGLSL
+Note: The `--upscale-bench` experiment includes generated WGSL ports derived
+from `glsl/acnet/acnet_f8b4*.glsl` variants for luma-only evaluation. They are
+not exposed as default user-facing display modes yet.
+
 Bundled Assets
 --------------
 
