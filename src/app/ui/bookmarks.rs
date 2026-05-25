@@ -62,7 +62,9 @@ impl SuiSuiViewApp {
                     },
                 );
             });
-        self.close_bookmark_popover_on_outside_click(ctx, area_response.response.rect);
+        let popover_rect = area_response.response.rect;
+        self.show_bookmark_delete_dialog(ctx, popover_rect);
+        self.close_bookmark_popover_on_outside_click(ctx, popover_rect);
     }
 
     pub(in crate::app) fn toggle_bookmark_popover_below(&mut self, anchor: Rect) {
@@ -90,7 +92,7 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn close_bookmark_popover(&mut self) {
         self.bookmark_popover_open = false;
-        self.bookmark_clear_confirming = false;
+        self.bookmark_delete_dialog = None;
         self.bookmark_popover_anchor = None;
     }
 
@@ -121,7 +123,7 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn toggle_current_page_bookmark(&mut self) {
-        self.bookmark_clear_confirming = false;
+        self.bookmark_delete_dialog = None;
         let Some(book_id) = self.book_id.clone() else {
             self.notify("북마크할 책이 열려 있지 않습니다.");
             return;
@@ -196,32 +198,20 @@ impl SuiSuiViewApp {
 
     fn show_bookmark_clear_button(&mut self, ui: &mut egui::Ui, bookmark_count: usize) {
         if bookmark_count == 0 {
-            self.bookmark_clear_confirming = false;
+            self.bookmark_delete_dialog = None;
         }
-        let label = if self.bookmark_clear_confirming {
-            "삭제 확인"
-        } else if self.bookmark_filter == BookmarkFilter::ThisBook {
+        let label = if self.bookmark_filter == BookmarkFilter::ThisBook {
             "이 책 삭제"
         } else {
             "전체 삭제"
-        };
-        let fill = if self.bookmark_clear_confirming {
-            theme::ACCENT
-        } else {
-            Color32::from_rgb(38, 41, 47)
-        };
-        let stroke = if self.bookmark_clear_confirming {
-            Stroke::new(1.0, theme::ACCENT_HOVER)
-        } else {
-            Stroke::new(1.0, Color32::from_rgb(58, 64, 73))
         };
         if ui
             .add_enabled(
                 bookmark_count > 0,
                 egui::Button::new(icons::icon_text(icons::DELETE, label))
                     .min_size(egui::vec2(108.0, 40.0))
-                    .fill(fill)
-                    .stroke(stroke),
+                    .fill(Color32::from_rgb(38, 41, 47))
+                    .stroke(Stroke::new(1.0, Color32::from_rgb(58, 64, 73))),
             )
             .on_hover_text(if self.bookmark_filter == BookmarkFilter::ThisBook {
                 "이 책의 모든 북마크 삭제"
@@ -230,11 +220,108 @@ impl SuiSuiViewApp {
             })
             .clicked()
         {
-            if self.bookmark_clear_confirming {
-                self.clear_current_tab_bookmarks();
-            } else {
-                self.bookmark_clear_confirming = true;
-            }
+            self.bookmark_delete_dialog = Some(super::super::BookmarkDeleteDialog {
+                scope: self.bookmark_filter,
+                count: bookmark_count,
+            });
+        }
+    }
+
+    fn show_bookmark_delete_dialog(&mut self, ctx: &egui::Context, popover_rect: Rect) {
+        let Some(mut dialog) = self.bookmark_delete_dialog else {
+            return;
+        };
+        let count = self.bookmark_delete_scope_count_for(dialog.scope);
+        if count == 0 {
+            self.bookmark_delete_dialog = None;
+            return;
+        }
+        dialog.count = count;
+        self.bookmark_delete_dialog = Some(dialog);
+
+        let scope_label = match dialog.scope {
+            BookmarkFilter::All => "전체 북마크",
+            BookmarkFilter::ThisBook => "이 책의 북마크",
+        };
+        let message = format!("{scope_label} {count}개를 삭제할까요?");
+        let note = if self.bookmark_search.trim().is_empty() {
+            "이 작업은 되돌릴 수 없습니다."
+        } else {
+            "검색 결과가 아니라 현재 탭 전체가 삭제됩니다."
+        };
+        let dialog_size = egui::vec2(320.0, 164.0);
+        let mut cancel_clicked = false;
+        let mut delete_clicked = false;
+
+        egui::Area::new(egui::Id::new("bookmark_delete_dialog"))
+            .fixed_pos(popover_rect.min)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let (overlay_rect, _) = ui.allocate_exact_size(popover_rect.size(), Sense::click());
+                ui.painter().rect_filled(
+                    overlay_rect,
+                    CornerRadius::same(7),
+                    Color32::from_rgba_unmultiplied(0, 0, 0, 112),
+                );
+
+                let dialog_rect = Rect::from_center_size(overlay_rect.center(), dialog_size);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(dialog_rect), |ui| {
+                    Frame::new()
+                        .fill(Color32::from_rgb(23, 25, 29))
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(76, 82, 92)))
+                        .corner_radius(CornerRadius::same(8))
+                        .inner_margin(Margin::symmetric(16, 14))
+                        .show(ui, |ui| {
+                            ui.set_min_size(dialog_size - egui::vec2(32.0, 28.0));
+                            ui.label(
+                                RichText::new("북마크 삭제")
+                                    .size(18.0)
+                                    .strong()
+                                    .color(theme::TEXT_PRIMARY),
+                            );
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new(message.as_str())
+                                    .size(14.0)
+                                    .color(theme::TEXT_PRIMARY),
+                            );
+                            ui.label(RichText::new(note).size(12.5).color(theme::TEXT_MUTED));
+                            ui.add_space(16.0);
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui
+                                    .add_sized(
+                                        [82.0, 34.0],
+                                        egui::Button::new("삭제")
+                                            .fill(theme::ACCENT)
+                                            .stroke(Stroke::new(1.0, theme::ACCENT_HOVER)),
+                                    )
+                                    .clicked()
+                                {
+                                    delete_clicked = true;
+                                }
+                                if ui
+                                    .add_sized(
+                                        [82.0, 34.0],
+                                        egui::Button::new("취소")
+                                            .fill(Color32::from_rgb(38, 41, 47))
+                                            .stroke(Stroke::new(
+                                                1.0,
+                                                Color32::from_rgb(58, 64, 73),
+                                            )),
+                                    )
+                                    .clicked()
+                                {
+                                    cancel_clicked = true;
+                                }
+                            });
+                        });
+                });
+            });
+
+        if cancel_clicked {
+            self.bookmark_delete_dialog = None;
+        } else if delete_clicked {
+            self.clear_bookmarks_for_scope(dialog.scope);
         }
     }
 
@@ -289,7 +376,7 @@ impl SuiSuiViewApp {
             }
             if response.clicked() {
                 self.bookmark_filter = filter;
-                self.bookmark_clear_confirming = false;
+                self.bookmark_delete_dialog = None;
             }
         }
     }
@@ -405,7 +492,7 @@ impl SuiSuiViewApp {
         }
 
         if remove_bookmark {
-            self.bookmark_clear_confirming = false;
+            self.bookmark_delete_dialog = None;
             if let Some(path) = row.known_path.as_deref() {
                 self.store.remove_page_bookmark(
                     &row.book_id,
@@ -415,34 +502,34 @@ impl SuiSuiViewApp {
             }
             self.bookmark_rows.clear();
         } else if jump_to_page {
-            self.bookmark_clear_confirming = false;
+            self.bookmark_delete_dialog = None;
             self.jump_to_bookmark(row);
         }
     }
 
-    fn clear_current_tab_bookmarks(&mut self) {
-        let removed = match self.bookmark_filter {
+    fn clear_bookmarks_for_scope(&mut self, scope: BookmarkFilter) {
+        let removed = match scope {
             BookmarkFilter::All => self.store.clear_all_page_bookmarks(),
             BookmarkFilter::ThisBook => {
                 let Some(book_id) = self.book_id.clone() else {
-                    self.bookmark_clear_confirming = false;
+                    self.bookmark_delete_dialog = None;
                     self.notify("삭제할 북마크가 없습니다.");
                     return;
                 };
                 let Some(source_path) = self.current_bookmark_source_path() else {
-                    self.bookmark_clear_confirming = false;
+                    self.bookmark_delete_dialog = None;
                     self.notify("삭제할 북마크가 없습니다.");
                     return;
                 };
                 self.store.clear_page_bookmarks(&book_id, &source_path)
             }
         };
-        self.bookmark_clear_confirming = false;
+        self.bookmark_delete_dialog = None;
         if removed == 0 {
             self.notify("삭제할 북마크가 없습니다.");
         } else {
             self.bookmark_thumbnails.clear();
-            let scope = if self.bookmark_filter == BookmarkFilter::ThisBook {
+            let scope = if scope == BookmarkFilter::ThisBook {
                 "이 책의"
             } else {
                 "전체"
@@ -453,7 +540,11 @@ impl SuiSuiViewApp {
     }
 
     fn bookmark_delete_scope_count(&self) -> usize {
-        match self.bookmark_filter {
+        self.bookmark_delete_scope_count_for(self.bookmark_filter)
+    }
+
+    fn bookmark_delete_scope_count_for(&self, scope: BookmarkFilter) -> usize {
+        match scope {
             BookmarkFilter::All => self.store.all_page_bookmark_count(),
             BookmarkFilter::ThisBook => self
                 .book_id

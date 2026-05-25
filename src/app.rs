@@ -329,6 +329,12 @@ struct EdgePrompt {
     direction: NavigationDirection,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BookmarkDeleteDialog {
+    scope: BookmarkFilter,
+    count: usize,
+}
+
 pub struct SuiSuiViewApp {
     egui_ctx: egui::Context,
     store: StateStore,
@@ -403,7 +409,7 @@ pub struct SuiSuiViewApp {
     bookmark_popover_anchor: Option<Rect>,
     bookmark_filter: BookmarkFilter,
     bookmark_search: String,
-    bookmark_clear_confirming: bool,
+    bookmark_delete_dialog: Option<BookmarkDeleteDialog>,
     bookmark_rows: BookmarkRowsCache,
     pending_bookmark_jump: Option<PendingBookmarkJump>,
     edge_prompt: Option<EdgePrompt>,
@@ -500,7 +506,7 @@ impl SuiSuiViewApp {
             bookmark_popover_anchor: None,
             bookmark_filter: BookmarkFilter::default(),
             bookmark_search: String::new(),
-            bookmark_clear_confirming: false,
+            bookmark_delete_dialog: None,
             bookmark_rows: BookmarkRowsCache::default(),
             pending_bookmark_jump: None,
             edge_prompt: None,
