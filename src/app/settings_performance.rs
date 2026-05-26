@@ -52,7 +52,7 @@ pub(in crate::app) fn show_performance_settings(
                     grid_label_with_help(
                         ui,
                         "표시 백엔드",
-                        "WGPU는 GPU shader 효과와 표시 업스케일러를 지원하지만 기본 메모리를 더 사용합니다. Glow는 메모리가 낮지만 WGPU 전용 표시 효과는 사용할 수 없습니다.",
+                        "기본값은 메모리와 페이지 넘김 응답성을 우선하는 OpenGL입니다. WGPU는 표시 업스케일러와 GPU shader 효과가 필요할 때 선택합니다.",
                     );
                     egui::ComboBox::from_id_salt("renderer_mode")
                         .selected_text(draft.renderer_mode.label())
@@ -67,7 +67,7 @@ pub(in crate::app) fn show_performance_settings(
                 });
             ui.add_space(4.0);
             ui.label(
-                RichText::new("저메모리 OpenGL을 선택하면 다음 실행부터 메모리 사용량이 크게 줄 수 있지만, GPU 표시 업스케일러는 비활성화됩니다.")
+                RichText::new("WGPU로 바꾸면 다음 실행부터 GPU 표시 업스케일러를 사용할 수 있지만, 기본 메모리 사용량이 크게 늘 수 있습니다.")
                     .size(12.0)
                     .color(theme::TEXT_MUTED),
             );

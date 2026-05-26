@@ -14,9 +14,9 @@ use crate::core::state::{
 };
 use crate::core::upscale::{AiUpscaleWorker, UpscaleEvent, UpscaleRequest};
 use crate::core::worker::{
-    clamp_target_long_edge, CachedPageKey, DecodeOptions, DecodeStrategy, NavigationDirection,
-    PageWorker, PreparedPage, WorkerEvent, WorkerOptions, DEFAULT_TARGET_LONG_EDGE,
-    MAX_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
+    clamp_target_long_edge, preview_prefetch_indices, CachedPageKey, DecodeOptions, DecodeStrategy,
+    NavigationDirection, PageWorker, PreparedPage, WorkerEvent, WorkerOptions,
+    DEFAULT_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
 use arboard::{Clipboard, ImageData as ClipboardImageData};
 use commands::{collect_keyboard_commands, command_for_mouse_gesture, AppCommand, DeleteMode};
@@ -1196,7 +1196,35 @@ impl SuiSuiViewApp {
                 self.pin_keys_for_indices(&transition.from_indices, transition.target_long_edge),
             );
         }
+        let preview_budget = self
+            .cpu_cache_budget_bytes()
+            .saturating_sub(self.cached_decoded_bytes_for_keys(&pinned));
+        pinned.extend(self.preview_prefetch_pin_keys(&pinned, preview_budget));
         pinned
+    }
+
+    fn preview_prefetch_pin_keys(
+        &self,
+        already_pinned: &HashSet<PageCacheKey>,
+        budget_bytes: usize,
+    ) -> HashSet<PageCacheKey> {
+        if !self.settings.prefetch_enabled
+            || !self.settings.progressive_preview_enabled
+            || self.target_long_edge <= PREVIEW_TARGET_LONG_EDGE
+        {
+            return HashSet::new();
+        }
+        let Some(source) = self.source.as_ref() else {
+            return HashSet::new();
+        };
+
+        let indices = preview_prefetch_indices(
+            self.worker_center_page(),
+            source.page_count(),
+            self.last_nav_direction,
+            self.visible_page_count(),
+        );
+        self.preview_pin_keys_for_indices(&indices, already_pinned, budget_bytes)
     }
 
     fn pinned_upscaled_page_indices(&self) -> HashSet<PageCacheKey> {
@@ -1238,6 +1266,48 @@ impl SuiSuiViewApp {
             }
         }
         keys
+    }
+
+    fn preview_pin_keys_for_indices(
+        &self,
+        indices: &[usize],
+        already_pinned: &HashSet<PageCacheKey>,
+        budget_bytes: usize,
+    ) -> HashSet<PageCacheKey> {
+        let mut keys = HashSet::with_capacity(indices.len());
+        let mut pinned_bytes = 0usize;
+        for index in indices {
+            let key = PageCacheKey {
+                index: *index,
+                target_long_edge: PREVIEW_TARGET_LONG_EDGE,
+                decode: self.decode_options(),
+            };
+            if already_pinned.contains(&key) {
+                continue;
+            }
+            let Some(byte_size) = self.decoded_page_byte_size(key) else {
+                continue;
+            };
+            if pinned_bytes.saturating_add(byte_size) > budget_bytes {
+                continue;
+            }
+            pinned_bytes = pinned_bytes.saturating_add(byte_size);
+            keys.insert(key);
+        }
+        keys
+    }
+
+    fn cached_decoded_bytes_for_keys(&self, keys: &HashSet<PageCacheKey>) -> usize {
+        self.decoded_pages
+            .iter()
+            .filter_map(|(key, page)| keys.contains(key).then_some(page.byte_size))
+            .sum()
+    }
+
+    fn decoded_page_byte_size(&self, requested: PageCacheKey) -> Option<usize> {
+        self.decoded_pages
+            .iter()
+            .find_map(|(key, page)| (*key == requested).then_some(page.byte_size))
     }
 
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
@@ -1664,6 +1734,8 @@ impl SuiSuiViewApp {
         self.current_page = target;
         self.last_nav_direction = direction;
         self.pan = Vec2::ZERO;
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        perf::record_page_turn_request(cache_state, target, self.target_long_edge);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         if cache_state.cached() {
             self.page_turn_started_at = None;
@@ -4128,12 +4200,12 @@ mod tests {
         best_page_key_in_cache, command_for_shortcut, delete_target_for, double_spread_indices,
         gpu_visual_needs_wgsl, korean_font_candidates, load_first_existing_font,
         lower_resolution_page_keys, ordered_spread_indices, page_cache_state_from_hit,
-        preferred_page_key_in_cache, relative_difference, sanitize_font_name,
-        should_allow_cpu_display_upscale, sibling_book_path, smart_spread_indices_for_metrics,
-        texture_cache_budget_bytes_for, transformed_page_size, transition_paint_params,
-        transition_screen_sign, worker_center_page_for_mode, AppCommand, DeleteMode, ImageFilter,
-        OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey, ViewEffects, ViewMode,
-        ViewTransform,
+        preferred_page_key_in_cache, preview_prefetch_indices, relative_difference,
+        sanitize_font_name, should_allow_cpu_display_upscale, sibling_book_path,
+        smart_spread_indices_for_metrics, texture_cache_budget_bytes_for, transformed_page_size,
+        transition_paint_params, transition_screen_sign, worker_center_page_for_mode, AppCommand,
+        DeleteMode, ImageFilter, OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey,
+        ViewEffects, ViewMode, ViewTransform,
     };
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
@@ -4666,6 +4738,14 @@ mod tests {
             ),
             vec![9]
         );
+    }
+
+    #[test]
+    fn preview_prefetch_indices_cover_forward_window() {
+        let pages = preview_prefetch_indices(0, 20, NavigationDirection::Forward, 1);
+
+        assert_eq!(pages.first(), Some(&0));
+        assert!(pages.contains(&19));
     }
 
     #[test]

@@ -28,8 +28,8 @@ fn settings_defaults_match_viewer_policy() {
     assert_eq!(settings.decode_mode, DecodeMode::AutoFast);
     assert_eq!(settings.resize_filter, ResizeFilter::Bicubic);
     assert_eq!(settings.gpu_effect_mode, GpuEffectMode::Auto);
-    assert_eq!(settings.renderer_mode, RendererMode::Wgpu);
-    assert_eq!(settings.display_upscaler, DisplayUpscaler::Auto);
+    assert_eq!(settings.renderer_mode, RendererMode::LowMemoryGlow);
+    assert_eq!(settings.display_upscaler, DisplayUpscaler::None);
     assert_eq!(settings.cache_memory_mode, CacheMemoryMode::Auto);
     assert_eq!(settings.manual_cache_mb, 160);
     assert!(settings.apply_exif_orientation);

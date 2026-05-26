@@ -467,7 +467,7 @@ fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, ch
                     grid_label_with_help(
                         ui,
                         "GPU 가속 업스케일러",
-                        "화면에 확대해서 표시할 때 GPU shader로 추가 보정합니다. 사용할 수 있으면 작은 이미지는 CPU에서 먼저 키우지 않고 GPU가 확대 표시를 맡습니다.",
+                        "WGPU 표시 백엔드에서 화면 확대 시 GPU shader로 추가 보정합니다. 저메모리 OpenGL 기본값에서는 사용되지 않습니다.",
                     );
                     egui::ComboBox::from_id_salt("display_upscaler")
                         .selected_text(draft.display_upscaler.label())
@@ -487,7 +487,7 @@ fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, ch
             ui.add_space(4.0);
             ui.label(
                 RichText::new(
-                    "기본 업스케일러는 캐시 준비와 CPU fallback에 쓰이고, GPU 가속 업스케일러는 확대 표시가 필요할 때 화면에서 적용됩니다.",
+                    "기본 업스케일러는 캐시 준비와 CPU fallback에 쓰입니다. GPU 가속 업스케일러가 필요하면 성능 설정에서 WGPU 백엔드를 선택한 뒤 앱을 다시 시작하세요.",
                 )
                 .size(12.0)
                 .color(theme::TEXT_MUTED),

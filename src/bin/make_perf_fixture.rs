@@ -54,6 +54,17 @@ impl FixtureFormat {
             Self::Gif => "gif",
         }
     }
+
+    fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "jpg" | "jpeg" => Ok(Self::Jpeg),
+            "png" => Ok(Self::Png),
+            "webp" => Ok(Self::Webp),
+            "bmp" => Ok(Self::Bmp),
+            "gif" => Ok(Self::Gif),
+            other => Err(format!("unknown fixture format: {other}")),
+        }
+    }
 }
 
 struct Args {
@@ -62,6 +73,7 @@ struct Args {
     count: usize,
     min_long_edge: u32,
     profile: FixtureProfile,
+    formats: Vec<FixtureFormat>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +96,7 @@ impl FixtureProfile {
 fn main() -> Result<(), String> {
     let args = Args::parse()?;
     fs::create_dir_all(&args.out_dir).map_err(|error| error.to_string())?;
+    clear_generated_archives(&args.out_dir, &args.formats)?;
 
     if args.profile == FixtureProfile::Comic {
         comic::create(&args)?;
@@ -95,7 +108,7 @@ fn main() -> Result<(), String> {
     recreate_dir(&mixed_dir)?;
 
     for index in 0..args.count {
-        let format = FixtureFormat::ALL[index % FixtureFormat::ALL.len()];
+        let format = args.formats[index % args.formats.len()];
         let image = page_image(index, args.min_long_edge, &seeds)?;
         let path = mixed_dir.join(format!("page-{index:04}.{}", format.extension()));
         save_image(&image, &path, format)?;
@@ -106,8 +119,10 @@ fn main() -> Result<(), String> {
 
     let build_dir = args.out_dir.join("_format-build");
     recreate_dir(&build_dir)?;
-    for format in FixtureFormat::ALL
-        .into_iter()
+    for format in args
+        .formats
+        .iter()
+        .copied()
         .filter(|format| !matches!(format, FixtureFormat::Gif))
     {
         let format_dir = build_dir.join(format.label());
@@ -130,10 +145,14 @@ fn main() -> Result<(), String> {
     println!("  mixed-folder/");
     println!("  mixed.zip");
     println!("  mixed.cbz");
-    println!("  large-jpeg.cbz");
-    println!("  large-png.cbz");
-    println!("  large-webp.cbz");
-    println!("  large-bmp.cbz");
+    for format in args
+        .formats
+        .iter()
+        .copied()
+        .filter(|format| !matches!(format, FixtureFormat::Gif))
+    {
+        println!("  large-{}.cbz", format.label());
+    }
     Ok(())
 }
 
@@ -144,6 +163,7 @@ impl Args {
         let mut count = DEFAULT_COUNT;
         let mut min_long_edge = DEFAULT_MIN_LONG_EDGE;
         let mut profile = FixtureProfile::Mixed;
+        let mut formats = FixtureFormat::ALL.to_vec();
         let mut args = env::args_os().skip(1);
 
         while let Some(arg) = args.next() {
@@ -179,6 +199,12 @@ impl Args {
                         .ok_or("--profile requires one of: mixed, comic")?;
                     profile = FixtureProfile::parse(&value.to_string_lossy())?;
                 }
+                "--formats" => {
+                    let value = args
+                        .next()
+                        .ok_or("--formats requires comma-separated formats")?;
+                    formats = parse_formats(&value.to_string_lossy())?;
+                }
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -193,6 +219,7 @@ impl Args {
             count: count.max(1),
             min_long_edge: min_long_edge.max(256),
             profile,
+            formats,
         })
     }
 }
@@ -201,6 +228,37 @@ fn print_help() {
     println!("make_perf_fixture --out perf-fixtures --count 50 --min-long-edge 4000");
     println!("  --profile mixed|comic chooses random format stress or comic-like line art");
     println!("  --seed-dir <path> uses downloaded/source images when available");
+    println!("  --formats jpeg,png,webp limits generated archive formats");
+}
+
+fn parse_formats(value: &str) -> Result<Vec<FixtureFormat>, String> {
+    let formats = value
+        .split(',')
+        .map(FixtureFormat::parse)
+        .collect::<Result<Vec<_>, _>>()?;
+    if formats.is_empty() {
+        return Err("--formats must contain at least one format".to_owned());
+    }
+    Ok(formats)
+}
+
+fn clear_generated_archives(out_dir: &Path, formats: &[FixtureFormat]) -> Result<(), String> {
+    let mut names = vec!["mixed.zip".to_owned(), "mixed.cbz".to_owned()];
+    names.extend(
+        formats
+            .iter()
+            .copied()
+            .filter(|format| !matches!(format, FixtureFormat::Gif))
+            .map(|format| format!("large-{}.cbz", format.label())),
+    );
+
+    for name in names {
+        let path = out_dir.join(name);
+        if path.exists() {
+            fs::remove_file(&path).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 fn load_seed_paths(seed_dir: Option<&Path>) -> Vec<PathBuf> {

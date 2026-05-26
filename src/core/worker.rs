@@ -37,11 +37,71 @@ pub const DEFAULT_TARGET_LONG_EDGE: u32 = 2048;
 pub const MIN_TARGET_LONG_EDGE: u32 = 1024;
 pub const MAX_TARGET_LONG_EDGE: u32 = 4096;
 pub const PREVIEW_TARGET_LONG_EDGE: u32 = MIN_TARGET_LONG_EDGE;
+pub const PREVIEW_PREFETCH_FORWARD_PAGES: usize = 24;
+pub const PREVIEW_PREFETCH_BACKWARD_PAGES: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavigationDirection {
     Forward,
     Backward,
+}
+
+pub fn preview_prefetch_indices(
+    center: usize,
+    page_count: usize,
+    direction: NavigationDirection,
+    visible_pages: usize,
+) -> Vec<usize> {
+    if page_count == 0 {
+        return Vec::new();
+    }
+
+    let center = center.min(page_count - 1);
+    let mut indices = Vec::with_capacity(
+        visible_pages
+            .max(1)
+            .saturating_add(PREVIEW_PREFETCH_FORWARD_PAGES)
+            .saturating_add(PREVIEW_PREFETCH_BACKWARD_PAGES),
+    );
+    for offset in 0..visible_pages.max(1) {
+        if let Some(index) = center.checked_add(offset) {
+            push_unique_prefetch_index(&mut indices, index, page_count);
+        }
+    }
+
+    match direction {
+        NavigationDirection::Forward => {
+            for offset in 1..=PREVIEW_PREFETCH_FORWARD_PAGES {
+                if let Some(index) = center.checked_add(offset) {
+                    push_unique_prefetch_index(&mut indices, index, page_count);
+                }
+            }
+            for offset in 1..=PREVIEW_PREFETCH_BACKWARD_PAGES {
+                if let Some(index) = center.checked_sub(offset) {
+                    push_unique_prefetch_index(&mut indices, index, page_count);
+                }
+            }
+        }
+        NavigationDirection::Backward => {
+            for offset in 1..=PREVIEW_PREFETCH_FORWARD_PAGES {
+                if let Some(index) = center.checked_sub(offset) {
+                    push_unique_prefetch_index(&mut indices, index, page_count);
+                }
+            }
+            for offset in 1..=PREVIEW_PREFETCH_BACKWARD_PAGES {
+                if let Some(index) = center.checked_add(offset) {
+                    push_unique_prefetch_index(&mut indices, index, page_count);
+                }
+            }
+        }
+    }
+    indices
+}
+
+fn push_unique_prefetch_index(indices: &mut Vec<usize>, index: usize, page_count: usize) {
+    if index < page_count && !indices.contains(&index) {
+        indices.push(index);
+    }
 }
 
 #[derive(Clone)]

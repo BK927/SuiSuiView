@@ -217,6 +217,23 @@ pub(super) fn record_page_turn_ready(
     );
 }
 
+pub(super) fn record_page_turn_request(
+    cache_state: PageCacheState,
+    page: usize,
+    target_long_edge: u32,
+) {
+    perf_trace::record_duration(
+        "page_turn_request",
+        Duration::ZERO,
+        &[
+            PerfField::Bool("cached", cache_state.cached()),
+            PerfField::Str("cache_state", cache_state.as_str()),
+            PerfField::Usize("page", page),
+            PerfField::U32("target_long_edge", target_long_edge),
+        ],
+    );
+}
+
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 #[derive(Debug, Clone, Copy)]
 pub(super) struct AppCacheSnapshot {

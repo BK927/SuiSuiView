@@ -151,8 +151,8 @@ pub enum GpuEffectMode {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DisplayUpscaler {
-    #[default]
     Auto,
+    #[default]
     None,
     WgslBilinear,
     WgslFsr1Style,
@@ -162,8 +162,8 @@ pub enum DisplayUpscaler {
 
 impl DisplayUpscaler {
     pub const ALL: [Self; 6] = [
-        Self::Auto,
         Self::None,
+        Self::Auto,
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
@@ -547,8 +547,8 @@ impl Default for AppSettings {
             decode_mode: DecodeMode::AutoFast,
             resize_filter: ResizeFilter::Bicubic,
             gpu_effect_mode: GpuEffectMode::Auto,
-            renderer_mode: RendererMode::Wgpu,
-            display_upscaler: DisplayUpscaler::Auto,
+            renderer_mode: RendererMode::LowMemoryGlow,
+            display_upscaler: DisplayUpscaler::None,
             prefetch_enabled: true,
             progressive_preview_enabled: true,
             cache_memory_mode: CacheMemoryMode::Auto,
