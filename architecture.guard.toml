@@ -107,3 +107,9 @@ path = "src/app.rs"
 rule = "legacy_growth"
 reason = "Temporary first-visible diagnostics wiring until viewer rendering is extracted."
 expires = "2026-06-15"
+
+[[waivers]]
+path = "src/core/upscale_bench/gpu/cunny.rs"
+rule = "large_new_file"
+reason = "Temporary CuNNy bench runner and exact pass metadata stay together until generated metadata is split after NVL variant expansion."
+expires = "2026-06-30"
