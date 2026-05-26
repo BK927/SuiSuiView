@@ -201,6 +201,7 @@ impl GpuUpscaleBench {
                 | DisplayUpscaler::CunnyFasterNvl
                 | DisplayUpscaler::CunnyFastNvl
                 | DisplayUpscaler::Cunny3x12Nvl
+                | DisplayUpscaler::Cunny4x12Nvl
         ) {
             return self
                 .cunny

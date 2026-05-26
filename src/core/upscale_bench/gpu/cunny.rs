@@ -444,7 +444,7 @@ struct CunnyVariantSource {
     pass_specs: &'static [CunnyPassSpec],
 }
 
-const CUNNY_VARIANTS: [CunnyVariantSource; 4] = [
+const CUNNY_VARIANTS: [CunnyVariantSource; 5] = [
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyVeryfastNvl,
         name: "CuNNy veryfast NVL",
@@ -472,6 +472,13 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 4] = [
         shader: include_str!("../../cunny_3x12_nvl.wgsl"),
         entry_points: &CUNNY_3X12_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_3X12_NVL_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::Cunny4x12Nvl,
+        name: "CuNNy 4x12 NVL",
+        shader: include_str!("../../cunny_4x12_nvl.wgsl"),
+        entry_points: &CUNNY_4X12_NVL_ENTRY_POINTS,
+        pass_specs: &CUNNY_4X12_NVL_PASSES,
     },
 ];
 
@@ -502,6 +509,15 @@ const CUNNY_3X12_NVL_ENTRY_POINTS: [&str; 5] = [
     "cunny_3x12_nvl_pass_2",
     "cunny_3x12_nvl_pass_3",
     "cunny_3x12_nvl_pass_4",
+];
+
+const CUNNY_4X12_NVL_ENTRY_POINTS: [&str; 6] = [
+    "cunny_4x12_nvl_pass_0",
+    "cunny_4x12_nvl_pass_1",
+    "cunny_4x12_nvl_pass_2",
+    "cunny_4x12_nvl_pass_3",
+    "cunny_4x12_nvl_pass_4",
+    "cunny_4x12_nvl_pass_5",
 ];
 
 const CUNNY_VERYFAST_NVL_PASSES: [CunnyPassSpec; 4] = [
@@ -580,6 +596,33 @@ const CUNNY_3X12_NVL_PASSES: [CunnyPassSpec; 5] = [
     },
     CunnyPassSpec {
         inputs: [3, 4, 5],
+        outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+    },
+];
+
+const CUNNY_4X12_NVL_PASSES: [CunnyPassSpec; 6] = [
+    CunnyPassSpec {
+        inputs: [DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: [0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: [0, 1, 2],
+        outputs: [3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: [3, 4, 5],
+        outputs: [0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: [0, 1, 2],
+        outputs: [3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: [3, 4, 5],
+        outputs: [0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: [0, 1, 2],
         outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
     },
 ];
