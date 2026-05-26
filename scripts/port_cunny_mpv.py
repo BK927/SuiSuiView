@@ -146,10 +146,11 @@ def validate_supported_subset(text: str, passes: list[PassBlock]) -> None:
     for token in unsupported_tokens:
         if token in lowered:
             raise ValueError(f"Unsupported CuNNy mpv shader feature: {token}")
-    if len(passes) != 4:
-        raise ValueError(f"Expected four supported CuNNy mpv passes, got {len(passes)}")
+    if len(passes) < 2:
+        raise ValueError(f"Expected at least two supported CuNNy mpv passes, got {len(passes)}")
     for index, block in enumerate(passes):
-        if index < 3:
+        final_pass = index == len(passes) - 1
+        if not final_pass:
             expected_height = "LUMA.h"
             expected_components = "4"
             if block.save is None:
@@ -168,7 +169,7 @@ def validate_supported_subset(text: str, passes: list[PassBlock]) -> None:
                 f"{(block.width, block.height, block.components)}, "
                 f"expected height/components {(expected_height, expected_components)}"
             )
-        if index < 3:
+        if not final_pass:
             validate_intermediate_stores(block)
 
 

@@ -71,7 +71,11 @@ pub enum DisplayUpscaler {
     Cunny2x12Soft,
     Cunny2x12Ds,
     Cunny3x12Nvl,
+    Cunny3x12Soft,
+    Cunny3x12Ds,
     Cunny4x12Nvl,
+    Cunny4x12Soft,
+    Cunny4x12Ds,
     Cunny4x16Nvl,
     Cunny4x24Nvl,
     Cunny4x32Nvl,
@@ -115,7 +119,7 @@ macro_rules! upscaler_candidate {
 }
 
 impl DisplayUpscaler {
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 30] = [
         Self::Auto,
         Self::None,
         Self::WgslBilinear,
@@ -137,14 +141,18 @@ impl DisplayUpscaler {
         Self::Cunny2x12Soft,
         Self::Cunny2x12Ds,
         Self::Cunny3x12Nvl,
+        Self::Cunny3x12Soft,
+        Self::Cunny3x12Ds,
         Self::Cunny4x12Nvl,
+        Self::Cunny4x12Soft,
+        Self::Cunny4x12Ds,
         Self::Cunny4x16Nvl,
         Self::Cunny4x24Nvl,
         Self::Cunny4x32Nvl,
         Self::Cunny8x32Nvl,
     ];
 
-    pub const GPU_METHODS: [Self; 27] = [
+    pub const GPU_METHODS: [Self; 31] = [
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
@@ -167,7 +175,11 @@ impl DisplayUpscaler {
         Self::Cunny2x12Soft,
         Self::Cunny2x12Ds,
         Self::Cunny3x12Nvl,
+        Self::Cunny3x12Soft,
+        Self::Cunny3x12Ds,
         Self::Cunny4x12Nvl,
+        Self::Cunny4x12Soft,
+        Self::Cunny4x12Ds,
         Self::Cunny4x16Nvl,
         Self::Cunny4x24Nvl,
         Self::Cunny4x32Nvl,
@@ -420,11 +432,51 @@ impl DisplayUpscaler {
                 "wgpu compute",
                 true,
             ),
+            Self::Cunny3x12Soft => upscaler_candidate!(
+                "CuNNy",
+                "CuNNy 3x12 SOFT",
+                "funnyplanter/CuNNy mpv soft",
+                "LGPL-3.0-or-later",
+                "2x",
+                "5",
+                "wgpu compute",
+                true,
+            ),
+            Self::Cunny3x12Ds => upscaler_candidate!(
+                "CuNNy",
+                "CuNNy 3x12 DS",
+                "funnyplanter/CuNNy mpv ds",
+                "LGPL-3.0-or-later",
+                "2x",
+                "5",
+                "wgpu compute",
+                true,
+            ),
             Self::Cunny4x12Nvl => upscaler_candidate!(
                 "CuNNy",
                 "CuNNy 4x12 NVL",
                 "funnyplanter/CuNNy magpie normal",
                 "LGPL-3.0-or-later / GPL-3.0-or-later effect header",
+                "2x",
+                "6",
+                "wgpu compute",
+                true,
+            ),
+            Self::Cunny4x12Soft => upscaler_candidate!(
+                "CuNNy",
+                "CuNNy 4x12 SOFT",
+                "funnyplanter/CuNNy mpv soft",
+                "LGPL-3.0-or-later",
+                "2x",
+                "6",
+                "wgpu compute",
+                true,
+            ),
+            Self::Cunny4x12Ds => upscaler_candidate!(
+                "CuNNy",
+                "CuNNy 4x12 DS",
+                "funnyplanter/CuNNy mpv ds",
+                "LGPL-3.0-or-later",
                 "2x",
                 "6",
                 "wgpu compute",
@@ -499,7 +551,11 @@ impl DisplayUpscaler {
             Self::Cunny2x12Soft => "cunny_2x12_soft",
             Self::Cunny2x12Ds => "cunny_2x12_ds",
             Self::Cunny3x12Nvl => "cunny_3x12_nvl",
+            Self::Cunny3x12Soft => "cunny_3x12_soft",
+            Self::Cunny3x12Ds => "cunny_3x12_ds",
             Self::Cunny4x12Nvl => "cunny_4x12_nvl",
+            Self::Cunny4x12Soft => "cunny_4x12_soft",
+            Self::Cunny4x12Ds => "cunny_4x12_ds",
             Self::Cunny4x16Nvl => "cunny_4x16_nvl",
             Self::Cunny4x24Nvl => "cunny_4x24_nvl",
             Self::Cunny4x32Nvl => "cunny_4x32_nvl",
@@ -548,7 +604,11 @@ impl DisplayUpscaler {
             | Self::Cunny2x12Soft
             | Self::Cunny2x12Ds
             | Self::Cunny3x12Nvl
+            | Self::Cunny3x12Soft
+            | Self::Cunny3x12Ds
             | Self::Cunny4x12Nvl
+            | Self::Cunny4x12Soft
+            | Self::Cunny4x12Ds
             | Self::Cunny4x16Nvl
             | Self::Cunny4x24Nvl
             | Self::Cunny4x32Nvl
@@ -568,7 +628,11 @@ impl DisplayUpscaler {
             | Self::Cunny2x12Soft
             | Self::Cunny2x12Ds
             | Self::Cunny3x12Nvl
+            | Self::Cunny3x12Soft
+            | Self::Cunny3x12Ds
             | Self::Cunny4x12Nvl
+            | Self::Cunny4x12Soft
+            | Self::Cunny4x12Ds
             | Self::Cunny4x16Nvl
             | Self::Cunny4x24Nvl
             | Self::Cunny4x32Nvl
@@ -602,7 +666,11 @@ impl DisplayUpscaler {
             | Self::Cunny2x12Soft
             | Self::Cunny2x12Ds
             | Self::Cunny3x12Nvl
+            | Self::Cunny3x12Soft
+            | Self::Cunny3x12Ds
             | Self::Cunny4x12Nvl
+            | Self::Cunny4x12Soft
+            | Self::Cunny4x12Ds
             | Self::Cunny4x16Nvl
             | Self::Cunny4x24Nvl
             | Self::Cunny4x32Nvl
