@@ -137,6 +137,8 @@ standalone files.
 - [ ] EXIF/file-info panels.
 - [ ] Printing, slideshow, and external editor workflows.
 - [ ] Broader AI backend options after distribution review.
+- [ ] SR Lab research-model path for RFDN, RepRFN, and SPAN/SPANV2 after
+  redistributable weights, model conversion, and WGSL tiny-net runtime proof.
 
 <details>
 <summary>Keyboard And Mouse Reference</summary>
