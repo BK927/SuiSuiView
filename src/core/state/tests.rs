@@ -62,7 +62,7 @@ fn automatic_display_upscaler_only_uses_heavy_shader_for_actual_upscale() {
     );
     assert_eq!(
         DisplayUpscaler::Auto.resolve_for_render([1400, 2100], [2000, 3000]),
-        Some(DisplayUpscaler::WgslFsr1Style)
+        Some(DisplayUpscaler::WgslFsr1EasuRcas)
     );
     assert_eq!(
         DisplayUpscaler::WgslNisStyle.resolve_for_render([1600, 2400], [800, 1200]),
