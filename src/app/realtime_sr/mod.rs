@@ -58,6 +58,7 @@ impl RealtimeSrResources {
                 | DisplayUpscaler::CunnyFastNvl
                 | DisplayUpscaler::Cunny3x12Nvl
                 | DisplayUpscaler::Cunny4x12Nvl
+                | DisplayUpscaler::Cunny4x16Nvl
                 | DisplayUpscaler::WgslAnime4kV32CnnX2S
                 | DisplayUpscaler::WgslAnime4kV32CnnX2M
                 | DisplayUpscaler::WgslAcnetF8B4Luma
@@ -91,7 +92,8 @@ impl RealtimeSrResources {
             | DisplayUpscaler::CunnyFasterNvl
             | DisplayUpscaler::CunnyFastNvl
             | DisplayUpscaler::Cunny3x12Nvl
-            | DisplayUpscaler::Cunny4x12Nvl => Some(
+            | DisplayUpscaler::Cunny4x12Nvl
+            | DisplayUpscaler::Cunny4x16Nvl => Some(
                 self.cunny
                     .get_or_insert_with(|| CunnyRenderer::new(device))
                     .render(method, device, encoder, source_view, source_size),
@@ -364,7 +366,7 @@ struct CunnyVariantSource {
     pass_specs: &'static [CunnyPassSpec],
 }
 
-const CUNNY_VARIANTS: [CunnyVariantSource; 5] = [
+const CUNNY_VARIANTS: [CunnyVariantSource; 6] = [
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyVeryfastNvl,
         name: "CuNNy veryfast NVL",
@@ -399,6 +401,13 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 5] = [
         shader: include_str!("../../core/cunny_4x12_nvl.wgsl"),
         entry_points: &CUNNY_4X12_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_4X12_NVL_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::Cunny4x16Nvl,
+        name: "CuNNy 4x16 NVL",
+        shader: include_str!("../../core/cunny_4x16_nvl.wgsl"),
+        entry_points: &CUNNY_4X16_NVL_ENTRY_POINTS,
+        pass_specs: &CUNNY_4X16_NVL_PASSES,
     },
 ];
 
@@ -438,6 +447,20 @@ const CUNNY_4X12_NVL_ENTRY_POINTS: [&str; 6] = [
     "cunny_4x12_nvl_pass_3",
     "cunny_4x12_nvl_pass_4",
     "cunny_4x12_nvl_pass_5",
+];
+
+const CUNNY_4X16_NVL_ENTRY_POINTS: [&str; 11] = [
+    "cunny_4x16_nvl_pass_0_chunk_0",
+    "cunny_4x16_nvl_pass_0_chunk_1",
+    "cunny_4x16_nvl_pass_1_chunk_0",
+    "cunny_4x16_nvl_pass_1_chunk_1",
+    "cunny_4x16_nvl_pass_2_chunk_0",
+    "cunny_4x16_nvl_pass_2_chunk_1",
+    "cunny_4x16_nvl_pass_3_chunk_0",
+    "cunny_4x16_nvl_pass_3_chunk_1",
+    "cunny_4x16_nvl_pass_4_chunk_0",
+    "cunny_4x16_nvl_pass_4_chunk_1",
+    "cunny_4x16_nvl_pass_5",
 ];
 
 const CUNNY_VERYFAST_NVL_PASSES: [CunnyPassSpec; 4] = [
@@ -544,6 +567,53 @@ const CUNNY_4X12_NVL_PASSES: [CunnyPassSpec; 6] = [
     CunnyPassSpec {
         inputs: &[0, 1, 2],
         outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+    },
+];
+
+const CUNNY_4X16_NVL_PASSES: [CunnyPassSpec; 11] = [
+    CunnyPassSpec {
+        inputs: &[],
+        outputs: &[0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: &[],
+        outputs: &[3],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3],
+        outputs: &[4, 5, 6],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3],
+        outputs: &[7],
+    },
+    CunnyPassSpec {
+        inputs: &[4, 5, 6, 7],
+        outputs: &[0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: &[4, 5, 6, 7],
+        outputs: &[3],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3],
+        outputs: &[4, 5, 6],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3],
+        outputs: &[7],
+    },
+    CunnyPassSpec {
+        inputs: &[4, 5, 6, 7],
+        outputs: &[0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: &[4, 5, 6, 7],
+        outputs: &[3],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3],
+        outputs: &[],
     },
 ];
 

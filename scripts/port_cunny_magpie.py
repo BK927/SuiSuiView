@@ -99,6 +99,7 @@ class PassBlock:
 @dataclass
 class PassConvertState:
     loaded_samples: set[str]
+    active_outputs: list[str]
 
 
 def parse_passes(text: str) -> list[PassBlock]:
@@ -225,9 +226,11 @@ def convert_statement(statement: str, block: PassBlock, state: PassConvertState)
     store = re.match(r"^(T\d+)\[gxy\]\s*=\s*(r\d+)$", statement)
     if store:
         texture, value = store.groups()
-        if texture not in block.outputs:
+        if texture not in state.active_outputs:
+            if texture in block.outputs:
+                return []
             raise ValueError(f"{texture} is not an output of pass {block.desc}")
-        slot = block.outputs.index(texture)
+        slot = state.active_outputs.index(texture)
         return [f"textureStore(out{slot}_tex, coord, {value});"]
 
     return [statement + ";"]
@@ -266,13 +269,31 @@ def final_write_lines(block: PassBlock) -> list[str]:
     ]
 
 
-def generate_pass(prefix: str, index: int, block: PassBlock) -> str:
+def entry_point_name(prefix: str, index: int, chunk_index: int | None = None) -> str:
+    if chunk_index is None:
+        return f"{prefix}_pass_{index}"
+    return f"{prefix}_pass_{index}_chunk_{chunk_index}"
+
+
+def output_chunks(block: PassBlock) -> list[list[str]]:
+    if "OUTPUT" in block.outputs or len(block.outputs) <= 3:
+        return [block.outputs]
+    return [block.outputs[index:index + 3] for index in range(0, len(block.outputs), 3)]
+
+
+def generate_pass(
+    prefix: str,
+    index: int,
+    block: PassBlock,
+    active_outputs: list[str],
+    chunk_index: int | None = None,
+) -> str:
     lines = [f"// {block.desc}"]
     lines.append("@compute @workgroup_size(8, 8)")
-    lines.append(f"fn {prefix}_pass_{index}(@builtin(global_invocation_id) global_id: vec3<u32>) {{")
+    lines.append(f"fn {entry_point_name(prefix, index, chunk_index)}(@builtin(global_invocation_id) global_id: vec3<u32>) {{")
     lines.append("    if (global_id.x >= params.source_width || global_id.y >= params.source_height) { return; }")
     lines.append("    let coord = vec2<i32>(i32(global_id.x), i32(global_id.y));")
-    state = PassConvertState(loaded_samples=set())
+    state = PassConvertState(loaded_samples=set(), active_outputs=active_outputs)
     for statement in split_statements(block.body):
         for converted in convert_statement(statement, block, state):
             lines.append(f"    {converted}")
@@ -297,8 +318,18 @@ def generate(source: Path, prefix: str, label: str) -> str:
         COMMON_HEADER,
     ]
     for index, block in enumerate(passes):
-        result.append(generate_pass(prefix, index, block))
-        result.append("")
+        chunks = output_chunks(block)
+        for chunk_index, active_outputs in enumerate(chunks):
+            result.append(
+                generate_pass(
+                    prefix,
+                    index,
+                    block,
+                    active_outputs,
+                    None if len(chunks) == 1 else chunk_index,
+                )
+            )
+            result.append("")
     return "\n".join(result).rstrip() + "\n"
 
 

@@ -88,6 +88,7 @@ fn product_display_upscalers_hide_style_candidates() {
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::CunnyFastNvl));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::Cunny3x12Nvl));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::Cunny4x12Nvl));
+    assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::Cunny4x16Nvl));
     assert!(
         DisplayUpscaler::WgslAnime4kV32CnnX2S
             .candidate()
@@ -112,6 +113,7 @@ fn product_display_upscalers_hide_style_candidates() {
     assert_eq!(DisplayUpscaler::CunnyFastNvl.candidate().family, "CuNNy");
     assert_eq!(DisplayUpscaler::Cunny3x12Nvl.label(), "CuNNy 3x12 NVL");
     assert_eq!(DisplayUpscaler::Cunny4x12Nvl.label(), "CuNNy 4x12 NVL");
+    assert_eq!(DisplayUpscaler::Cunny4x16Nvl.label(), "CuNNy 4x16 NVL");
 }
 
 #[test]
@@ -143,6 +145,10 @@ fn exact_cunny_variants_render_only_when_upscaling() {
     assert_eq!(
         DisplayUpscaler::Cunny4x12Nvl.resolve_for_render([800, 1200], [1600, 2400]),
         Some(DisplayUpscaler::Cunny4x12Nvl)
+    );
+    assert_eq!(
+        DisplayUpscaler::Cunny4x16Nvl.resolve_for_render([800, 1200], [1600, 2400]),
+        Some(DisplayUpscaler::Cunny4x16Nvl)
     );
     assert_eq!(
         DisplayUpscaler::WgslAnime4kV32CnnX2S.resolve_for_render([800, 1200], [1600, 2400]),
