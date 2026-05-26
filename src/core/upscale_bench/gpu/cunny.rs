@@ -421,13 +421,20 @@ struct CunnyVariantSource {
     pass_specs: &'static [CunnyPassSpec],
 }
 
-const CUNNY_VARIANTS: [CunnyVariantSource; 10] = [
+const CUNNY_VARIANTS: [CunnyVariantSource; 12] = [
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyVeryfastNvl,
         name: "CuNNy veryfast NVL",
         shader: include_str!("../../cunny_veryfast_nvl.wgsl"),
         entry_points: &CUNNY_VERYFAST_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_VERYFAST_NVL_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::CunnyVeryfastSoft,
+        name: "CuNNy veryfast SOFT",
+        shader: include_str!("../../cunny_veryfast_soft.wgsl"),
+        entry_points: &CUNNY_VERYFAST_SOFT_ENTRY_POINTS,
+        pass_specs: &CUNNY_VERYFAST_SOFT_PASSES,
     },
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyFasterNvl,
@@ -449,6 +456,13 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 10] = [
         shader: include_str!("../../cunny_fast_nvl.wgsl"),
         entry_points: &CUNNY_FAST_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_FAST_NVL_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::CunnyFastSoft,
+        name: "CuNNy fast SOFT",
+        shader: include_str!("../../cunny_fast_soft.wgsl"),
+        entry_points: &CUNNY_FAST_SOFT_ENTRY_POINTS,
+        pass_specs: &CUNNY_FAST_SOFT_PASSES,
     },
     CunnyVariantSource {
         method: DisplayUpscaler::Cunny3x12Nvl,
@@ -501,6 +515,13 @@ const CUNNY_VERYFAST_NVL_ENTRY_POINTS: [&str; 4] = [
     "cunny_veryfast_nvl_pass_3",
 ];
 
+const CUNNY_VERYFAST_SOFT_ENTRY_POINTS: [&str; 4] = [
+    "cunny_veryfast_soft_pass_0",
+    "cunny_veryfast_soft_pass_1",
+    "cunny_veryfast_soft_pass_2",
+    "cunny_veryfast_soft_pass_3",
+];
+
 const CUNNY_FASTER_NVL_ENTRY_POINTS: [&str; 4] = [
     "cunny_faster_nvl_pass_0",
     "cunny_faster_nvl_pass_1",
@@ -520,6 +541,13 @@ const CUNNY_FAST_NVL_ENTRY_POINTS: [&str; 4] = [
     "cunny_fast_nvl_pass_1",
     "cunny_fast_nvl_pass_2",
     "cunny_fast_nvl_pass_3",
+];
+
+const CUNNY_FAST_SOFT_ENTRY_POINTS: [&str; 4] = [
+    "cunny_fast_soft_pass_0",
+    "cunny_fast_soft_pass_1",
+    "cunny_fast_soft_pass_2",
+    "cunny_fast_soft_pass_3",
 ];
 
 const CUNNY_3X12_NVL_ENTRY_POINTS: [&str; 5] = [
@@ -636,6 +664,25 @@ const CUNNY_VERYFAST_NVL_PASSES: [CunnyPassSpec; 4] = [
     },
 ];
 
+const CUNNY_VERYFAST_SOFT_PASSES: [CunnyPassSpec; 4] = [
+    CunnyPassSpec {
+        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: &[0, 1, DUMMY_OUT0],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, DUMMY_READ],
+        outputs: &[2, 3, DUMMY_OUT0],
+    },
+    CunnyPassSpec {
+        inputs: &[2, 3, DUMMY_READ],
+        outputs: &[0, DUMMY_OUT0, DUMMY_OUT1],
+    },
+    CunnyPassSpec {
+        inputs: &[0, DUMMY_READ, DUMMY_READ],
+        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+    },
+];
+
 const CUNNY_FASTER_NVL_PASSES: [CunnyPassSpec; 4] = [
     CunnyPassSpec {
         inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
@@ -675,6 +722,25 @@ const CUNNY_FASTER_SOFT_PASSES: [CunnyPassSpec; 4] = [
 ];
 
 const CUNNY_FAST_NVL_PASSES: [CunnyPassSpec; 4] = [
+    CunnyPassSpec {
+        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: &[0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2],
+        outputs: &[3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: &[3, 4, 5],
+        outputs: &[0, 1, DUMMY_OUT0],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, DUMMY_READ],
+        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+    },
+];
+
+const CUNNY_FAST_SOFT_PASSES: [CunnyPassSpec; 4] = [
     CunnyPassSpec {
         inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
         outputs: &[0, 1, 2],

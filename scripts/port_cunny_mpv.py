@@ -150,17 +150,52 @@ def validate_supported_subset(text: str, passes: list[PassBlock]) -> None:
         raise ValueError(f"Expected four CuNNy faster SOFT passes, got {len(passes)}")
     for index, block in enumerate(passes):
         if index < 3:
-            expected = ("LUMA.w 2 *", "LUMA.h", "4")
+            expected_height = "LUMA.h"
+            expected_components = "4"
             if block.save is None:
                 raise ValueError(f"Expected intermediate SAVE directive for {block.desc}")
         else:
-            expected = ("LUMA.w 2 *", "LUMA.h 2 *", "1")
+            expected_height = "LUMA.h 2 *"
+            expected_components = "1"
             if block.save is not None:
                 raise ValueError(f"Expected final pass without SAVE directive for {block.desc}")
-        actual = (block.width, block.height, block.components)
-        if actual != expected:
+        supported_widths = {"LUMA.w", "LUMA.w 2 *", "LUMA.w 3 *"}
+        if block.width not in supported_widths:
+            raise ValueError(f"Unsupported WIDTH for {block.desc}: {block.width}")
+        if block.height != expected_height or block.components != expected_components:
             raise ValueError(
-                f"Unsupported dimensions/components for {block.desc}: {actual}, expected {expected}"
+                f"Unsupported dimensions/components for {block.desc}: "
+                f"{(block.width, block.height, block.components)}, "
+                f"expected height/components {(expected_height, expected_components)}"
+            )
+        if index < 3:
+            validate_intermediate_stores(block)
+
+
+def feature_slot_count(width: str) -> int:
+    if width == "LUMA.w":
+        return 1
+    if width == "LUMA.w 2 *":
+        return 2
+    if width == "LUMA.w 3 *":
+        return 3
+    raise ValueError(f"Unsupported feature WIDTH: {width}")
+
+
+def validate_intermediate_stores(block: PassBlock) -> None:
+    expected_slots = feature_slot_count(block.width)
+    stores = re.findall(r"imageStore\(out_image,\s*opos\s*\+\s*ivec2\((\d+),\s*(\d+)\)", block.body)
+    if not stores:
+        raise ValueError(f"Expected intermediate imageStore statements for {block.desc}")
+    for x_text, y_text in stores:
+        x = int(x_text)
+        y = int(y_text)
+        if y != 0:
+            raise ValueError(f"Unsupported packed output row for {block.desc}: ivec2({x}, {y})")
+        if x >= expected_slots or x >= 3:
+            raise ValueError(
+                f"Unsupported output slot for {block.desc}: {x}, "
+                f"expected less than {min(expected_slots, 3)}"
             )
 
 

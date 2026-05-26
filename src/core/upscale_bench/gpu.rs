@@ -198,9 +198,11 @@ impl GpuUpscaleBench {
         if matches!(
             method,
             DisplayUpscaler::CunnyVeryfastNvl
+                | DisplayUpscaler::CunnyVeryfastSoft
                 | DisplayUpscaler::CunnyFasterNvl
                 | DisplayUpscaler::CunnyFasterSoft
                 | DisplayUpscaler::CunnyFastNvl
+                | DisplayUpscaler::CunnyFastSoft
                 | DisplayUpscaler::Cunny3x12Nvl
                 | DisplayUpscaler::Cunny4x12Nvl
                 | DisplayUpscaler::Cunny4x16Nvl

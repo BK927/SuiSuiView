@@ -84,9 +84,11 @@ fn product_display_upscalers_hide_style_candidates() {
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslAcnetF8B4HdnLuma));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslAcnetF8B4BoxHdnLuma));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::CunnyVeryfastNvl));
+    assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::CunnyVeryfastSoft));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::CunnyFasterNvl));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::CunnyFasterSoft));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::CunnyFastNvl));
+    assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::CunnyFastSoft));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::Cunny3x12Nvl));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::Cunny4x12Nvl));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::Cunny4x16Nvl));
@@ -113,9 +115,19 @@ fn product_display_upscalers_hide_style_candidates() {
             .candidate()
             .product_visible
     );
+    assert!(
+        DisplayUpscaler::CunnyVeryfastSoft
+            .candidate()
+            .product_visible
+    );
     assert!(DisplayUpscaler::CunnyFasterNvl.candidate().product_visible);
     assert!(DisplayUpscaler::CunnyFasterSoft.candidate().product_visible);
     assert_eq!(DisplayUpscaler::CunnyFastNvl.candidate().family, "CuNNy");
+    assert_eq!(DisplayUpscaler::CunnyFastSoft.candidate().family, "CuNNy");
+    assert_eq!(
+        DisplayUpscaler::CunnyVeryfastSoft.label(),
+        "CuNNy veryfast SOFT"
+    );
     assert_eq!(
         DisplayUpscaler::CunnyFasterSoft.label(),
         "CuNNy faster SOFT"
@@ -139,6 +151,14 @@ fn exact_cunny_variants_render_only_when_upscaling() {
         Some(DisplayUpscaler::CunnyVeryfastNvl)
     );
     assert_eq!(
+        DisplayUpscaler::CunnyVeryfastSoft.resolve_for_render([1600, 2400], [800, 1200]),
+        None
+    );
+    assert_eq!(
+        DisplayUpscaler::CunnyVeryfastSoft.resolve_for_render([800, 1200], [1600, 2400]),
+        Some(DisplayUpscaler::CunnyVeryfastSoft)
+    );
+    assert_eq!(
         DisplayUpscaler::CunnyFasterNvl.resolve_for_render([1600, 2400], [800, 1200]),
         None
     );
@@ -157,6 +177,10 @@ fn exact_cunny_variants_render_only_when_upscaling() {
     assert_eq!(
         DisplayUpscaler::CunnyFastNvl.resolve_for_render([800, 1200], [1600, 2400]),
         Some(DisplayUpscaler::CunnyFastNvl)
+    );
+    assert_eq!(
+        DisplayUpscaler::CunnyFastSoft.resolve_for_render([800, 1200], [1600, 2400]),
+        Some(DisplayUpscaler::CunnyFastSoft)
     );
     assert_eq!(
         DisplayUpscaler::Cunny3x12Nvl.resolve_for_render([800, 1200], [1600, 2400]),
