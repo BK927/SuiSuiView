@@ -214,7 +214,7 @@ Source: https://github.com/TianZerL/ACNetGLSL
 
 CuNNy
 License: LGPL-3.0-or-later repository license; reviewed Magpie effect headers
-state GPL-3.0-or-later terms; reviewed mpv SOFT shader header states
+state GPL-3.0-or-later terms; reviewed mpv SOFT/DS shader headers state
 LGPL-3.0-or-later terms.
 Copyright: Copyright (c) 2024 funnyplanter
 Source: https://github.com/funnyplanter/CuNNy
@@ -231,7 +231,9 @@ Source: https://github.com/funnyplanter/CuNNy
   `magpie/normal/CuNNy-8x32-NVL.hlsl`, and
   `mpv/soft/CuNNy-veryfast-SOFT.glsl`,
   `mpv/soft/CuNNy-faster-SOFT.glsl`, and
-  `mpv/soft/CuNNy-fast-SOFT.glsl`. SuiSuiView is GPL-3.0-only, so the
+  `mpv/soft/CuNNy-fast-SOFT.glsl`, and
+  `mpv/ds/CuNNy-faster-DS.glsl`, and
+  `mpv/ds/CuNNy-fast-DS.glsl`. SuiSuiView is GPL-3.0-only, so the
   GPL/LGPL-compatible source terms are accepted here. The corresponding
   generated WGSL source is included in the repository.
 

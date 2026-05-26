@@ -64,8 +64,10 @@ pub enum DisplayUpscaler {
     CunnyVeryfastSoft,
     CunnyFasterNvl,
     CunnyFasterSoft,
+    CunnyFasterDs,
     CunnyFastNvl,
     CunnyFastSoft,
+    CunnyFastDs,
     Cunny3x12Nvl,
     Cunny4x12Nvl,
     Cunny4x16Nvl,
@@ -111,7 +113,7 @@ macro_rules! upscaler_candidate {
 }
 
 impl DisplayUpscaler {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 24] = [
         Self::Auto,
         Self::None,
         Self::WgslBilinear,
@@ -126,8 +128,10 @@ impl DisplayUpscaler {
         Self::CunnyVeryfastSoft,
         Self::CunnyFasterNvl,
         Self::CunnyFasterSoft,
+        Self::CunnyFasterDs,
         Self::CunnyFastNvl,
         Self::CunnyFastSoft,
+        Self::CunnyFastDs,
         Self::Cunny3x12Nvl,
         Self::Cunny4x12Nvl,
         Self::Cunny4x16Nvl,
@@ -136,7 +140,7 @@ impl DisplayUpscaler {
         Self::Cunny8x32Nvl,
     ];
 
-    pub const GPU_METHODS: [Self; 23] = [
+    pub const GPU_METHODS: [Self; 25] = [
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
@@ -152,8 +156,10 @@ impl DisplayUpscaler {
         Self::CunnyVeryfastSoft,
         Self::CunnyFasterNvl,
         Self::CunnyFasterSoft,
+        Self::CunnyFasterDs,
         Self::CunnyFastNvl,
         Self::CunnyFastSoft,
+        Self::CunnyFastDs,
         Self::Cunny3x12Nvl,
         Self::Cunny4x12Nvl,
         Self::Cunny4x16Nvl,
@@ -338,6 +344,16 @@ impl DisplayUpscaler {
                 "wgpu compute",
                 true,
             ),
+            Self::CunnyFasterDs => upscaler_candidate!(
+                "CuNNy",
+                "CuNNy faster DS",
+                "funnyplanter/CuNNy mpv ds",
+                "LGPL-3.0-or-later",
+                "2x",
+                "4",
+                "wgpu compute",
+                true,
+            ),
             Self::CunnyFastNvl => upscaler_candidate!(
                 "CuNNy",
                 "CuNNy fast NVL",
@@ -352,6 +368,16 @@ impl DisplayUpscaler {
                 "CuNNy",
                 "CuNNy fast SOFT",
                 "funnyplanter/CuNNy mpv soft",
+                "LGPL-3.0-or-later",
+                "2x",
+                "4",
+                "wgpu compute",
+                true,
+            ),
+            Self::CunnyFastDs => upscaler_candidate!(
+                "CuNNy",
+                "CuNNy fast DS",
+                "funnyplanter/CuNNy mpv ds",
                 "LGPL-3.0-or-later",
                 "2x",
                 "4",
@@ -440,8 +466,10 @@ impl DisplayUpscaler {
             Self::CunnyVeryfastSoft => "cunny_veryfast_soft",
             Self::CunnyFasterNvl => "cunny_faster_nvl",
             Self::CunnyFasterSoft => "cunny_faster_soft",
+            Self::CunnyFasterDs => "cunny_faster_ds",
             Self::CunnyFastNvl => "cunny_fast_nvl",
             Self::CunnyFastSoft => "cunny_fast_soft",
+            Self::CunnyFastDs => "cunny_fast_ds",
             Self::Cunny3x12Nvl => "cunny_3x12_nvl",
             Self::Cunny4x12Nvl => "cunny_4x12_nvl",
             Self::Cunny4x16Nvl => "cunny_4x16_nvl",
@@ -485,8 +513,10 @@ impl DisplayUpscaler {
             | Self::CunnyVeryfastSoft
             | Self::CunnyFasterNvl
             | Self::CunnyFasterSoft
+            | Self::CunnyFasterDs
             | Self::CunnyFastNvl
             | Self::CunnyFastSoft
+            | Self::CunnyFastDs
             | Self::Cunny3x12Nvl
             | Self::Cunny4x12Nvl
             | Self::Cunny4x16Nvl
@@ -501,8 +531,10 @@ impl DisplayUpscaler {
             | Self::CunnyVeryfastSoft
             | Self::CunnyFasterNvl
             | Self::CunnyFasterSoft
+            | Self::CunnyFasterDs
             | Self::CunnyFastNvl
             | Self::CunnyFastSoft
+            | Self::CunnyFastDs
             | Self::Cunny3x12Nvl
             | Self::Cunny4x12Nvl
             | Self::Cunny4x16Nvl
@@ -531,8 +563,10 @@ impl DisplayUpscaler {
             | Self::CunnyVeryfastSoft
             | Self::CunnyFasterNvl
             | Self::CunnyFasterSoft
+            | Self::CunnyFasterDs
             | Self::CunnyFastNvl
             | Self::CunnyFastSoft
+            | Self::CunnyFastDs
             | Self::Cunny3x12Nvl
             | Self::Cunny4x12Nvl
             | Self::Cunny4x16Nvl

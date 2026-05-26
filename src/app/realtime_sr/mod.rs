@@ -61,8 +61,10 @@ impl RealtimeSrResources {
                 | DisplayUpscaler::CunnyVeryfastSoft
                 | DisplayUpscaler::CunnyFasterNvl
                 | DisplayUpscaler::CunnyFasterSoft
+                | DisplayUpscaler::CunnyFasterDs
                 | DisplayUpscaler::CunnyFastNvl
                 | DisplayUpscaler::CunnyFastSoft
+                | DisplayUpscaler::CunnyFastDs
                 | DisplayUpscaler::Cunny3x12Nvl
                 | DisplayUpscaler::Cunny4x12Nvl
                 | DisplayUpscaler::Cunny4x16Nvl
@@ -102,8 +104,10 @@ impl RealtimeSrResources {
             | DisplayUpscaler::CunnyVeryfastSoft
             | DisplayUpscaler::CunnyFasterNvl
             | DisplayUpscaler::CunnyFasterSoft
+            | DisplayUpscaler::CunnyFasterDs
             | DisplayUpscaler::CunnyFastNvl
             | DisplayUpscaler::CunnyFastSoft
+            | DisplayUpscaler::CunnyFastDs
             | DisplayUpscaler::Cunny3x12Nvl
             | DisplayUpscaler::Cunny4x12Nvl
             | DisplayUpscaler::Cunny4x16Nvl
@@ -395,7 +399,7 @@ struct CunnyVariantSource {
     pass_specs: &'static [CunnyPassSpec],
 }
 
-const CUNNY_VARIANTS: [CunnyVariantSource; 12] = [
+const CUNNY_VARIANTS: [CunnyVariantSource; 14] = [
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyVeryfastNvl,
         name: "CuNNy veryfast NVL",
@@ -425,6 +429,13 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 12] = [
         pass_specs: &CUNNY_FASTER_SOFT_PASSES,
     },
     CunnyVariantSource {
+        method: DisplayUpscaler::CunnyFasterDs,
+        name: "CuNNy faster DS",
+        shader: include_str!("../../core/cunny_faster_ds.wgsl"),
+        entry_points: &CUNNY_FASTER_DS_ENTRY_POINTS,
+        pass_specs: &CUNNY_FASTER_DS_PASSES,
+    },
+    CunnyVariantSource {
         method: DisplayUpscaler::CunnyFastNvl,
         name: "CuNNy fast NVL",
         shader: include_str!("../../core/cunny_fast_nvl.wgsl"),
@@ -437,6 +448,13 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 12] = [
         shader: include_str!("../../core/cunny_fast_soft.wgsl"),
         entry_points: &CUNNY_FAST_SOFT_ENTRY_POINTS,
         pass_specs: &CUNNY_FAST_SOFT_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::CunnyFastDs,
+        name: "CuNNy fast DS",
+        shader: include_str!("../../core/cunny_fast_ds.wgsl"),
+        entry_points: &CUNNY_FAST_DS_ENTRY_POINTS,
+        pass_specs: &CUNNY_FAST_DS_PASSES,
     },
     CunnyVariantSource {
         method: DisplayUpscaler::Cunny3x12Nvl,
@@ -510,6 +528,13 @@ const CUNNY_FASTER_SOFT_ENTRY_POINTS: [&str; 4] = [
     "cunny_faster_soft_pass_3",
 ];
 
+const CUNNY_FASTER_DS_ENTRY_POINTS: [&str; 4] = [
+    "cunny_faster_ds_pass_0",
+    "cunny_faster_ds_pass_1",
+    "cunny_faster_ds_pass_2",
+    "cunny_faster_ds_pass_3",
+];
+
 const CUNNY_FAST_NVL_ENTRY_POINTS: [&str; 4] = [
     "cunny_fast_nvl_pass_0",
     "cunny_fast_nvl_pass_1",
@@ -522,6 +547,13 @@ const CUNNY_FAST_SOFT_ENTRY_POINTS: [&str; 4] = [
     "cunny_fast_soft_pass_1",
     "cunny_fast_soft_pass_2",
     "cunny_fast_soft_pass_3",
+];
+
+const CUNNY_FAST_DS_ENTRY_POINTS: [&str; 4] = [
+    "cunny_fast_ds_pass_0",
+    "cunny_fast_ds_pass_1",
+    "cunny_fast_ds_pass_2",
+    "cunny_fast_ds_pass_3",
 ];
 
 const CUNNY_3X12_NVL_ENTRY_POINTS: [&str; 5] = [
@@ -695,6 +727,8 @@ const CUNNY_FASTER_SOFT_PASSES: [CunnyPassSpec; 4] = [
     },
 ];
 
+const CUNNY_FASTER_DS_PASSES: [CunnyPassSpec; 4] = CUNNY_FASTER_SOFT_PASSES;
+
 const CUNNY_FAST_NVL_PASSES: [CunnyPassSpec; 4] = [
     CunnyPassSpec {
         inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
@@ -732,6 +766,8 @@ const CUNNY_FAST_SOFT_PASSES: [CunnyPassSpec; 4] = [
         outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
     },
 ];
+
+const CUNNY_FAST_DS_PASSES: [CunnyPassSpec; 4] = CUNNY_FAST_SOFT_PASSES;
 
 const CUNNY_3X12_NVL_PASSES: [CunnyPassSpec; 5] = [
     CunnyPassSpec {
