@@ -221,7 +221,8 @@ Source: https://github.com/funnyplanter/CuNNy
   generated WGSL ports derived
   from `magpie/normal/CuNNy-veryfast-NVL.hlsl`,
   `magpie/normal/CuNNy-faster-NVL.hlsl`, and
-  `magpie/normal/CuNNy-fast-NVL.hlsl`. SuiSuiView is GPL-3.0-only, so the
+  `magpie/normal/CuNNy-fast-NVL.hlsl`, and
+  `magpie/normal/CuNNy-3x12-NVL.hlsl`. SuiSuiView is GPL-3.0-only, so the
   GPL/LGPL-compatible source terms are accepted here. The corresponding
   generated WGSL source is included in the repository.
 

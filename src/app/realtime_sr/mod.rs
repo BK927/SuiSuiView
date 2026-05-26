@@ -53,6 +53,7 @@ impl RealtimeSrResources {
             DisplayUpscaler::CunnyVeryfastNvl
                 | DisplayUpscaler::CunnyFasterNvl
                 | DisplayUpscaler::CunnyFastNvl
+                | DisplayUpscaler::Cunny3x12Nvl
                 | DisplayUpscaler::WgslAnime4kV32CnnX2S
                 | DisplayUpscaler::WgslAnime4kV32CnnX2M
                 | DisplayUpscaler::WgslAcnetF8B4Luma
@@ -84,7 +85,8 @@ impl RealtimeSrResources {
         match method {
             DisplayUpscaler::CunnyVeryfastNvl
             | DisplayUpscaler::CunnyFasterNvl
-            | DisplayUpscaler::CunnyFastNvl => Some(
+            | DisplayUpscaler::CunnyFastNvl
+            | DisplayUpscaler::Cunny3x12Nvl => Some(
                 self.cunny
                     .get_or_insert_with(|| CunnyRenderer::new(device))
                     .render(method, device, encoder, source_view, source_size),
@@ -225,8 +227,17 @@ impl CunnyRenderer {
             .iter()
             .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
             .collect();
-        let dummy_texture = create_intermediate_texture(device, source_extent, DUMMY_READ);
-        let dummy_view = dummy_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let dummy_read_texture = create_intermediate_texture(device, source_extent, DUMMY_READ);
+        let dummy_read_view =
+            dummy_read_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let dummy_output_textures: Vec<wgpu::Texture> = [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2]
+            .into_iter()
+            .map(|index| create_intermediate_texture(device, source_extent, index))
+            .collect();
+        let dummy_output_views: Vec<wgpu::TextureView> = dummy_output_textures
+            .iter()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect();
         let output_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(variant.name),
             size: output_extent,
@@ -258,27 +269,57 @@ impl CunnyRenderer {
                     texture_binding(0, source_view),
                     texture_binding(
                         1,
-                        intermediate_view(&intermediate_views, pass_spec.inputs[0], &dummy_view),
+                        intermediate_view(
+                            &intermediate_views,
+                            &dummy_read_view,
+                            &dummy_output_views,
+                            pass_spec.inputs[0],
+                        ),
                     ),
                     texture_binding(
                         2,
-                        intermediate_view(&intermediate_views, pass_spec.inputs[1], &dummy_view),
+                        intermediate_view(
+                            &intermediate_views,
+                            &dummy_read_view,
+                            &dummy_output_views,
+                            pass_spec.inputs[1],
+                        ),
                     ),
                     texture_binding(
                         3,
-                        intermediate_view(&intermediate_views, pass_spec.inputs[2], &dummy_view),
+                        intermediate_view(
+                            &intermediate_views,
+                            &dummy_read_view,
+                            &dummy_output_views,
+                            pass_spec.inputs[2],
+                        ),
                     ),
                     storage_binding(
                         4,
-                        intermediate_view(&intermediate_views, pass_spec.outputs[0], &dummy_view),
+                        intermediate_view(
+                            &intermediate_views,
+                            &dummy_read_view,
+                            &dummy_output_views,
+                            pass_spec.outputs[0],
+                        ),
                     ),
                     storage_binding(
                         5,
-                        intermediate_view(&intermediate_views, pass_spec.outputs[1], &dummy_view),
+                        intermediate_view(
+                            &intermediate_views,
+                            &dummy_read_view,
+                            &dummy_output_views,
+                            pass_spec.outputs[1],
+                        ),
                     ),
                     storage_binding(
                         6,
-                        intermediate_view(&intermediate_views, pass_spec.outputs[2], &dummy_view),
+                        intermediate_view(
+                            &intermediate_views,
+                            &dummy_read_view,
+                            &dummy_output_views,
+                            pass_spec.outputs[2],
+                        ),
                     ),
                     storage_binding(7, &output_view),
                     wgpu::BindGroupEntry {
@@ -322,10 +363,17 @@ fn intermediate_count(pass_specs: &[CunnyPassSpec]) -> usize {
 
 fn intermediate_view<'a>(
     intermediate_views: &'a [wgpu::TextureView],
+    dummy_read_view: &'a wgpu::TextureView,
+    dummy_output_views: &'a [wgpu::TextureView],
     index: usize,
-    dummy_view: &'a wgpu::TextureView,
 ) -> &'a wgpu::TextureView {
-    intermediate_views.get(index).unwrap_or(dummy_view)
+    match index {
+        DUMMY_READ => dummy_read_view,
+        DUMMY_OUT0 => &dummy_output_views[0],
+        DUMMY_OUT1 => &dummy_output_views[1],
+        DUMMY_OUT2 => &dummy_output_views[2],
+        _ => &intermediate_views[index],
+    }
 }
 
 struct CunnyVariantSource {
@@ -336,7 +384,7 @@ struct CunnyVariantSource {
     pass_specs: &'static [CunnyPassSpec],
 }
 
-const CUNNY_VARIANTS: [CunnyVariantSource; 3] = [
+const CUNNY_VARIANTS: [CunnyVariantSource; 4] = [
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyVeryfastNvl,
         name: "CuNNy veryfast NVL",
@@ -357,6 +405,13 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 3] = [
         shader: include_str!("../../core/cunny_fast_nvl.wgsl"),
         entry_points: &CUNNY_FAST_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_FAST_NVL_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::Cunny3x12Nvl,
+        name: "CuNNy 3x12 NVL",
+        shader: include_str!("../../core/cunny_3x12_nvl.wgsl"),
+        entry_points: &CUNNY_3X12_NVL_ENTRY_POINTS,
+        pass_specs: &CUNNY_3X12_NVL_PASSES,
     },
 ];
 
@@ -379,6 +434,14 @@ const CUNNY_FAST_NVL_ENTRY_POINTS: [&str; 4] = [
     "cunny_fast_nvl_pass_1",
     "cunny_fast_nvl_pass_2",
     "cunny_fast_nvl_pass_3",
+];
+
+const CUNNY_3X12_NVL_ENTRY_POINTS: [&str; 5] = [
+    "cunny_3x12_nvl_pass_0",
+    "cunny_3x12_nvl_pass_1",
+    "cunny_3x12_nvl_pass_2",
+    "cunny_3x12_nvl_pass_3",
+    "cunny_3x12_nvl_pass_4",
 ];
 
 const CUNNY_VERYFAST_NVL_PASSES: [CunnyPassSpec; 4] = [
@@ -434,6 +497,29 @@ const CUNNY_FAST_NVL_PASSES: [CunnyPassSpec; 4] = [
     },
     CunnyPassSpec {
         inputs: [0, 1, DUMMY_READ],
+        outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+    },
+];
+
+const CUNNY_3X12_NVL_PASSES: [CunnyPassSpec; 5] = [
+    CunnyPassSpec {
+        inputs: [DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: [0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: [0, 1, 2],
+        outputs: [3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: [3, 4, 5],
+        outputs: [0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: [0, 1, 2],
+        outputs: [3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: [3, 4, 5],
         outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
     },
 ];

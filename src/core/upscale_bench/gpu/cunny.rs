@@ -187,10 +187,21 @@ impl CunnyBench {
             source_extent,
         );
 
-        let intermediates: Vec<wgpu::Texture> = (0..10)
+        let intermediates: Vec<wgpu::Texture> = (0..intermediate_count(variant.pass_specs))
             .map(|index| create_intermediate_texture(device, source_extent, index))
             .collect();
         let intermediate_views: Vec<wgpu::TextureView> = intermediates
+            .iter()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect();
+        let dummy_read_texture = create_intermediate_texture(device, source_extent, DUMMY_READ);
+        let dummy_read_view =
+            dummy_read_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let dummy_output_textures: Vec<wgpu::Texture> = [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2]
+            .into_iter()
+            .map(|index| create_intermediate_texture(device, source_extent, index))
+            .collect();
+        let dummy_output_views: Vec<wgpu::TextureView> = dummy_output_textures
             .iter()
             .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
             .collect();
@@ -242,6 +253,8 @@ impl CunnyBench {
                     encoder: &mut encoder,
                     source_view: &source_view,
                     intermediate_views: &intermediate_views,
+                    dummy_read_view: &dummy_read_view,
+                    dummy_output_views: &dummy_output_views,
                     output_view: &output_view,
                     params_buffer: &params_buffer,
                     variant,
@@ -314,12 +327,60 @@ impl CunnyBench {
             layout: &self.bind_group_layout,
             entries: &[
                 texture_binding(0, ctx.source_view),
-                texture_binding(1, &ctx.intermediate_views[pass_spec.inputs[0]]),
-                texture_binding(2, &ctx.intermediate_views[pass_spec.inputs[1]]),
-                texture_binding(3, &ctx.intermediate_views[pass_spec.inputs[2]]),
-                storage_binding(4, &ctx.intermediate_views[pass_spec.outputs[0]]),
-                storage_binding(5, &ctx.intermediate_views[pass_spec.outputs[1]]),
-                storage_binding(6, &ctx.intermediate_views[pass_spec.outputs[2]]),
+                texture_binding(
+                    1,
+                    intermediate_view(
+                        ctx.intermediate_views,
+                        ctx.dummy_read_view,
+                        ctx.dummy_output_views,
+                        pass_spec.inputs[0],
+                    ),
+                ),
+                texture_binding(
+                    2,
+                    intermediate_view(
+                        ctx.intermediate_views,
+                        ctx.dummy_read_view,
+                        ctx.dummy_output_views,
+                        pass_spec.inputs[1],
+                    ),
+                ),
+                texture_binding(
+                    3,
+                    intermediate_view(
+                        ctx.intermediate_views,
+                        ctx.dummy_read_view,
+                        ctx.dummy_output_views,
+                        pass_spec.inputs[2],
+                    ),
+                ),
+                storage_binding(
+                    4,
+                    intermediate_view(
+                        ctx.intermediate_views,
+                        ctx.dummy_read_view,
+                        ctx.dummy_output_views,
+                        pass_spec.outputs[0],
+                    ),
+                ),
+                storage_binding(
+                    5,
+                    intermediate_view(
+                        ctx.intermediate_views,
+                        ctx.dummy_read_view,
+                        ctx.dummy_output_views,
+                        pass_spec.outputs[1],
+                    ),
+                ),
+                storage_binding(
+                    6,
+                    intermediate_view(
+                        ctx.intermediate_views,
+                        ctx.dummy_read_view,
+                        ctx.dummy_output_views,
+                        pass_spec.outputs[2],
+                    ),
+                ),
                 storage_binding(7, ctx.output_view),
                 wgpu::BindGroupEntry {
                     binding: 8,
@@ -344,9 +405,35 @@ struct RunPassCtx<'a> {
     encoder: &'a mut wgpu::CommandEncoder,
     source_view: &'a wgpu::TextureView,
     intermediate_views: &'a [wgpu::TextureView],
+    dummy_read_view: &'a wgpu::TextureView,
+    dummy_output_views: &'a [wgpu::TextureView],
     output_view: &'a wgpu::TextureView,
     params_buffer: &'a wgpu::Buffer,
     variant: &'a CunnyVariantBench,
+}
+
+fn intermediate_count(pass_specs: &[CunnyPassSpec]) -> usize {
+    pass_specs
+        .iter()
+        .flat_map(|pass| pass.inputs.into_iter().chain(pass.outputs))
+        .filter(|&index| index < DUMMY_READ)
+        .max()
+        .map_or(0, |index| index + 1)
+}
+
+fn intermediate_view<'a>(
+    intermediate_views: &'a [wgpu::TextureView],
+    dummy_read_view: &'a wgpu::TextureView,
+    dummy_output_views: &'a [wgpu::TextureView],
+    index: usize,
+) -> &'a wgpu::TextureView {
+    match index {
+        DUMMY_READ => dummy_read_view,
+        DUMMY_OUT0 => &dummy_output_views[0],
+        DUMMY_OUT1 => &dummy_output_views[1],
+        DUMMY_OUT2 => &dummy_output_views[2],
+        _ => &intermediate_views[index],
+    }
 }
 
 struct CunnyVariantSource {
@@ -357,7 +444,7 @@ struct CunnyVariantSource {
     pass_specs: &'static [CunnyPassSpec],
 }
 
-const CUNNY_VARIANTS: [CunnyVariantSource; 3] = [
+const CUNNY_VARIANTS: [CunnyVariantSource; 4] = [
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyVeryfastNvl,
         name: "CuNNy veryfast NVL",
@@ -378,6 +465,13 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 3] = [
         shader: include_str!("../../cunny_fast_nvl.wgsl"),
         entry_points: &CUNNY_FAST_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_FAST_NVL_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::Cunny3x12Nvl,
+        name: "CuNNy 3x12 NVL",
+        shader: include_str!("../../cunny_3x12_nvl.wgsl"),
+        entry_points: &CUNNY_3X12_NVL_ENTRY_POINTS,
+        pass_specs: &CUNNY_3X12_NVL_PASSES,
     },
 ];
 
@@ -400,6 +494,14 @@ const CUNNY_FAST_NVL_ENTRY_POINTS: [&str; 4] = [
     "cunny_fast_nvl_pass_1",
     "cunny_fast_nvl_pass_2",
     "cunny_fast_nvl_pass_3",
+];
+
+const CUNNY_3X12_NVL_ENTRY_POINTS: [&str; 5] = [
+    "cunny_3x12_nvl_pass_0",
+    "cunny_3x12_nvl_pass_1",
+    "cunny_3x12_nvl_pass_2",
+    "cunny_3x12_nvl_pass_3",
+    "cunny_3x12_nvl_pass_4",
 ];
 
 const CUNNY_VERYFAST_NVL_PASSES: [CunnyPassSpec; 4] = [
@@ -455,6 +557,29 @@ const CUNNY_FAST_NVL_PASSES: [CunnyPassSpec; 4] = [
     },
     CunnyPassSpec {
         inputs: [0, 1, DUMMY_READ],
+        outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+    },
+];
+
+const CUNNY_3X12_NVL_PASSES: [CunnyPassSpec; 5] = [
+    CunnyPassSpec {
+        inputs: [DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: [0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: [0, 1, 2],
+        outputs: [3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: [3, 4, 5],
+        outputs: [0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: [0, 1, 2],
+        outputs: [3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: [3, 4, 5],
         outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
     },
 ];

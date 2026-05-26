@@ -86,6 +86,11 @@ class PassBlock:
     macro_sources: dict[str, tuple[str, str]]
 
 
+@dataclass
+class PassConvertState:
+    loaded_samples: set[str]
+
+
 def parse_passes(text: str) -> list[PassBlock]:
     passes: list[PassBlock] = []
     for match in re.finditer(r"//!PASS\s+\d+(.*?)(?=//!PASS\s+\d+|\Z)", text, re.S):
@@ -145,7 +150,7 @@ def load_expr(macro: str, dx: str, dy: str, block: PassBlock) -> str:
     return f"load_input{slot}(coord, {x}, {y})"
 
 
-def convert_statement(statement: str, block: PassBlock) -> list[str]:
+def convert_statement(statement: str, block: PassBlock, state: PassConvertState) -> list[str]:
     statement = statement.strip()
     if not statement:
         return []
@@ -182,7 +187,11 @@ def convert_statement(statement: str, block: PassBlock) -> list[str]:
     load = re.match(r"^(s\d+_\d+_\d+)\s*=\s*(L\d)\((-?\d+\.0),\s*(-?\d+\.0)\)$", statement)
     if load:
         name, macro, dx, dy = load.groups()
-        return [f"let {name} = {load_expr(macro, dx, dy, block)};"]
+        expr = load_expr(macro, dx, dy, block)
+        if name in state.loaded_samples:
+            return [f"{name} = {expr};"]
+        state.loaded_samples.add(name)
+        return [f"var {name} = {expr};"]
 
     statement = re.sub(r"\bV4\(", "vec4<f32>(", statement)
     statement = re.sub(r"\bV3\(", "vec3<f32>(", statement)
@@ -253,8 +262,9 @@ def generate_pass(prefix: str, index: int, block: PassBlock) -> str:
     lines.append(f"fn {prefix}_pass_{index}(@builtin(global_invocation_id) global_id: vec3<u32>) {{")
     lines.append("    if (global_id.x >= params.source_width || global_id.y >= params.source_height) { return; }")
     lines.append("    let coord = vec2<i32>(i32(global_id.x), i32(global_id.y));")
+    state = PassConvertState(loaded_samples=set())
     for statement in split_statements(block.body):
-        for converted in convert_statement(statement, block):
+        for converted in convert_statement(statement, block, state):
             lines.append(f"    {converted}")
     if "OUTPUT" in block.outputs:
         for line in final_write_lines(block):
