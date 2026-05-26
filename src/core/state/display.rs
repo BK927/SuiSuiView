@@ -64,12 +64,50 @@ pub enum DisplayUpscaler {
     CunnyFastNvl,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpscalerCandidate {
+    pub family: &'static str,
+    pub exact_label: &'static str,
+    pub source_version: &'static str,
+    pub license: &'static str,
+    pub scale: &'static str,
+    pub passes: &'static str,
+    pub feature_requirements: &'static str,
+    pub product_visible: bool,
+}
+
+macro_rules! upscaler_candidate {
+    (
+        $family:expr,
+        $exact_label:expr,
+        $source_version:expr,
+        $license:expr,
+        $scale:expr,
+        $passes:expr,
+        $feature_requirements:expr,
+        $product_visible:expr $(,)?
+    ) => {
+        UpscalerCandidate {
+            family: $family,
+            exact_label: $exact_label,
+            source_version: $source_version,
+            license: $license,
+            scale: $scale,
+            passes: $passes,
+            feature_requirements: $feature_requirements,
+            product_visible: $product_visible,
+        }
+    };
+}
+
 impl DisplayUpscaler {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 6] = [
         Self::Auto,
         Self::None,
         Self::WgslBilinear,
         Self::WgslFsr1EasuRcas,
+        Self::CunnyFasterNvl,
+        Self::CunnyFastNvl,
     ];
 
     pub const GPU_METHODS: [Self; 13] = [
@@ -89,22 +127,161 @@ impl DisplayUpscaler {
     ];
 
     pub fn label(self) -> &'static str {
+        self.candidate().exact_label
+    }
+
+    pub fn candidate(self) -> UpscalerCandidate {
         match self {
-            Self::Auto => "자동",
-            Self::None => "없음",
-            Self::WgslBilinear => "WGSL Bilinear",
-            Self::WgslFsr1Style => "WGSL FSR-style",
-            Self::WgslFsr1EasuRcas => "WGSL FSR1 EASU+RCAS",
-            Self::WgslNisStyle => "WGSL NIS-style",
-            Self::NvidiaNis => "NVIDIA Image Scaling (NIS)",
-            Self::WgslAnime4kV32CnnX2S => "Anime4K v3.2 CNN x2 S",
-            Self::WgslAnime4kV32CnnX2M => "Anime4K v3.2 CNN x2 M",
-            Self::WgslAcnetF8B4Luma => "ACNet F8B4 Luma",
-            Self::WgslAcnetF8B4BoxLuma => "ACNet F8B4 Box Luma",
-            Self::WgslAcnetF8B4HdnLuma => "ACNet F8B4 HDN Luma",
-            Self::WgslAcnetF8B4BoxHdnLuma => "ACNet F8B4 Box HDN Luma",
-            Self::CunnyFasterNvl => "CuNNy faster NVL",
-            Self::CunnyFastNvl => "CuNNy fast NVL",
+            Self::Auto => upscaler_candidate!(
+                "Control",
+                "자동",
+                "first-party",
+                "license-neutral",
+                "auto",
+                "auto",
+                "wgpu optional",
+                true,
+            ),
+            Self::None => upscaler_candidate!(
+                "Control",
+                "없음",
+                "first-party",
+                "license-neutral",
+                "1x",
+                "0",
+                "none",
+                true,
+            ),
+            Self::WgslBilinear => upscaler_candidate!(
+                "SuiSuiView",
+                "WGSL Bilinear",
+                "first-party",
+                "license-neutral",
+                "arbitrary",
+                "1",
+                "wgpu",
+                true,
+            ),
+            Self::WgslFsr1Style => upscaler_candidate!(
+                "SuiSuiView",
+                "WGSL FSR-style",
+                "first-party style candidate",
+                "license-neutral",
+                "arbitrary",
+                "1",
+                "wgpu",
+                false,
+            ),
+            Self::WgslFsr1EasuRcas => upscaler_candidate!(
+                "AMD FidelityFX FSR 1",
+                "WGSL FSR1 EASU+RCAS",
+                "FidelityFX-FSR 1",
+                "MIT",
+                "arbitrary",
+                "2",
+                "wgpu",
+                true,
+            ),
+            Self::WgslNisStyle => upscaler_candidate!(
+                "SuiSuiView",
+                "WGSL NIS-style",
+                "first-party style candidate",
+                "license-neutral",
+                "arbitrary",
+                "1",
+                "wgpu",
+                false,
+            ),
+            Self::NvidiaNis => upscaler_candidate!(
+                "NVIDIA Image Scaling",
+                "NVIDIA Image Scaling (NIS)",
+                "NVIDIAImageScaling SDK",
+                "MIT",
+                "arbitrary",
+                "1",
+                "wgpu compute",
+                false,
+            ),
+            Self::WgslAnime4kV32CnnX2S => upscaler_candidate!(
+                "Anime4K",
+                "Anime4K v3.2 CNN x2 S",
+                "Anime4K v3.2",
+                "MIT",
+                "2x",
+                "multi-pass",
+                "wgpu compute",
+                false,
+            ),
+            Self::WgslAnime4kV32CnnX2M => upscaler_candidate!(
+                "Anime4K",
+                "Anime4K v3.2 CNN x2 M",
+                "Anime4K v3.2",
+                "MIT",
+                "2x",
+                "multi-pass",
+                "wgpu compute",
+                false,
+            ),
+            Self::WgslAcnetF8B4Luma => upscaler_candidate!(
+                "ACNetGLSL",
+                "ACNet F8B4 Luma",
+                "ACNetGLSL f8b4",
+                "MIT",
+                "2x",
+                "multi-pass",
+                "wgpu compute",
+                false,
+            ),
+            Self::WgslAcnetF8B4BoxLuma => upscaler_candidate!(
+                "ACNetGLSL",
+                "ACNet F8B4 Box Luma",
+                "ACNetGLSL f8b4 box",
+                "MIT",
+                "2x",
+                "multi-pass",
+                "wgpu compute",
+                false,
+            ),
+            Self::WgslAcnetF8B4HdnLuma => upscaler_candidate!(
+                "ACNetGLSL",
+                "ACNet F8B4 HDN Luma",
+                "ACNetGLSL f8b4 hdn",
+                "MIT",
+                "2x",
+                "multi-pass",
+                "wgpu compute",
+                false,
+            ),
+            Self::WgslAcnetF8B4BoxHdnLuma => upscaler_candidate!(
+                "ACNetGLSL",
+                "ACNet F8B4 Box HDN Luma",
+                "ACNetGLSL f8b4 box hdn",
+                "MIT",
+                "2x",
+                "multi-pass",
+                "wgpu compute",
+                false,
+            ),
+            Self::CunnyFasterNvl => upscaler_candidate!(
+                "CuNNy",
+                "CuNNy faster NVL",
+                "funnyplanter/CuNNy magpie normal",
+                "LGPL-3.0-or-later / GPL-3.0-or-later effect header",
+                "2x",
+                "4",
+                "wgpu compute",
+                true,
+            ),
+            Self::CunnyFastNvl => upscaler_candidate!(
+                "CuNNy",
+                "CuNNy fast NVL",
+                "funnyplanter/CuNNy magpie normal",
+                "LGPL-3.0-or-later / GPL-3.0-or-later effect header",
+                "2x",
+                "4",
+                "wgpu compute",
+                true,
+            ),
         }
     }
 
@@ -138,8 +315,6 @@ impl DisplayUpscaler {
                 | Self::WgslAcnetF8B4BoxLuma
                 | Self::WgslAcnetF8B4HdnLuma
                 | Self::WgslAcnetF8B4BoxHdnLuma
-                | Self::CunnyFasterNvl
-                | Self::CunnyFastNvl
         )
     }
 
@@ -160,9 +335,9 @@ impl DisplayUpscaler {
             | Self::WgslAcnetF8B4Luma
             | Self::WgslAcnetF8B4BoxLuma
             | Self::WgslAcnetF8B4HdnLuma
-            | Self::WgslAcnetF8B4BoxHdnLuma
-            | Self::CunnyFasterNvl
-            | Self::CunnyFastNvl => None,
+            | Self::WgslAcnetF8B4BoxHdnLuma => None,
+            Self::CunnyFasterNvl | Self::CunnyFastNvl if target_is_larger => Some(self),
+            Self::CunnyFasterNvl | Self::CunnyFastNvl => None,
             other => Some(other),
         }
     }

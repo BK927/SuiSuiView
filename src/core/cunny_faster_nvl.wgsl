@@ -1,4 +1,4 @@
-// Generated WGSL port of CuNNy faster NVL for benchmark-only evaluation.
+// Generated WGSL port of CuNNy faster NVL for real-time display evaluation.
 // Source: funnyplanter/CuNNy magpie/normal/CuNNy-faster-NVL.hlsl.
 // CuNNy is LGPL-3.0-or-later in the repository license, while this Magpie
 // effect header grants GPL-3.0-or-later terms. SuiSuiView is GPL-3.0-only;

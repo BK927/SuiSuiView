@@ -50,6 +50,7 @@ mod gpu_paint;
 mod image_info;
 mod perf;
 mod platform;
+mod realtime_sr;
 mod settings;
 mod settings_bookmarks;
 mod settings_input;

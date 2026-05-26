@@ -69,3 +69,32 @@ fn automatic_display_upscaler_only_uses_heavy_shader_for_actual_upscale() {
         Some(DisplayUpscaler::WgslNisStyle)
     );
 }
+
+#[test]
+fn product_display_upscalers_hide_style_candidates() {
+    assert!(!DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslFsr1Style));
+    assert!(!DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslNisStyle));
+    assert!(!DisplayUpscaler::WgslFsr1Style.candidate().product_visible);
+    assert!(!DisplayUpscaler::WgslNisStyle.candidate().product_visible);
+    assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslFsr1EasuRcas));
+    assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::CunnyFasterNvl));
+    assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::CunnyFastNvl));
+    assert!(DisplayUpscaler::CunnyFasterNvl.candidate().product_visible);
+    assert_eq!(DisplayUpscaler::CunnyFastNvl.candidate().family, "CuNNy");
+}
+
+#[test]
+fn exact_cunny_variants_render_only_when_upscaling() {
+    assert_eq!(
+        DisplayUpscaler::CunnyFasterNvl.resolve_for_render([1600, 2400], [800, 1200]),
+        None
+    );
+    assert_eq!(
+        DisplayUpscaler::CunnyFasterNvl.resolve_for_render([800, 1200], [1600, 2400]),
+        Some(DisplayUpscaler::CunnyFasterNvl)
+    );
+    assert_eq!(
+        DisplayUpscaler::CunnyFastNvl.resolve_for_render([800, 1200], [1600, 2400]),
+        Some(DisplayUpscaler::CunnyFastNvl)
+    );
+}

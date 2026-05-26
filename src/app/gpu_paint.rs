@@ -1,3 +1,4 @@
+use super::realtime_sr::RealtimeSrResources;
 use super::{PageCacheKey, SuiSuiViewApp};
 use crate::core::effects::ViewEffects;
 use crate::core::gpu_effect::{
@@ -199,11 +200,12 @@ struct GpuPaintResources {
     draw_state_intermediate_bytes: usize,
     intermediate_textures: LruCache<u64, Arc<GpuIntermediateTexture>>,
     intermediate_texture_bytes: usize,
+    realtime_sr: RealtimeSrResources,
 }
 
 struct GpuSourceTexture {
     _texture: wgpu::Texture,
-    _view: wgpu::TextureView,
+    view: wgpu::TextureView,
     bind_group: Arc<wgpu::BindGroup>,
     byte_size: usize,
 }
@@ -219,6 +221,7 @@ struct GpuIntermediateTexture {
     _texture: wgpu::Texture,
     _view: wgpu::TextureView,
     bind_group: Arc<wgpu::BindGroup>,
+    size: [usize; 2],
     byte_size: usize,
 }
 
@@ -323,6 +326,7 @@ impl GpuPaintResources {
                 NonZeroUsize::new(GPU_INTERMEDIATE_TEXTURE_CACHE_LIMIT).unwrap(),
             ),
             intermediate_texture_bytes: 0,
+            realtime_sr: RealtimeSrResources::new(device),
         }
     }
 
@@ -383,7 +387,7 @@ impl GpuPaintResources {
             key,
             GpuSourceTexture {
                 _texture: texture,
-                _view: view,
+                view,
                 bind_group,
                 byte_size,
             },
@@ -425,6 +429,33 @@ impl GpuPaintResources {
         let effective_upscaler = display_upscaler
             .resolve_for_render(output_size, target_size)
             .unwrap_or(DisplayUpscaler::None);
+        if RealtimeSrResources::is_supported(effective_upscaler) {
+            let sr_key = realtime_sr_texture_key(source_key, source_size, effective_upscaler);
+            self.ensure_realtime_sr_texture(
+                device,
+                encoder,
+                sr_key,
+                source_key,
+                source_size,
+                effective_upscaler,
+            );
+            if let Some(intermediate) = self.intermediate_textures.peek(&sr_key).cloned() {
+                let params = params_for_effects(
+                    intermediate.size,
+                    output_size_for_effects(intermediate.size, effects),
+                    effects,
+                    DisplayUpscaler::None,
+                    origin,
+                    target_size,
+                    opacity,
+                );
+                return GpuDrawState::new(
+                    intermediate.bind_group.clone(),
+                    self.params_bind_group_for(device, params),
+                    Some(intermediate),
+                );
+            }
+        }
         if let Some(rcas_method) = effective_upscaler.rcas_shader_method_id() {
             let intermediate_key = intermediate_texture_key(
                 source_key,
@@ -526,6 +557,7 @@ impl GpuPaintResources {
                 _texture: texture,
                 _view: view,
                 bind_group,
+                size: [target_size[0] as usize, target_size[1] as usize],
                 byte_size,
             }),
         ) {
@@ -534,6 +566,50 @@ impl GpuPaintResources {
                 .saturating_sub(old_texture.byte_size);
         }
         self.intermediate_texture_bytes = self.intermediate_texture_bytes.saturating_add(byte_size);
+        self.prune_intermediate_textures();
+    }
+
+    fn ensure_realtime_sr_texture(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        key: u64,
+        source_key: GpuPaintSourceKey,
+        source_size: [usize; 2],
+        method: DisplayUpscaler,
+    ) {
+        if self.intermediate_textures.get(&key).is_some() {
+            return;
+        }
+        let Some(source) = self.source_textures.peek(&source_key) else {
+            return;
+        };
+        let Some(output) =
+            self.realtime_sr
+                .render(method, device, encoder, &source.view, source_size)
+        else {
+            return;
+        };
+        let output_size = output.size;
+        let output_byte_size = output.byte_size;
+        let bind_group = Arc::new(self.texture_bind_group_for(device, &output.view));
+        if let Some((_old_key, old_texture)) = self.intermediate_textures.push(
+            key,
+            Arc::new(GpuIntermediateTexture {
+                _texture: output.texture,
+                _view: output.view,
+                bind_group,
+                size: output_size,
+                byte_size: output_byte_size,
+            }),
+        ) {
+            self.intermediate_texture_bytes = self
+                .intermediate_texture_bytes
+                .saturating_sub(old_texture.byte_size);
+        }
+        self.intermediate_texture_bytes = self
+            .intermediate_texture_bytes
+            .saturating_add(output_byte_size);
         self.prune_intermediate_textures();
     }
 
@@ -713,6 +789,18 @@ fn intermediate_texture_key(
     effects.hash(&mut hasher);
     display_upscaler.token().hash(&mut hasher);
     target_size.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn realtime_sr_texture_key(
+    source_key: GpuPaintSourceKey,
+    source_size: [usize; 2],
+    display_upscaler: DisplayUpscaler,
+) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source_key.hash(&mut hasher);
+    source_size.hash(&mut hasher);
+    display_upscaler.token().hash(&mut hasher);
     hasher.finish()
 }
 
