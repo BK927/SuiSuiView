@@ -53,4 +53,3 @@ const F8B4_ENTRY_POINTS: [&str; 12] = [
     "acnet_upscale_conv_8x4x3x3_part_0",
     "acnet_pixel_shuffle",
 ];
-
