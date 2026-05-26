@@ -133,11 +133,33 @@ impl DecodeOptions {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CachedPageKey {
+    pub index: usize,
+    pub target_long_edge: u32,
+    pub decode: DecodeOptions,
+}
+
+impl CachedPageKey {
+    pub fn new(index: usize, target_long_edge: u32, decode: DecodeOptions) -> Self {
+        Self {
+            index,
+            target_long_edge: clamp_target_long_edge(target_long_edge),
+            decode,
+        }
+    }
+
+    fn covers(self, index: usize, target_long_edge: u32, decode: DecodeOptions) -> bool {
+        self.index == index && self.decode == decode && self.target_long_edge >= target_long_edge
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerOptions {
     pub decode: DecodeOptions,
     pub prefetch_enabled: bool,
     pub progressive_preview_enabled: bool,
     pub cache_bytes: usize,
+    pub app_cached_pages: Vec<CachedPageKey>,
 }
 
 impl Default for WorkerOptions {
@@ -147,6 +169,7 @@ impl Default for WorkerOptions {
             prefetch_enabled: true,
             progressive_preview_enabled: true,
             cache_bytes: WORKER_CACHE_BYTES,
+            app_cached_pages: Vec::new(),
         }
     }
 }
@@ -157,6 +180,12 @@ impl WorkerOptions {
             cache_bytes: self.cache_bytes.max(8 * 1024 * 1024),
             ..self
         }
+    }
+
+    fn app_cache_covers(&self, index: usize, target_long_edge: u32) -> bool {
+        self.app_cached_pages
+            .iter()
+            .any(|cached| cached.covers(index, target_long_edge, self.decode))
     }
 }
 
@@ -738,6 +767,9 @@ fn run_worker(
                     ctx.request_repaint();
                     continue;
                 }
+                if options.app_cache_covers(job.index, job.target_long_edge) {
+                    continue;
+                }
 
                 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
                 let read_started = Instant::now();
@@ -1058,9 +1090,9 @@ fn page_cache_key(
 mod tests {
     use super::{
         display_dimensions, display_dimensions_with_upscale, image_filter_type, page_cache_key,
-        prepare_image, prepare_image_with_strategy, run_worker, DecodeBackend, DecodeOptions,
-        DecodeStrategy, NavigationDirection, WorkerCommand, WorkerEvent, WorkerOptions,
-        MAX_TARGET_LONG_EDGE,
+        prepare_image, prepare_image_with_strategy, run_worker, CachedPageKey, DecodeBackend,
+        DecodeOptions, DecodeStrategy, NavigationDirection, WorkerCommand, WorkerEvent,
+        WorkerOptions, MAX_TARGET_LONG_EDGE,
     };
     use crate::core::source::{BookSource, SharedSource, SourceError};
     use crate::core::state::ResizeFilter;
@@ -1283,6 +1315,25 @@ mod tests {
         assert!(crate::core::perf_trace::flush_timeout(Duration::from_secs(
             1
         )));
+    }
+
+    #[test]
+    fn cached_page_key_covers_same_page_decode_and_sufficient_size() {
+        let decode = DecodeOptions::default();
+        let key = CachedPageKey::new(3, 2048, decode);
+
+        assert!(key.covers(3, 1024, decode));
+        assert!(key.covers(3, 2048, decode));
+        assert!(!key.covers(3, 4096, decode));
+        assert!(!key.covers(4, 1024, decode));
+        assert!(!key.covers(
+            3,
+            1024,
+            DecodeOptions {
+                apply_embedded_icc: true,
+                ..decode
+            }
+        ));
     }
 
     #[test]

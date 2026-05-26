@@ -14,9 +14,9 @@ use crate::core::state::{
 };
 use crate::core::upscale::{AiUpscaleWorker, UpscaleEvent, UpscaleRequest};
 use crate::core::worker::{
-    clamp_target_long_edge, DecodeOptions, DecodeStrategy, NavigationDirection, PageWorker,
-    PreparedPage, WorkerEvent, WorkerOptions, DEFAULT_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE,
-    MIN_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
+    clamp_target_long_edge, CachedPageKey, DecodeOptions, DecodeStrategy, NavigationDirection,
+    PageWorker, PreparedPage, WorkerEvent, WorkerOptions, DEFAULT_TARGET_LONG_EDGE,
+    MAX_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
 use arboard::{Clipboard, ImageData as ClipboardImageData};
 use commands::{collect_keyboard_commands, command_for_mouse_gesture, AppCommand, DeleteMode};
@@ -1011,7 +1011,15 @@ impl SuiSuiViewApp {
             prefetch_enabled: self.settings.prefetch_enabled,
             progressive_preview_enabled: self.settings.progressive_preview_enabled,
             cache_bytes: self.worker_cache_budget_bytes(),
+            app_cached_pages: self.app_cached_page_keys(),
         }
+    }
+
+    fn app_cached_page_keys(&self) -> Vec<CachedPageKey> {
+        self.decoded_pages
+            .iter()
+            .map(|(key, _)| CachedPageKey::new(key.index, key.target_long_edge, key.decode))
+            .collect()
     }
 
     fn cpu_cache_budget_bytes(&self) -> usize {

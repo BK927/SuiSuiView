@@ -1,6 +1,6 @@
 use super::{clamp_target_long_edge, NavigationDirection, PREVIEW_TARGET_LONG_EDGE};
 
-const PREVIEW_PREFETCH_FORWARD_PAGES: usize = 12;
+const PREVIEW_PREFETCH_FORWARD_PAGES: usize = 18;
 const PREVIEW_PREFETCH_BACKWARD_PAGES: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
