@@ -147,7 +147,7 @@ def validate_supported_subset(text: str, passes: list[PassBlock]) -> None:
         if token in lowered:
             raise ValueError(f"Unsupported CuNNy mpv shader feature: {token}")
     if len(passes) != 4:
-        raise ValueError(f"Expected four CuNNy faster SOFT passes, got {len(passes)}")
+        raise ValueError(f"Expected four supported CuNNy mpv passes, got {len(passes)}")
     for index, block in enumerate(passes):
         if index < 3:
             expected_height = "LUMA.h"

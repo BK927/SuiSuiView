@@ -421,7 +421,7 @@ struct CunnyVariantSource {
     pass_specs: &'static [CunnyPassSpec],
 }
 
-const CUNNY_VARIANTS: [CunnyVariantSource; 14] = [
+const CUNNY_VARIANTS: [CunnyVariantSource; 16] = [
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyVeryfastNvl,
         name: "CuNNy veryfast NVL",
@@ -477,6 +477,20 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 14] = [
         shader: include_str!("../../cunny_fast_ds.wgsl"),
         entry_points: &CUNNY_FAST_DS_ENTRY_POINTS,
         pass_specs: &CUNNY_FAST_DS_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::Cunny2x12Soft,
+        name: "CuNNy 2x12 SOFT",
+        shader: include_str!("../../cunny_2x12_soft.wgsl"),
+        entry_points: &CUNNY_2X12_SOFT_ENTRY_POINTS,
+        pass_specs: &CUNNY_2X12_MPV_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::Cunny2x12Ds,
+        name: "CuNNy 2x12 DS",
+        shader: include_str!("../../cunny_2x12_ds.wgsl"),
+        entry_points: &CUNNY_2X12_DS_ENTRY_POINTS,
+        pass_specs: &CUNNY_2X12_MPV_PASSES,
     },
     CunnyVariantSource {
         method: DisplayUpscaler::Cunny3x12Nvl,
@@ -576,6 +590,20 @@ const CUNNY_FAST_DS_ENTRY_POINTS: [&str; 4] = [
     "cunny_fast_ds_pass_1",
     "cunny_fast_ds_pass_2",
     "cunny_fast_ds_pass_3",
+];
+
+const CUNNY_2X12_SOFT_ENTRY_POINTS: [&str; 4] = [
+    "cunny_2x12_soft_pass_0",
+    "cunny_2x12_soft_pass_1",
+    "cunny_2x12_soft_pass_2",
+    "cunny_2x12_soft_pass_3",
+];
+
+const CUNNY_2X12_DS_ENTRY_POINTS: [&str; 4] = [
+    "cunny_2x12_ds_pass_0",
+    "cunny_2x12_ds_pass_1",
+    "cunny_2x12_ds_pass_2",
+    "cunny_2x12_ds_pass_3",
 ];
 
 const CUNNY_3X12_NVL_ENTRY_POINTS: [&str; 5] = [
@@ -790,6 +818,25 @@ const CUNNY_FAST_SOFT_PASSES: [CunnyPassSpec; 4] = [
 ];
 
 const CUNNY_FAST_DS_PASSES: [CunnyPassSpec; 4] = CUNNY_FAST_SOFT_PASSES;
+
+const CUNNY_2X12_MPV_PASSES: [CunnyPassSpec; 4] = [
+    CunnyPassSpec {
+        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: &[0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2],
+        outputs: &[3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: &[3, 4, 5],
+        outputs: &[0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2],
+        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+    },
+];
 
 const CUNNY_3X12_NVL_PASSES: [CunnyPassSpec; 5] = [
     CunnyPassSpec {
