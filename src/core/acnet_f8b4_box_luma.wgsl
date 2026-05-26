@@ -34,6 +34,29 @@ fn load_source_luma(coord: vec2<i32>, dx: i32, dy: i32) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
+fn sample_source_rgb_for_output(out_coord: vec2<i32>) -> vec3<f32> {
+    let source_scale = vec2<f32>(
+        f32(params.source_width) / f32(params.output_width),
+        f32(params.source_height) / f32(params.output_height),
+    );
+    let source_pos = (vec2<f32>(out_coord) + vec2<f32>(0.5)) * source_scale - vec2<f32>(0.5);
+    let p0f = floor(source_pos);
+    let t = source_pos - p0f;
+    let p0 = clamp_source_coord(vec2<i32>(p0f));
+    let p1 = clamp_source_coord(vec2<i32>(p0f) + vec2<i32>(1, 1));
+    let c00 = textureLoad(source_tex, p0, 0).rgb;
+    let c10 = textureLoad(source_tex, vec2<i32>(p1.x, p0.y), 0).rgb;
+    let c01 = textureLoad(source_tex, vec2<i32>(p0.x, p1.y), 0).rgb;
+    let c11 = textureLoad(source_tex, p1, 0).rgb;
+    return mix(mix(c00, c10, t.x), mix(c01, c11, t.x), t.y);
+}
+
+fn merge_luma_with_source_chroma(out_coord: vec2<i32>, y: f32) -> vec3<f32> {
+    let rgb = sample_source_rgb_for_output(out_coord);
+    let source_y = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return clamp(rgb + vec3<f32>(y - source_y), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 fn load_input0(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> {
     let p = clamp_source_coord(coord + vec2<i32>(dx, dy));
     return textureLoad(input0_tex, p, 0);
@@ -356,5 +379,6 @@ fn acnet_pixel_shuffle(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let component = sub.y * 2 + sub.x;
     let features = textureLoad(input0_tex, base, 0);
     let value = clamp(features[component], 0.0, 1.0);
-    textureStore(final_tex, out_coord, vec4<f32>(value, value, value, 1.0));
+    let rgb = merge_luma_with_source_chroma(out_coord, value);
+    textureStore(final_tex, out_coord, vec4<f32>(rgb, 1.0));
 }
