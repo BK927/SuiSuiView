@@ -199,6 +199,7 @@ impl GpuUpscaleBench {
             method,
             DisplayUpscaler::CunnyVeryfastNvl
                 | DisplayUpscaler::CunnyFasterNvl
+                | DisplayUpscaler::CunnyFasterSoft
                 | DisplayUpscaler::CunnyFastNvl
                 | DisplayUpscaler::Cunny3x12Nvl
                 | DisplayUpscaler::Cunny4x12Nvl

@@ -421,7 +421,7 @@ struct CunnyVariantSource {
     pass_specs: &'static [CunnyPassSpec],
 }
 
-const CUNNY_VARIANTS: [CunnyVariantSource; 9] = [
+const CUNNY_VARIANTS: [CunnyVariantSource; 10] = [
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyVeryfastNvl,
         name: "CuNNy veryfast NVL",
@@ -435,6 +435,13 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 9] = [
         shader: include_str!("../../cunny_faster_nvl.wgsl"),
         entry_points: &CUNNY_FASTER_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_FASTER_NVL_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::CunnyFasterSoft,
+        name: "CuNNy faster SOFT",
+        shader: include_str!("../../cunny_faster_soft.wgsl"),
+        entry_points: &CUNNY_FASTER_SOFT_ENTRY_POINTS,
+        pass_specs: &CUNNY_FASTER_SOFT_PASSES,
     },
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyFastNvl,
@@ -499,6 +506,13 @@ const CUNNY_FASTER_NVL_ENTRY_POINTS: [&str; 4] = [
     "cunny_faster_nvl_pass_1",
     "cunny_faster_nvl_pass_2",
     "cunny_faster_nvl_pass_3",
+];
+
+const CUNNY_FASTER_SOFT_ENTRY_POINTS: [&str; 4] = [
+    "cunny_faster_soft_pass_0",
+    "cunny_faster_soft_pass_1",
+    "cunny_faster_soft_pass_2",
+    "cunny_faster_soft_pass_3",
 ];
 
 const CUNNY_FAST_NVL_ENTRY_POINTS: [&str; 4] = [
@@ -623,6 +637,25 @@ const CUNNY_VERYFAST_NVL_PASSES: [CunnyPassSpec; 4] = [
 ];
 
 const CUNNY_FASTER_NVL_PASSES: [CunnyPassSpec; 4] = [
+    CunnyPassSpec {
+        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: &[0, 1, DUMMY_OUT0],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, DUMMY_READ],
+        outputs: &[2, 3, DUMMY_OUT0],
+    },
+    CunnyPassSpec {
+        inputs: &[2, 3, DUMMY_READ],
+        outputs: &[0, 1, DUMMY_OUT0],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, DUMMY_READ],
+        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+    },
+];
+
+const CUNNY_FASTER_SOFT_PASSES: [CunnyPassSpec; 4] = [
     CunnyPassSpec {
         inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
         outputs: &[0, 1, DUMMY_OUT0],

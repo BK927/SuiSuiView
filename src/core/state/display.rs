@@ -62,6 +62,7 @@ pub enum DisplayUpscaler {
     WgslAcnetF8B4BoxHdnLuma,
     CunnyVeryfastNvl,
     CunnyFasterNvl,
+    CunnyFasterSoft,
     CunnyFastNvl,
     Cunny3x12Nvl,
     Cunny4x12Nvl,
@@ -108,7 +109,7 @@ macro_rules! upscaler_candidate {
 }
 
 impl DisplayUpscaler {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::Auto,
         Self::None,
         Self::WgslBilinear,
@@ -121,6 +122,7 @@ impl DisplayUpscaler {
         Self::WgslAcnetF8B4BoxHdnLuma,
         Self::CunnyVeryfastNvl,
         Self::CunnyFasterNvl,
+        Self::CunnyFasterSoft,
         Self::CunnyFastNvl,
         Self::Cunny3x12Nvl,
         Self::Cunny4x12Nvl,
@@ -130,7 +132,7 @@ impl DisplayUpscaler {
         Self::Cunny8x32Nvl,
     ];
 
-    pub const GPU_METHODS: [Self; 20] = [
+    pub const GPU_METHODS: [Self; 21] = [
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
@@ -144,6 +146,7 @@ impl DisplayUpscaler {
         Self::WgslAcnetF8B4BoxHdnLuma,
         Self::CunnyVeryfastNvl,
         Self::CunnyFasterNvl,
+        Self::CunnyFasterSoft,
         Self::CunnyFastNvl,
         Self::Cunny3x12Nvl,
         Self::Cunny4x12Nvl,
@@ -309,6 +312,16 @@ impl DisplayUpscaler {
                 "wgpu compute",
                 true,
             ),
+            Self::CunnyFasterSoft => upscaler_candidate!(
+                "CuNNy",
+                "CuNNy faster SOFT",
+                "funnyplanter/CuNNy mpv soft",
+                "LGPL-3.0-or-later",
+                "2x",
+                "4",
+                "wgpu compute",
+                true,
+            ),
             Self::CunnyFastNvl => upscaler_candidate!(
                 "CuNNy",
                 "CuNNy fast NVL",
@@ -399,6 +412,7 @@ impl DisplayUpscaler {
             Self::WgslAcnetF8B4BoxHdnLuma => "acnet_f8b4_box_hdn_luma",
             Self::CunnyVeryfastNvl => "cunny_veryfast_nvl",
             Self::CunnyFasterNvl => "cunny_faster_nvl",
+            Self::CunnyFasterSoft => "cunny_faster_soft",
             Self::CunnyFastNvl => "cunny_fast_nvl",
             Self::Cunny3x12Nvl => "cunny_3x12_nvl",
             Self::Cunny4x12Nvl => "cunny_4x12_nvl",
@@ -441,6 +455,7 @@ impl DisplayUpscaler {
             | Self::WgslAcnetF8B4BoxHdnLuma => None,
             Self::CunnyVeryfastNvl
             | Self::CunnyFasterNvl
+            | Self::CunnyFasterSoft
             | Self::CunnyFastNvl
             | Self::Cunny3x12Nvl
             | Self::Cunny4x12Nvl
@@ -454,6 +469,7 @@ impl DisplayUpscaler {
             }
             Self::CunnyVeryfastNvl
             | Self::CunnyFasterNvl
+            | Self::CunnyFasterSoft
             | Self::CunnyFastNvl
             | Self::Cunny3x12Nvl
             | Self::Cunny4x12Nvl
@@ -481,6 +497,7 @@ impl DisplayUpscaler {
             | Self::WgslAcnetF8B4BoxHdnLuma
             | Self::CunnyVeryfastNvl
             | Self::CunnyFasterNvl
+            | Self::CunnyFasterSoft
             | Self::CunnyFastNvl
             | Self::Cunny3x12Nvl
             | Self::Cunny4x12Nvl
