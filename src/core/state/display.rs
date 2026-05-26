@@ -101,12 +101,13 @@ macro_rules! upscaler_candidate {
 }
 
 impl DisplayUpscaler {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Auto,
         Self::None,
         Self::WgslBilinear,
         Self::WgslFsr1EasuRcas,
         Self::WgslAnime4kV32CnnX2S,
+        Self::WgslAnime4kV32CnnX2M,
         Self::WgslAcnetF8B4Luma,
         Self::WgslAcnetF8B4BoxLuma,
         Self::WgslAcnetF8B4HdnLuma,
@@ -225,7 +226,7 @@ impl DisplayUpscaler {
                 "2x",
                 "multi-pass",
                 "wgpu compute",
-                false,
+                true,
             ),
             Self::WgslAcnetF8B4Luma => upscaler_candidate!(
                 "ACNetGLSL",
@@ -311,7 +312,7 @@ impl DisplayUpscaler {
     }
 
     pub fn is_benchmark_only(self) -> bool {
-        matches!(self, Self::NvidiaNis | Self::WgslAnime4kV32CnnX2M)
+        matches!(self, Self::NvidiaNis)
     }
 
     pub fn resolve_for_render(
@@ -323,9 +324,11 @@ impl DisplayUpscaler {
             target_size[0] > output_size[0] as u32 || target_size[1] > output_size[1] as u32;
         match self {
             Self::Auto if target_is_larger => Some(Self::WgslFsr1EasuRcas),
-            Self::Auto | Self::None | Self::NvidiaNis | Self::WgslAnime4kV32CnnX2M => None,
-            Self::WgslAnime4kV32CnnX2S if target_is_larger => Some(self),
-            Self::WgslAnime4kV32CnnX2S => None,
+            Self::Auto | Self::None | Self::NvidiaNis => None,
+            Self::WgslAnime4kV32CnnX2S | Self::WgslAnime4kV32CnnX2M if target_is_larger => {
+                Some(self)
+            }
+            Self::WgslAnime4kV32CnnX2S | Self::WgslAnime4kV32CnnX2M => None,
             Self::WgslAcnetF8B4Luma
             | Self::WgslAcnetF8B4BoxLuma
             | Self::WgslAcnetF8B4HdnLuma

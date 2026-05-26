@@ -78,6 +78,7 @@ fn product_display_upscalers_hide_style_candidates() {
     assert!(!DisplayUpscaler::WgslNisStyle.candidate().product_visible);
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslFsr1EasuRcas));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslAnime4kV32CnnX2S));
+    assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslAnime4kV32CnnX2M));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslAcnetF8B4Luma));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslAcnetF8B4BoxLuma));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslAcnetF8B4HdnLuma));
@@ -86,6 +87,11 @@ fn product_display_upscalers_hide_style_candidates() {
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::CunnyFastNvl));
     assert!(
         DisplayUpscaler::WgslAnime4kV32CnnX2S
+            .candidate()
+            .product_visible
+    );
+    assert!(
+        DisplayUpscaler::WgslAnime4kV32CnnX2M
             .candidate()
             .product_visible
     );
@@ -115,6 +121,10 @@ fn exact_cunny_variants_render_only_when_upscaling() {
     assert_eq!(
         DisplayUpscaler::WgslAnime4kV32CnnX2S.resolve_for_render([800, 1200], [1600, 2400]),
         Some(DisplayUpscaler::WgslAnime4kV32CnnX2S)
+    );
+    assert_eq!(
+        DisplayUpscaler::WgslAnime4kV32CnnX2M.resolve_for_render([800, 1200], [1600, 2400]),
+        Some(DisplayUpscaler::WgslAnime4kV32CnnX2M)
     );
     assert_eq!(
         DisplayUpscaler::WgslAcnetF8B4BoxHdnLuma.resolve_for_render([800, 1200], [1600, 2400]),

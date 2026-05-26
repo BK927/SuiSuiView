@@ -198,11 +198,10 @@ Anime4K
 License: MIT
 Copyright: Copyright (c) 2019-2021 bloc97
 Source: https://github.com/bloc97/Anime4K
-  Note: The real-time display path includes a WGSL port derived from
-  `glsl/Upscale/Anime4K_Upscale_CNN_x2_S.glsl`; `--upscale-bench` also
-  includes `Anime4K_Upscale_CNN_x2_M.glsl` for evaluation. The M variant
-  remains benchmark-only until its larger pass graph is connected to the app
-  paint path.
+  Note: The real-time display path includes WGSL ports derived from
+  `glsl/Upscale/Anime4K_Upscale_CNN_x2_S.glsl` and
+  `glsl/Upscale/Anime4K_Upscale_CNN_x2_M.glsl`. The benchmark harness uses
+  the same checked-in WGSL ports for quality and performance comparison.
 
 ACNetGLSL
 License: MIT
