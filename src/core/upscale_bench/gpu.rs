@@ -10,9 +10,11 @@ mod acnet;
 mod acnet_manifest;
 mod anime4k;
 mod anime4k_m;
+mod nvidia_nis;
 use acnet::AcnetBench;
 use anime4k::Anime4kBench;
 use anime4k_m::Anime4kMBench;
+use nvidia_nis::NvidiaNisBench;
 
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -28,6 +30,7 @@ pub(crate) struct GpuUpscaleBench {
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
+    nvidia_nis: Option<NvidiaNisBench>,
     anime4k: Option<Anime4kBench>,
     anime4k_m: Option<Anime4kMBench>,
     acnet: Option<AcnetBench>,
@@ -125,6 +128,7 @@ impl GpuUpscaleBench {
             cache: None,
         });
 
+        let nvidia_nis = NvidiaNisBench::try_new(&device).await;
         let anime4k = Anime4kBench::try_new(&device).await;
         let anime4k_m = Anime4kMBench::try_new(&device).await;
         let acnet = AcnetBench::try_new(&device).await;
@@ -134,6 +138,7 @@ impl GpuUpscaleBench {
             queue,
             pipeline,
             bind_group_layout,
+            nvidia_nis,
             anime4k,
             anime4k_m,
             acnet,
@@ -163,6 +168,13 @@ impl GpuUpscaleBench {
                 .anime4k_m
                 .as_ref()
                 .ok_or_else(|| "Anime4K v3.2 CNN x2 M GPU pipelines unavailable".to_owned())?
+                .apply(&self.device, &self.queue, image, output_size);
+        }
+        if method == DisplayUpscaler::NvidiaNis {
+            return self
+                .nvidia_nis
+                .as_ref()
+                .ok_or_else(|| "NVIDIA Image Scaling GPU pipeline unavailable".to_owned())?
                 .apply(&self.device, &self.queue, image, output_size);
         }
         if matches!(

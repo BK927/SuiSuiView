@@ -156,6 +156,7 @@ pub enum DisplayUpscaler {
     WgslFsr1Style,
     WgslFsr1EasuRcas,
     WgslNisStyle,
+    NvidiaNis,
     WgslAnime4kV32CnnX2S,
     WgslAnime4kV32CnnX2M,
     WgslAcnetF8B4Luma,
@@ -173,11 +174,12 @@ impl DisplayUpscaler {
         Self::WgslFsr1EasuRcas,
     ];
 
-    pub const GPU_METHODS: [Self; 10] = [
+    pub const GPU_METHODS: [Self; 11] = [
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
         Self::WgslNisStyle,
+        Self::NvidiaNis,
         Self::WgslAnime4kV32CnnX2S,
         Self::WgslAnime4kV32CnnX2M,
         Self::WgslAcnetF8B4Luma,
@@ -194,6 +196,7 @@ impl DisplayUpscaler {
             Self::WgslFsr1Style => "WGSL FSR-style",
             Self::WgslFsr1EasuRcas => "WGSL FSR1 EASU+RCAS",
             Self::WgslNisStyle => "WGSL NIS-style",
+            Self::NvidiaNis => "NVIDIA Image Scaling (NIS)",
             Self::WgslAnime4kV32CnnX2S => "Anime4K v3.2 CNN x2 S",
             Self::WgslAnime4kV32CnnX2M => "Anime4K v3.2 CNN x2 M",
             Self::WgslAcnetF8B4Luma => "ACNet F8B4 Luma",
@@ -211,6 +214,7 @@ impl DisplayUpscaler {
             Self::WgslFsr1Style => "wgsl_fsr1_style",
             Self::WgslFsr1EasuRcas => "wgsl_fsr1_easu_rcas",
             Self::WgslNisStyle => "wgsl_nis_style",
+            Self::NvidiaNis => "nvidia_nis",
             Self::WgslAnime4kV32CnnX2S => "anime4k_v32_cnn_x2_s",
             Self::WgslAnime4kV32CnnX2M => "anime4k_v32_cnn_x2_m",
             Self::WgslAcnetF8B4Luma => "acnet_f8b4_luma",
@@ -223,7 +227,8 @@ impl DisplayUpscaler {
     pub fn is_benchmark_only(self) -> bool {
         matches!(
             self,
-            Self::WgslAnime4kV32CnnX2S
+            Self::NvidiaNis
+                | Self::WgslAnime4kV32CnnX2S
                 | Self::WgslAnime4kV32CnnX2M
                 | Self::WgslAcnetF8B4Luma
                 | Self::WgslAcnetF8B4BoxLuma
@@ -249,6 +254,7 @@ impl DisplayUpscaler {
             }
             Self::Auto
             | Self::None
+            | Self::NvidiaNis
             | Self::WgslAnime4kV32CnnX2S
             | Self::WgslAnime4kV32CnnX2M
             | Self::WgslAcnetF8B4Luma
@@ -266,7 +272,8 @@ impl DisplayUpscaler {
             Self::WgslFsr1Style => 2,
             Self::WgslNisStyle => 3,
             Self::WgslFsr1EasuRcas => 4,
-            Self::WgslAnime4kV32CnnX2S
+            Self::NvidiaNis
+            | Self::WgslAnime4kV32CnnX2S
             | Self::WgslAnime4kV32CnnX2M
             | Self::WgslAcnetF8B4Luma
             | Self::WgslAcnetF8B4BoxLuma

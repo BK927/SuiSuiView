@@ -184,6 +184,16 @@ Note: The `--upscale-bench` experiment includes a WGSL port of the FSR1 EASU
 and RCAS equations for evaluation. It is not exposed as a default user-facing
 display mode yet.
 
+NVIDIA Image Scaling
+License: MIT
+Copyright: Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+Source: https://github.com/NVIDIAGameWorks/NVIDIAImageScaling
+Note: The `--upscale-bench` experiment includes a scalar WGSL compute port
+derived from `NIS_Scaler.h` and `NIS_Config.h` for evaluation. The port keeps
+the SDK coefficient tables and adaptive sharpening constants, but does not use
+the SDK shared-memory tile optimization yet. It is not exposed as a default
+user-facing display mode yet.
+
 Anime4K
 License: MIT
 Copyright: Copyright (c) 2019-2021 bloc97
