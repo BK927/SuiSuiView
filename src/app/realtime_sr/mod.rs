@@ -24,10 +24,10 @@ struct CunnyParams {
 }
 
 pub(super) struct RealtimeSrResources {
-    cunny: CunnyRenderer,
-    anime4k_s: Anime4kSRenderer,
-    anime4k_m: Anime4kMRenderer,
-    acnet: AcnetRenderer,
+    cunny: Option<CunnyRenderer>,
+    anime4k_s: Option<Anime4kSRenderer>,
+    anime4k_m: Option<Anime4kMRenderer>,
+    acnet: Option<AcnetRenderer>,
 }
 
 pub(super) struct RealtimeSrOutput {
@@ -38,12 +38,12 @@ pub(super) struct RealtimeSrOutput {
 }
 
 impl RealtimeSrResources {
-    pub(super) fn new(device: &wgpu::Device) -> Self {
+    pub(super) fn new() -> Self {
         Self {
-            cunny: CunnyRenderer::new(device),
-            anime4k_s: Anime4kSRenderer::new(device),
-            anime4k_m: Anime4kMRenderer::new(device),
-            acnet: AcnetRenderer::new(device),
+            cunny: None,
+            anime4k_s: None,
+            anime4k_m: None,
+            acnet: None,
         }
     }
 
@@ -73,7 +73,7 @@ impl RealtimeSrResources {
     }
 
     pub(super) fn render(
-        &self,
+        &mut self,
         method: DisplayUpscaler,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -83,27 +83,26 @@ impl RealtimeSrResources {
         match method {
             DisplayUpscaler::CunnyFasterNvl | DisplayUpscaler::CunnyFastNvl => Some(
                 self.cunny
+                    .get_or_insert_with(|| CunnyRenderer::new(device))
                     .render(method, device, encoder, source_view, source_size),
             ),
-            DisplayUpscaler::WgslAnime4kV32CnnX2S => {
-                Some(
-                    self.anime4k_s
-                        .render(device, encoder, source_view, source_size),
-                )
-            }
-            DisplayUpscaler::WgslAnime4kV32CnnX2M => {
-                Some(
-                    self.anime4k_m
-                        .render(device, encoder, source_view, source_size),
-                )
-            }
+            DisplayUpscaler::WgslAnime4kV32CnnX2S => Some(
+                self.anime4k_s
+                    .get_or_insert_with(|| Anime4kSRenderer::new(device))
+                    .render(device, encoder, source_view, source_size),
+            ),
+            DisplayUpscaler::WgslAnime4kV32CnnX2M => Some(
+                self.anime4k_m
+                    .get_or_insert_with(|| Anime4kMRenderer::new(device))
+                    .render(device, encoder, source_view, source_size),
+            ),
             DisplayUpscaler::WgslAcnetF8B4Luma
             | DisplayUpscaler::WgslAcnetF8B4BoxLuma
             | DisplayUpscaler::WgslAcnetF8B4HdnLuma
-            | DisplayUpscaler::WgslAcnetF8B4BoxHdnLuma => {
-                self.acnet
-                    .render(method, device, encoder, source_view, source_size)
-            }
+            | DisplayUpscaler::WgslAcnetF8B4BoxHdnLuma => self
+                .acnet
+                .get_or_insert_with(|| AcnetRenderer::new(device))
+                .render(method, device, encoder, source_view, source_size),
             _ => None,
         }
     }

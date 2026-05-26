@@ -326,7 +326,7 @@ impl GpuPaintResources {
                 NonZeroUsize::new(GPU_INTERMEDIATE_TEXTURE_CACHE_LIMIT).unwrap(),
             ),
             intermediate_texture_bytes: 0,
-            realtime_sr: RealtimeSrResources::new(device),
+            realtime_sr: RealtimeSrResources::new(),
         }
     }
 
