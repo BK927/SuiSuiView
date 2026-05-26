@@ -16,11 +16,16 @@ struct CuNNyParams {
 @group(0) @binding(1) var input0_tex: texture_2d<f32>;
 @group(0) @binding(2) var input1_tex: texture_2d<f32>;
 @group(0) @binding(3) var input2_tex: texture_2d<f32>;
-@group(0) @binding(4) var out0_tex: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(5) var out1_tex: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(6) var out2_tex: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(7) var final_tex: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(8) var<uniform> params: CuNNyParams;
+@group(0) @binding(4) var input3_tex: texture_2d<f32>;
+@group(0) @binding(5) var input4_tex: texture_2d<f32>;
+@group(0) @binding(6) var input5_tex: texture_2d<f32>;
+@group(0) @binding(7) var input6_tex: texture_2d<f32>;
+@group(0) @binding(8) var input7_tex: texture_2d<f32>;
+@group(0) @binding(9) var out0_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(10) var out1_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(11) var out2_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(12) var final_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(13) var<uniform> params: CuNNyParams;
 
 fn clamp_source_coord(coord: vec2<i32>) -> vec2<i32> {
     return clamp(coord, vec2<i32>(0, 0), vec2<i32>(i32(params.source_width) - 1, i32(params.source_height) - 1));
@@ -36,6 +41,11 @@ fn load_source_rgb(coord: vec2<i32>, dx: i32, dy: i32) -> vec3<f32> {
 fn load_input0(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input0_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
 fn load_input1(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input1_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
 fn load_input2(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input2_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
+fn load_input3(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input3_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
+fn load_input4(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input4_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
+fn load_input5(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input5_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
+fn load_input6(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input6_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
+fn load_input7(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input7_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
 
 fn sample_source_rgb_for_output(out_coord: vec2<i32>) -> vec3<f32> {
     let source_scale = vec2<f32>(f32(params.source_width) / f32(params.output_width), f32(params.source_height) / f32(params.output_height));
@@ -73,15 +83,15 @@ fn cunny_veryfast_nvl_pass_0(@builtin(global_invocation_id) global_id: vec3<u32>
     let coord = vec2<i32>(i32(global_id.x), i32(global_id.y));
     var r0 = vec4<f32>(0.0);
     var r1 = vec4<f32>(0.0);
-    let s0_0_0 = load_source_luma(coord, -1, -1);
-    let s0_0_1 = load_source_luma(coord, 0, -1);
-    let s0_0_2 = load_source_luma(coord, 1, -1);
-    let s0_1_0 = load_source_luma(coord, -1, 0);
-    let s0_1_1 = load_source_luma(coord, 0, 0);
-    let s0_1_2 = load_source_luma(coord, 1, 0);
-    let s0_2_0 = load_source_luma(coord, -1, 1);
-    let s0_2_1 = load_source_luma(coord, 0, 1);
-    let s0_2_2 = load_source_luma(coord, 1, 1);
+    var s0_0_0 = load_source_luma(coord, -1, -1);
+    var s0_0_1 = load_source_luma(coord, 0, -1);
+    var s0_0_2 = load_source_luma(coord, 1, -1);
+    var s0_1_0 = load_source_luma(coord, -1, 0);
+    var s0_1_1 = load_source_luma(coord, 0, 0);
+    var s0_1_2 = load_source_luma(coord, 1, 0);
+    var s0_2_0 = load_source_luma(coord, -1, 1);
+    var s0_2_1 = load_source_luma(coord, 0, 1);
+    var s0_2_2 = load_source_luma(coord, 1, 1);
     r0 += vec4<f32>(-6.888e-02, -6.888e-02, -6.888e-02, -6.888e-02) * s0_0_0;
     r1 += vec4<f32>(1.851e-01, -4.871e-03, -3.070e-02, 1.101e-02) * s0_0_0;
     r0 += vec4<f32>(-1.549e-01, -1.549e-01, -1.549e-01, -1.549e-01) * s0_0_1;
@@ -115,24 +125,24 @@ fn cunny_veryfast_nvl_pass_1(@builtin(global_invocation_id) global_id: vec3<u32>
     let coord = vec2<i32>(i32(global_id.x), i32(global_id.y));
     var r0 = vec4<f32>(0.0);
     var r1 = vec4<f32>(0.0);
-    let s0_0_0 = load_input0(coord, -1, -1);
-    let s0_0_1 = load_input0(coord, 0, -1);
-    let s0_0_2 = load_input0(coord, 1, -1);
-    let s0_1_0 = load_input0(coord, -1, 0);
-    let s0_1_1 = load_input0(coord, 0, 0);
-    let s0_1_2 = load_input0(coord, 1, 0);
-    let s0_2_0 = load_input0(coord, -1, 1);
-    let s0_2_1 = load_input0(coord, 0, 1);
-    let s0_2_2 = load_input0(coord, 1, 1);
-    let s1_0_0 = load_input1(coord, -1, -1);
-    let s1_0_1 = load_input1(coord, 0, -1);
-    let s1_0_2 = load_input1(coord, 1, -1);
-    let s1_1_0 = load_input1(coord, -1, 0);
-    let s1_1_1 = load_input1(coord, 0, 0);
-    let s1_1_2 = load_input1(coord, 1, 0);
-    let s1_2_0 = load_input1(coord, -1, 1);
-    let s1_2_1 = load_input1(coord, 0, 1);
-    let s1_2_2 = load_input1(coord, 1, 1);
+    var s0_0_0 = load_input0(coord, -1, -1);
+    var s0_0_1 = load_input0(coord, 0, -1);
+    var s0_0_2 = load_input0(coord, 1, -1);
+    var s0_1_0 = load_input0(coord, -1, 0);
+    var s0_1_1 = load_input0(coord, 0, 0);
+    var s0_1_2 = load_input0(coord, 1, 0);
+    var s0_2_0 = load_input0(coord, -1, 1);
+    var s0_2_1 = load_input0(coord, 0, 1);
+    var s0_2_2 = load_input0(coord, 1, 1);
+    var s1_0_0 = load_input1(coord, -1, -1);
+    var s1_0_1 = load_input1(coord, 0, -1);
+    var s1_0_2 = load_input1(coord, 1, -1);
+    var s1_1_0 = load_input1(coord, -1, 0);
+    var s1_1_1 = load_input1(coord, 0, 0);
+    var s1_1_2 = load_input1(coord, 1, 0);
+    var s1_2_0 = load_input1(coord, -1, 1);
+    var s1_2_1 = load_input1(coord, 0, 1);
+    var s1_2_2 = load_input1(coord, 1, 1);
     r0 += vec4<f32>(dot(s0_0_0, vec4<f32>(9.942e-02, 5.382e-02, 2.066e-01, -4.982e-03)), dot(s0_0_0, vec4<f32>(9.942e-02, 5.109e-02, 2.066e-01, -6.896e-03)), dot(s0_0_0, vec4<f32>(9.942e-02, 4.971e-02, 2.066e-01, -8.240e-03)), dot(s0_0_0, vec4<f32>(9.942e-02, 5.303e-02, 2.066e-01, -5.609e-03)));
     r1 += vec4<f32>(dot(s0_0_0, vec4<f32>(3.222e-02, -2.166e-01, -1.292e-02, -2.242e-01)), dot(s0_0_0, vec4<f32>(3.222e-02, -2.166e-01, -1.292e-02, -2.242e-01)), dot(s0_0_0, vec4<f32>(3.222e-02, -2.159e-01, -1.292e-02, -2.236e-01)), dot(s0_0_0, vec4<f32>(3.222e-02, -2.161e-01, -1.292e-02, -2.239e-01)));
     r0 += vec4<f32>(dot(s0_0_1, vec4<f32>(1.187e-01, 7.311e-02, -1.313e-01, 8.349e-02)), dot(s0_0_1, vec4<f32>(1.187e-01, 7.000e-02, -1.313e-01, 8.108e-02)), dot(s0_0_1, vec4<f32>(1.187e-01, 6.898e-02, -1.313e-01, 8.026e-02)), dot(s0_0_1, vec4<f32>(1.187e-01, 7.144e-02, -1.313e-01, 8.194e-02)));
@@ -181,24 +191,24 @@ fn cunny_veryfast_nvl_pass_2(@builtin(global_invocation_id) global_id: vec3<u32>
     if (global_id.x >= params.source_width || global_id.y >= params.source_height) { return; }
     let coord = vec2<i32>(i32(global_id.x), i32(global_id.y));
     var r0 = vec4<f32>(0.0);
-    let s0_0_0 = load_input0(coord, -1, -1);
-    let s0_0_1 = load_input0(coord, 0, -1);
-    let s0_0_2 = load_input0(coord, 1, -1);
-    let s0_1_0 = load_input0(coord, -1, 0);
-    let s0_1_1 = load_input0(coord, 0, 0);
-    let s0_1_2 = load_input0(coord, 1, 0);
-    let s0_2_0 = load_input0(coord, -1, 1);
-    let s0_2_1 = load_input0(coord, 0, 1);
-    let s0_2_2 = load_input0(coord, 1, 1);
-    let s1_0_0 = load_input1(coord, -1, -1);
-    let s1_0_1 = load_input1(coord, 0, -1);
-    let s1_0_2 = load_input1(coord, 1, -1);
-    let s1_1_0 = load_input1(coord, -1, 0);
-    let s1_1_1 = load_input1(coord, 0, 0);
-    let s1_1_2 = load_input1(coord, 1, 0);
-    let s1_2_0 = load_input1(coord, -1, 1);
-    let s1_2_1 = load_input1(coord, 0, 1);
-    let s1_2_2 = load_input1(coord, 1, 1);
+    var s0_0_0 = load_input0(coord, -1, -1);
+    var s0_0_1 = load_input0(coord, 0, -1);
+    var s0_0_2 = load_input0(coord, 1, -1);
+    var s0_1_0 = load_input0(coord, -1, 0);
+    var s0_1_1 = load_input0(coord, 0, 0);
+    var s0_1_2 = load_input0(coord, 1, 0);
+    var s0_2_0 = load_input0(coord, -1, 1);
+    var s0_2_1 = load_input0(coord, 0, 1);
+    var s0_2_2 = load_input0(coord, 1, 1);
+    var s1_0_0 = load_input1(coord, -1, -1);
+    var s1_0_1 = load_input1(coord, 0, -1);
+    var s1_0_2 = load_input1(coord, 1, -1);
+    var s1_1_0 = load_input1(coord, -1, 0);
+    var s1_1_1 = load_input1(coord, 0, 0);
+    var s1_1_2 = load_input1(coord, 1, 0);
+    var s1_2_0 = load_input1(coord, -1, 1);
+    var s1_2_1 = load_input1(coord, 0, 1);
+    var s1_2_2 = load_input1(coord, 1, 1);
     r0 += vec4<f32>(dot(s0_0_0, vec4<f32>(4.652e-02, 3.834e-03, -1.450e-01, -3.711e-04)), dot(s0_0_0, vec4<f32>(2.118e-02, 1.011e-02, -1.499e-01, 2.741e-02)), dot(s0_0_0, vec4<f32>(1.777e-02, -6.713e-02, 2.302e-03, -3.458e-02)), dot(s0_0_0, vec4<f32>(-2.906e-02, 1.085e-02, 2.583e-02, 3.259e-02)));
     r0 += vec4<f32>(dot(s0_0_1, vec4<f32>(-2.569e-04, 5.387e-02, 5.662e-03, -3.874e-02)), dot(s0_0_1, vec4<f32>(4.004e-02, 6.909e-02, -2.999e-02, -6.909e-02)), dot(s0_0_1, vec4<f32>(7.850e-02, -8.329e-02, -1.608e-01, 6.379e-02)), dot(s0_0_1, vec4<f32>(-2.020e-01, -3.478e-02, -8.773e-03, 2.815e-02)));
     r0 += vec4<f32>(dot(s0_0_2, vec4<f32>(-2.328e-02, -9.687e-03, -1.682e-02, 2.338e-02)), dot(s0_0_2, vec4<f32>(-3.024e-02, 3.121e-02, -2.241e-02, 1.218e-03)), dot(s0_0_2, vec4<f32>(2.104e-01, 9.264e-05, 3.162e-02, 3.072e-03)), dot(s0_0_2, vec4<f32>(-1.535e-01, -2.195e-02, -7.546e-02, 3.387e-02)));
@@ -227,15 +237,15 @@ fn cunny_veryfast_nvl_pass_3(@builtin(global_invocation_id) global_id: vec3<u32>
     if (global_id.x >= params.source_width || global_id.y >= params.source_height) { return; }
     let coord = vec2<i32>(i32(global_id.x), i32(global_id.y));
     var r0 = vec4<f32>(0.0);
-    let s0_0_0 = load_input0(coord, -1, -1);
-    let s0_0_1 = load_input0(coord, 0, -1);
-    let s0_0_2 = load_input0(coord, 1, -1);
-    let s0_1_0 = load_input0(coord, -1, 0);
-    let s0_1_1 = load_input0(coord, 0, 0);
-    let s0_1_2 = load_input0(coord, 1, 0);
-    let s0_2_0 = load_input0(coord, -1, 1);
-    let s0_2_1 = load_input0(coord, 0, 1);
-    let s0_2_2 = load_input0(coord, 1, 1);
+    var s0_0_0 = load_input0(coord, -1, -1);
+    var s0_0_1 = load_input0(coord, 0, -1);
+    var s0_0_2 = load_input0(coord, 1, -1);
+    var s0_1_0 = load_input0(coord, -1, 0);
+    var s0_1_1 = load_input0(coord, 0, 0);
+    var s0_1_2 = load_input0(coord, 1, 0);
+    var s0_2_0 = load_input0(coord, -1, 1);
+    var s0_2_1 = load_input0(coord, 0, 1);
+    var s0_2_2 = load_input0(coord, 1, 1);
     r0 += vec4<f32>(dot(s0_0_0, vec4<f32>(-8.466e-03, 4.039e-02, -9.043e-02, 2.522e-02)), dot(s0_0_0, vec4<f32>(8.423e-03, 1.243e-02, -4.385e-02, -1.250e-02)), dot(s0_0_0, vec4<f32>(-1.341e-02, 3.053e-03, 1.099e-02, 1.207e-02)), dot(s0_0_0, vec4<f32>(8.400e-03, 2.236e-02, -4.289e-03, -6.843e-04)));
     r0 += vec4<f32>(dot(s0_0_1, vec4<f32>(2.039e-02, 1.700e-01, -2.046e-02, 4.650e-02)), dot(s0_0_1, vec4<f32>(2.086e-02, 1.294e-01, -6.568e-02, 7.837e-02)), dot(s0_0_1, vec4<f32>(7.522e-03, -2.264e-02, -3.262e-03, -1.792e-03)), dot(s0_0_1, vec4<f32>(-3.699e-02, 4.882e-03, 1.502e-02, 6.150e-03)));
     r0 += vec4<f32>(dot(s0_0_2, vec4<f32>(1.362e-03, 1.193e-02, -6.344e-03, -2.810e-02)), dot(s0_0_2, vec4<f32>(-4.553e-03, 6.665e-02, -1.285e-03, -9.490e-03)), dot(s0_0_2, vec4<f32>(-5.095e-03, 9.653e-03, 6.389e-04, 2.764e-03)), dot(s0_0_2, vec4<f32>(-1.786e-02, -1.117e-02, -1.254e-04, 1.519e-02)));

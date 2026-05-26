@@ -9,10 +9,13 @@ use acnet::AcnetRenderer;
 use anime4k::{Anime4kMRenderer, Anime4kSRenderer};
 
 pub(super) const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-const DUMMY_READ: usize = 6;
-const DUMMY_OUT0: usize = 7;
-const DUMMY_OUT1: usize = 8;
-const DUMMY_OUT2: usize = 9;
+const CUNNY_INPUT_SLOTS: usize = 8;
+const CUNNY_OUTPUT_SLOTS: usize = 3;
+const CUNNY_INTERMEDIATE_CAPACITY: usize = 16;
+const DUMMY_READ: usize = CUNNY_INTERMEDIATE_CAPACITY;
+const DUMMY_OUT0: usize = DUMMY_READ + 1;
+const DUMMY_OUT1: usize = DUMMY_READ + 2;
+const DUMMY_OUT2: usize = DUMMY_READ + 3;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -133,34 +136,34 @@ struct CunnyVariant {
 
 #[derive(Clone, Copy)]
 struct CunnyPassSpec {
-    inputs: [usize; 3],
-    outputs: [usize; 3],
+    inputs: &'static [usize],
+    outputs: &'static [usize],
 }
 
 impl CunnyRenderer {
     fn new(device: &wgpu::Device) -> Self {
+        let mut layout_entries = Vec::with_capacity(1 + CUNNY_INPUT_SLOTS + CUNNY_OUTPUT_SLOTS + 2);
+        layout_entries.push(texture_entry(0));
+        for slot in 0..CUNNY_INPUT_SLOTS {
+            layout_entries.push(texture_entry(input_binding(slot)));
+        }
+        for slot in 0..CUNNY_OUTPUT_SLOTS {
+            layout_entries.push(storage_entry(output_binding(slot)));
+        }
+        layout_entries.push(storage_entry(final_binding()));
+        layout_entries.push(wgpu::BindGroupLayoutEntry {
+            binding: params_binding(),
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        });
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("suisuiview-realtime-cunny-bind-group-layout"),
-            entries: &[
-                texture_entry(0),
-                texture_entry(1),
-                texture_entry(2),
-                texture_entry(3),
-                storage_entry(4),
-                storage_entry(5),
-                storage_entry(6),
-                storage_entry(7),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 8,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
+            entries: &layout_entries,
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("suisuiview-realtime-cunny-pipeline-layout"),
@@ -232,8 +235,8 @@ impl CunnyRenderer {
         let dummy_read_texture = create_intermediate_texture(device, source_extent, DUMMY_READ);
         let dummy_read_view =
             dummy_read_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let dummy_output_textures: Vec<wgpu::Texture> = [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2]
-            .into_iter()
+        let dummy_output_textures: Vec<wgpu::Texture> = (0..CUNNY_OUTPUT_SLOTS)
+            .map(dummy_output_index)
             .map(|index| create_intermediate_texture(device, source_extent, index))
             .collect();
         let dummy_output_views: Vec<wgpu::TextureView> = dummy_output_textures
@@ -264,71 +267,46 @@ impl CunnyRenderer {
         });
 
         for (index, pass_spec) in variant.pass_specs.iter().enumerate() {
+            let mut bind_entries =
+                Vec::with_capacity(1 + CUNNY_INPUT_SLOTS + CUNNY_OUTPUT_SLOTS + 2);
+            bind_entries.push(texture_binding(0, source_view));
+            for slot in 0..CUNNY_INPUT_SLOTS {
+                let input_index = pass_spec.inputs.get(slot).copied().unwrap_or(DUMMY_READ);
+                bind_entries.push(texture_binding(
+                    input_binding(slot),
+                    intermediate_view(
+                        &intermediate_views,
+                        &dummy_read_view,
+                        &dummy_output_views,
+                        input_index,
+                    ),
+                ));
+            }
+            for slot in 0..CUNNY_OUTPUT_SLOTS {
+                let output_index = pass_spec
+                    .outputs
+                    .get(slot)
+                    .copied()
+                    .unwrap_or_else(|| dummy_output_index(slot));
+                bind_entries.push(storage_binding(
+                    output_binding(slot),
+                    intermediate_view(
+                        &intermediate_views,
+                        &dummy_read_view,
+                        &dummy_output_views,
+                        output_index,
+                    ),
+                ));
+            }
+            bind_entries.push(storage_binding(final_binding(), &output_view));
+            bind_entries.push(wgpu::BindGroupEntry {
+                binding: params_binding(),
+                resource: params_buffer.as_entire_binding(),
+            });
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(variant.entry_points[index]),
                 layout: &self.bind_group_layout,
-                entries: &[
-                    texture_binding(0, source_view),
-                    texture_binding(
-                        1,
-                        intermediate_view(
-                            &intermediate_views,
-                            &dummy_read_view,
-                            &dummy_output_views,
-                            pass_spec.inputs[0],
-                        ),
-                    ),
-                    texture_binding(
-                        2,
-                        intermediate_view(
-                            &intermediate_views,
-                            &dummy_read_view,
-                            &dummy_output_views,
-                            pass_spec.inputs[1],
-                        ),
-                    ),
-                    texture_binding(
-                        3,
-                        intermediate_view(
-                            &intermediate_views,
-                            &dummy_read_view,
-                            &dummy_output_views,
-                            pass_spec.inputs[2],
-                        ),
-                    ),
-                    storage_binding(
-                        4,
-                        intermediate_view(
-                            &intermediate_views,
-                            &dummy_read_view,
-                            &dummy_output_views,
-                            pass_spec.outputs[0],
-                        ),
-                    ),
-                    storage_binding(
-                        5,
-                        intermediate_view(
-                            &intermediate_views,
-                            &dummy_read_view,
-                            &dummy_output_views,
-                            pass_spec.outputs[1],
-                        ),
-                    ),
-                    storage_binding(
-                        6,
-                        intermediate_view(
-                            &intermediate_views,
-                            &dummy_read_view,
-                            &dummy_output_views,
-                            pass_spec.outputs[2],
-                        ),
-                    ),
-                    storage_binding(7, &output_view),
-                    wgpu::BindGroupEntry {
-                        binding: 8,
-                        resource: params_buffer.as_entire_binding(),
-                    },
-                ],
+                entries: &bind_entries,
             });
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some(variant.entry_points[index]),
@@ -357,7 +335,7 @@ impl CunnyRenderer {
 fn intermediate_count(pass_specs: &[CunnyPassSpec]) -> usize {
     pass_specs
         .iter()
-        .flat_map(|pass| pass.inputs.into_iter().chain(pass.outputs))
+        .flat_map(|pass| pass.inputs.iter().chain(pass.outputs).copied())
         .filter(|&index| index < DUMMY_READ)
         .max()
         .map_or(0, |index| index + 1)
@@ -369,12 +347,12 @@ fn intermediate_view<'a>(
     dummy_output_views: &'a [wgpu::TextureView],
     index: usize,
 ) -> &'a wgpu::TextureView {
-    match index {
-        DUMMY_READ => dummy_read_view,
-        DUMMY_OUT0 => &dummy_output_views[0],
-        DUMMY_OUT1 => &dummy_output_views[1],
-        DUMMY_OUT2 => &dummy_output_views[2],
-        _ => &intermediate_views[index],
+    if index == DUMMY_READ {
+        dummy_read_view
+    } else if (DUMMY_OUT0..DUMMY_OUT0 + CUNNY_OUTPUT_SLOTS).contains(&index) {
+        &dummy_output_views[index - DUMMY_OUT0]
+    } else {
+        &intermediate_views[index]
     }
 }
 
@@ -464,108 +442,108 @@ const CUNNY_4X12_NVL_ENTRY_POINTS: [&str; 6] = [
 
 const CUNNY_VERYFAST_NVL_PASSES: [CunnyPassSpec; 4] = [
     CunnyPassSpec {
-        inputs: [DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: [0, 1, DUMMY_OUT0],
+        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: &[0, 1, DUMMY_OUT0],
     },
     CunnyPassSpec {
-        inputs: [0, 1, DUMMY_READ],
-        outputs: [2, 3, DUMMY_OUT0],
+        inputs: &[0, 1, DUMMY_READ],
+        outputs: &[2, 3, DUMMY_OUT0],
     },
     CunnyPassSpec {
-        inputs: [2, 3, DUMMY_READ],
-        outputs: [0, DUMMY_OUT0, DUMMY_OUT1],
+        inputs: &[2, 3, DUMMY_READ],
+        outputs: &[0, DUMMY_OUT0, DUMMY_OUT1],
     },
     CunnyPassSpec {
-        inputs: [0, DUMMY_READ, DUMMY_READ],
-        outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+        inputs: &[0, DUMMY_READ, DUMMY_READ],
+        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
     },
 ];
 
 const CUNNY_FASTER_NVL_PASSES: [CunnyPassSpec; 4] = [
     CunnyPassSpec {
-        inputs: [DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: [0, 1, DUMMY_OUT0],
+        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: &[0, 1, DUMMY_OUT0],
     },
     CunnyPassSpec {
-        inputs: [0, 1, DUMMY_READ],
-        outputs: [2, 3, DUMMY_OUT0],
+        inputs: &[0, 1, DUMMY_READ],
+        outputs: &[2, 3, DUMMY_OUT0],
     },
     CunnyPassSpec {
-        inputs: [2, 3, DUMMY_READ],
-        outputs: [0, 1, DUMMY_OUT0],
+        inputs: &[2, 3, DUMMY_READ],
+        outputs: &[0, 1, DUMMY_OUT0],
     },
     CunnyPassSpec {
-        inputs: [0, 1, DUMMY_READ],
-        outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+        inputs: &[0, 1, DUMMY_READ],
+        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
     },
 ];
 
 const CUNNY_FAST_NVL_PASSES: [CunnyPassSpec; 4] = [
     CunnyPassSpec {
-        inputs: [DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: [0, 1, 2],
+        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: &[0, 1, 2],
     },
     CunnyPassSpec {
-        inputs: [0, 1, 2],
-        outputs: [3, 4, 5],
+        inputs: &[0, 1, 2],
+        outputs: &[3, 4, 5],
     },
     CunnyPassSpec {
-        inputs: [3, 4, 5],
-        outputs: [0, 1, DUMMY_OUT0],
+        inputs: &[3, 4, 5],
+        outputs: &[0, 1, DUMMY_OUT0],
     },
     CunnyPassSpec {
-        inputs: [0, 1, DUMMY_READ],
-        outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+        inputs: &[0, 1, DUMMY_READ],
+        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
     },
 ];
 
 const CUNNY_3X12_NVL_PASSES: [CunnyPassSpec; 5] = [
     CunnyPassSpec {
-        inputs: [DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: [0, 1, 2],
+        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: &[0, 1, 2],
     },
     CunnyPassSpec {
-        inputs: [0, 1, 2],
-        outputs: [3, 4, 5],
+        inputs: &[0, 1, 2],
+        outputs: &[3, 4, 5],
     },
     CunnyPassSpec {
-        inputs: [3, 4, 5],
-        outputs: [0, 1, 2],
+        inputs: &[3, 4, 5],
+        outputs: &[0, 1, 2],
     },
     CunnyPassSpec {
-        inputs: [0, 1, 2],
-        outputs: [3, 4, 5],
+        inputs: &[0, 1, 2],
+        outputs: &[3, 4, 5],
     },
     CunnyPassSpec {
-        inputs: [3, 4, 5],
-        outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+        inputs: &[3, 4, 5],
+        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
     },
 ];
 
 const CUNNY_4X12_NVL_PASSES: [CunnyPassSpec; 6] = [
     CunnyPassSpec {
-        inputs: [DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: [0, 1, 2],
+        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: &[0, 1, 2],
     },
     CunnyPassSpec {
-        inputs: [0, 1, 2],
-        outputs: [3, 4, 5],
+        inputs: &[0, 1, 2],
+        outputs: &[3, 4, 5],
     },
     CunnyPassSpec {
-        inputs: [3, 4, 5],
-        outputs: [0, 1, 2],
+        inputs: &[3, 4, 5],
+        outputs: &[0, 1, 2],
     },
     CunnyPassSpec {
-        inputs: [0, 1, 2],
-        outputs: [3, 4, 5],
+        inputs: &[0, 1, 2],
+        outputs: &[3, 4, 5],
     },
     CunnyPassSpec {
-        inputs: [3, 4, 5],
-        outputs: [0, 1, 2],
+        inputs: &[3, 4, 5],
+        outputs: &[0, 1, 2],
     },
     CunnyPassSpec {
-        inputs: [0, 1, 2],
-        outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+        inputs: &[0, 1, 2],
+        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
     },
 ];
 
@@ -593,6 +571,26 @@ fn create_intermediate_texture(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
         view_formats: &[],
     })
+}
+
+fn input_binding(slot: usize) -> u32 {
+    1 + slot as u32
+}
+
+fn output_binding(slot: usize) -> u32 {
+    1 + CUNNY_INPUT_SLOTS as u32 + slot as u32
+}
+
+fn final_binding() -> u32 {
+    1 + CUNNY_INPUT_SLOTS as u32 + CUNNY_OUTPUT_SLOTS as u32
+}
+
+fn params_binding() -> u32 {
+    final_binding() + 1
+}
+
+fn dummy_output_index(slot: usize) -> usize {
+    DUMMY_OUT0 + slot
 }
 
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {

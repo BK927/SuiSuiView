@@ -16,11 +16,16 @@ struct CuNNyParams {
 @group(0) @binding(1) var input0_tex: texture_2d<f32>;
 @group(0) @binding(2) var input1_tex: texture_2d<f32>;
 @group(0) @binding(3) var input2_tex: texture_2d<f32>;
-@group(0) @binding(4) var out0_tex: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(5) var out1_tex: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(6) var out2_tex: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(7) var final_tex: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(8) var<uniform> params: CuNNyParams;
+@group(0) @binding(4) var input3_tex: texture_2d<f32>;
+@group(0) @binding(5) var input4_tex: texture_2d<f32>;
+@group(0) @binding(6) var input5_tex: texture_2d<f32>;
+@group(0) @binding(7) var input6_tex: texture_2d<f32>;
+@group(0) @binding(8) var input7_tex: texture_2d<f32>;
+@group(0) @binding(9) var out0_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(10) var out1_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(11) var out2_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(12) var final_tex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(13) var<uniform> params: CuNNyParams;
 
 fn clamp_source_coord(coord: vec2<i32>) -> vec2<i32> {
     return clamp(coord, vec2<i32>(0, 0), vec2<i32>(i32(params.source_width) - 1, i32(params.source_height) - 1));
@@ -36,6 +41,11 @@ fn load_source_rgb(coord: vec2<i32>, dx: i32, dy: i32) -> vec3<f32> {
 fn load_input0(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input0_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
 fn load_input1(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input1_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
 fn load_input2(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input2_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
+fn load_input3(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input3_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
+fn load_input4(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input4_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
+fn load_input5(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input5_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
+fn load_input6(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input6_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
+fn load_input7(coord: vec2<i32>, dx: i32, dy: i32) -> vec4<f32> { return textureLoad(input7_tex, clamp_source_coord(coord + vec2<i32>(dx, dy)), 0); }
 
 fn sample_source_rgb_for_output(out_coord: vec2<i32>) -> vec3<f32> {
     let source_scale = vec2<f32>(f32(params.source_width) / f32(params.output_width), f32(params.source_height) / f32(params.output_height));
