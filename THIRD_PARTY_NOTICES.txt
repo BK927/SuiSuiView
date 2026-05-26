@@ -208,10 +208,10 @@ ACNetGLSL
 License: MIT
 Copyright: Copyright (c) 2020 TianZer
 Source: https://github.com/TianZerL/ACNetGLSL
-Note: The `--upscale-bench` experiment includes generated WGSL ports derived
-from `glsl/acnet/acnet_f8b4*.glsl` variants. The neural path predicts luma and
-the benchmark port merges source chroma in the final pass. They are not exposed
-as default user-facing display modes yet.
+  Note: The real-time display path and `--upscale-bench` experiment include
+  generated WGSL ports derived from `glsl/acnet/acnet_f8b4*.glsl` variants.
+  The neural path predicts luma and the port merges source chroma in the final
+  pass.
 
 CuNNy
 License: LGPL-3.0-or-later repository license; Magpie effect headers state

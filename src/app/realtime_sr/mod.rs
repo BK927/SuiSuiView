@@ -2,8 +2,10 @@ use crate::core::state::DisplayUpscaler;
 use std::borrow::Cow;
 use wgpu::util::DeviceExt;
 
+mod acnet;
 mod anime4k;
 
+use acnet::AcnetRenderer;
 use anime4k::Anime4kSRenderer;
 
 pub(super) const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -24,6 +26,7 @@ struct CunnyParams {
 pub(super) struct RealtimeSrResources {
     cunny: CunnyRenderer,
     anime4k_s: Anime4kSRenderer,
+    acnet: AcnetRenderer,
 }
 
 pub(super) struct RealtimeSrOutput {
@@ -38,6 +41,7 @@ impl RealtimeSrResources {
         Self {
             cunny: CunnyRenderer::new(device),
             anime4k_s: Anime4kSRenderer::new(device),
+            acnet: AcnetRenderer::new(device),
         }
     }
 
@@ -47,6 +51,10 @@ impl RealtimeSrResources {
             DisplayUpscaler::CunnyFasterNvl
                 | DisplayUpscaler::CunnyFastNvl
                 | DisplayUpscaler::WgslAnime4kV32CnnX2S
+                | DisplayUpscaler::WgslAcnetF8B4Luma
+                | DisplayUpscaler::WgslAcnetF8B4BoxLuma
+                | DisplayUpscaler::WgslAcnetF8B4HdnLuma
+                | DisplayUpscaler::WgslAcnetF8B4BoxHdnLuma
         )
     }
 
@@ -79,6 +87,13 @@ impl RealtimeSrResources {
                     self.anime4k_s
                         .render(device, encoder, source_view, source_size),
                 )
+            }
+            DisplayUpscaler::WgslAcnetF8B4Luma
+            | DisplayUpscaler::WgslAcnetF8B4BoxLuma
+            | DisplayUpscaler::WgslAcnetF8B4HdnLuma
+            | DisplayUpscaler::WgslAcnetF8B4BoxHdnLuma => {
+                self.acnet
+                    .render(method, device, encoder, source_view, source_size)
             }
             _ => None,
         }

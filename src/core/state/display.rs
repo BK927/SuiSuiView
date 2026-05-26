@@ -101,12 +101,16 @@ macro_rules! upscaler_candidate {
 }
 
 impl DisplayUpscaler {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 11] = [
         Self::Auto,
         Self::None,
         Self::WgslBilinear,
         Self::WgslFsr1EasuRcas,
         Self::WgslAnime4kV32CnnX2S,
+        Self::WgslAcnetF8B4Luma,
+        Self::WgslAcnetF8B4BoxLuma,
+        Self::WgslAcnetF8B4HdnLuma,
+        Self::WgslAcnetF8B4BoxHdnLuma,
         Self::CunnyFasterNvl,
         Self::CunnyFastNvl,
     ];
@@ -231,7 +235,7 @@ impl DisplayUpscaler {
                 "2x",
                 "multi-pass",
                 "wgpu compute",
-                false,
+                true,
             ),
             Self::WgslAcnetF8B4BoxLuma => upscaler_candidate!(
                 "ACNetGLSL",
@@ -241,7 +245,7 @@ impl DisplayUpscaler {
                 "2x",
                 "multi-pass",
                 "wgpu compute",
-                false,
+                true,
             ),
             Self::WgslAcnetF8B4HdnLuma => upscaler_candidate!(
                 "ACNetGLSL",
@@ -251,7 +255,7 @@ impl DisplayUpscaler {
                 "2x",
                 "multi-pass",
                 "wgpu compute",
-                false,
+                true,
             ),
             Self::WgslAcnetF8B4BoxHdnLuma => upscaler_candidate!(
                 "ACNetGLSL",
@@ -261,7 +265,7 @@ impl DisplayUpscaler {
                 "2x",
                 "multi-pass",
                 "wgpu compute",
-                false,
+                true,
             ),
             Self::CunnyFasterNvl => upscaler_candidate!(
                 "CuNNy",
@@ -307,15 +311,7 @@ impl DisplayUpscaler {
     }
 
     pub fn is_benchmark_only(self) -> bool {
-        matches!(
-            self,
-            Self::NvidiaNis
-                | Self::WgslAnime4kV32CnnX2M
-                | Self::WgslAcnetF8B4Luma
-                | Self::WgslAcnetF8B4BoxLuma
-                | Self::WgslAcnetF8B4HdnLuma
-                | Self::WgslAcnetF8B4BoxHdnLuma
-        )
+        matches!(self, Self::NvidiaNis | Self::WgslAnime4kV32CnnX2M)
     }
 
     pub fn resolve_for_render(
@@ -327,16 +323,21 @@ impl DisplayUpscaler {
             target_size[0] > output_size[0] as u32 || target_size[1] > output_size[1] as u32;
         match self {
             Self::Auto if target_is_larger => Some(Self::WgslFsr1EasuRcas),
-            Self::Auto
-            | Self::None
-            | Self::NvidiaNis
-            | Self::WgslAnime4kV32CnnX2M
-            | Self::WgslAcnetF8B4Luma
+            Self::Auto | Self::None | Self::NvidiaNis | Self::WgslAnime4kV32CnnX2M => None,
+            Self::WgslAnime4kV32CnnX2S if target_is_larger => Some(self),
+            Self::WgslAnime4kV32CnnX2S => None,
+            Self::WgslAcnetF8B4Luma
+            | Self::WgslAcnetF8B4BoxLuma
+            | Self::WgslAcnetF8B4HdnLuma
+            | Self::WgslAcnetF8B4BoxHdnLuma
+                if target_is_larger =>
+            {
+                Some(self)
+            }
+            Self::WgslAcnetF8B4Luma
             | Self::WgslAcnetF8B4BoxLuma
             | Self::WgslAcnetF8B4HdnLuma
             | Self::WgslAcnetF8B4BoxHdnLuma => None,
-            Self::WgslAnime4kV32CnnX2S if target_is_larger => Some(self),
-            Self::WgslAnime4kV32CnnX2S => None,
             Self::CunnyFasterNvl | Self::CunnyFastNvl if target_is_larger => Some(self),
             Self::CunnyFasterNvl | Self::CunnyFastNvl => None,
             other => Some(other),
