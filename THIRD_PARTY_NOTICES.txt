@@ -224,7 +224,8 @@ Source: https://github.com/funnyplanter/CuNNy
   `magpie/normal/CuNNy-fast-NVL.hlsl`, and
   `magpie/normal/CuNNy-3x12-NVL.hlsl`, and
   `magpie/normal/CuNNy-4x12-NVL.hlsl`, and
-  `magpie/normal/CuNNy-4x16-NVL.hlsl`. SuiSuiView is GPL-3.0-only, so the
+  `magpie/normal/CuNNy-4x16-NVL.hlsl`, and
+  `magpie/normal/CuNNy-4x24-NVL.hlsl`. SuiSuiView is GPL-3.0-only, so the
   GPL/LGPL-compatible source terms are accepted here. The corresponding
   generated WGSL source is included in the repository.
 
