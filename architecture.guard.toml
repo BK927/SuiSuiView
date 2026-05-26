@@ -113,3 +113,9 @@ path = "src/core/upscale_bench/gpu/cunny.rs"
 rule = "large_new_file"
 reason = "Temporary CuNNy bench runner and exact pass metadata stay together until generated metadata is split after NVL variant expansion."
 expires = "2026-06-30"
+
+[[waivers]]
+path = "src/app/realtime_sr/mod.rs"
+rule = "large_new_file"
+reason = "Temporary CuNNy runtime renderer and exact pass metadata stay together until generated metadata is split after NVL variant expansion."
+expires = "2026-06-30"

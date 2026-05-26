@@ -421,7 +421,7 @@ struct CunnyVariantSource {
     pass_specs: &'static [CunnyPassSpec],
 }
 
-const CUNNY_VARIANTS: [CunnyVariantSource; 8] = [
+const CUNNY_VARIANTS: [CunnyVariantSource; 9] = [
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyVeryfastNvl,
         name: "CuNNy veryfast NVL",
@@ -477,6 +477,13 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 8] = [
         shader: include_str!("../../cunny_4x32_nvl.wgsl"),
         entry_points: &CUNNY_4X32_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_4X32_NVL_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::Cunny8x32Nvl,
+        name: "CuNNy 8x32 NVL",
+        shader: include_str!("../../cunny_8x32_nvl.wgsl"),
+        entry_points: &CUNNY_8X32_NVL_ENTRY_POINTS,
+        pass_specs: &CUNNY_8X32_NVL_PASSES,
     },
 ];
 
@@ -563,6 +570,37 @@ const CUNNY_4X32_NVL_ENTRY_POINTS: [&str; 16] = [
     "cunny_4x32_nvl_pass_4_chunk_1",
     "cunny_4x32_nvl_pass_4_chunk_2",
     "cunny_4x32_nvl_pass_5",
+];
+
+const CUNNY_8X32_NVL_ENTRY_POINTS: [&str; 28] = [
+    "cunny_8x32_nvl_pass_0_chunk_0",
+    "cunny_8x32_nvl_pass_0_chunk_1",
+    "cunny_8x32_nvl_pass_0_chunk_2",
+    "cunny_8x32_nvl_pass_1_chunk_0",
+    "cunny_8x32_nvl_pass_1_chunk_1",
+    "cunny_8x32_nvl_pass_1_chunk_2",
+    "cunny_8x32_nvl_pass_2_chunk_0",
+    "cunny_8x32_nvl_pass_2_chunk_1",
+    "cunny_8x32_nvl_pass_2_chunk_2",
+    "cunny_8x32_nvl_pass_3_chunk_0",
+    "cunny_8x32_nvl_pass_3_chunk_1",
+    "cunny_8x32_nvl_pass_3_chunk_2",
+    "cunny_8x32_nvl_pass_4_chunk_0",
+    "cunny_8x32_nvl_pass_4_chunk_1",
+    "cunny_8x32_nvl_pass_4_chunk_2",
+    "cunny_8x32_nvl_pass_5_chunk_0",
+    "cunny_8x32_nvl_pass_5_chunk_1",
+    "cunny_8x32_nvl_pass_5_chunk_2",
+    "cunny_8x32_nvl_pass_6_chunk_0",
+    "cunny_8x32_nvl_pass_6_chunk_1",
+    "cunny_8x32_nvl_pass_6_chunk_2",
+    "cunny_8x32_nvl_pass_7_chunk_0",
+    "cunny_8x32_nvl_pass_7_chunk_1",
+    "cunny_8x32_nvl_pass_7_chunk_2",
+    "cunny_8x32_nvl_pass_8_chunk_0",
+    "cunny_8x32_nvl_pass_8_chunk_1",
+    "cunny_8x32_nvl_pass_8_chunk_2",
+    "cunny_8x32_nvl_pass_9",
 ];
 
 const CUNNY_VERYFAST_NVL_PASSES: [CunnyPassSpec; 4] = [
@@ -777,6 +815,121 @@ const CUNNY_4X32_NVL_PASSES: [CunnyPassSpec; 16] = [
     },
     CunnyPassSpec {
         inputs: &[],
+        outputs: &[6, 7],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
+        outputs: &[8, 9, 10],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
+        outputs: &[11, 12, 13],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
+        outputs: &[14, 15],
+    },
+    CunnyPassSpec {
+        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
+        outputs: &[0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
+        outputs: &[3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
+        outputs: &[6, 7],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
+        outputs: &[8, 9, 10],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
+        outputs: &[11, 12, 13],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
+        outputs: &[14, 15],
+    },
+    CunnyPassSpec {
+        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
+        outputs: &[0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
+        outputs: &[3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
+        outputs: &[6, 7],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
+        outputs: &[],
+    },
+];
+
+const CUNNY_8X32_NVL_PASSES: [CunnyPassSpec; 28] = [
+    CunnyPassSpec {
+        inputs: &[],
+        outputs: &[0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: &[],
+        outputs: &[3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: &[],
+        outputs: &[6, 7],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
+        outputs: &[8, 9, 10],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
+        outputs: &[11, 12, 13],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
+        outputs: &[14, 15],
+    },
+    CunnyPassSpec {
+        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
+        outputs: &[0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
+        outputs: &[3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
+        outputs: &[6, 7],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
+        outputs: &[8, 9, 10],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
+        outputs: &[11, 12, 13],
+    },
+    CunnyPassSpec {
+        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
+        outputs: &[14, 15],
+    },
+    CunnyPassSpec {
+        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
+        outputs: &[0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
+        outputs: &[3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
         outputs: &[6, 7],
     },
     CunnyPassSpec {

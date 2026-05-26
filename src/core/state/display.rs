@@ -68,6 +68,7 @@ pub enum DisplayUpscaler {
     Cunny4x16Nvl,
     Cunny4x24Nvl,
     Cunny4x32Nvl,
+    Cunny8x32Nvl,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,7 +108,7 @@ macro_rules! upscaler_candidate {
 }
 
 impl DisplayUpscaler {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Auto,
         Self::None,
         Self::WgslBilinear,
@@ -126,9 +127,10 @@ impl DisplayUpscaler {
         Self::Cunny4x16Nvl,
         Self::Cunny4x24Nvl,
         Self::Cunny4x32Nvl,
+        Self::Cunny8x32Nvl,
     ];
 
-    pub const GPU_METHODS: [Self; 19] = [
+    pub const GPU_METHODS: [Self; 20] = [
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
@@ -148,6 +150,7 @@ impl DisplayUpscaler {
         Self::Cunny4x16Nvl,
         Self::Cunny4x24Nvl,
         Self::Cunny4x32Nvl,
+        Self::Cunny8x32Nvl,
     ];
 
     pub fn label(self) -> &'static str {
@@ -366,6 +369,16 @@ impl DisplayUpscaler {
                 "wgpu compute",
                 true,
             ),
+            Self::Cunny8x32Nvl => upscaler_candidate!(
+                "CuNNy",
+                "CuNNy 8x32 NVL",
+                "funnyplanter/CuNNy magpie normal",
+                "LGPL-3.0-or-later / GPL-3.0-or-later effect header",
+                "2x",
+                "28",
+                "wgpu compute",
+                true,
+            ),
         }
     }
 
@@ -392,6 +405,7 @@ impl DisplayUpscaler {
             Self::Cunny4x16Nvl => "cunny_4x16_nvl",
             Self::Cunny4x24Nvl => "cunny_4x24_nvl",
             Self::Cunny4x32Nvl => "cunny_4x32_nvl",
+            Self::Cunny8x32Nvl => "cunny_8x32_nvl",
         }
     }
 
@@ -433,6 +447,7 @@ impl DisplayUpscaler {
             | Self::Cunny4x16Nvl
             | Self::Cunny4x24Nvl
             | Self::Cunny4x32Nvl
+            | Self::Cunny8x32Nvl
                 if target_is_larger =>
             {
                 Some(self)
@@ -444,7 +459,8 @@ impl DisplayUpscaler {
             | Self::Cunny4x12Nvl
             | Self::Cunny4x16Nvl
             | Self::Cunny4x24Nvl
-            | Self::Cunny4x32Nvl => None,
+            | Self::Cunny4x32Nvl
+            | Self::Cunny8x32Nvl => None,
             other => Some(other),
         }
     }
@@ -470,7 +486,8 @@ impl DisplayUpscaler {
             | Self::Cunny4x12Nvl
             | Self::Cunny4x16Nvl
             | Self::Cunny4x24Nvl
-            | Self::Cunny4x32Nvl => 0,
+            | Self::Cunny4x32Nvl
+            | Self::Cunny8x32Nvl => 0,
         }
     }
 
