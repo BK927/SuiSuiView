@@ -197,7 +197,9 @@ impl GpuUpscaleBench {
         }
         if matches!(
             method,
-            DisplayUpscaler::CunnyFasterNvl | DisplayUpscaler::CunnyFastNvl
+            DisplayUpscaler::CunnyVeryfastNvl
+                | DisplayUpscaler::CunnyFasterNvl
+                | DisplayUpscaler::CunnyFastNvl
         ) {
             return self
                 .cunny

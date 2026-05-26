@@ -219,7 +219,8 @@ Copyright: Copyright (c) 2024 funnyplanter
 Source: https://github.com/funnyplanter/CuNNy
   Note: The real-time display path and `--upscale-bench` experiment include
   generated WGSL ports derived
-  from `magpie/normal/CuNNy-faster-NVL.hlsl` and
+  from `magpie/normal/CuNNy-veryfast-NVL.hlsl`,
+  `magpie/normal/CuNNy-faster-NVL.hlsl`, and
   `magpie/normal/CuNNy-fast-NVL.hlsl`. SuiSuiView is GPL-3.0-only, so the
   GPL/LGPL-compatible source terms are accepted here. The corresponding
   generated WGSL source is included in the repository.

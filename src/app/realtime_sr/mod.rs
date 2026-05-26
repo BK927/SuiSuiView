@@ -50,7 +50,8 @@ impl RealtimeSrResources {
     pub(super) fn is_supported(method: DisplayUpscaler) -> bool {
         matches!(
             method,
-            DisplayUpscaler::CunnyFasterNvl
+            DisplayUpscaler::CunnyVeryfastNvl
+                | DisplayUpscaler::CunnyFasterNvl
                 | DisplayUpscaler::CunnyFastNvl
                 | DisplayUpscaler::WgslAnime4kV32CnnX2S
                 | DisplayUpscaler::WgslAnime4kV32CnnX2M
@@ -81,7 +82,9 @@ impl RealtimeSrResources {
         source_size: [usize; 2],
     ) -> Option<RealtimeSrOutput> {
         match method {
-            DisplayUpscaler::CunnyFasterNvl | DisplayUpscaler::CunnyFastNvl => Some(
+            DisplayUpscaler::CunnyVeryfastNvl
+            | DisplayUpscaler::CunnyFasterNvl
+            | DisplayUpscaler::CunnyFastNvl => Some(
                 self.cunny
                     .get_or_insert_with(|| CunnyRenderer::new(device))
                     .render(method, device, encoder, source_view, source_size),
@@ -110,15 +113,18 @@ impl RealtimeSrResources {
 
 struct CunnyRenderer {
     bind_group_layout: wgpu::BindGroupLayout,
+    pipeline_layout: wgpu::PipelineLayout,
     variants: Vec<CunnyVariant>,
 }
 
 struct CunnyVariant {
     method: DisplayUpscaler,
     name: &'static str,
+    shader: &'static str,
     entry_points: &'static [&'static str],
     pass_specs: &'static [CunnyPassSpec],
-    pipelines: Vec<wgpu::ComputePipeline>,
+    intermediate_count: usize,
+    pipelines: Option<Vec<wgpu::ComputePipeline>>,
 }
 
 #[derive(Clone, Copy)]
@@ -159,42 +165,25 @@ impl CunnyRenderer {
         });
         let variants = CUNNY_VARIANTS
             .iter()
-            .map(|variant| {
-                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some(variant.name),
-                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(variant.shader)),
-                });
-                let pipelines = variant
-                    .entry_points
-                    .iter()
-                    .map(|entry_point| {
-                        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                            label: Some(entry_point),
-                            layout: Some(&pipeline_layout),
-                            module: &shader,
-                            entry_point: Some(entry_point),
-                            compilation_options: Default::default(),
-                            cache: None,
-                        })
-                    })
-                    .collect();
-                CunnyVariant {
-                    method: variant.method,
-                    name: variant.name,
-                    entry_points: variant.entry_points,
-                    pass_specs: variant.pass_specs,
-                    pipelines,
-                }
+            .map(|variant| CunnyVariant {
+                method: variant.method,
+                name: variant.name,
+                shader: variant.shader,
+                entry_points: variant.entry_points,
+                pass_specs: variant.pass_specs,
+                intermediate_count: intermediate_count(variant.pass_specs),
+                pipelines: None,
             })
             .collect();
         Self {
             bind_group_layout,
+            pipeline_layout,
             variants,
         }
     }
 
     fn render(
-        &self,
+        &mut self,
         method: DisplayUpscaler,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -203,19 +192,41 @@ impl CunnyRenderer {
     ) -> RealtimeSrOutput {
         let variant = self
             .variants
-            .iter()
+            .iter_mut()
             .find(|variant| variant.method == method)
             .expect("CuNNy method should have a realtime variant");
+        let pipelines = variant.pipelines.get_or_insert_with(|| {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(variant.name),
+                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(variant.shader)),
+            });
+            variant
+                .entry_points
+                .iter()
+                .map(|entry_point| {
+                    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some(entry_point),
+                        layout: Some(&self.pipeline_layout),
+                        module: &shader,
+                        entry_point: Some(entry_point),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    })
+                })
+                .collect()
+        });
         let output_size = RealtimeSrResources::output_size(method, source_size);
         let source_extent = extent_for_size(source_size);
         let output_extent = extent_for_size(output_size);
-        let intermediates: Vec<wgpu::Texture> = (0..10)
+        let intermediates: Vec<wgpu::Texture> = (0..variant.intermediate_count)
             .map(|index| create_intermediate_texture(device, source_extent, index))
             .collect();
         let intermediate_views: Vec<wgpu::TextureView> = intermediates
             .iter()
             .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
             .collect();
+        let dummy_texture = create_intermediate_texture(device, source_extent, DUMMY_READ);
+        let dummy_view = dummy_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let output_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(variant.name),
             size: output_extent,
@@ -245,12 +256,30 @@ impl CunnyRenderer {
                 layout: &self.bind_group_layout,
                 entries: &[
                     texture_binding(0, source_view),
-                    texture_binding(1, &intermediate_views[pass_spec.inputs[0]]),
-                    texture_binding(2, &intermediate_views[pass_spec.inputs[1]]),
-                    texture_binding(3, &intermediate_views[pass_spec.inputs[2]]),
-                    storage_binding(4, &intermediate_views[pass_spec.outputs[0]]),
-                    storage_binding(5, &intermediate_views[pass_spec.outputs[1]]),
-                    storage_binding(6, &intermediate_views[pass_spec.outputs[2]]),
+                    texture_binding(
+                        1,
+                        intermediate_view(&intermediate_views, pass_spec.inputs[0], &dummy_view),
+                    ),
+                    texture_binding(
+                        2,
+                        intermediate_view(&intermediate_views, pass_spec.inputs[1], &dummy_view),
+                    ),
+                    texture_binding(
+                        3,
+                        intermediate_view(&intermediate_views, pass_spec.inputs[2], &dummy_view),
+                    ),
+                    storage_binding(
+                        4,
+                        intermediate_view(&intermediate_views, pass_spec.outputs[0], &dummy_view),
+                    ),
+                    storage_binding(
+                        5,
+                        intermediate_view(&intermediate_views, pass_spec.outputs[1], &dummy_view),
+                    ),
+                    storage_binding(
+                        6,
+                        intermediate_view(&intermediate_views, pass_spec.outputs[2], &dummy_view),
+                    ),
                     storage_binding(7, &output_view),
                     wgpu::BindGroupEntry {
                         binding: 8,
@@ -262,7 +291,7 @@ impl CunnyRenderer {
                 label: Some(variant.entry_points[index]),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&variant.pipelines[index]);
+            pass.set_pipeline(&pipelines[index]);
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(
                 (source_size[0] as u32).div_ceil(8),
@@ -282,6 +311,23 @@ impl CunnyRenderer {
     }
 }
 
+fn intermediate_count(pass_specs: &[CunnyPassSpec]) -> usize {
+    pass_specs
+        .iter()
+        .flat_map(|pass| pass.inputs.into_iter().chain(pass.outputs))
+        .filter(|&index| index < DUMMY_READ)
+        .max()
+        .map_or(0, |index| index + 1)
+}
+
+fn intermediate_view<'a>(
+    intermediate_views: &'a [wgpu::TextureView],
+    index: usize,
+    dummy_view: &'a wgpu::TextureView,
+) -> &'a wgpu::TextureView {
+    intermediate_views.get(index).unwrap_or(dummy_view)
+}
+
 struct CunnyVariantSource {
     method: DisplayUpscaler,
     name: &'static str,
@@ -290,7 +336,14 @@ struct CunnyVariantSource {
     pass_specs: &'static [CunnyPassSpec],
 }
 
-const CUNNY_VARIANTS: [CunnyVariantSource; 2] = [
+const CUNNY_VARIANTS: [CunnyVariantSource; 3] = [
+    CunnyVariantSource {
+        method: DisplayUpscaler::CunnyVeryfastNvl,
+        name: "CuNNy veryfast NVL",
+        shader: include_str!("../../core/cunny_veryfast_nvl.wgsl"),
+        entry_points: &CUNNY_VERYFAST_NVL_ENTRY_POINTS,
+        pass_specs: &CUNNY_VERYFAST_NVL_PASSES,
+    },
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyFasterNvl,
         name: "CuNNy faster NVL",
@@ -307,6 +360,13 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 2] = [
     },
 ];
 
+const CUNNY_VERYFAST_NVL_ENTRY_POINTS: [&str; 4] = [
+    "cunny_veryfast_nvl_pass_0",
+    "cunny_veryfast_nvl_pass_1",
+    "cunny_veryfast_nvl_pass_2",
+    "cunny_veryfast_nvl_pass_3",
+];
+
 const CUNNY_FASTER_NVL_ENTRY_POINTS: [&str; 4] = [
     "cunny_faster_nvl_pass_0",
     "cunny_faster_nvl_pass_1",
@@ -319,6 +379,25 @@ const CUNNY_FAST_NVL_ENTRY_POINTS: [&str; 4] = [
     "cunny_fast_nvl_pass_1",
     "cunny_fast_nvl_pass_2",
     "cunny_fast_nvl_pass_3",
+];
+
+const CUNNY_VERYFAST_NVL_PASSES: [CunnyPassSpec; 4] = [
+    CunnyPassSpec {
+        inputs: [DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: [0, 1, DUMMY_OUT0],
+    },
+    CunnyPassSpec {
+        inputs: [0, 1, DUMMY_READ],
+        outputs: [2, 3, DUMMY_OUT0],
+    },
+    CunnyPassSpec {
+        inputs: [2, 3, DUMMY_READ],
+        outputs: [0, DUMMY_OUT0, DUMMY_OUT1],
+    },
+    CunnyPassSpec {
+        inputs: [0, DUMMY_READ, DUMMY_READ],
+        outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+    },
 ];
 
 const CUNNY_FASTER_NVL_PASSES: [CunnyPassSpec; 4] = [

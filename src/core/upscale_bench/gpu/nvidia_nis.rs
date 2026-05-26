@@ -1,4 +1,4 @@
-use super::{GpuUpscaleOutput, TEXTURE_FORMAT, align_to};
+use super::{align_to, GpuUpscaleOutput, TEXTURE_FORMAT};
 use crate::core::gpu_effect::color_image_to_rgba;
 use eframe::egui::ColorImage;
 use std::borrow::Cow;
