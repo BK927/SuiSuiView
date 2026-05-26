@@ -208,8 +208,20 @@ License: MIT
 Copyright: Copyright (c) 2020 TianZer
 Source: https://github.com/TianZerL/ACNetGLSL
 Note: The `--upscale-bench` experiment includes generated WGSL ports derived
-from `glsl/acnet/acnet_f8b4*.glsl` variants for luma-only evaluation. They are
-not exposed as default user-facing display modes yet.
+from `glsl/acnet/acnet_f8b4*.glsl` variants. The neural path predicts luma and
+the benchmark port merges source chroma in the final pass. They are not exposed
+as default user-facing display modes yet.
+
+CuNNy
+License: LGPL-3.0-or-later repository license; Magpie effect headers state
+GPL-3.0-or-later terms.
+Copyright: Copyright (c) 2024 funnyplanter
+Source: https://github.com/funnyplanter/CuNNy
+Note: The `--upscale-bench` experiment includes generated WGSL ports derived
+from `magpie/normal/CuNNy-faster-NVL.hlsl` and
+`magpie/normal/CuNNy-fast-NVL.hlsl` for benchmark-only evaluation. SuiSuiView
+is GPL-3.0-only, so the GPL/LGPL-compatible source terms are accepted here.
+The corresponding generated WGSL source is included in the repository.
 
 Bundled Assets
 --------------

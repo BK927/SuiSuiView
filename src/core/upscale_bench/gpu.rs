@@ -10,10 +10,12 @@ mod acnet;
 mod acnet_manifest;
 mod anime4k;
 mod anime4k_m;
+mod cunny;
 mod nvidia_nis;
 use acnet::AcnetBench;
 use anime4k::Anime4kBench;
 use anime4k_m::Anime4kMBench;
+use cunny::CunnyBench;
 use nvidia_nis::NvidiaNisBench;
 
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -34,6 +36,7 @@ pub(crate) struct GpuUpscaleBench {
     anime4k: Option<Anime4kBench>,
     anime4k_m: Option<Anime4kMBench>,
     acnet: Option<AcnetBench>,
+    cunny: Option<CunnyBench>,
 }
 
 pub(crate) struct GpuUpscaleOutput {
@@ -132,6 +135,7 @@ impl GpuUpscaleBench {
         let anime4k = Anime4kBench::try_new(&device).await;
         let anime4k_m = Anime4kMBench::try_new(&device).await;
         let acnet = AcnetBench::try_new(&device).await;
+        let cunny = CunnyBench::try_new(&device).await;
 
         Ok(Self {
             device,
@@ -142,6 +146,7 @@ impl GpuUpscaleBench {
             anime4k,
             anime4k_m,
             acnet,
+            cunny,
         })
     }
 
@@ -188,6 +193,16 @@ impl GpuUpscaleBench {
                 .acnet
                 .as_ref()
                 .ok_or_else(|| "ACNet F8B4 luma GPU pipelines unavailable".to_owned())?
+                .apply(method, &self.device, &self.queue, image, output_size);
+        }
+        if matches!(
+            method,
+            DisplayUpscaler::CunnyFasterNvl | DisplayUpscaler::CunnyFastNvl
+        ) {
+            return self
+                .cunny
+                .as_ref()
+                .ok_or_else(|| "CuNNy NVL GPU pipelines unavailable".to_owned())?
                 .apply(method, &self.device, &self.queue, image, output_size);
         }
 

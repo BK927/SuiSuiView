@@ -1,0 +1,482 @@
+use super::{align_to, GpuUpscaleOutput, TEXTURE_FORMAT};
+use crate::core::gpu_effect::color_image_to_rgba;
+use crate::core::state::DisplayUpscaler;
+use eframe::egui::ColorImage;
+use std::borrow::Cow;
+use std::sync::mpsc;
+use std::time::Instant;
+use wgpu::util::DeviceExt;
+
+const DUMMY_READ: usize = 6;
+const DUMMY_OUT0: usize = 7;
+const DUMMY_OUT1: usize = 8;
+const DUMMY_OUT2: usize = 9;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct CunnyParams {
+    source_width: u32,
+    source_height: u32,
+    output_width: u32,
+    output_height: u32,
+}
+
+pub(super) struct CunnyBench {
+    bind_group_layout: wgpu::BindGroupLayout,
+    variants: Vec<CunnyVariantBench>,
+}
+
+struct CunnyVariantBench {
+    method: DisplayUpscaler,
+    name: &'static str,
+    entry_points: &'static [&'static str],
+    pass_specs: &'static [CunnyPassSpec],
+    pipelines: Vec<wgpu::ComputePipeline>,
+}
+
+#[derive(Clone, Copy)]
+struct CunnyPassSpec {
+    inputs: [usize; 3],
+    outputs: [usize; 3],
+}
+
+impl CunnyBench {
+    pub(super) async fn try_new(device: &wgpu::Device) -> Option<Self> {
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let bench = Self::new(device);
+        match device.pop_error_scope().await {
+            Some(error) => {
+                eprintln!("CuNNy NVL bench candidates disabled: {error}");
+                None
+            }
+            None => Some(bench),
+        }
+    }
+
+    fn new(device: &wgpu::Device) -> Self {
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("suisuiview-cunny-nvl-bind-group-layout"),
+            entries: &[
+                texture_entry(0),
+                texture_entry(1),
+                texture_entry(2),
+                texture_entry(3),
+                storage_entry(4),
+                storage_entry(5),
+                storage_entry(6),
+                storage_entry(7),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("suisuiview-cunny-nvl-pipeline-layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let variants = CUNNY_VARIANTS
+            .iter()
+            .map(|variant| {
+                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some(variant.name),
+                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(variant.shader)),
+                });
+                let pipelines = variant
+                    .entry_points
+                    .iter()
+                    .map(|entry_point| {
+                        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                            label: Some(entry_point),
+                            layout: Some(&pipeline_layout),
+                            module: &shader,
+                            entry_point: Some(entry_point),
+                            compilation_options: Default::default(),
+                            cache: None,
+                        })
+                    })
+                    .collect();
+                CunnyVariantBench {
+                    method: variant.method,
+                    name: variant.name,
+                    entry_points: variant.entry_points,
+                    pass_specs: variant.pass_specs,
+                    pipelines,
+                }
+            })
+            .collect();
+
+        Self {
+            bind_group_layout,
+            variants,
+        }
+    }
+
+    pub(super) fn apply(
+        &self,
+        method: DisplayUpscaler,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        image: &ColorImage,
+        output_size: [usize; 2],
+    ) -> Result<GpuUpscaleOutput, String> {
+        let variant = self
+            .variants
+            .iter()
+            .find(|variant| variant.method == method)
+            .ok_or_else(|| format!("{} GPU pipelines unavailable", method.label()))?;
+        let [source_width, source_height] = image.size;
+        let [output_width, output_height] = output_size;
+        let exact_width = source_width.saturating_mul(2);
+        let exact_height = source_height.saturating_mul(2);
+        if output_width > exact_width
+            || output_height > exact_height
+            || exact_width - output_width > 1
+            || exact_height - output_height > 1
+        {
+            return Err(format!(
+                "{} requires 2x output or a one-pixel crop, got {source_width}x{source_height} -> {output_width}x{output_height}",
+                variant.name
+            ));
+        }
+
+        let started = Instant::now();
+        let source_bytes = color_image_to_rgba(image);
+        let source_extent = wgpu::Extent3d {
+            width: source_width as u32,
+            height: source_height as u32,
+            depth_or_array_layers: 1,
+        };
+        let output_extent = wgpu::Extent3d {
+            width: output_width as u32,
+            height: output_height as u32,
+            depth_or_array_layers: 1,
+        };
+
+        let source_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("suisuiview-cunny-source"),
+            size: source_extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEXTURE_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &source_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &source_bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some((source_width * 4) as u32),
+                rows_per_image: Some(source_height as u32),
+            },
+            source_extent,
+        );
+
+        let intermediates: Vec<wgpu::Texture> = (0..10)
+            .map(|index| create_intermediate_texture(device, source_extent, index))
+            .collect();
+        let intermediate_views: Vec<wgpu::TextureView> = intermediates
+            .iter()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect();
+
+        let output_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("suisuiview-cunny-output"),
+            size: output_extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEXTURE_FORMAT,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let params = CunnyParams {
+            source_width: source_width as u32,
+            source_height: source_height as u32,
+            output_width: output_width as u32,
+            output_height: output_height as u32,
+        };
+        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("suisuiview-cunny-params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        let padded_bytes_per_row = align_to(
+            (output_width * 4) as u32,
+            wgpu::COPY_BYTES_PER_ROW_ALIGNMENT,
+        );
+        let output_buffer_size = padded_bytes_per_row as u64 * output_height as u64;
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("suisuiview-cunny-readback"),
+            size: output_buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("suisuiview-cunny-encoder"),
+        });
+        for (index, pass_spec) in variant.pass_specs.iter().enumerate() {
+            self.run_pass(
+                &mut RunPassCtx {
+                    device,
+                    encoder: &mut encoder,
+                    source_view: &source_view,
+                    intermediate_views: &intermediate_views,
+                    output_view: &output_view,
+                    params_buffer: &params_buffer,
+                    variant,
+                },
+                index,
+                *pass_spec,
+                [source_width as u32, source_height as u32],
+            );
+        }
+
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &output_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(output_height as u32),
+                },
+            },
+            output_extent,
+        );
+        queue.submit(Some(encoder.finish()));
+
+        let slice = readback.slice(..);
+        let (sender, receiver) = mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result.map_err(|error| error.to_string()));
+        });
+        device
+            .poll(wgpu::PollType::Wait)
+            .map_err(|error| format!("wgpu poll failed: {error}"))?;
+        receiver
+            .recv()
+            .map_err(|error| format!("wgpu readback channel failed: {error}"))?
+            .map_err(|error| format!("wgpu readback failed: {error}"))?;
+        let elapsed = started.elapsed();
+
+        let mapped = slice.get_mapped_range();
+        let mut pixels = vec![0_u8; output_width * output_height * 4];
+        for y in 0..output_height {
+            let src_offset = y * padded_bytes_per_row as usize;
+            let dst_offset = y * output_width * 4;
+            pixels[dst_offset..dst_offset + output_width * 4]
+                .copy_from_slice(&mapped[src_offset..src_offset + output_width * 4]);
+        }
+        drop(mapped);
+        readback.unmap();
+
+        Ok(GpuUpscaleOutput {
+            image: ColorImage::from_rgba_unmultiplied([output_width, output_height], &pixels),
+            elapsed,
+        })
+    }
+
+    fn run_pass(
+        &self,
+        ctx: &mut RunPassCtx<'_>,
+        index: usize,
+        pass_spec: CunnyPassSpec,
+        size: [u32; 2],
+    ) {
+        let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(ctx.variant.entry_points[index]),
+            layout: &self.bind_group_layout,
+            entries: &[
+                texture_binding(0, ctx.source_view),
+                texture_binding(1, &ctx.intermediate_views[pass_spec.inputs[0]]),
+                texture_binding(2, &ctx.intermediate_views[pass_spec.inputs[1]]),
+                texture_binding(3, &ctx.intermediate_views[pass_spec.inputs[2]]),
+                storage_binding(4, &ctx.intermediate_views[pass_spec.outputs[0]]),
+                storage_binding(5, &ctx.intermediate_views[pass_spec.outputs[1]]),
+                storage_binding(6, &ctx.intermediate_views[pass_spec.outputs[2]]),
+                storage_binding(7, ctx.output_view),
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: ctx.params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let mut pass = ctx
+            .encoder
+            .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some(ctx.variant.entry_points[index]),
+                timestamp_writes: None,
+            });
+        pass.set_pipeline(&ctx.variant.pipelines[index]);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
+    }
+}
+
+struct RunPassCtx<'a> {
+    device: &'a wgpu::Device,
+    encoder: &'a mut wgpu::CommandEncoder,
+    source_view: &'a wgpu::TextureView,
+    intermediate_views: &'a [wgpu::TextureView],
+    output_view: &'a wgpu::TextureView,
+    params_buffer: &'a wgpu::Buffer,
+    variant: &'a CunnyVariantBench,
+}
+
+struct CunnyVariantSource {
+    method: DisplayUpscaler,
+    name: &'static str,
+    shader: &'static str,
+    entry_points: &'static [&'static str],
+    pass_specs: &'static [CunnyPassSpec],
+}
+
+const CUNNY_VARIANTS: [CunnyVariantSource; 2] = [
+    CunnyVariantSource {
+        method: DisplayUpscaler::CunnyFasterNvl,
+        name: "CuNNy faster NVL",
+        shader: include_str!("../../cunny_faster_nvl.wgsl"),
+        entry_points: &CUNNY_FASTER_NVL_ENTRY_POINTS,
+        pass_specs: &CUNNY_FASTER_NVL_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::CunnyFastNvl,
+        name: "CuNNy fast NVL",
+        shader: include_str!("../../cunny_fast_nvl.wgsl"),
+        entry_points: &CUNNY_FAST_NVL_ENTRY_POINTS,
+        pass_specs: &CUNNY_FAST_NVL_PASSES,
+    },
+];
+
+const CUNNY_FASTER_NVL_ENTRY_POINTS: [&str; 4] = [
+    "cunny_faster_nvl_pass_0",
+    "cunny_faster_nvl_pass_1",
+    "cunny_faster_nvl_pass_2",
+    "cunny_faster_nvl_pass_3",
+];
+
+const CUNNY_FAST_NVL_ENTRY_POINTS: [&str; 4] = [
+    "cunny_fast_nvl_pass_0",
+    "cunny_fast_nvl_pass_1",
+    "cunny_fast_nvl_pass_2",
+    "cunny_fast_nvl_pass_3",
+];
+
+const CUNNY_FASTER_NVL_PASSES: [CunnyPassSpec; 4] = [
+    CunnyPassSpec {
+        inputs: [DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: [0, 1, DUMMY_OUT0],
+    },
+    CunnyPassSpec {
+        inputs: [0, 1, DUMMY_READ],
+        outputs: [2, 3, DUMMY_OUT0],
+    },
+    CunnyPassSpec {
+        inputs: [2, 3, DUMMY_READ],
+        outputs: [0, 1, DUMMY_OUT0],
+    },
+    CunnyPassSpec {
+        inputs: [0, 1, DUMMY_READ],
+        outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+    },
+];
+
+const CUNNY_FAST_NVL_PASSES: [CunnyPassSpec; 4] = [
+    CunnyPassSpec {
+        inputs: [DUMMY_READ, DUMMY_READ, DUMMY_READ],
+        outputs: [0, 1, 2],
+    },
+    CunnyPassSpec {
+        inputs: [0, 1, 2],
+        outputs: [3, 4, 5],
+    },
+    CunnyPassSpec {
+        inputs: [3, 4, 5],
+        outputs: [0, 1, DUMMY_OUT0],
+    },
+    CunnyPassSpec {
+        inputs: [0, 1, DUMMY_READ],
+        outputs: [DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
+    },
+];
+
+fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+fn storage_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: TEXTURE_FORMAT,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    }
+}
+
+fn texture_binding(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry<'_> {
+    wgpu::BindGroupEntry {
+        binding,
+        resource: wgpu::BindingResource::TextureView(view),
+    }
+}
+
+fn storage_binding(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry<'_> {
+    texture_binding(binding, view)
+}
+
+fn create_intermediate_texture(
+    device: &wgpu::Device,
+    size: wgpu::Extent3d,
+    index: usize,
+) -> wgpu::Texture {
+    let label = format!("suisuiview-cunny-intermediate-{index}");
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(&label),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: TEXTURE_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+        view_formats: &[],
+    })
+}
