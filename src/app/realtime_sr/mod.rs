@@ -2,7 +2,11 @@ use crate::core::state::DisplayUpscaler;
 use std::borrow::Cow;
 use wgpu::util::DeviceExt;
 
-const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+mod anime4k;
+
+use anime4k::Anime4kSRenderer;
+
+pub(super) const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DUMMY_READ: usize = 6;
 const DUMMY_OUT0: usize = 7;
 const DUMMY_OUT1: usize = 8;
@@ -19,6 +23,7 @@ struct CunnyParams {
 
 pub(super) struct RealtimeSrResources {
     cunny: CunnyRenderer,
+    anime4k_s: Anime4kSRenderer,
 }
 
 pub(super) struct RealtimeSrOutput {
@@ -32,13 +37,16 @@ impl RealtimeSrResources {
     pub(super) fn new(device: &wgpu::Device) -> Self {
         Self {
             cunny: CunnyRenderer::new(device),
+            anime4k_s: Anime4kSRenderer::new(device),
         }
     }
 
     pub(super) fn is_supported(method: DisplayUpscaler) -> bool {
         matches!(
             method,
-            DisplayUpscaler::CunnyFasterNvl | DisplayUpscaler::CunnyFastNvl
+            DisplayUpscaler::CunnyFasterNvl
+                | DisplayUpscaler::CunnyFastNvl
+                | DisplayUpscaler::WgslAnime4kV32CnnX2S
         )
     }
 
@@ -66,6 +74,12 @@ impl RealtimeSrResources {
                 self.cunny
                     .render(method, device, encoder, source_view, source_size),
             ),
+            DisplayUpscaler::WgslAnime4kV32CnnX2S => {
+                Some(
+                    self.anime4k_s
+                        .render(device, encoder, source_view, source_size),
+                )
+            }
             _ => None,
         }
     }
@@ -257,14 +271,14 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 2] = [
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyFasterNvl,
         name: "CuNNy faster NVL",
-        shader: include_str!("../core/cunny_faster_nvl.wgsl"),
+        shader: include_str!("../../core/cunny_faster_nvl.wgsl"),
         entry_points: &CUNNY_FASTER_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_FASTER_NVL_PASSES,
     },
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyFastNvl,
         name: "CuNNy fast NVL",
-        shader: include_str!("../core/cunny_fast_nvl.wgsl"),
+        shader: include_str!("../../core/cunny_fast_nvl.wgsl"),
         entry_points: &CUNNY_FAST_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_FAST_NVL_PASSES,
     },
