@@ -74,11 +74,16 @@ impl RealtimeSrResources {
                 | DisplayUpscaler::Cunny4x12Soft
                 | DisplayUpscaler::Cunny4x12Ds
                 | DisplayUpscaler::Cunny4x16Nvl
+                | DisplayUpscaler::Cunny4x16Soft
+                | DisplayUpscaler::Cunny4x16Ds
                 | DisplayUpscaler::Cunny4x24Nvl
                 | DisplayUpscaler::Cunny4x24Soft
                 | DisplayUpscaler::Cunny4x24Ds
                 | DisplayUpscaler::Cunny4x32Nvl
+                | DisplayUpscaler::Cunny4x32Soft
+                | DisplayUpscaler::Cunny4x32Ds
                 | DisplayUpscaler::Cunny8x32Nvl
+                | DisplayUpscaler::Cunny8x32Ds
                 | DisplayUpscaler::WgslAnime4kV32CnnX2S
                 | DisplayUpscaler::WgslAnime4kV32CnnX2M
                 | DisplayUpscaler::WgslAcnetF8B4Luma
@@ -125,11 +130,16 @@ impl RealtimeSrResources {
             | DisplayUpscaler::Cunny4x12Soft
             | DisplayUpscaler::Cunny4x12Ds
             | DisplayUpscaler::Cunny4x16Nvl
+            | DisplayUpscaler::Cunny4x16Soft
+            | DisplayUpscaler::Cunny4x16Ds
             | DisplayUpscaler::Cunny4x24Nvl
             | DisplayUpscaler::Cunny4x24Soft
             | DisplayUpscaler::Cunny4x24Ds
             | DisplayUpscaler::Cunny4x32Nvl
-            | DisplayUpscaler::Cunny8x32Nvl => Some(
+            | DisplayUpscaler::Cunny4x32Soft
+            | DisplayUpscaler::Cunny4x32Ds
+            | DisplayUpscaler::Cunny8x32Nvl
+            | DisplayUpscaler::Cunny8x32Ds => Some(
                 self.cunny
                     .get_or_insert_with(|| CunnyRenderer::new(device))
                     .render(method, device, encoder, source_view, source_size),
@@ -415,7 +425,7 @@ struct CunnyVariantSource {
     pass_specs: &'static [CunnyPassSpec],
 }
 
-const CUNNY_VARIANTS: [CunnyVariantSource; 22] = [
+const CUNNY_VARIANTS: [CunnyVariantSource; 27] = [
     CunnyVariantSource {
         method: DisplayUpscaler::CunnyVeryfastNvl,
         name: "CuNNy veryfast NVL",
@@ -536,6 +546,20 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 22] = [
         pass_specs: &CUNNY_4X16_NVL_PASSES,
     },
     CunnyVariantSource {
+        method: DisplayUpscaler::Cunny4x16Soft,
+        name: "CuNNy 4x16 SOFT",
+        shader: include_str!("../../core/cunny_4x16_soft.wgsl"),
+        entry_points: &CUNNY_4X16_SOFT_ENTRY_POINTS,
+        pass_specs: &CUNNY_4X16_NVL_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::Cunny4x16Ds,
+        name: "CuNNy 4x16 DS",
+        shader: include_str!("../../core/cunny_4x16_ds.wgsl"),
+        entry_points: &CUNNY_4X16_DS_ENTRY_POINTS,
+        pass_specs: &CUNNY_4X16_NVL_PASSES,
+    },
+    CunnyVariantSource {
         method: DisplayUpscaler::Cunny4x24Nvl,
         name: "CuNNy 4x24 NVL",
         shader: include_str!("../../core/cunny_4x24_nvl.wgsl"),
@@ -564,10 +588,31 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 22] = [
         pass_specs: &CUNNY_4X32_NVL_PASSES,
     },
     CunnyVariantSource {
+        method: DisplayUpscaler::Cunny4x32Soft,
+        name: "CuNNy 4x32 SOFT",
+        shader: include_str!("../../core/cunny_4x32_soft.wgsl"),
+        entry_points: &CUNNY_4X32_SOFT_ENTRY_POINTS,
+        pass_specs: &CUNNY_4X32_NVL_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::Cunny4x32Ds,
+        name: "CuNNy 4x32 DS",
+        shader: include_str!("../../core/cunny_4x32_ds.wgsl"),
+        entry_points: &CUNNY_4X32_DS_ENTRY_POINTS,
+        pass_specs: &CUNNY_4X32_NVL_PASSES,
+    },
+    CunnyVariantSource {
         method: DisplayUpscaler::Cunny8x32Nvl,
         name: "CuNNy 8x32 NVL",
         shader: include_str!("../../core/cunny_8x32_nvl.wgsl"),
         entry_points: &CUNNY_8X32_NVL_ENTRY_POINTS,
+        pass_specs: &CUNNY_8X32_NVL_PASSES,
+    },
+    CunnyVariantSource {
+        method: DisplayUpscaler::Cunny8x32Ds,
+        name: "CuNNy 8x32 DS",
+        shader: include_str!("../../core/cunny_8x32_ds.wgsl"),
+        entry_points: &CUNNY_8X32_DS_ENTRY_POINTS,
         pass_specs: &CUNNY_8X32_NVL_PASSES,
     },
 ];
@@ -707,6 +752,34 @@ const CUNNY_4X16_NVL_ENTRY_POINTS: [&str; 11] = [
     "cunny_4x16_nvl_pass_5",
 ];
 
+const CUNNY_4X16_SOFT_ENTRY_POINTS: [&str; 11] = [
+    "cunny_4x16_soft_pass_0_chunk_0",
+    "cunny_4x16_soft_pass_0_chunk_1",
+    "cunny_4x16_soft_pass_1_chunk_0",
+    "cunny_4x16_soft_pass_1_chunk_1",
+    "cunny_4x16_soft_pass_2_chunk_0",
+    "cunny_4x16_soft_pass_2_chunk_1",
+    "cunny_4x16_soft_pass_3_chunk_0",
+    "cunny_4x16_soft_pass_3_chunk_1",
+    "cunny_4x16_soft_pass_4_chunk_0",
+    "cunny_4x16_soft_pass_4_chunk_1",
+    "cunny_4x16_soft_pass_5",
+];
+
+const CUNNY_4X16_DS_ENTRY_POINTS: [&str; 11] = [
+    "cunny_4x16_ds_pass_0_chunk_0",
+    "cunny_4x16_ds_pass_0_chunk_1",
+    "cunny_4x16_ds_pass_1_chunk_0",
+    "cunny_4x16_ds_pass_1_chunk_1",
+    "cunny_4x16_ds_pass_2_chunk_0",
+    "cunny_4x16_ds_pass_2_chunk_1",
+    "cunny_4x16_ds_pass_3_chunk_0",
+    "cunny_4x16_ds_pass_3_chunk_1",
+    "cunny_4x16_ds_pass_4_chunk_0",
+    "cunny_4x16_ds_pass_4_chunk_1",
+    "cunny_4x16_ds_pass_5",
+];
+
 const CUNNY_4X24_NVL_ENTRY_POINTS: [&str; 11] = [
     "cunny_4x24_nvl_pass_0_chunk_0",
     "cunny_4x24_nvl_pass_0_chunk_1",
@@ -768,6 +841,44 @@ const CUNNY_4X32_NVL_ENTRY_POINTS: [&str; 16] = [
     "cunny_4x32_nvl_pass_5",
 ];
 
+const CUNNY_4X32_SOFT_ENTRY_POINTS: [&str; 16] = [
+    "cunny_4x32_soft_pass_0_chunk_0",
+    "cunny_4x32_soft_pass_0_chunk_1",
+    "cunny_4x32_soft_pass_0_chunk_2",
+    "cunny_4x32_soft_pass_1_chunk_0",
+    "cunny_4x32_soft_pass_1_chunk_1",
+    "cunny_4x32_soft_pass_1_chunk_2",
+    "cunny_4x32_soft_pass_2_chunk_0",
+    "cunny_4x32_soft_pass_2_chunk_1",
+    "cunny_4x32_soft_pass_2_chunk_2",
+    "cunny_4x32_soft_pass_3_chunk_0",
+    "cunny_4x32_soft_pass_3_chunk_1",
+    "cunny_4x32_soft_pass_3_chunk_2",
+    "cunny_4x32_soft_pass_4_chunk_0",
+    "cunny_4x32_soft_pass_4_chunk_1",
+    "cunny_4x32_soft_pass_4_chunk_2",
+    "cunny_4x32_soft_pass_5",
+];
+
+const CUNNY_4X32_DS_ENTRY_POINTS: [&str; 16] = [
+    "cunny_4x32_ds_pass_0_chunk_0",
+    "cunny_4x32_ds_pass_0_chunk_1",
+    "cunny_4x32_ds_pass_0_chunk_2",
+    "cunny_4x32_ds_pass_1_chunk_0",
+    "cunny_4x32_ds_pass_1_chunk_1",
+    "cunny_4x32_ds_pass_1_chunk_2",
+    "cunny_4x32_ds_pass_2_chunk_0",
+    "cunny_4x32_ds_pass_2_chunk_1",
+    "cunny_4x32_ds_pass_2_chunk_2",
+    "cunny_4x32_ds_pass_3_chunk_0",
+    "cunny_4x32_ds_pass_3_chunk_1",
+    "cunny_4x32_ds_pass_3_chunk_2",
+    "cunny_4x32_ds_pass_4_chunk_0",
+    "cunny_4x32_ds_pass_4_chunk_1",
+    "cunny_4x32_ds_pass_4_chunk_2",
+    "cunny_4x32_ds_pass_5",
+];
+
 const CUNNY_8X32_NVL_ENTRY_POINTS: [&str; 28] = [
     "cunny_8x32_nvl_pass_0_chunk_0",
     "cunny_8x32_nvl_pass_0_chunk_1",
@@ -797,6 +908,37 @@ const CUNNY_8X32_NVL_ENTRY_POINTS: [&str; 28] = [
     "cunny_8x32_nvl_pass_8_chunk_1",
     "cunny_8x32_nvl_pass_8_chunk_2",
     "cunny_8x32_nvl_pass_9",
+];
+
+const CUNNY_8X32_DS_ENTRY_POINTS: [&str; 28] = [
+    "cunny_8x32_ds_pass_0_chunk_0",
+    "cunny_8x32_ds_pass_0_chunk_1",
+    "cunny_8x32_ds_pass_0_chunk_2",
+    "cunny_8x32_ds_pass_1_chunk_0",
+    "cunny_8x32_ds_pass_1_chunk_1",
+    "cunny_8x32_ds_pass_1_chunk_2",
+    "cunny_8x32_ds_pass_2_chunk_0",
+    "cunny_8x32_ds_pass_2_chunk_1",
+    "cunny_8x32_ds_pass_2_chunk_2",
+    "cunny_8x32_ds_pass_3_chunk_0",
+    "cunny_8x32_ds_pass_3_chunk_1",
+    "cunny_8x32_ds_pass_3_chunk_2",
+    "cunny_8x32_ds_pass_4_chunk_0",
+    "cunny_8x32_ds_pass_4_chunk_1",
+    "cunny_8x32_ds_pass_4_chunk_2",
+    "cunny_8x32_ds_pass_5_chunk_0",
+    "cunny_8x32_ds_pass_5_chunk_1",
+    "cunny_8x32_ds_pass_5_chunk_2",
+    "cunny_8x32_ds_pass_6_chunk_0",
+    "cunny_8x32_ds_pass_6_chunk_1",
+    "cunny_8x32_ds_pass_6_chunk_2",
+    "cunny_8x32_ds_pass_7_chunk_0",
+    "cunny_8x32_ds_pass_7_chunk_1",
+    "cunny_8x32_ds_pass_7_chunk_2",
+    "cunny_8x32_ds_pass_8_chunk_0",
+    "cunny_8x32_ds_pass_8_chunk_1",
+    "cunny_8x32_ds_pass_8_chunk_2",
+    "cunny_8x32_ds_pass_9",
 ];
 
 const CUNNY_VERYFAST_NVL_PASSES: [CunnyPassSpec; 4] = [

@@ -155,7 +155,7 @@ def required_directive(block: str, name: str, desc: str) -> str:
 
 def validate_supported_subset(text: str, passes: list[PassBlock]) -> None:
     lowered = text.lower()
-    unsupported_tokens = ("gather", "dp4a", "//!offset", "//!hooked")
+    unsupported_tokens = ("dp4a", "//!offset", "//!hooked")
     for token in unsupported_tokens:
         if token in lowered:
             raise ValueError(f"Unsupported CuNNy mpv shader feature: {token}")
@@ -246,7 +246,16 @@ def dot4_expr(vector: str, matrix_numbers: list[str]) -> str:
 
 
 def load_expr(macro: str, dx: str, dy: str, block: PassBlock) -> str:
-    source, mode = block.macro_sources[macro]
+    source_mode = block.macro_sources.get(macro)
+    if source_mode is None:
+        layer_match = re.fullmatch(r"l(\d+)", macro)
+        feature_sources = [bind for bind in block.binds if bind != "LUMA"]
+        if not layer_match or len(feature_sources) != 1:
+            raise ValueError(f"Unsupported sample macro {macro} in {block.desc}")
+        source = feature_sources[0]
+        mode = int(layer_match.group(1))
+    else:
+        source, mode = source_mode
     x = int(dx) - 1
     y = int(dy) - 1
     if source == "LUMA":
@@ -311,6 +320,8 @@ def convert_statement(
         "}",
         "shared ",
         "F ",
+        "vec2 p",
+        "p = ",
         "vec2 opt",
         "vec2 fpos",
     )
@@ -329,9 +340,13 @@ def convert_statement(
         state.loaded_samples.add(variable)
         return [f"var {variable} = {expr};"]
 
+    if "G[" in statement:
+        if re.match(r"^G\[\d+\]\[ay\]\[ax\]\s*=", statement):
+            return []
+        raise ValueError(f"Unsupported CuNNy gather statement: {statement}")
+
     if (
         statement.startswith(skip_prefixes)
-        or "G[" in statement
         or "barrier()" in statement
         or statement in {"}", "return"}
     ):

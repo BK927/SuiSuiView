@@ -235,13 +235,18 @@ Source: https://github.com/funnyplanter/CuNNy
   `mpv/soft/CuNNy-2x12-SOFT.glsl`, and
   `mpv/soft/CuNNy-3x12-SOFT.glsl`, and
   `mpv/soft/CuNNy-4x12-SOFT.glsl`, and
+  `mpv/soft/CuNNy-4x16-SOFT.glsl`, and
   `mpv/soft/CuNNy-4x24-SOFT.glsl`, and
+  `mpv/soft/CuNNy-4x32-SOFT.glsl`, and
   `mpv/ds/CuNNy-faster-DS.glsl`, and
   `mpv/ds/CuNNy-fast-DS.glsl`, and
   `mpv/ds/CuNNy-2x12-DS.glsl`, and
   `mpv/ds/CuNNy-3x12-DS.glsl`, and
   `mpv/ds/CuNNy-4x12-DS.glsl`, and
-  `mpv/ds/CuNNy-4x24-DS.glsl`. SuiSuiView is GPL-3.0-only, so the
+  `mpv/ds/CuNNy-4x16-DS.glsl`, and
+  `mpv/ds/CuNNy-4x24-DS.glsl`, and
+  `mpv/ds/CuNNy-4x32-DS.glsl`, and
+  `mpv/ds/CuNNy-8x32-DS.glsl`. SuiSuiView is GPL-3.0-only, so the
   GPL/LGPL-compatible source terms are accepted here. The corresponding
   generated WGSL source is included in the repository.
 
