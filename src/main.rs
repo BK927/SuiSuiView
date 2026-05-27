@@ -134,8 +134,8 @@ fn renderer_for_settings(settings: &AppSettings) -> eframe::Renderer {
 }
 
 fn window_icon() -> eframe::egui::IconData {
-    let image = image::load_from_memory(include_bytes!("../assets/app-icon.png"))
-        .expect("embedded app icon should be a valid PNG")
+    let image = image::load_from_memory(include_bytes!("../assets/app-icon.ico"))
+        .expect("embedded app icon should be a valid ICO")
         .into_rgba8();
     let width = image.width();
     let height = image.height();
@@ -144,5 +144,24 @@ fn window_icon() -> eframe::egui::IconData {
         rgba: image.into_raw(),
         width,
         height,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::window_icon;
+
+    #[test]
+    fn embedded_window_icon_loads_from_ico() {
+        let icon = window_icon();
+
+        assert!(icon.width > 0);
+        assert!(icon.height > 0);
+        assert!(icon.width <= 256);
+        assert!(icon.height <= 256);
+        assert_eq!(
+            icon.rgba.len(),
+            icon.width as usize * icon.height as usize * 4
+        );
     }
 }

@@ -17,12 +17,14 @@ use std::time::{Duration, Instant};
 
 mod bmp;
 mod gif;
+mod image_crate;
 mod jpeg;
 mod metadata;
 mod png;
 mod scheduler;
 
-use metadata::{apply_embedded_icc_to_rgba, apply_exif_orientation_to_page, read_image_metadata};
+use image_crate::{prepare_image_with_image_crate, prepare_image_with_image_crate_and_icc};
+use metadata::{apply_exif_orientation_to_page, read_image_metadata};
 use scheduler::prioritized_jobs;
 
 const WORKER_CACHE_BYTES: usize = 48 * 1024 * 1024;
@@ -534,67 +536,6 @@ fn reject_oversized_original(width: u32, height: u32) -> Result<(), String> {
 
 fn sampled_source_index(out_index: usize, out_len: usize, source_len: usize) -> usize {
     (((out_index * 2 + 1) * source_len) / (out_len * 2)).min(source_len.saturating_sub(1))
-}
-
-fn prepare_image_with_image_crate(
-    bytes: &[u8],
-    target_long_edge: u32,
-    options: DecodeOptions,
-) -> Result<PreparedPage, String> {
-    prepare_image_with_image_crate_and_icc(
-        bytes,
-        target_long_edge,
-        options.resize_filter,
-        options.allow_display_upscale,
-        None,
-    )
-}
-
-fn prepare_image_with_image_crate_and_icc(
-    bytes: &[u8],
-    target_long_edge: u32,
-    resize_filter: ResizeFilter,
-    allow_display_upscale: bool,
-    icc_profile: Option<&[u8]>,
-) -> Result<PreparedPage, String> {
-    let target_long_edge = clamp_target_long_edge(target_long_edge);
-    let (width, height) = image_reader(bytes)?
-        .into_dimensions()
-        .map_err(|error| error.to_string())?;
-    reject_oversized_original(width, height)?;
-
-    let image = image_reader(bytes)?
-        .decode()
-        .map_err(|error| error.to_string())?;
-    let rgba = image.into_rgba8();
-    let (display_width, display_height) =
-        display_dimensions_with_upscale(width, height, target_long_edge, allow_display_upscale)?;
-    let display = if display_width == width && display_height == height {
-        rgba
-    } else {
-        resize_rgba(&rgba, display_width, display_height, resize_filter)
-    };
-    let mut raw = display.into_raw();
-    let mut notice = None;
-    if let Some(profile) = icc_profile {
-        if let Err(error) = apply_embedded_icc_to_rgba(&mut raw, profile) {
-            notice = Some(format!(
-                "ICC profile could not be applied; assuming sRGB: {error}"
-            ));
-        }
-    }
-
-    let mut page = prepared_page_from_rgba(
-        raw,
-        width,
-        height,
-        display_width,
-        display_height,
-        target_long_edge,
-        DecodeBackend::ImageCrate,
-    )?;
-    page.notice = notice;
-    Ok(page)
 }
 
 fn prepared_page_from_rgba(
