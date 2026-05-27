@@ -1,5 +1,3 @@
-#[cfg(feature = "bench-native-wuffs")]
-use super::wuffs;
 use super::{animated, DeferredCandidate};
 use crate::core::decoder_backend;
 use image::{GenericImageView, ImageFormat, ImageReader, Limits};
@@ -178,14 +176,6 @@ pub fn candidate_decoders(format: BenchFormat) -> &'static [CandidateDecoder] {
                 allocation_note: "zune-png is asked to strip to 8-bit and add alpha before RGBA validation.",
                 decode: decode_zune_png,
             },
-            #[cfg(feature = "bench-native-wuffs")]
-            CandidateDecoder {
-                name: "wuffs-png-rgba",
-                note: "Native Wuffs PNG decode into an RGBA pixel buffer.",
-                output_pixel_format: "RGBA8",
-                allocation_note: "Wuffs writes directly into a pre-sized RGBA buffer plus its format-specific work buffer.",
-                decode: wuffs::decode_png,
-            },
         ],
         BenchFormat::Webp => &[
             CandidateDecoder {
@@ -255,14 +245,6 @@ pub fn candidate_decoders(format: BenchFormat) -> &'static [CandidateDecoder] {
                 allocation_note: "gif crate expands frame rectangles; the bench composes and stores RGBA canvases.",
                 decode: animated::decode_gif_animation,
             },
-            #[cfg(feature = "bench-native-wuffs")]
-            CandidateDecoder {
-                name: "wuffs-gif-first-frame-rgba",
-                note: "Native Wuffs GIF first-frame decode into a full-canvas RGBA pixel buffer.",
-                output_pixel_format: "RGBA8",
-                allocation_note: "Wuffs writes directly into a pre-sized RGBA buffer plus its LZW work buffer.",
-                decode: wuffs::decode_gif_first_frame,
-            },
         ],
         BenchFormat::Avif => avif_decoders(),
         BenchFormat::Svg => svg_decoders(),
@@ -309,23 +291,11 @@ pub fn deferred_candidates() -> Vec<DeferredCandidate> {
             candidate: "libjpeg-turbo",
             reason: "Build with bench-native-jpeg-turbo or bench-native to measure the TurboJPEG backend.",
         },
-        #[cfg(not(feature = "bench-native-wuffs"))]
-        DeferredCandidate {
-            format: "png",
-            candidate: "Wuffs PNG",
-            reason: "Build with bench-native-wuffs to measure the Wuffs PNG backend.",
-        },
         #[cfg(not(feature = "bench-native-webp"))]
         DeferredCandidate {
             format: "webp",
             candidate: "libwebp",
             reason: "Build with bench-native-webp or bench-native to measure the libwebp backend.",
-        },
-        #[cfg(not(feature = "bench-native-wuffs"))]
-        DeferredCandidate {
-            format: "gif",
-            candidate: "Wuffs GIF",
-            reason: "Build with bench-native-wuffs to measure the Wuffs GIF backend.",
         },
         #[cfg(not(any(
             feature = "bench-avif-native",

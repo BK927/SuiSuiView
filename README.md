@@ -122,8 +122,8 @@ uv run python scripts\fetch_pdfium.py --platform windows-x64 --copy-to target\re
 For release packaging, pass the expected archive checksum with `--sha256`; the
 script also prints the downloaded archive checksum for provenance records.
 
-Benchmark-only native candidates such as TurboJPEG and Wuffs remain out of the
-production settings.
+Benchmark-only native candidates such as TurboJPEG remain out of the production
+settings.
 
 ## Settings
 

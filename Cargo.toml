@@ -10,11 +10,9 @@ default = []
 bench-native = [
     "bench-native-jpeg-turbo",
     "bench-native-webp",
-    "bench-native-wuffs",
 ]
 bench-native-jpeg-turbo = ["dep:turbojpeg"]
 bench-native-webp = ["native-webp"]
-bench-native-wuffs = ["dep:wuffs-sys"]
 bench-avif-native = ["image/avif-native"]
 bench-libavif-native = ["native-avif"]
 bench-svg = ["dep:resvg"]
@@ -57,15 +55,11 @@ turbojpeg = { version = "1.3.3", optional = true }
 webp = { version = "0.3", optional = true, default-features = false }
 wgpu = "25.0.2"
 windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes"] }
-wuffs-sys = { version = "0.1", optional = true }
 zip = "2.2"
 zune-core = "0.5"
 zune-jpeg = "0.5"
 zune-png = "0.5"
 zune-psd = "0.5"
-
-[patch.crates-io]
-wuffs-sys = { path = "third_party/wuffs-sys" }
 
 [build-dependencies]
 winresource = "0.1"

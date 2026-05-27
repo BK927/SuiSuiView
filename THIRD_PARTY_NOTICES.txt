@@ -1144,19 +1144,6 @@ zune-psd 0.5.1
 License: MIT OR Apache-2.0 OR Zlib
 Source: https://github.com/etemesi254/zune-image/tree/dev/crates/zune-psd
 
-Bundled Benchmark Source
-------------------------
-
-Wuffs generated C source and wuffs-sys benchmark patch
-License: Apache-2.0
-Copyright: Copyright 2017 The Wuffs Authors.
-Source: https://github.com/google/wuffs and https://crates.io/crates/wuffs-sys
-Files:
-- third_party/wuffs-sys/
-Note: This is a bench-only local patch for the optional bench-native-wuffs
-feature. It is not enabled by the default application build and is not a
-production decoder backend.
-
 Bundled Icon Fonts
 ------------------
 
@@ -1204,8 +1191,8 @@ use scripts/fetch_pdfium.py to fetch a V8/XFA-free PDFium package. Release
 packaging must record the package URL and checksum and ship the PDFium license
 text with the bundle.
 
-Benchmark-only native candidates such as TurboJPEG and Wuffs are not production
-decoder settings in the default application.
+Benchmark-only native candidates such as TurboJPEG are not production decoder
+settings in the default application.
 
 Shader Algorithm References
 ---------------------------

@@ -2,8 +2,6 @@ mod animated;
 mod candidates;
 mod source;
 mod stats;
-#[cfg(feature = "bench-native-wuffs")]
-mod wuffs;
 
 use candidates::{candidate_decoders, deferred_candidates, detect_format, BenchFormat};
 use serde::Serialize;
@@ -41,7 +39,6 @@ pub struct DecoderBenchFeatures {
     pub bench_native: bool,
     pub bench_native_jpeg_turbo: bool,
     pub bench_native_webp: bool,
-    pub bench_native_wuffs: bool,
     pub bench_avif_native: bool,
     pub bench_libavif_native: bool,
     pub bench_svg: bool,
@@ -270,7 +267,6 @@ pub fn bench_path(
             bench_native: cfg!(feature = "bench-native"),
             bench_native_jpeg_turbo: cfg!(feature = "bench-native-jpeg-turbo"),
             bench_native_webp: cfg!(feature = "bench-native-webp"),
-            bench_native_wuffs: cfg!(feature = "bench-native-wuffs"),
             bench_avif_native: cfg!(feature = "bench-avif-native"),
             bench_libavif_native: cfg!(feature = "bench-libavif-native"),
             bench_svg: cfg!(feature = "bench-svg"),
@@ -693,11 +689,10 @@ fn print_report(report: &DecoderBenchReport) {
         report.total_source_bytes as f64 / (1024.0 * 1024.0)
     );
     println!(
-        "Features: bench-native={}, jpeg-turbo={}, libwebp={}, wuffs={}, bench-avif-native={}, bench-libavif-native={}, bench-svg={}",
+        "Features: bench-native={}, jpeg-turbo={}, libwebp={}, bench-avif-native={}, bench-libavif-native={}, bench-svg={}",
         report.features.bench_native,
         report.features.bench_native_jpeg_turbo,
         report.features.bench_native_webp,
-        report.features.bench_native_wuffs,
         report.features.bench_avif_native,
         report.features.bench_libavif_native,
         report.features.bench_svg
