@@ -14,14 +14,25 @@
 *.tmp
 *.temp
 /tmp/
+/docs/
 /bench-output/
+/bench-data/
 __pycache__/
 *.pyc
 
 # Local stress-test image sets
+/perf-datasets/
 /perf-fixtures/
+/target-avif/
 /validation-reports*/
 /validation-samples*/
+
+# Internal-only benchmark and validation harnesses
+/scripts/fetch_perf_dataset.py
+/scripts/format_validation.py
+/scripts/perf_analyze.py
+/scripts/viewer_blackbox_compare.ps1
+/scripts/viewer_visual_latency_ffmpeg.py
 
 # Local development helper scripts
 /tools/

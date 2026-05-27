@@ -38,13 +38,6 @@ cargo run --release
 Release builds are the right way to judge page-turn and image-decode
 responsiveness.
 
-Upscaler quality checks can write visual comparison sheets:
-
-```powershell
-cargo run --release --bin make_perf_fixture -- --profile comic --out perf-fixtures\comic-smoke --count 6 --min-long-edge 2048
-cargo run --release --bin suisuiview-cli -- --upscale-quality-scan perf-fixtures\comic-smoke\comic.cbz --source-long-edge 1024 --target-long-edge 2048 --upscale-quality-report tmp\upscale-quality-comic.json --upscale-quality-visuals tmp\upscale-quality-comic-visuals
-```
-
 ## Open And Read
 
 - `F2` or `Ctrl+O`: open a file.
