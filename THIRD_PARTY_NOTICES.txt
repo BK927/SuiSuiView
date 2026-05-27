@@ -4,8 +4,10 @@ SuiSuiView Third-Party Notices
 This application includes third-party open-source software. This notice is
 shown in the About window and should also be shipped with packaged releases.
 The Rust dependency list below was generated from Cargo.lock with cargo-about
-for the x86_64-pc-windows-msvc release target. Regenerate this file when
-dependencies, bundled assets, native binaries, or distribution targets change.
+for the x86_64-pc-windows-msvc default release target. Optional native and
+benchmark-only components that are not part of the default binary are called
+out separately below. Regenerate this file when dependencies, bundled assets,
+native binaries, or distribution targets change.
 
 Application
 -----------
@@ -20,7 +22,7 @@ Rust Dependencies
 -----------------
 
 Generated target: x86_64-pc-windows-msvc
-Generated packages: 278
+Generated packages: 280
 
 ab_glyph 0.2.32
 License: Apache-2.0
@@ -1134,6 +1136,27 @@ zune-jpeg 0.5.15
 License: MIT OR Apache-2.0 OR Zlib
 Source: https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg
 
+zune-png 0.5.2
+License: MIT OR Apache-2.0 OR Zlib
+Source: https://github.com/etemesi254/zune-image/tree/dev/zune-png
+
+zune-psd 0.5.1
+License: MIT OR Apache-2.0 OR Zlib
+Source: https://github.com/etemesi254/zune-image/tree/dev/crates/zune-psd
+
+Bundled Benchmark Source
+------------------------
+
+Wuffs generated C source and wuffs-sys benchmark patch
+License: Apache-2.0
+Copyright: Copyright 2017 The Wuffs Authors.
+Source: https://github.com/google/wuffs and https://crates.io/crates/wuffs-sys
+Files:
+- third_party/wuffs-sys/
+Note: This is a bench-only local patch for the optional bench-native-wuffs
+feature. It is not enabled by the default application build and is not a
+production decoder backend.
+
 Bundled Icon Fonts
 ------------------
 
@@ -1155,6 +1178,34 @@ redistributed by SuiSuiView.
 Real-ESRGAN ncnn-vulkan support is optional. SuiSuiView lets the user choose
 their own executable and model paths. SuiSuiView does not bundle Python,
 PyTorch, Real-ESRGAN binaries, ncnn binaries, or model files.
+
+Optional native codec features are explicit build choices and are not enabled
+in the default binary. If a release enables native-webp, native-avif, or
+native-ai, the release bundle must include the license text and attribution for
+the corresponding native library and all packaged runtime binaries.
+
+native-webp uses the Rust webp crate to call libwebp.
+License: MIT OR Apache-2.0 for the Rust crate; libwebp uses BSD-style terms.
+Source: https://crates.io/crates/webp and https://chromium.googlesource.com/webm/libwebp
+
+native-avif uses the Rust libavif crate with libavif and dav1d.
+License: BSD-2-Clause for libavif-rs; libavif and dav1d use BSD-style terms.
+Source: https://crates.io/crates/libavif, https://github.com/AOMediaCodec/libavif,
+and https://code.videolan.org/videolan/dav1d
+
+native-ai uses pdfium-render to call an app-local PDFium dynamic library.
+License: MIT OR Apache-2.0 for pdfium-render; PDFium uses BSD-style terms plus
+Apache-2.0-covered components.
+Source: https://crates.io/crates/pdfium-render,
+https://pdfium.googlesource.com/pdfium/, and
+https://github.com/bblanchon/pdfium-binaries
+Note: The repository does not commit PDFium binaries. Development builds may
+use scripts/fetch_pdfium.py to fetch a V8/XFA-free PDFium package. Release
+packaging must record the package URL and checksum and ship the PDFium license
+text with the bundle.
+
+Benchmark-only native candidates such as TurboJPEG and Wuffs are not production
+decoder settings in the default application.
 
 Shader Algorithm References
 ---------------------------

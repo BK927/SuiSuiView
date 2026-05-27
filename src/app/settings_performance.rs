@@ -187,7 +187,7 @@ pub(in crate::app) fn show_decoder_settings(
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(
-                        "고품질 / 호환 모드에서는 모든 포맷이 image crate 경로를 사용합니다.",
+                        "고품질 / 호환 모드에서는 PSD와 AI 미리보기를 제외한 포맷이 image crate 경로를 사용합니다.",
                     )
                     .size(12.0)
                     .color(theme::TEXT_MUTED),
