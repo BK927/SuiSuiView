@@ -350,7 +350,7 @@ fn webp_default_note() -> &'static str {
     if cfg!(feature = "native-webp") {
         "기본값: libwebp, 애니메이션은 image-webp"
     } else {
-        "기본값: image-webp"
+        "기본값: image crate, 애니메이션은 image-webp"
     }
 }
 

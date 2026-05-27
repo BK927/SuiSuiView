@@ -2,11 +2,12 @@
 use super::wuffs;
 use super::{animated, DeferredCandidate};
 use crate::core::decoder_backend;
-use image::ImageFormat;
+use image::{GenericImageView, ImageFormat, ImageReader, Limits};
 use jpeg_decoder::{Decoder as JpegDecoder, PixelFormat as JpegPixelFormat};
 use std::io::Cursor;
 
 const MAX_BENCH_DIMENSION: usize = 20_000;
+const MAX_BENCH_RGBA_BYTES: usize = 256 * 1024 * 1024;
 const MAX_ANIMATION_RGBA_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -449,10 +450,12 @@ fn decode_resvg_svg(bytes: &[u8]) -> Result<DecodedImage, String> {
 }
 
 fn decode_image_crate_as(format: ImageFormat, bytes: &[u8]) -> Result<DecodedImage, String> {
-    let image = image::load_from_memory_with_format(bytes, format)
-        .map_err(|error| error.to_string())?
-        .into_rgba8();
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    reader.limits(bench_decode_limits());
+    let image = reader.decode().map_err(|error| error.to_string())?;
     let (width, height) = image.dimensions();
+    checked_rgba_len(width, height)?;
+    let image = image.into_rgba8();
     Ok(DecodedImage::still(width, height, image.into_raw()))
 }
 
@@ -486,9 +489,9 @@ fn decode_turbojpeg(bytes: &[u8]) -> Result<DecodedImage, String> {
         .map_err(|error| error.to_string())?;
     let width = u32::try_from(header.width).map_err(|_| "TurboJPEG width exceeds u32")?;
     let height = u32::try_from(header.height).map_err(|_| "TurboJPEG height exceeds u32")?;
-    let pixel_count = checked_pixel_count(width, height)?;
+    let rgba_len = checked_rgba_len(width, height)?;
     let mut image = turbojpeg::Image {
-        pixels: vec![0u8; pixel_count * 4],
+        pixels: vec![0u8; rgba_len],
         width: header.width,
         pitch: header
             .width
@@ -556,7 +559,7 @@ fn rgba_from_jpeg_decoder_pixels(
 fn rgba_from_rgb(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedImage, String> {
     let pixel_count = checked_pixel_count(width, height)?;
     expect_len(pixels.len(), pixel_count * 3, "RGB")?;
-    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    let mut rgba = Vec::with_capacity(checked_rgba_len(width, height)?);
     for rgb in pixels.chunks_exact(3) {
         rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
     }
@@ -566,7 +569,7 @@ fn rgba_from_rgb(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedImag
 fn rgba_from_luma(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedImage, String> {
     let pixel_count = checked_pixel_count(width, height)?;
     expect_len(pixels.len(), pixel_count, "luma")?;
-    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    let mut rgba = Vec::with_capacity(checked_rgba_len(width, height)?);
     for gray in pixels {
         rgba.extend_from_slice(&[gray, gray, gray, 255]);
     }
@@ -575,11 +578,7 @@ fn rgba_from_luma(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedIma
 
 #[cfg(feature = "bench-native-jpeg-turbo")]
 fn checked_rgba(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedImage, String> {
-    expect_len(
-        pixels.len(),
-        checked_pixel_count(width, height)? * 4,
-        "RGBA",
-    )?;
+    expect_len(pixels.len(), checked_rgba_len(width, height)?, "RGBA")?;
     Ok(DecodedImage::still(width, height, pixels))
 }
 
@@ -598,9 +597,13 @@ pub(super) fn checked_pixel_count(width: u32, height: u32) -> Result<usize, Stri
 }
 
 pub(super) fn checked_rgba_len(width: u32, height: u32) -> Result<usize, String> {
-    checked_pixel_count(width, height)?
+    let bytes = checked_pixel_count(width, height)?
         .checked_mul(4)
-        .ok_or_else(|| "RGBA buffer length overflows memory limits".to_owned())
+        .ok_or_else(|| "RGBA buffer length overflows memory limits".to_owned())?;
+    if bytes > MAX_BENCH_RGBA_BYTES {
+        return Err(format!("RGBA output exceeds bench limit: {bytes} bytes"));
+    }
+    Ok(bytes)
 }
 
 pub(super) fn checked_animation_rgba_len(
@@ -650,6 +653,14 @@ pub(super) fn expect_len(actual: usize, expected: usize, label: &str) -> Result<
             "{label} buffer length mismatch: expected {expected}, got {actual}"
         ))
     }
+}
+
+fn bench_decode_limits() -> Limits {
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_BENCH_DIMENSION as u32);
+    limits.max_image_height = Some(MAX_BENCH_DIMENSION as u32);
+    limits.max_alloc = Some(MAX_BENCH_RGBA_BYTES as u64);
+    limits
 }
 
 fn is_avif_signature(bytes: &[u8]) -> bool {

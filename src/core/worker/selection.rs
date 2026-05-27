@@ -279,13 +279,7 @@ fn prepare_default_webp_still(
     target_long_edge: u32,
     options: DecodeOptions,
 ) -> Result<PreparedPage, String> {
-    prepare_direct_or_image_fallback(
-        bytes,
-        target_long_edge,
-        options,
-        DecodeBackend::ImageWebp,
-        decoder_backend::decode_image_webp,
-    )
+    prepare_image_with_image_crate(bytes, target_long_edge, options)
 }
 
 #[cfg(feature = "native-webp")]

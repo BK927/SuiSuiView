@@ -1,6 +1,6 @@
 use super::candidates::{
-    checked_animation_rgba_len, checked_pixel_count, expect_len, reserve_animation_frame,
-    DecodedImage,
+    checked_animation_rgba_len, checked_pixel_count, checked_rgba_len, expect_len,
+    reserve_animation_frame, DecodedImage,
 };
 use gif::{
     ColorOutput as GifColorOutput, DecodeOptions as GifDecodeOptions,
@@ -15,6 +15,7 @@ pub fn decode_image_webp_all_frames(bytes: &[u8]) -> Result<DecodedImage, String
     let mut decoder = WebPDecoder::new(Cursor::new(bytes)).map_err(|error| error.to_string())?;
     let (width, height) = decoder.dimensions();
     let has_alpha = decoder.has_alpha();
+    checked_rgba_len(width, height)?;
     let buffer_size = decoder
         .output_buffer_size()
         .ok_or_else(|| "WebP output size exceeds platform limits".to_owned())?;
@@ -124,8 +125,8 @@ pub fn decode_gif_animation(bytes: &[u8]) -> Result<DecodedImage, String> {
         .map_err(|error| error.to_string())?;
     let width = u32::from(reader.width());
     let height = u32::from(reader.height());
-    let pixel_count = checked_pixel_count(width, height)?;
-    let mut canvas = vec![0u8; pixel_count * 4];
+    let frame_len = checked_rgba_len(width, height)?;
+    let mut canvas = vec![0u8; frame_len];
     let mut frames = Vec::new();
     let mut frame_count = 0u32;
     let mut total_duration_ms = 0u64;

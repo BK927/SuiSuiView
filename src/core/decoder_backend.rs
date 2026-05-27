@@ -45,6 +45,7 @@ pub struct DecodedRgba {
 
 impl DecodedRgba {
     fn new(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, String> {
+        ensure_backend_rgba_budget(width, height, "decoded RGBA output")?;
         checked_rgba_len(width, height)
             .and_then(|expected| expect_len(pixels.len(), expected, "RGBA"))?;
         Ok(Self {
@@ -110,6 +111,7 @@ pub fn decode_png_crate(bytes: &[u8]) -> Result<DecodedRgba, String> {
     let output_size = reader
         .output_buffer_size()
         .ok_or_else(|| "PNG output size exceeds platform limits".to_owned())?;
+    ensure_backend_buffer_budget(output_size, "PNG output")?;
     let mut pixels = vec![0u8; output_size];
     let info = reader
         .next_frame(&mut pixels)
@@ -145,13 +147,13 @@ pub fn decode_zune_png(bytes: &[u8]) -> Result<DecodedRgba, String> {
 pub fn decode_image_webp(bytes: &[u8]) -> Result<DecodedRgba, String> {
     let mut decoder = WebPDecoder::new(Cursor::new(bytes)).map_err(|error| error.to_string())?;
     let (width, height) = decoder.dimensions();
+    ensure_backend_rgba_budget(width, height, "WebP output")?;
     let has_alpha = decoder.has_alpha();
-    let mut pixels = vec![
-        0u8;
-        decoder
-            .output_buffer_size()
-            .ok_or_else(|| "WebP output size exceeds platform limits".to_owned())?
-    ];
+    let output_size = decoder
+        .output_buffer_size()
+        .ok_or_else(|| "WebP output size exceeds platform limits".to_owned())?;
+    ensure_backend_buffer_budget(output_size, "WebP output")?;
+    let mut pixels = vec![0u8; output_size];
     if decoder.is_animated() {
         decoder
             .read_frame(&mut pixels)
@@ -207,6 +209,7 @@ pub fn decode_gif_first_frame(bytes: &[u8]) -> Result<DecodedRgba, String> {
         .map_err(|error| error.to_string())?;
     let width = u32::from(reader.width());
     let height = u32::from(reader.height());
+    ensure_backend_rgba_budget(width, height, "GIF output")?;
     let frame = reader
         .read_next_frame()
         .map_err(|error| error.to_string())?
@@ -227,8 +230,8 @@ pub fn decode_gif_first_frame(bytes: &[u8]) -> Result<DecodedRgba, String> {
         return DecodedRgba::new(width, height, frame.buffer.to_vec());
     }
 
-    let pixel_count = checked_pixel_count(width, height)?;
-    let mut rgba = vec![0u8; pixel_count * 4];
+    let rgba_len = checked_rgba_len(width, height)?;
+    let mut rgba = vec![0u8; rgba_len];
     overlay_gif_frame(&mut rgba, width, height, frame)?;
     DecodedRgba::new(width, height, rgba)
 }
@@ -312,7 +315,7 @@ fn rgba_from_colorspace(
 fn rgba_from_rgb(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedRgba, String> {
     let pixel_count = checked_pixel_count(width, height)?;
     expect_len(pixels.len(), pixel_count * 3, "RGB")?;
-    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    let mut rgba = Vec::with_capacity(checked_rgba_len(width, height)?);
     for rgb in pixels.chunks_exact(3) {
         rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
     }
@@ -322,7 +325,7 @@ fn rgba_from_rgb(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedRgba
 fn rgba_from_bgr(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedRgba, String> {
     let pixel_count = checked_pixel_count(width, height)?;
     expect_len(pixels.len(), pixel_count * 3, "BGR")?;
-    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    let mut rgba = Vec::with_capacity(checked_rgba_len(width, height)?);
     for bgr in pixels.chunks_exact(3) {
         rgba.extend_from_slice(&[bgr[2], bgr[1], bgr[0], 255]);
     }
@@ -330,9 +333,9 @@ fn rgba_from_bgr(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedRgba
 }
 
 fn rgba_from_bgra(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedRgba, String> {
-    let pixel_count = checked_pixel_count(width, height)?;
-    expect_len(pixels.len(), pixel_count * 4, "BGRA")?;
-    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    let rgba_len = checked_rgba_len(width, height)?;
+    expect_len(pixels.len(), rgba_len, "BGRA")?;
+    let mut rgba = Vec::with_capacity(rgba_len);
     for bgra in pixels.chunks_exact(4) {
         rgba.extend_from_slice(&[bgra[2], bgra[1], bgra[0], bgra[3]]);
     }
@@ -342,7 +345,7 @@ fn rgba_from_bgra(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedRgb
 fn rgba_from_luma(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedRgba, String> {
     let pixel_count = checked_pixel_count(width, height)?;
     expect_len(pixels.len(), pixel_count, "luma")?;
-    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    let mut rgba = Vec::with_capacity(checked_rgba_len(width, height)?);
     for gray in pixels {
         rgba.extend_from_slice(&[gray, gray, gray, 255]);
     }
@@ -352,7 +355,7 @@ fn rgba_from_luma(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedRgb
 fn rgba_from_luma_alpha(pixels: Vec<u8>, width: u32, height: u32) -> Result<DecodedRgba, String> {
     let pixel_count = checked_pixel_count(width, height)?;
     expect_len(pixels.len(), pixel_count * 2, "luma-alpha")?;
-    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    let mut rgba = Vec::with_capacity(checked_rgba_len(width, height)?);
     for pair in pixels.chunks_exact(2) {
         rgba.extend_from_slice(&[pair[0], pair[0], pair[0], pair[1]]);
     }
@@ -468,9 +471,10 @@ fn parse_dib_header(
 }
 
 fn decode_bmp_pixels(bytes: &[u8], header: &BmpHeader) -> Result<DecodedRgba, String> {
-    let pixel_count = checked_pixel_count(header.width, header.height)?;
+    ensure_backend_rgba_budget(header.width, header.height, "BMP output")?;
+    let rgba_len = checked_rgba_len(header.width, header.height)?;
     let bytes_per_pixel = usize::from(header.bits_per_pixel / 8);
-    let mut rgba = vec![0u8; pixel_count * 4];
+    let mut rgba = vec![0u8; rgba_len];
     let mut saw_source_alpha = false;
     let source_width = header.width as usize;
     let source_height = header.height as usize;
@@ -675,6 +679,10 @@ fn checked_rgba_len(width: u32, height: u32) -> Result<usize, String> {
 
 fn ensure_backend_rgba_budget(width: u32, height: u32, label: &str) -> Result<(), String> {
     let bytes = checked_rgba_len(width, height)?;
+    ensure_backend_buffer_budget(bytes, label)
+}
+
+fn ensure_backend_buffer_budget(bytes: usize, label: &str) -> Result<(), String> {
     if bytes > MAX_BACKEND_DECODED_BYTES {
         return Err(format!(
             "{label} is too large: {:.1} MB",

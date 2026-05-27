@@ -89,7 +89,7 @@ AutoFast currently resolves `기본값` like this:
 | --- | --- |
 | JPEG | target-aware scaled JPEG when useful, then `zune-jpeg` |
 | PNG | large-page sampled PNG when useful, then the `png` crate |
-| WebP | `image-webp`; `libwebp` for still images when built with `native-webp` |
+| WebP | `image` baseline for still images, `image-webp` for animation; `libwebp` for still images when built with `native-webp` |
 | GIF | large static GIF sampling when useful, then the `gif` crate first-frame path |
 | BMP | sampled BMP when useful, then direct 24/32-bit BMP fast path |
 | ICO | `image` baseline by default, with an explicit ICO fast-path option |
