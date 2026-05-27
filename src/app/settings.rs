@@ -15,6 +15,7 @@ pub(super) enum SettingsSection {
     General,
     View,
     ImageProcessing,
+    Decoders,
     Performance,
     Bookmarks,
     Keyboard,
@@ -22,10 +23,11 @@ pub(super) enum SettingsSection {
 }
 
 impl SettingsSection {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::General,
         Self::View,
         Self::ImageProcessing,
+        Self::Decoders,
         Self::Performance,
         Self::Bookmarks,
         Self::Keyboard,
@@ -37,6 +39,7 @@ impl SettingsSection {
             Self::General => "일반",
             Self::View => "보기",
             Self::ImageProcessing => "영상 처리",
+            Self::Decoders => "디코더",
             Self::Performance => "성능",
             Self::Bookmarks => "책갈피",
             Self::Keyboard => "키보드",
@@ -49,7 +52,8 @@ impl SettingsSection {
             Self::General => "삭제 확인, 창 표시, 페이지 끝 동작",
             Self::View => "상단 도구막대, 상태바, 뷰어 보조 표시",
             Self::ImageProcessing => "보간, 실시간 업스케일, 색상 보정",
-            Self::Performance => "디코딩, 미리보기, 프리로드, 캐시 정책",
+            Self::Decoders => "디코딩 모드와 포맷별 디코더 선택",
+            Self::Performance => "미리보기, 프리로드, 캐시 정책",
             Self::Bookmarks => "이어보기, 책갈피 저장 범위와 기록 정리",
             Self::Keyboard => "현재 단축키 확인, 추가, 변경, 초기화",
             Self::Mouse => "더블클릭, 가운데 버튼, 휠 조작",
@@ -61,6 +65,7 @@ impl SettingsSection {
             Self::General => (icons::SETTINGS, icons::IconStyle::Regular),
             Self::View => (icons::EYE, icons::IconStyle::Regular),
             Self::ImageProcessing => (icons::WAND, icons::IconStyle::Regular),
+            Self::Decoders => (icons::DOCUMENT, icons::IconStyle::Regular),
             Self::Performance => (icons::DOCUMENT, icons::IconStyle::Regular),
             Self::Bookmarks => (icons::BOOKMARK, icons::IconStyle::Regular),
             Self::Keyboard => (icons::DOCUMENT, icons::IconStyle::Regular),
@@ -157,6 +162,13 @@ impl SuiSuiViewApp {
                                     }
                                     SettingsSection::ImageProcessing => {
                                         show_image_processing_settings(
+                                            ui,
+                                            &mut draft,
+                                            &mut changed,
+                                        );
+                                    }
+                                    SettingsSection::Decoders => {
+                                        settings_performance::show_decoder_settings(
                                             ui,
                                             &mut draft,
                                             &mut changed,

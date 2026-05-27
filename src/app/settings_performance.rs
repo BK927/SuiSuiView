@@ -1,29 +1,66 @@
 use super::cache_budget_summary;
 use super::settings::{checkbox_with_help, grid_label_with_help, info_icon, setting_group};
 use super::ui::theme;
-use crate::core::state::{AppSettings, CacheMemoryMode, DecodeMode, RendererMode};
+use crate::core::state::{
+    AppSettings, CacheMemoryMode, DecodeMode, DecoderPreference, RendererMode,
+};
 use eframe::egui::{self, RichText};
 
-pub(in crate::app) fn show_performance_settings(
+const JPEG_DECODER_OPTIONS: &[DecoderPreference] = &[
+    DecoderPreference::Default,
+    DecoderPreference::ImageCrate,
+    DecoderPreference::ZuneJpeg,
+];
+const PNG_DECODER_OPTIONS: &[DecoderPreference] = &[
+    DecoderPreference::Default,
+    DecoderPreference::ImageCrate,
+    DecoderPreference::PngCrate,
+    DecoderPreference::ZunePng,
+];
+const WEBP_DECODER_OPTIONS: &[DecoderPreference] = &[
+    DecoderPreference::Default,
+    DecoderPreference::ImageCrate,
+    DecoderPreference::ImageWebp,
+    DecoderPreference::LibWebp,
+];
+const GIF_DECODER_OPTIONS: &[DecoderPreference] = &[
+    DecoderPreference::Default,
+    DecoderPreference::ImageCrate,
+    DecoderPreference::GifCrate,
+];
+const BMP_DECODER_OPTIONS: &[DecoderPreference] = &[
+    DecoderPreference::Default,
+    DecoderPreference::ImageCrate,
+    DecoderPreference::BmpFastPath,
+];
+const ICO_DECODER_OPTIONS: &[DecoderPreference] = &[
+    DecoderPreference::Default,
+    DecoderPreference::ImageCrate,
+    DecoderPreference::IcoFastPath,
+];
+const AVIF_DECODER_OPTIONS: &[DecoderPreference] =
+    &[DecoderPreference::Default, DecoderPreference::LibAvifDav1d];
+const SVG_DECODER_OPTIONS: &[DecoderPreference] =
+    &[DecoderPreference::Default, DecoderPreference::Resvg];
+
+pub(in crate::app) fn show_decoder_settings(
     ui: &mut egui::Ui,
     draft: &mut AppSettings,
-    target_long_edge: u32,
-    visible_pages: usize,
     changed: &mut bool,
 ) {
     setting_group(
         ui,
-        "이미지 읽기",
-        "페이지 파일을 읽고 표시용 이미지로 준비하는 방식입니다.",
+        "디코딩 모드",
+        "이미지를 읽는 내부 방식입니다.",
         |ui| {
-            egui::Grid::new("settings_performance_grid")
+            egui::Grid::new("settings_decoder_mode_grid")
                 .num_columns(2)
                 .spacing([14.0, 8.0])
                 .show(ui, |ui| {
                     grid_label_with_help(
                         ui,
                         "디코딩 모드",
-                        "이미지를 읽는 내부 방식입니다. 자동 모드는 가능한 경우 빠른 경로를 사용합니다.",
+                        "자동 모드는 포맷별 설정과 빠른 경로를 사용합니다.",
                     );
                     egui::ComboBox::from_id_salt("decode_mode")
                         .selected_text(draft.decode_mode.label())
@@ -40,6 +77,111 @@ pub(in crate::app) fn show_performance_settings(
     );
 
     ui.add_space(8.0);
+    setting_group(
+        ui,
+        "포맷별 디코더",
+        "기본값은 현재 벤치 결과 기준 후보로 연결됩니다.",
+        |ui| {
+            let enabled = draft.decode_mode == DecodeMode::AutoFast;
+            egui::Grid::new("settings_decoder_preferences_grid")
+                .num_columns(3)
+                .spacing([14.0, 8.0])
+                .show(ui, |ui| {
+                    decoder_row(
+                        ui,
+                        changed,
+                        enabled,
+                        "JPEG",
+                        "기본값: zune-jpeg",
+                        &mut draft.decoder_preferences.jpeg,
+                        JPEG_DECODER_OPTIONS,
+                    );
+                    decoder_row(
+                        ui,
+                        changed,
+                        enabled,
+                        "PNG",
+                        "기본값: png crate",
+                        &mut draft.decoder_preferences.png,
+                        PNG_DECODER_OPTIONS,
+                    );
+                    decoder_row(
+                        ui,
+                        changed,
+                        enabled,
+                        "WebP",
+                        webp_default_note(),
+                        &mut draft.decoder_preferences.webp,
+                        WEBP_DECODER_OPTIONS,
+                    );
+                    decoder_row(
+                        ui,
+                        changed,
+                        enabled,
+                        "GIF",
+                        "기본값: gif crate",
+                        &mut draft.decoder_preferences.gif,
+                        GIF_DECODER_OPTIONS,
+                    );
+                    decoder_row(
+                        ui,
+                        changed,
+                        enabled,
+                        "BMP",
+                        "기본값: BMP fast path",
+                        &mut draft.decoder_preferences.bmp,
+                        BMP_DECODER_OPTIONS,
+                    );
+                    decoder_row(
+                        ui,
+                        changed,
+                        enabled,
+                        "ICO",
+                        "기본값: image crate",
+                        &mut draft.decoder_preferences.ico,
+                        ICO_DECODER_OPTIONS,
+                    );
+                    decoder_row(
+                        ui,
+                        changed,
+                        enabled && cfg!(feature = "native-avif"),
+                        "AVIF",
+                        avif_default_note(),
+                        &mut draft.decoder_preferences.avif,
+                        AVIF_DECODER_OPTIONS,
+                    );
+                    decoder_row(
+                        ui,
+                        changed,
+                        false,
+                        "SVG",
+                        "지원 예정: resvg",
+                        &mut draft.decoder_preferences.svg,
+                        SVG_DECODER_OPTIONS,
+                    );
+                });
+
+            if draft.decode_mode == DecodeMode::HighQuality {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "고품질 / 호환 모드에서는 모든 포맷이 image crate 경로를 사용합니다.",
+                    )
+                    .size(12.0)
+                    .color(theme::TEXT_MUTED),
+                );
+            }
+        },
+    );
+}
+
+pub(in crate::app) fn show_performance_settings(
+    ui: &mut egui::Ui,
+    draft: &mut AppSettings,
+    target_long_edge: u32,
+    visible_pages: usize,
+    changed: &mut bool,
+) {
     setting_group(
         ui,
         "렌더러",
@@ -155,6 +297,47 @@ pub(in crate::app) fn show_performance_settings(
             );
         },
     );
+}
+
+fn decoder_row(
+    ui: &mut egui::Ui,
+    changed: &mut bool,
+    enabled: bool,
+    format: &str,
+    note: &str,
+    value: &mut DecoderPreference,
+    options: &[DecoderPreference],
+) {
+    ui.label(format);
+    ui.add_enabled_ui(enabled, |ui| {
+        egui::ComboBox::from_id_salt(("decoder_preference", format))
+            .selected_text(value.label())
+            .show_ui(ui, |ui| {
+                for option in options {
+                    *changed |= ui
+                        .selectable_value(value, *option, option.label())
+                        .changed();
+                }
+            });
+    });
+    ui.label(RichText::new(note).size(12.0).color(theme::TEXT_MUTED));
+    ui.end_row();
+}
+
+fn webp_default_note() -> &'static str {
+    if cfg!(feature = "native-webp") {
+        "기본값: libwebp, 애니메이션은 image-webp"
+    } else {
+        "기본값: image-webp"
+    }
+}
+
+fn avif_default_note() -> &'static str {
+    if cfg!(feature = "native-avif") {
+        "기본값: libavif + dav1d"
+    } else {
+        "native-avif 빌드에서 사용 가능"
+    }
 }
 
 fn mib(bytes: usize) -> f32 {

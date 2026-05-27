@@ -9,8 +9,8 @@ use crate::core::source::{
 };
 use crate::core::state::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, BookmarkInput, CacheMemoryMode,
-    CommandId, DecodeMode, DisplayUpscaler, EdgePageAction, FitMode, LargeImageAnchor,
-    MouseGesture, PageTransitionStyle, ReadingDirection, StateStore, WheelMode,
+    CommandId, DecodeMode, DecoderPreferences, DisplayUpscaler, EdgePageAction, FitMode,
+    LargeImageAnchor, MouseGesture, PageTransitionStyle, ReadingDirection, StateStore, WheelMode,
 };
 use crate::core::upscale::{AiUpscaleWorker, UpscaleEvent, UpscaleRequest};
 use crate::core::worker::{
@@ -981,11 +981,18 @@ impl SuiSuiViewApp {
     }
 
     fn decode_options(&self) -> DecodeOptions {
+        let strategy = match self.settings.decode_mode {
+            DecodeMode::AutoFast => DecodeStrategy::Auto,
+            DecodeMode::HighQuality => DecodeStrategy::ImageCrate,
+        };
+        let decoder_preferences = if matches!(strategy, DecodeStrategy::Auto) {
+            self.settings.decoder_preferences
+        } else {
+            DecoderPreferences::default()
+        };
         DecodeOptions {
-            strategy: match self.settings.decode_mode {
-                DecodeMode::AutoFast => DecodeStrategy::Auto,
-                DecodeMode::HighQuality => DecodeStrategy::ImageCrate,
-            },
+            strategy,
+            decoder_preferences,
             resize_filter: self.settings.resize_filter,
             allow_display_upscale: self.should_allow_display_upscale(),
             apply_exif_orientation: self.settings.apply_exif_orientation,

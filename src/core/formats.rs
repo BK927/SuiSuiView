@@ -55,14 +55,14 @@ pub const FORMAT_DESCRIPTORS: &[FormatDescriptor] = &[
         extensions: &["webp"],
         policy: FormatPolicy::BuiltIn,
         current_decode: true,
-        note: "built-in decode through image crate; libwebp remains a native performance candidate",
+        note: "built-in decode with optional native-webp libwebp backend",
     },
     FormatDescriptor {
         name: "BMP",
         extensions: &["bmp", "dib"],
         policy: FormatPolicy::BuiltIn,
         current_decode: true,
-        note: "built-in decode; uncompressed large BMP sampling remains benchmark-gated",
+        note: "built-in decode with direct uncompressed BMP fast path",
     },
     FormatDescriptor {
         name: "TIFF",
@@ -90,7 +90,7 @@ pub const FORMAT_DESCRIPTORS: &[FormatDescriptor] = &[
         extensions: &["ico"],
         policy: FormatPolicy::BuiltIn,
         current_decode: true,
-        note: "built-in decode through image crate",
+        note: "built-in decode through image crate; direct ICO picker is available as fallback candidate",
     },
     FormatDescriptor {
         name: "QOI",
@@ -124,8 +124,8 @@ pub const FORMAT_DESCRIPTORS: &[FormatDescriptor] = &[
         name: "AVIF / Animated AVIF",
         extensions: &["avif"],
         policy: FormatPolicy::ExperimentalBuiltIn,
-        current_decode: false,
-        note: "decode-only native libavif/dav1d candidate; no encoder and no HEVC fallback",
+        current_decode: cfg!(feature = "native-avif"),
+        note: "decode-only native-avif libavif/dav1d backend; no encoder and no HEVC fallback",
     },
     FormatDescriptor {
         name: "JPEG XL",
@@ -254,6 +254,12 @@ fn is_heif_container(bytes: &[u8]) -> bool {
         return false;
     }
     let brands = &bytes[8..bytes.len().min(32)];
+    if brands
+        .chunks(4)
+        .any(|brand| matches!(brand, b"avif" | b"avis"))
+    {
+        return false;
+    }
     brands.chunks(4).any(|brand| {
         matches!(
             brand,
@@ -313,6 +319,9 @@ mod tests {
         assert!(unsupported_message_for_bytes(&heic)
             .unwrap()
             .contains("HEIC/HEIF"));
+        let mut avif = b"\0\0\0\x20ftypavif\0\0\0\0mif1".to_vec();
+        avif.extend_from_slice(&[0; 12]);
+        assert!(unsupported_message_for_bytes(&avif).is_none());
         assert!(unsupported_message_for_extension("clip")
             .unwrap()
             .contains("blocked"));

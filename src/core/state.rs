@@ -7,12 +7,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod bookmarks;
+mod decoders;
 mod input;
 mod rendering;
 #[cfg(test)]
 mod tests;
 use bookmarks::path_key;
 pub use bookmarks::{Bookmark, BookmarkInput, PageBookmark, PageBookmarkEntry, ReadingPosition};
+pub use decoders::{DecodeMode, DecoderPreference, DecoderPreferences};
 pub use input::{
     default_key_bindings, default_mouse_bindings, CommandId, KeyBinding, KeyCode, KeyShortcut,
     MouseBinding, MouseGesture,
@@ -83,24 +85,6 @@ impl EdgePageAction {
             Self::Ask => "무엇을 할지 물어보기",
             Self::Wrap => "다시 처음으로 돌아가기",
             Self::NextBook => "다음/이전 폴더/파일로 넘어가기",
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DecodeMode {
-    #[default]
-    AutoFast,
-    HighQuality,
-}
-
-impl DecodeMode {
-    pub const ALL: [Self; 2] = [Self::AutoFast, Self::HighQuality];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::AutoFast => "Auto fast",
-            Self::HighQuality => "High quality / compatible",
         }
     }
 }
@@ -445,6 +429,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub decode_mode: DecodeMode,
     #[serde(default)]
+    pub decoder_preferences: DecoderPreferences,
+    #[serde(default)]
     pub resize_filter: ResizeFilter,
     #[serde(default)]
     pub gpu_effect_mode: GpuEffectMode,
@@ -545,6 +531,7 @@ impl Default for AppSettings {
             image_edge_page_action: EdgePageAction::Wrap,
             archive_edge_page_action: default_archive_edge_page_action(),
             decode_mode: DecodeMode::AutoFast,
+            decoder_preferences: DecoderPreferences::default(),
             resize_filter: ResizeFilter::Bicubic,
             gpu_effect_mode: GpuEffectMode::Auto,
             renderer_mode: RendererMode::LowMemoryGlow,

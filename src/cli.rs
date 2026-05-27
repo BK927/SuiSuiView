@@ -3,6 +3,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod decoder_bench_args;
+
 const CLI_NAME: &str = "suisuiview-cli";
 
 pub const REDIRECT_MESSAGE: &str =
@@ -18,9 +20,13 @@ Usage:
   suisuiview-cli --upscale-bench <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-report <report.json>] [--upscale-report-default]
   suisuiview-cli --upscale-quality-scan <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-quality-report <report.json>] [--upscale-quality-report-default] [--upscale-quality-visuals <dir>]
   suisuiview-cli --gpu-copy-bench <path> [--target-long-edge <px>] [--gpu-copy-iterations <count>] [--gpu-copy-max-pages <count>] [--gpu-copy-report <report.json>] [--gpu-copy-report-default]
+  suisuiview-cli --decoder-bench <path> [--decoder-iterations <count>] [--decoder-max-pages <count>] [--decoder-report <report.json>] [--decoder-report-default]
 
 Options:
   -h, --help    Show this help.
+
+Decoder bench accepts a single file, CBZ/ZIP, or a recursive folder and does
+not change production decoder defaults.
 ";
 
 #[derive(Debug, Clone)]
@@ -63,6 +69,12 @@ pub enum CliCommand {
     GpuCopyBench {
         path: PathBuf,
         target_long_edge: u32,
+        iterations: usize,
+        max_pages: usize,
+        report_path: Option<PathBuf>,
+    },
+    DecoderBench {
+        path: PathBuf,
         iterations: usize,
         max_pages: usize,
         report_path: Option<PathBuf>,
@@ -135,6 +147,9 @@ pub fn parse_args(args: Vec<OsString>) -> Result<CliAction, CliError> {
     if first == "--gpu-copy-bench" {
         return parse_gpu_copy_bench(args).map(CliAction::Command);
     }
+    if first == "--decoder-bench" {
+        return decoder_bench_args::parse(args).map(CliAction::Command);
+    }
 
     Err(CliError::new(format!(
         "unknown {CLI_NAME} command: {}",
@@ -157,6 +172,7 @@ fn is_cli_command_arg(arg: &OsString) -> bool {
         || arg == "--upscale-bench"
         || arg == "--upscale-quality-scan"
         || arg == "--gpu-copy-bench"
+        || arg == "--decoder-bench"
 }
 
 impl CliCommand {
@@ -234,6 +250,18 @@ impl CliCommand {
                 max_pages,
             )
             .map_err(|error| format!("gpu copy bench failed: {error}")),
+            Self::DecoderBench {
+                path,
+                iterations,
+                max_pages,
+                report_path,
+            } => crate::core::decoder_bench::run_decoder_bench(
+                &path,
+                report_path.as_deref(),
+                iterations,
+                max_pages,
+            )
+            .map_err(|error| format!("decoder bench failed: {error}")),
         }
     }
 }

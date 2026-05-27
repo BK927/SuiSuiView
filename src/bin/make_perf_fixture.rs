@@ -1,8 +1,15 @@
+use gif::{
+    DisposalMethod as GifDisposalMethod, Encoder as GifEncoder, Frame as GifFrame,
+    Repeat as GifRepeat,
+};
 use image::{DynamicImage, ImageBuffer, ImageFormat, Rgb};
+use std::borrow::Cow;
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, Seek, Write};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "bench-native-webp")]
+use webp::{AnimEncoder as WebpAnimEncoder, AnimFrame as WebpAnimFrame, WebPConfig};
 use zip::write::SimpleFileOptions;
 
 #[path = "make_perf_fixture/comic.rs"]
@@ -20,10 +27,20 @@ enum FixtureFormat {
     Webp,
     Bmp,
     Gif,
+    Ico,
+    Svg,
 }
 
 impl FixtureFormat {
-    const ALL: [Self; 5] = [Self::Jpeg, Self::Png, Self::Webp, Self::Bmp, Self::Gif];
+    const ALL: [Self; 7] = [
+        Self::Jpeg,
+        Self::Png,
+        Self::Webp,
+        Self::Bmp,
+        Self::Gif,
+        Self::Ico,
+        Self::Svg,
+    ];
 
     fn extension(self) -> &'static str {
         match self {
@@ -32,16 +49,20 @@ impl FixtureFormat {
             Self::Webp => "webp",
             Self::Bmp => "bmp",
             Self::Gif => "gif",
+            Self::Ico => "ico",
+            Self::Svg => "svg",
         }
     }
 
-    fn image_format(self) -> ImageFormat {
+    fn image_format(self) -> Option<ImageFormat> {
         match self {
-            Self::Jpeg => ImageFormat::Jpeg,
-            Self::Png => ImageFormat::Png,
-            Self::Webp => ImageFormat::WebP,
-            Self::Bmp => ImageFormat::Bmp,
-            Self::Gif => ImageFormat::Gif,
+            Self::Jpeg => Some(ImageFormat::Jpeg),
+            Self::Png => Some(ImageFormat::Png),
+            Self::Webp => Some(ImageFormat::WebP),
+            Self::Bmp => Some(ImageFormat::Bmp),
+            Self::Gif => Some(ImageFormat::Gif),
+            Self::Ico => Some(ImageFormat::Ico),
+            Self::Svg => None,
         }
     }
 
@@ -52,6 +73,8 @@ impl FixtureFormat {
             Self::Webp => "webp",
             Self::Bmp => "bmp",
             Self::Gif => "gif",
+            Self::Ico => "ico",
+            Self::Svg => "svg",
         }
     }
 
@@ -62,6 +85,8 @@ impl FixtureFormat {
             "webp" => Ok(Self::Webp),
             "bmp" => Ok(Self::Bmp),
             "gif" => Ok(Self::Gif),
+            "ico" => Ok(Self::Ico),
+            "svg" => Ok(Self::Svg),
             other => Err(format!("unknown fixture format: {other}")),
         }
     }
@@ -81,6 +106,7 @@ enum FixtureProfile {
     #[default]
     Mixed,
     Comic,
+    Animation,
 }
 
 impl FixtureProfile {
@@ -88,7 +114,8 @@ impl FixtureProfile {
         match value {
             "mixed" => Ok(Self::Mixed),
             "comic" => Ok(Self::Comic),
-            _ => Err("--profile must be one of: mixed, comic".to_owned()),
+            "animation" => Ok(Self::Animation),
+            _ => Err("--profile must be one of: mixed, comic, animation".to_owned()),
         }
     }
 }
@@ -100,6 +127,10 @@ fn main() -> Result<(), String> {
 
     if args.profile == FixtureProfile::Comic {
         comic::create(&args)?;
+        return Ok(());
+    }
+    if args.profile == FixtureProfile::Animation {
+        create_animation_fixtures(&args.out_dir)?;
         return Ok(());
     }
 
@@ -119,12 +150,7 @@ fn main() -> Result<(), String> {
 
     let build_dir = args.out_dir.join("_format-build");
     recreate_dir(&build_dir)?;
-    for format in args
-        .formats
-        .iter()
-        .copied()
-        .filter(|format| !matches!(format, FixtureFormat::Gif))
-    {
+    for format in args.formats.iter().copied() {
         let format_dir = build_dir.join(format.label());
         recreate_dir(&format_dir)?;
         for index in 0..args.count {
@@ -145,12 +171,7 @@ fn main() -> Result<(), String> {
     println!("  mixed-folder/");
     println!("  mixed.zip");
     println!("  mixed.cbz");
-    for format in args
-        .formats
-        .iter()
-        .copied()
-        .filter(|format| !matches!(format, FixtureFormat::Gif))
-    {
+    for format in args.formats.iter().copied() {
         println!("  large-{}.cbz", format.label());
     }
     Ok(())
@@ -226,9 +247,11 @@ impl Args {
 
 fn print_help() {
     println!("make_perf_fixture --out perf-fixtures --count 50 --min-long-edge 4000");
-    println!("  --profile mixed|comic chooses random format stress or comic-like line art");
+    println!(
+        "  --profile mixed|comic|animation chooses random format stress, comic-like line art, or animated GIF/WebP"
+    );
     println!("  --seed-dir <path> uses downloaded/source images when available");
-    println!("  --formats jpeg,png,webp limits generated archive formats");
+    println!("  --formats jpeg,png,webp,bmp,gif,ico,svg limits generated archive formats");
 }
 
 fn parse_formats(value: &str) -> Result<Vec<FixtureFormat>, String> {
@@ -248,7 +271,6 @@ fn clear_generated_archives(out_dir: &Path, formats: &[FixtureFormat]) -> Result
         formats
             .iter()
             .copied()
-            .filter(|format| !matches!(format, FixtureFormat::Gif))
             .map(|format| format!("large-{}.cbz", format.label())),
     );
 
@@ -259,6 +281,169 @@ fn clear_generated_archives(out_dir: &Path, formats: &[FixtureFormat]) -> Result
         }
     }
     Ok(())
+}
+
+fn create_animation_fixtures(out_dir: &Path) -> Result<(), String> {
+    let animation_dir = out_dir.join("animation-folder");
+    recreate_dir(&animation_dir)?;
+    write_simple_gif(&animation_dir.join("animated-simple.gif"))?;
+    write_dispose_gif(&animation_dir.join("animated-dispose.gif"))?;
+    write_animation_webp(&animation_dir.join("animated-lossless.webp"))?;
+    zip_dir(&animation_dir, &out_dir.join("animation.cbz"))?;
+
+    println!(
+        "Created animation decoder fixtures in {}",
+        out_dir.display()
+    );
+    println!("  animation-folder/");
+    println!("  animation.cbz");
+    Ok(())
+}
+
+fn write_simple_gif(path: &Path) -> Result<(), String> {
+    let width = 96;
+    let height = 64;
+    let palette = animation_palette();
+    let mut file = File::create(path).map_err(|error| error.to_string())?;
+    let mut encoder =
+        GifEncoder::new(&mut file, width, height, &palette).map_err(|error| error.to_string())?;
+    encoder
+        .set_repeat(GifRepeat::Infinite)
+        .map_err(|error| error.to_string())?;
+
+    for index in 0..8 {
+        let mut pixels = vec![4u8; width as usize * height as usize];
+        let square_x = 8 + index * 9;
+        for y in 18..42 {
+            for x in square_x..square_x + 18 {
+                pixels[y as usize * width as usize + x as usize] = 1 + (index % 3) as u8;
+            }
+        }
+        let mut frame = GifFrame::default();
+        frame.width = width;
+        frame.height = height;
+        frame.delay = 4 + index as u16;
+        frame.dispose = GifDisposalMethod::Keep;
+        frame.buffer = Cow::Owned(pixels);
+        encoder
+            .write_frame(&frame)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn write_dispose_gif(path: &Path) -> Result<(), String> {
+    let width = 96;
+    let height = 64;
+    let palette = animation_palette();
+    let mut file = File::create(path).map_err(|error| error.to_string())?;
+    let mut encoder =
+        GifEncoder::new(&mut file, width, height, &palette).map_err(|error| error.to_string())?;
+    encoder
+        .set_repeat(GifRepeat::Infinite)
+        .map_err(|error| error.to_string())?;
+
+    for index in 0..7 {
+        let frame_width = 32;
+        let frame_height = 24;
+        let left = 4 + index * 9;
+        let top = 8 + (index % 3) * 10;
+        let mut pixels = vec![0u8; frame_width as usize * frame_height as usize];
+        for y in 2..frame_height - 2 {
+            for x in 2..frame_width - 2 {
+                let edge = x < 5 || x >= frame_width - 5 || y < 5 || y >= frame_height - 5;
+                pixels[y as usize * frame_width as usize + x as usize] =
+                    if edge { 3 } else { 1 + (index % 3) as u8 };
+            }
+        }
+        let mut frame = GifFrame::default();
+        frame.left = left;
+        frame.top = top;
+        frame.width = frame_width;
+        frame.height = frame_height;
+        frame.delay = 6;
+        frame.dispose = if index % 2 == 0 {
+            GifDisposalMethod::Background
+        } else {
+            GifDisposalMethod::Previous
+        };
+        frame.transparent = Some(0);
+        frame.buffer = Cow::Owned(pixels);
+        encoder
+            .write_frame(&frame)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn animation_palette() -> Vec<u8> {
+    vec![
+        0, 0, 0, // transparent slot
+        226, 54, 80, // red
+        35, 169, 122, // green
+        50, 98, 220, // blue
+        245, 208, 78, // yellow background
+    ]
+}
+
+#[cfg(feature = "bench-native-webp")]
+fn write_animation_webp(path: &Path) -> Result<(), String> {
+    let width = 96;
+    let height = 64;
+    let mut config = WebPConfig::new().map_err(|_| "failed to create WebPConfig".to_owned())?;
+    config.lossless = 1;
+    config.quality = 90.0;
+    config.alpha_compression = 0;
+    config.alpha_filtering = 0;
+
+    let mut buffers = Vec::new();
+    for index in 0..8 {
+        buffers.push(animation_rgba_frame(width, height, index));
+    }
+
+    let mut encoder = WebpAnimEncoder::new(width, height, &config);
+    encoder.set_bgcolor([0, 0, 0, 0]);
+    encoder.set_loop_count(0);
+    for (index, frame) in buffers.iter().enumerate() {
+        let timestamp_ms = 1000 + index as i32 * 90;
+        encoder.add_frame(WebpAnimFrame::from_rgba(frame, width, height, timestamp_ms));
+    }
+
+    let encoded = encoder
+        .try_encode()
+        .map_err(|error| format!("failed to encode animated WebP fixture: {error:?}"))?;
+    fs::write(path, &*encoded).map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "bench-native-webp"))]
+fn write_animation_webp(_path: &Path) -> Result<(), String> {
+    Err(
+        "--profile animation requires --features bench-native-webp to generate animated WebP"
+            .to_owned(),
+    )
+}
+
+#[cfg(feature = "bench-native-webp")]
+fn animation_rgba_frame(width: u32, height: u32, index: usize) -> Vec<u8> {
+    let mut pixels = vec![0u8; width as usize * height as usize * 4];
+    for y in 0..height {
+        for x in 0..width {
+            let offset = (y as usize * width as usize + x as usize) * 4;
+            pixels[offset] = ((x * 3 + index as u32 * 17) % 256) as u8;
+            pixels[offset + 1] = ((y * 4 + index as u32 * 29) % 256) as u8;
+            pixels[offset + 2] = ((x + y + index as u32 * 41) % 256) as u8;
+            pixels[offset + 3] = 255;
+        }
+    }
+
+    let square_x = 8 + index as u32 * 8;
+    for y in 18..42 {
+        for x in square_x..(square_x + 18).min(width) {
+            let offset = (y as usize * width as usize + x as usize) * 4;
+            pixels[offset..offset + 4].copy_from_slice(&[255, 255, 255, 220]);
+        }
+    }
+    pixels
 }
 
 fn load_seed_paths(seed_dir: Option<&Path>) -> Vec<PathBuf> {
@@ -333,9 +518,55 @@ fn resize_to_long_edge(image: DynamicImage, long_edge: u32) -> DynamicImage {
 }
 
 fn save_image(image: &DynamicImage, path: &Path, format: FixtureFormat) -> Result<(), String> {
+    if matches!(format, FixtureFormat::Svg) {
+        return save_svg_fixture(image.width(), image.height(), path);
+    }
+
+    let ico_image;
+    let image = if matches!(format, FixtureFormat::Ico) {
+        ico_image = DynamicImage::ImageRgba8(
+            image
+                .resize(256, 256, image::imageops::FilterType::Triangle)
+                .to_rgba8(),
+        );
+        &ico_image
+    } else {
+        image
+    };
+
     image
-        .save_with_format(path, format.image_format())
+        .save_with_format(
+            path,
+            format
+                .image_format()
+                .ok_or("fixture format does not map to image crate")?,
+        )
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+fn save_svg_fixture(width: u32, height: u32, path: &Path) -> Result<(), String> {
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+<rect width="100%" height="100%" fill="#f7f7f2"/>
+<path d="M0 {mid} C {c1} 0, {c2} {height}, {width} {mid}" fill="none" stroke="#1f2937" stroke-width="12"/>
+<g fill="#d946ef" fill-opacity="0.45">
+  <circle cx="{cx1}" cy="{cy1}" r="{r1}"/>
+  <circle cx="{cx2}" cy="{cy2}" r="{r2}"/>
+</g>
+<text x="48" y="96" font-size="64" fill="#111827">SuiSuiView SVG decoder bench</text>
+</svg>
+"##,
+        mid = height / 2,
+        c1 = width / 3,
+        c2 = width * 2 / 3,
+        cx1 = width / 4,
+        cy1 = height / 3,
+        r1 = width.min(height) / 8,
+        cx2 = width * 3 / 4,
+        cy2 = height * 2 / 3,
+        r2 = width.min(height) / 10,
+    );
+    fs::write(path, svg).map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
 
 fn recreate_dir(path: &Path) -> Result<(), String> {

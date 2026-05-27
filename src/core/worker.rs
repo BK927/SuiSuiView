@@ -1,7 +1,7 @@
 use crate::core::formats::unsupported_message_for_bytes;
 use crate::core::perf_trace::{self, PerfField};
 use crate::core::source::SharedSource;
-use crate::core::state::ResizeFilter;
+use crate::core::state::{DecoderPreferences, ResizeFilter};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use eframe::egui::{ColorImage, Context};
 use image::{imageops::FilterType, ImageReader, Limits, RgbaImage};
@@ -22,10 +22,13 @@ mod jpeg;
 mod metadata;
 mod png;
 mod scheduler;
+mod selection;
 
 use image_crate::{prepare_image_with_image_crate, prepare_image_with_image_crate_and_icc};
 use metadata::{apply_exif_orientation_to_page, read_image_metadata};
 use scheduler::prioritized_jobs;
+#[cfg(test)]
+use selection::prepare_unavailable_or_image_fallback;
 
 const WORKER_CACHE_BYTES: usize = 48 * 1024 * 1024;
 const WORKER_CACHE_ENTRY_LIMIT: usize = 12;
@@ -155,6 +158,7 @@ impl DecodeStrategy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DecodeOptions {
     pub strategy: DecodeStrategy,
+    pub decoder_preferences: DecoderPreferences,
     pub resize_filter: ResizeFilter,
     pub allow_display_upscale: bool,
     pub apply_exif_orientation: bool,
@@ -165,6 +169,7 @@ impl Default for DecodeOptions {
     fn default() -> Self {
         Self {
             strategy: DecodeStrategy::Auto,
+            decoder_preferences: DecoderPreferences::default(),
             resize_filter: ResizeFilter::Bicubic,
             allow_display_upscale: false,
             apply_exif_orientation: false,
@@ -176,8 +181,9 @@ impl Default for DecodeOptions {
 impl DecodeOptions {
     pub fn cache_token(self) -> String {
         format!(
-            "{}-{}-{}{}{}",
+            "{}-{}-{}-{}{}{}",
             self.strategy.as_str(),
+            self.decoder_preferences.cache_token(),
             self.resize_filter.token(),
             if self.allow_display_upscale {
                 "upscale"
@@ -258,6 +264,15 @@ pub enum DecodeBackend {
     BmpSampled,
     GifSampled,
     PngSampled,
+    ZuneJpeg,
+    PngCrate,
+    ZunePng,
+    ImageWebp,
+    LibWebp,
+    GifCrate,
+    BmpFastPath,
+    IcoFastPath,
+    LibAvifDav1d,
 }
 
 impl DecodeBackend {
@@ -268,6 +283,15 @@ impl DecodeBackend {
             Self::BmpSampled => "bmp-sampled",
             Self::GifSampled => "gif-sampled",
             Self::PngSampled => "png-sampled",
+            Self::ZuneJpeg => "zune-jpeg",
+            Self::PngCrate => "png-crate",
+            Self::ZunePng => "zune-png",
+            Self::ImageWebp => "image-webp",
+            Self::LibWebp => "libwebp",
+            Self::GifCrate => "gif-crate",
+            Self::BmpFastPath => "bmp-fast",
+            Self::IcoFastPath => "ico-fast",
+            Self::LibAvifDav1d => "libavif-dav1d",
         }
     }
 }
@@ -493,21 +517,7 @@ fn prepare_image_without_metadata(
 ) -> Result<PreparedPage, String> {
     match options.strategy {
         DecodeStrategy::Auto => {
-            if let Ok(Some(page)) =
-                jpeg::prepare_image_with_scaled_jpeg(bytes, target_long_edge, options)
-            {
-                return Ok(page);
-            }
-            if let Ok(Some(page)) = bmp::prepare_image_with_sampled_bmp(bytes, target_long_edge) {
-                return Ok(page);
-            }
-            if let Ok(Some(page)) = gif::prepare_image_with_sampled_gif(bytes, target_long_edge) {
-                return Ok(page);
-            }
-            if let Ok(Some(page)) = png::prepare_image_with_sampled_png(bytes, target_long_edge) {
-                return Ok(page);
-            }
-            prepare_image_with_image_crate(bytes, target_long_edge, options)
+            selection::prepare_image_with_selected_decoder(bytes, target_long_edge, options)
         }
         DecodeStrategy::ImageCrate => {
             prepare_image_with_image_crate(bytes, target_long_edge, options)
@@ -1091,12 +1101,13 @@ fn page_cache_key(
 mod tests {
     use super::{
         display_dimensions, display_dimensions_with_upscale, image_filter_type, page_cache_key,
-        prepare_image, prepare_image_with_strategy, run_worker, CachedPageKey, DecodeBackend,
+        prepare_image, prepare_image_with_options, prepare_image_with_strategy,
+        prepare_unavailable_or_image_fallback, run_worker, CachedPageKey, DecodeBackend,
         DecodeOptions, DecodeStrategy, NavigationDirection, WorkerCommand, WorkerEvent,
         WorkerOptions, MAX_TARGET_LONG_EDGE,
     };
     use crate::core::source::{BookSource, SharedSource, SourceError};
-    use crate::core::state::ResizeFilter;
+    use crate::core::state::{DecoderPreference, DecoderPreferences, ResizeFilter};
     use crossbeam_channel::unbounded;
     use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
     use std::io::Cursor;
@@ -1162,6 +1173,63 @@ mod tests {
         assert_eq!(page.decode_backend, DecodeBackend::ImageCrate);
         assert_eq!(page.display_width, 1024);
         assert_eq!(page.display_height, 683);
+    }
+
+    #[test]
+    fn auto_strategy_default_preferences_resolve_to_benchmark_winners() {
+        let jpeg = encoded_test_image(ImageFormat::Jpeg);
+        let jpeg_page = prepare_image_with_options(&jpeg, 1024, DecodeOptions::default()).unwrap();
+        assert_eq!(jpeg_page.decode_backend, DecodeBackend::ZuneJpeg);
+
+        let png = encoded_test_image(ImageFormat::Png);
+        let png_page = prepare_image_with_options(&png, 1024, DecodeOptions::default()).unwrap();
+        assert_eq!(png_page.decode_backend, DecodeBackend::PngCrate);
+
+        let gif = encoded_test_image(ImageFormat::Gif);
+        let gif_page = prepare_image_with_options(&gif, 1024, DecodeOptions::default()).unwrap();
+        assert_eq!(gif_page.decode_backend, DecodeBackend::GifCrate);
+
+        let bmp = encoded_test_image(ImageFormat::Bmp);
+        let bmp_page = prepare_image_with_options(&bmp, 1024, DecodeOptions::default()).unwrap();
+        assert_eq!(bmp_page.decode_backend, DecodeBackend::BmpFastPath);
+    }
+
+    #[test]
+    fn image_crate_strategy_ignores_format_preferences() {
+        let bytes = encoded_test_image(ImageFormat::Jpeg);
+        let page = prepare_image_with_options(
+            &bytes,
+            1024,
+            DecodeOptions {
+                strategy: DecodeStrategy::ImageCrate,
+                decoder_preferences: DecoderPreferences {
+                    jpeg: DecoderPreference::ZuneJpeg,
+                    ..DecoderPreferences::default()
+                },
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(page.decode_backend, DecodeBackend::ImageCrate);
+    }
+
+    #[test]
+    fn unavailable_selected_backend_falls_back_with_notice() {
+        let bytes = encoded_test_image(ImageFormat::Png);
+        let page = prepare_unavailable_or_image_fallback(
+            &bytes,
+            1024,
+            DecodeOptions::default(),
+            DecodeBackend::LibWebp,
+            "backend not enabled",
+        )
+        .unwrap();
+
+        assert_eq!(page.decode_backend, DecodeBackend::ImageCrate);
+        let notice = page.notice.as_deref().unwrap_or_default();
+        assert!(notice.contains("libwebp"));
+        assert!(notice.contains("used image fallback"));
     }
 
     #[test]
@@ -1381,6 +1449,20 @@ mod tests {
         assert_ne!(normal, icc);
         assert_ne!(normal, lanczos);
         assert_ne!(normal, upscaled);
+
+        let zune_jpeg = page_cache_key(
+            "book",
+            1,
+            2048,
+            DecodeOptions {
+                decoder_preferences: DecoderPreferences {
+                    jpeg: DecoderPreference::ZuneJpeg,
+                    ..DecoderPreferences::default()
+                },
+                ..DecodeOptions::default()
+            },
+        );
+        assert_ne!(normal, zune_jpeg);
     }
 
     fn encoded_test_image(format: ImageFormat) -> Vec<u8> {

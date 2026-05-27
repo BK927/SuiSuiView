@@ -1,7 +1,7 @@
 use super::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, DecodeMode,
-    DisplayUpscaler, EdgePageAction, GpuEffectMode, PersistedState, RendererMode, ResizeFilter,
-    WheelMode, WindowPlacement,
+    DecoderPreferences, DisplayUpscaler, EdgePageAction, GpuEffectMode, PersistedState,
+    RendererMode, ResizeFilter, WheelMode, WindowPlacement,
 };
 
 #[test]
@@ -11,6 +11,17 @@ fn old_state_without_settings_loads_defaults() {
     assert_eq!(state.settings, AppSettings::default());
     assert_eq!(state.window, WindowPlacement::default());
     assert!(state.books.is_empty());
+}
+
+#[test]
+fn old_settings_without_decoder_preferences_load_defaults() {
+    let state: PersistedState =
+        serde_json::from_str(r#"{"version":1,"settings":{},"books":{}}"#).unwrap();
+
+    assert_eq!(
+        state.settings.decoder_preferences,
+        DecoderPreferences::default()
+    );
 }
 
 #[test]
@@ -26,6 +37,7 @@ fn settings_defaults_match_viewer_policy() {
     assert_eq!(settings.archive_edge_page_action, EdgePageAction::Ask);
     assert_eq!(settings.edge_page_action, EdgePageAction::Stop);
     assert_eq!(settings.decode_mode, DecodeMode::AutoFast);
+    assert_eq!(settings.decoder_preferences, DecoderPreferences::default());
     assert_eq!(settings.resize_filter, ResizeFilter::Bicubic);
     assert_eq!(settings.gpu_effect_mode, GpuEffectMode::Auto);
     assert_eq!(settings.renderer_mode, RendererMode::LowMemoryGlow);

@@ -30,7 +30,7 @@ remediation = [
 [[files]]
 path = "src/core/worker.rs"
 kind = "legacy-large"
-baseline_lines = 1446
+baseline_lines = 1436
 growth_warn_lines = 80
 growth_fail_lines = 160
 purpose = "Page worker orchestration, public worker-facing decode API, shared image preparation, and metadata policy."

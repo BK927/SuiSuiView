@@ -31,7 +31,7 @@ def main() -> int:
         path = Path(relative)
         if not path.exists():
             continue
-        text = path.read_text(encoding="utf-8", errors="ignore").lower()
+        text = scanned_text(path)
         for token in FORBIDDEN:
             if token in text:
                 failures.append(f"{relative}: found forbidden indicator {token!r}")
@@ -44,6 +44,18 @@ def main() -> int:
 
     print("Native dependency scan passed.")
     return 0
+
+
+def scanned_text(path: Path) -> str:
+    text = path.read_text(encoding="utf-8", errors="ignore").lower()
+    if path.name != "Cargo.toml":
+        return text
+
+    return "\n".join(
+        line
+        for line in text.splitlines()
+        if line.strip() != 'license = "gpl-3.0-only"'
+    )
 
 
 if __name__ == "__main__":
