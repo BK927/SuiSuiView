@@ -215,6 +215,8 @@ impl GpuUpscaleBench {
                 | DisplayUpscaler::Cunny4x12Ds
                 | DisplayUpscaler::Cunny4x16Nvl
                 | DisplayUpscaler::Cunny4x24Nvl
+                | DisplayUpscaler::Cunny4x24Soft
+                | DisplayUpscaler::Cunny4x24Ds
                 | DisplayUpscaler::Cunny4x32Nvl
                 | DisplayUpscaler::Cunny8x32Nvl
         ) {

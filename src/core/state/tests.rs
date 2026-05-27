@@ -51,6 +51,18 @@ fn settings_defaults_match_viewer_policy() {
 }
 
 #[test]
+fn hidden_display_upscaler_settings_normalize_to_auto() {
+    let mut settings = AppSettings {
+        display_upscaler: DisplayUpscaler::WgslFsr1Style,
+        ..AppSettings::default()
+    };
+
+    settings.normalize_product_choices();
+
+    assert_eq!(settings.display_upscaler, DisplayUpscaler::Auto);
+}
+
+#[test]
 fn automatic_display_upscaler_only_uses_heavy_shader_for_actual_upscale() {
     assert_eq!(
         DisplayUpscaler::Auto.resolve_for_render([1600, 2400], [800, 1200]),
@@ -101,6 +113,8 @@ fn product_display_upscalers_hide_style_candidates() {
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::Cunny4x12Ds));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::Cunny4x16Nvl));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::Cunny4x24Nvl));
+    assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::Cunny4x24Soft));
+    assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::Cunny4x24Ds));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::Cunny4x32Nvl));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::Cunny8x32Nvl));
     assert!(
@@ -140,6 +154,14 @@ fn product_display_upscalers_hide_style_candidates() {
     assert_eq!(DisplayUpscaler::Cunny3x12Ds.candidate().family, "CuNNy");
     assert_eq!(DisplayUpscaler::Cunny4x12Soft.candidate().family, "CuNNy");
     assert_eq!(DisplayUpscaler::Cunny4x12Ds.candidate().family, "CuNNy");
+    assert_eq!(DisplayUpscaler::Cunny4x24Soft.candidate().family, "CuNNy");
+    assert_eq!(DisplayUpscaler::Cunny4x24Ds.candidate().family, "CuNNy");
+    assert!(DisplayUpscaler::Cunny4x24Soft.candidate().product_visible);
+    assert!(DisplayUpscaler::Cunny4x24Ds.candidate().product_visible);
+    assert!(DisplayUpscaler::Cunny4x24Soft.product_selectable());
+    assert!(DisplayUpscaler::Cunny4x24Ds.product_selectable());
+    assert!(!DisplayUpscaler::Cunny4x24Soft.is_benchmark_only());
+    assert!(!DisplayUpscaler::Cunny4x24Ds.is_benchmark_only());
     assert_eq!(
         DisplayUpscaler::CunnyVeryfastSoft.label(),
         "CuNNy veryfast SOFT"
@@ -159,6 +181,8 @@ fn product_display_upscalers_hide_style_candidates() {
     assert_eq!(DisplayUpscaler::Cunny4x12Nvl.label(), "CuNNy 4x12 NVL");
     assert_eq!(DisplayUpscaler::Cunny4x16Nvl.label(), "CuNNy 4x16 NVL");
     assert_eq!(DisplayUpscaler::Cunny4x24Nvl.label(), "CuNNy 4x24 NVL");
+    assert_eq!(DisplayUpscaler::Cunny4x24Soft.label(), "CuNNy 4x24 SOFT");
+    assert_eq!(DisplayUpscaler::Cunny4x24Ds.label(), "CuNNy 4x24 DS");
     assert_eq!(DisplayUpscaler::Cunny4x32Nvl.label(), "CuNNy 4x32 NVL");
     assert_eq!(DisplayUpscaler::Cunny8x32Nvl.label(), "CuNNy 8x32 NVL");
 }
@@ -252,6 +276,14 @@ fn exact_cunny_variants_render_only_when_upscaling() {
     assert_eq!(
         DisplayUpscaler::Cunny4x24Nvl.resolve_for_render([800, 1200], [1600, 2400]),
         Some(DisplayUpscaler::Cunny4x24Nvl)
+    );
+    assert_eq!(
+        DisplayUpscaler::Cunny4x24Soft.resolve_for_render([800, 1200], [1600, 2400]),
+        Some(DisplayUpscaler::Cunny4x24Soft)
+    );
+    assert_eq!(
+        DisplayUpscaler::Cunny4x24Ds.resolve_for_render([800, 1200], [1600, 2400]),
+        Some(DisplayUpscaler::Cunny4x24Ds)
     );
     assert_eq!(
         DisplayUpscaler::Cunny4x32Nvl.resolve_for_render([800, 1200], [1600, 2400]),

@@ -358,6 +358,12 @@ pub struct AppSettings {
 }
 
 impl AppSettings {
+    pub fn normalize_product_choices(&mut self) {
+        if !self.display_upscaler.product_selectable() {
+            self.display_upscaler = DisplayUpscaler::Auto;
+        }
+    }
+
     pub fn effective_page_transition_style(&self) -> PageTransitionStyle {
         if self.transition_effect {
             self.page_transition_style
@@ -459,10 +465,11 @@ pub struct StateStore {
 impl StateStore {
     pub fn load() -> Self {
         let path = state_file_path();
-        let state = fs::read_to_string(&path)
+        let mut state = fs::read_to_string(&path)
             .ok()
             .and_then(|text| serde_json::from_str::<PersistedState>(&text).ok())
             .unwrap_or_default();
+        state.settings.normalize_product_choices();
 
         Self { path, state }
     }
@@ -491,7 +498,8 @@ impl StateStore {
         &self.state.settings
     }
 
-    pub fn update_settings(&mut self, settings: AppSettings) {
+    pub fn update_settings(&mut self, mut settings: AppSettings) {
+        settings.normalize_product_choices();
         self.state.settings = settings;
         self.state.version = 4;
         let _ = self.save();
@@ -504,6 +512,8 @@ impl StateStore {
         let Ok(state) = serde_json::from_str::<PersistedState>(&text) else {
             return false;
         };
+        let mut state = state;
+        state.settings.normalize_product_choices();
         self.state = state;
         true
     }

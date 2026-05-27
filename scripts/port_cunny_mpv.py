@@ -2,9 +2,9 @@
 """Port CuNNy mpv GLSL effects into the SuiSuiView WGSL subset.
 
 This dev-only converter handles the non-dp4a CuNNy mpv shaders whose feature
-maps are stored as horizontally packed luma textures. The generated WGSL keeps
-the feature maps in separate source-sized storage textures so it can reuse the
-existing SuiSuiView CuNNy runtime path.
+maps are stored as horizontally/vertically packed luma textures. The generated
+WGSL keeps each packed feature cell in a separate source-sized storage texture
+so it can reuse the existing SuiSuiView CuNNy runtime path.
 """
 
 from __future__ import annotations
@@ -93,7 +93,13 @@ class PassBlock:
     height: str
     components: str
     body: str
-    macro_sources: dict[str, tuple[str, str]]
+    macro_sources: dict[str, tuple[str, int]]
+
+
+@dataclass(frozen=True)
+class FeatureLayout:
+    width_mul: int
+    height_mul: int
 
 
 @dataclass
@@ -104,6 +110,7 @@ class ConvertState:
 def parse_passes(text: str) -> list[PassBlock]:
     blocks = re.split(r"(?=//!DESC\s+)", text)
     passes: list[PassBlock] = []
+    saved_layouts: dict[str, FeatureLayout] = {}
     for block in blocks:
         if not block.startswith("//!DESC"):
             continue
@@ -119,17 +126,23 @@ def parse_passes(text: str) -> list[PassBlock]:
         body_match = re.search(r"void\s+hook\(\)\s*\{(.*)\n\}", block, re.S)
         if not body_match:
             raise ValueError(f"Could not parse hook body for {desc}")
-        macros: dict[str, tuple[str, str]] = {}
+        macros: dict[str, tuple[str, int]] = {}
         for define in re.finditer(r"#define\s+(l\d)\(x,\s*y\)\s+(.+)", block):
             macro, expression = define.groups()
             texture = re.search(r"\b([A-Za-z0-9_]+)_raw\b", expression).group(1)
             if texture == "LUMA":
-                macros[macro] = ("LUMA", "luma")
+                macros[macro] = ("LUMA", 0)
             else:
-                offset_match = re.search(r"\+\s*ivec2\((\d+),\s*0\)", expression)
-                slot = offset_match.group(1) if offset_match else "0"
-                macros[macro] = (texture, slot)
+                offset_match = re.search(r"\+\s*ivec2\((\d+),\s*(\d+)\)", expression)
+                x_offset = int(offset_match.group(1)) if offset_match else 0
+                y_offset = int(offset_match.group(2)) if offset_match else 0
+                layout = saved_layouts.get(texture)
+                if layout is None:
+                    raise ValueError(f"Unknown packed feature source {texture} for {desc}")
+                macros[macro] = (texture, x_offset + y_offset * layout.width_mul)
         passes.append(PassBlock(desc, save, binds, width, height, components, body_match.group(1), macros))
+        if save is not None:
+            saved_layouts[save] = feature_layout(width, height)
     return passes
 
 
@@ -151,7 +164,6 @@ def validate_supported_subset(text: str, passes: list[PassBlock]) -> None:
     for index, block in enumerate(passes):
         final_pass = index == len(passes) - 1
         if not final_pass:
-            expected_height = "LUMA.h"
             expected_components = "4"
             if block.save is None:
                 raise ValueError(f"Expected intermediate SAVE directive for {block.desc}")
@@ -160,43 +172,65 @@ def validate_supported_subset(text: str, passes: list[PassBlock]) -> None:
             expected_components = "1"
             if block.save is not None:
                 raise ValueError(f"Expected final pass without SAVE directive for {block.desc}")
-        supported_widths = {"LUMA.w", "LUMA.w 2 *", "LUMA.w 3 *"}
-        if block.width not in supported_widths:
-            raise ValueError(f"Unsupported WIDTH for {block.desc}: {block.width}")
-        if block.height != expected_height or block.components != expected_components:
+        feature_layout(block.width, block.height)
+        if final_pass and block.height != expected_height:
             raise ValueError(
                 f"Unsupported dimensions/components for {block.desc}: "
                 f"{(block.width, block.height, block.components)}, "
                 f"expected height/components {(expected_height, expected_components)}"
             )
+        if block.components != expected_components:
+            raise ValueError(
+                f"Unsupported COMPONENTS for {block.desc}: {block.components}, "
+                f"expected {expected_components}"
+            )
         if not final_pass:
             validate_intermediate_stores(block)
 
 
-def feature_slot_count(width: str) -> int:
+def feature_layout(width: str, height: str) -> FeatureLayout:
+    return FeatureLayout(width_multiplier(width), height_multiplier(height))
+
+
+def width_multiplier(width: str) -> int:
     if width == "LUMA.w":
         return 1
     if width == "LUMA.w 2 *":
         return 2
     if width == "LUMA.w 3 *":
         return 3
+    if width == "LUMA.w 4 *":
+        return 4
     raise ValueError(f"Unsupported feature WIDTH: {width}")
 
 
+def height_multiplier(height: str) -> int:
+    if height == "LUMA.h":
+        return 1
+    if height == "LUMA.h 2 *":
+        return 2
+    raise ValueError(f"Unsupported feature HEIGHT: {height}")
+
+
+def feature_slot_count(width: str, height: str) -> int:
+    layout = feature_layout(width, height)
+    return layout.width_mul * layout.height_mul
+
+
 def validate_intermediate_stores(block: PassBlock) -> None:
-    expected_slots = feature_slot_count(block.width)
+    layout = feature_layout(block.width, block.height)
+    expected_slots = layout.width_mul * layout.height_mul
     stores = re.findall(r"imageStore\(out_image,\s*opos\s*\+\s*ivec2\((\d+),\s*(\d+)\)", block.body)
     if not stores:
         raise ValueError(f"Expected intermediate imageStore statements for {block.desc}")
     for x_text, y_text in stores:
         x = int(x_text)
         y = int(y_text)
-        if y != 0:
-            raise ValueError(f"Unsupported packed output row for {block.desc}: ivec2({x}, {y})")
-        if x >= expected_slots or x >= 3:
+        slot = x + y * layout.width_mul
+        if x >= layout.width_mul or y >= layout.height_mul or slot >= expected_slots:
             raise ValueError(
-                f"Unsupported output slot for {block.desc}: {x}, "
-                f"expected less than {min(expected_slots, 3)}"
+                f"Unsupported output slot for {block.desc}: ivec2({x}, {y}), "
+                f"layout {layout.width_mul}x{layout.height_mul}"
             )
 
 
@@ -219,11 +253,16 @@ def load_expr(macro: str, dx: str, dy: str, block: PassBlock) -> str:
         return f"load_source_luma(coord, {x}, {y})"
     ordered_feature_sources = [bind for bind in block.binds if bind != "LUMA"]
     base = ordered_feature_sources.index(source) * 2
-    slot = base + int(mode)
+    slot = base + mode
     return f"load_input{slot}(coord, {x}, {y})"
 
 
-def convert_image_store(statement: str, final_pass: bool) -> list[str] | None:
+def convert_image_store(
+    statement: str,
+    block: PassBlock,
+    final_pass: bool,
+    output_slot_map: dict[int, int],
+) -> list[str] | None:
     if not statement.startswith("imageStore("):
         return None
     if final_pass:
@@ -236,14 +275,25 @@ def convert_image_store(statement: str, final_pass: bool) -> list[str] | None:
         return [
             f"write_output_luma_value(base + vec2<i32>({x}, {y}), r0.{component_name} + sample_source_luma_for_output(base + vec2<i32>({x}, {y})));"
         ]
-    store = re.search(r"opos\s*\+\s*ivec2\((\d),\s*0\).*vec4\((r\d)\)", statement)
+    store = re.search(r"opos\s*\+\s*ivec2\((\d),\s*(\d)\).*vec4\((r\d)\)", statement)
     if not store:
         raise ValueError(f"Unsupported intermediate imageStore: {statement}")
-    slot, register = store.groups()
-    return [f"textureStore(out{slot}_tex, coord, {register});"]
+    x_text, y_text, register = store.groups()
+    layout = feature_layout(block.width, block.height)
+    packed_slot = int(x_text) + int(y_text) * layout.width_mul
+    if packed_slot not in output_slot_map:
+        return []
+    binding_slot = output_slot_map[packed_slot]
+    return [f"textureStore(out{binding_slot}_tex, coord, {register});"]
 
 
-def convert_statement(statement: str, block: PassBlock, state: ConvertState, final_pass: bool) -> list[str]:
+def convert_statement(
+    statement: str,
+    block: PassBlock,
+    state: ConvertState,
+    final_pass: bool,
+    output_slot_map: dict[int, int],
+) -> list[str]:
     statement = statement.strip()
     if not statement:
         return []
@@ -287,7 +337,7 @@ def convert_statement(statement: str, block: PassBlock, state: ConvertState, fin
     ):
         return []
 
-    image_store = convert_image_store(statement, final_pass)
+    image_store = convert_image_store(statement, block, final_pass, output_slot_map)
     if image_store is not None:
         return image_store
 
@@ -314,23 +364,52 @@ def convert_statement(statement: str, block: PassBlock, state: ConvertState, fin
     return [statement + ";"]
 
 
-def convert_pass(block: PassBlock, index: int, prefix: str) -> str:
+def output_chunks(block: PassBlock) -> list[list[int]]:
+    if block.save is None:
+        return [[]]
+    slots = list(range(feature_slot_count(block.width, block.height)))
+    return [slots[index : index + 3] for index in range(0, len(slots), 3)]
+
+
+def convert_pass_chunk(
+    block: PassBlock,
+    index: int,
+    prefix: str,
+    chunk_index: int,
+    chunk_count: int,
+    chunk: list[int],
+) -> str:
     final_pass = block.save is None
     state = ConvertState(loaded_samples=set())
+    output_slot_map = {slot: binding_index for binding_index, slot in enumerate(chunk)}
+    entry_point = (
+        f"{prefix}_pass_{index}"
+        if final_pass or chunk_count == 1
+        else f"{prefix}_pass_{index}_chunk_{chunk_index}"
+    )
     lines = [
         f"// {block.desc}",
         "@compute @workgroup_size(8, 8)",
-        f"fn {prefix}_pass_{index}(@builtin(global_invocation_id) global_id: vec3<u32>) {{",
+        f"fn {entry_point}(@builtin(global_invocation_id) global_id: vec3<u32>) {{",
         "    if (global_id.x >= params.source_width || global_id.y >= params.source_height) { return; }",
         "    let coord = vec2<i32>(i32(global_id.x), i32(global_id.y));",
     ]
     if final_pass:
         lines.append("    let base = coord * vec2<i32>(2, 2);")
     for statement in block.body.split(";"):
-        for converted in convert_statement(statement, block, state, final_pass):
+        for converted in convert_statement(statement, block, state, final_pass, output_slot_map):
             lines.append(f"    {converted}")
     lines.append("}")
     return "\n".join(lines)
+
+
+def convert_passes(blocks: list[PassBlock], prefix: str) -> list[str]:
+    converted: list[str] = []
+    for index, block in enumerate(blocks):
+        chunks = output_chunks(block)
+        for chunk_index, chunk in enumerate(chunks):
+            converted.append(convert_pass_chunk(block, index, prefix, chunk_index, len(chunks), chunk))
+    return converted
 
 
 def main() -> None:
@@ -352,7 +431,7 @@ def main() -> None:
         "",
         COMMON_HEADER,
     ]
-    output.extend(convert_pass(block, index, args.prefix) for index, block in enumerate(passes))
+    output.extend(convert_passes(passes, args.prefix))
     args.output.write_text("\n\n".join(output) + "\n", encoding="utf-8")
 
 

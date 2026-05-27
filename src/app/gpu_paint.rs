@@ -59,7 +59,8 @@ impl SuiSuiViewApp {
         }
         match self.settings.display_upscaler {
             DisplayUpscaler::None => DisplayUpscaler::None,
-            upscaler => upscaler,
+            upscaler if upscaler.product_selectable() => upscaler,
+            _ => DisplayUpscaler::Auto,
         }
     }
 
