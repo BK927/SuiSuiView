@@ -19,7 +19,6 @@ use crate::core::worker::{
     WorkerOptions, DEFAULT_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE,
     PREVIEW_TARGET_LONG_EDGE,
 };
-use arboard::{Clipboard, ImageData as ClipboardImageData};
 use commands::{collect_keyboard_commands, command_for_mouse_gesture, AppCommand, DeleteMode};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use debug_compare::{DebugCompareState, DebugCompareWorker};
@@ -31,14 +30,10 @@ use gpu_paint::{GpuPaintRequest, GpuPaintSourceKey};
 use image_info::ImageInfoState;
 use lru::LruCache;
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
-#[cfg(target_os = "windows")]
-use std::ffi::OsString;
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -462,7 +457,7 @@ impl SuiSuiViewApp {
         let (adjacent_seed_tx, adjacent_seed_rx) = unbounded();
         let settings = store.settings().clone();
         let initial_window_size = store.window_placement().inner_size;
-        apply_window_level(&cc.egui_ctx, settings.always_on_top);
+        platform::apply_window_level(&cc.egui_ctx, settings.always_on_top);
         let mut app = Self {
             egui_ctx: cc.egui_ctx.clone(),
             store,
@@ -2167,7 +2162,7 @@ impl SuiSuiViewApp {
             self.notify("No current file to reveal.");
             return;
         };
-        match reveal_in_file_manager(&target) {
+        match platform::reveal_in_file_manager(&target) {
             Ok(()) => {
                 self.notify(format!("Opened file location: {}", target.display()));
             }
@@ -2196,7 +2191,7 @@ impl SuiSuiViewApp {
             self.notify("No current page path to copy.");
             return;
         };
-        match copy_text_to_clipboard(&text) {
+        match platform::copy_text_to_clipboard(&text) {
             Ok(()) => self.notify("Copied current path."),
             Err(error) => self.notify(format!("Could not copy path: {error}")),
         }
@@ -2207,7 +2202,7 @@ impl SuiSuiViewApp {
             self.notify("Current page is not ready to copy.");
             return;
         };
-        match copy_color_image_to_clipboard(&image) {
+        match platform::copy_color_image_to_clipboard(&image) {
             Ok(()) => self.notify("Copied current page image."),
             Err(error) => self.notify(format!("Could not copy image: {error}")),
         }
@@ -2219,7 +2214,7 @@ impl SuiSuiViewApp {
             self.notify("Current spread is not ready to copy.");
             return;
         };
-        match copy_color_image_to_clipboard(&image) {
+        match platform::copy_color_image_to_clipboard(&image) {
             Ok(()) => self.notify("Copied visible spread image."),
             Err(error) => self.notify(format!("Could not copy spread: {error}")),
         }
@@ -3807,15 +3802,6 @@ fn edge_prompt_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     )
 }
 
-fn apply_window_level(ctx: &egui::Context, always_on_top: bool) {
-    let level = if always_on_top {
-        egui::WindowLevel::AlwaysOnTop
-    } else {
-        egui::WindowLevel::Normal
-    };
-    ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
-}
-
 impl SuiSuiViewApp {
     fn drain_ipc_open_requests(&mut self, ctx: &egui::Context) {
         let Some(request) = self.ipc_rx.as_ref().and_then(|rx| rx.try_iter().last()) else {
@@ -4051,65 +4037,6 @@ fn context_selectable(
             .selected(selected)
             .shortcut_text(shortcut.to_owned()),
     )
-}
-
-fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
-    Clipboard::new()
-        .map_err(|error| error.to_string())?
-        .set_text(text.to_owned())
-        .map_err(|error| error.to_string())
-}
-
-fn copy_color_image_to_clipboard(image: &ColorImage) -> Result<(), String> {
-    let mut bytes = Vec::with_capacity(image.pixels.len() * 4);
-    for pixel in &image.pixels {
-        bytes.extend_from_slice(&[pixel.r(), pixel.g(), pixel.b(), pixel.a()]);
-    }
-    Clipboard::new()
-        .map_err(|error| error.to_string())?
-        .set_image(ClipboardImageData {
-            width: image.size[0],
-            height: image.size[1],
-            bytes: Cow::Owned(bytes),
-        })
-        .map_err(|error| error.to_string())
-}
-
-fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        let args = windows_explorer_select_arguments(path);
-        Command::new("explorer.exe")
-            .args(args)
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open")
-            .arg("-R")
-            .arg(path)
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    {
-        let target = path.parent().unwrap_or(path);
-        Command::new("xdg-open")
-            .arg(target)
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn windows_explorer_select_arguments(path: &Path) -> [OsString; 2] {
-    [OsString::from("/select,"), path.as_os_str().to_os_string()]
 }
 
 fn random_offset(max: usize) -> usize {
@@ -4610,8 +4537,6 @@ fn preferred_page_key_in_cache(
 #[cfg(test)]
 mod tests {
     use super::perf::PageCacheState;
-    #[cfg(target_os = "windows")]
-    use super::windows_explorer_select_arguments;
     use super::{
         adjacent_sibling_book_paths, ai_prefetch_pages_for, apply_effects_to_image,
         best_page_key_at_or_below_in_cache, best_page_key_in_cache, command_for_shortcut,
@@ -4634,6 +4559,8 @@ mod tests {
         PREVIEW_TARGET_LONG_EDGE,
     };
     use eframe::egui::{Color32, ColorImage, Pos2, Rect, Vec2};
+    #[cfg(target_os = "windows")]
+    use std::ffi::OsString;
     use lru::LruCache;
     use std::fs;
     use std::num::NonZeroUsize;
@@ -5347,7 +5274,7 @@ mod tests {
     #[test]
     fn explorer_select_args_keep_switch_and_path_separate() {
         let path = Path::new(r"C:\Users\dead4\Pictures\folder with space\image.png");
-        let args = windows_explorer_select_arguments(path);
+        let args = platform::windows_explorer_select_arguments(path);
 
         assert_eq!(args[0], std::ffi::OsString::from("/select,"));
         assert_eq!(args[1], path.as_os_str().to_os_string());

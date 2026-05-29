@@ -1,7 +1,5 @@
 use super::ui::{dialog, icons, theme};
-use super::{
-    apply_window_level, settings_bookmarks, settings_input, settings_performance, SuiSuiViewApp,
-};
+use super::{platform, settings_bookmarks, settings_input, settings_performance, SuiSuiViewApp};
 use crate::core::state::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, DisplayUpscaler, EdgePageAction,
     GpuEffectMode, PageTransitionStyle, ResizeFilter,
@@ -243,7 +241,7 @@ impl SuiSuiViewApp {
         self.store.update_settings(self.settings.clone());
         self.refresh_single_instance_listener();
         self.pending_state_save_at = None;
-        apply_window_level(ctx, self.settings.always_on_top);
+        platform::apply_window_level(ctx, self.settings.always_on_top);
 
         let decode_changed = previous_decode != self.decode_options();
         let preview_changed = previous_preview != self.settings.progressive_preview_enabled;
