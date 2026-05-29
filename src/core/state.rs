@@ -582,6 +582,7 @@ impl Default for PersistedState {
     }
 }
 
+#[derive(Clone)]
 pub struct StateStore {
     path: PathBuf,
     state: PersistedState,

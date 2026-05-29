@@ -60,15 +60,15 @@ delete, copy, and window actions.
 
 | Tier | Formats |
 | --- | --- |
-| Built in | Folders, single images, `.zip`, `.cbz`, `.jpg`, `.jpeg`, `.png`, `.apng`, `.webp`, `.bmp`, `.gif`, `.tif`, `.tiff`, `.tga`, `.pnm`, `.pbm`, `.pgm`, `.ppm`, `.ico`, `.qoi`, `.psd` |
-| Experimental recognized | `.dds`, `.exr`, `.hdr`, `.rgbe`, `.jxl`, `.svg`; `.avif` is indexed only in `native-avif` builds; `.ai` is indexed only in `native-ai` builds |
-| System-codec-only recognized | `.heic`, `.heif`, `.jxr`, RAW/DNG camera formats |
+| Built in | Folders, single images, `.zip`, `.cbz`, `.jpg`, `.jpeg`, `.jpe`, `.jfif`, `.png`, `.apng`, `.webp`, `.bmp`, `.dib`, `.gif`, `.tif`, `.tiff`, `.tga`, `.pnm`, `.pbm`, `.pgm`, `.ppm`, `.ico`, `.qoi`, `.psd` |
+| Experimental recognized | `.dds`, `.exr`, `.hdr`, `.rgbe`, `.jxl`, `.svg`, `.svgz`; `.avif` is indexed only in `native-avif` builds; `.ai` is indexed only in `native-ai` builds |
+| Recognized but not decoded yet | `.heic`, `.heif`, `.jxr`, RAW/DNG camera formats; SuiSuiView shows a format-specific message instead of opening them until a system-codec backend exists |
 
 Some formats are intentionally limited or blocked for commercial-distribution
-safety. CBR/RAR, ONNX/TensorRT AI backends, page-curl animation,
-EXIF/file-info panels, printing, slideshow, external editor integration, and
-photo storage boxes are planned or under evaluation for later versions. BPG and
-full CLIP parsing are intentionally blocked for v1.
+safety. CBR/RAR, ONNX/TensorRT AI backends, page-curl animation, printing,
+slideshow, external editor integration, and photo storage boxes are planned or
+under evaluation for later versions. BPG and full CLIP parsing are intentionally
+blocked for v1.
 
 PSD support is view-only. SuiSuiView reads the composite/base image preview
 through `zune-psd`; Photoshop layers, blend modes, masks, adjustment layers,
@@ -89,7 +89,7 @@ AutoFast currently resolves `기본값` like this:
 | --- | --- |
 | JPEG | target-aware scaled JPEG when useful, then `zune-jpeg` |
 | PNG | large-page sampled PNG when useful, then the `png` crate |
-| WebP | `image` baseline for still images, `image-webp` for animation; `libwebp` for still images when built with `native-webp` |
+| WebP | `image` baseline for still images, `image-webp` first-frame decode for animated WebP; `libwebp` for still images when built with `native-webp` |
 | GIF | large static GIF sampling when useful, then the `gif` crate first-frame path |
 | BMP | sampled BMP when useful, then direct 24/32-bit BMP fast path |
 | ICO | `image` baseline by default, with an explicit ICO fast-path option |
@@ -136,10 +136,11 @@ state file.
   display upscaling, EXIF orientation, and embedded ICC conversion.
 - Decoders: decode mode and per-format decoder choices. `기본값` is shown as
   selected text, with the resolved backend summarized beside each format.
-- Performance: automatic or manual page-cache memory, nearby-page prefetch,
-  and progressive low-resolution preview.
-- View and mouse: large-image starting position, double-click maximize,
-  middle-click fullscreen, and wheel behavior.
+- Performance: renderer backend, automatic or manual page-cache memory,
+  nearby-page prefetch, and progressive low-resolution preview.
+- View, keyboard, and mouse: large-image starting position, visible viewer UI,
+  customizable keyboard shortcuts, double-click maximize, middle-click
+  fullscreen, and wheel behavior.
 - Experimental AI upscale: Real-ESRGAN executable path, model name, optional
   model folder, scale, tile size, output format, and optional current/next-page
   AI prefetch.
@@ -147,8 +148,7 @@ state file.
 ## Bookmarks And State
 
 Bookmarks and viewer preferences are saved to the platform data directory. On
-Windows, this resolves to an AppData `SuiSuiView/state.json` location. The
-status bar shows the exact path currently in use.
+Windows, this resolves to an AppData `SuiSuiView/state.json` location.
 
 For ZIP and CBZ files, the bookmark key is based on archive contents, not the
 archive path. Moving or renaming the same archive should keep the bookmark.
@@ -185,8 +185,8 @@ standalone files.
 - [x] Optional Real-ESRGAN current-page upscale.
 - [x] WGSL display effects and real-time upscaler candidates.
 - [x] Per-format decoder benchmarks and user-selectable decoder settings.
+- [x] Current-page EXIF/file/color information panel.
 - [ ] CBR/RAR read-only archive support after backend and license review.
-- [ ] EXIF/file-info panels.
 - [ ] Printing, slideshow, and external editor workflows.
 - [ ] Broader AI backend options after distribution review.
 

@@ -14,9 +14,10 @@ use crate::core::state::{
 };
 use crate::core::upscale::{AiUpscaleWorker, UpscaleEvent, UpscaleRequest};
 use crate::core::worker::{
-    clamp_target_long_edge, preview_prefetch_indices, CachedPageKey, DecodeOptions, DecodeStrategy,
-    NavigationDirection, PageWorker, PreparedPage, WorkerEvent, WorkerOptions,
-    DEFAULT_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
+    clamp_target_long_edge, prepare_image_with_options, preview_prefetch_indices, CachedPageKey,
+    DecodeOptions, DecodeStrategy, NavigationDirection, PageWorker, PreparedPage, WorkerEvent,
+    WorkerOptions, DEFAULT_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE,
+    PREVIEW_TARGET_LONG_EDGE,
 };
 use arboard::{Clipboard, ImageData as ClipboardImageData};
 use commands::{collect_keyboard_commands, command_for_mouse_gesture, AppCommand, DeleteMode};
@@ -38,6 +39,7 @@ use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -305,6 +307,28 @@ struct LoaderEvent {
     result: Result<(SharedSource, Option<usize>), String>,
 }
 
+struct SeededPreparedPage {
+    index: usize,
+    key: PageCacheKey,
+    page: Arc<PreparedPage>,
+}
+
+struct AdjacentSeedEvent {
+    generation: u64,
+    cache: Option<AdjacentSeedCache>,
+}
+
+struct AdjacentSeedCache {
+    path: PathBuf,
+    direction: isize,
+    origin: OpenOrigin,
+    source: SharedSource,
+    forced_page: Option<usize>,
+    target_long_edge: u32,
+    decode: DecodeOptions,
+    seeded_page: SeededPreparedPage,
+}
+
 #[derive(Debug, Clone)]
 struct PendingBookmarkJump {
     book_id: String,
@@ -351,6 +375,12 @@ pub struct SuiSuiViewApp {
     worker: PageWorker,
     loader_tx: Sender<LoaderEvent>,
     loader_rx: Receiver<LoaderEvent>,
+    adjacent_seed_tx: Sender<AdjacentSeedEvent>,
+    adjacent_seed_rx: Receiver<AdjacentSeedEvent>,
+    adjacent_seed_generation: u64,
+    adjacent_seed_generation_token: Arc<AtomicU64>,
+    adjacent_seed_cache: Vec<AdjacentSeedCache>,
+    pending_adjacent_seed_prefetch_at: Option<Instant>,
     ipc_rx: Option<Receiver<Option<PathBuf>>>,
     loader_generation: u64,
     source: Option<SharedSource>,
@@ -429,6 +459,7 @@ impl SuiSuiViewApp {
         platform::install_app_fonts(&cc.egui_ctx);
         ui::apply_app_theme(&cc.egui_ctx);
         let (loader_tx, loader_rx) = unbounded();
+        let (adjacent_seed_tx, adjacent_seed_rx) = unbounded();
         let settings = store.settings().clone();
         let initial_window_size = store.window_placement().inner_size;
         apply_window_level(&cc.egui_ctx, settings.always_on_top);
@@ -448,6 +479,12 @@ impl SuiSuiViewApp {
             upscale_worker: AiUpscaleWorker::new(cc.egui_ctx.clone()),
             loader_tx,
             loader_rx,
+            adjacent_seed_tx,
+            adjacent_seed_rx,
+            adjacent_seed_generation: 0,
+            adjacent_seed_generation_token: Arc::new(AtomicU64::new(0)),
+            adjacent_seed_cache: Vec::new(),
+            pending_adjacent_seed_prefetch_at: None,
             ipc_rx,
             loader_generation: 0,
             source: None,
@@ -540,6 +577,7 @@ impl SuiSuiViewApp {
 
     fn open_path(&mut self, path: PathBuf) {
         self.pending_bookmark_jump = None;
+        self.clear_adjacent_seed_cache();
         self.open_path_inner(path);
     }
 
@@ -549,6 +587,7 @@ impl SuiSuiViewApp {
             path: path.clone(),
             page,
         });
+        self.clear_adjacent_seed_cache();
         self.open_path_inner(path);
     }
 
@@ -616,7 +655,7 @@ impl SuiSuiViewApp {
 
             match event.result {
                 Ok((source, forced_page)) => {
-                    self.install_source(source, forced_page, event.origin, event.path)
+                    self.install_source(source, forced_page, event.origin, event.path, None)
                 }
                 Err(message) => {
                     if self
@@ -645,15 +684,17 @@ impl SuiSuiViewApp {
         forced_page: Option<usize>,
         origin: OpenOrigin,
         opened_path: PathBuf,
+        seeded_page: Option<SeededPreparedPage>,
     ) {
         let book_id = source.book_id().to_owned();
         let page_count = source.page_count();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::arm_open_to_first_visible(&mut self.open_to_first_visible_trace, &book_id);
-        let bookmark_path = bookmark_path_for_open(origin, &opened_path, source.as_ref());
-        let reading_position = self.store.reading_position(
-            &book_id,
-            bookmark_path,
+        let reading_position = reading_position_for_open(
+            &self.store,
+            source.as_ref(),
+            origin,
+            &opened_path,
             self.settings.resume_by_file_identity,
         );
         self.reading_direction = reading_position
@@ -680,18 +721,12 @@ impl SuiSuiViewApp {
             .map(|pending| pending.page);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let forced_page = forced_page.or_else(perf::forced_start_page_index);
-        let bookmarked_page = reading_position.as_ref().and_then(|position| {
-            position
-                .last_page_name
-                .as_deref()
-                .and_then(|page_name| page_index_for_name(source.as_ref(), page_name))
-                .or(Some(position.last_page))
-        });
-        self.current_page = pending_page
-            .or(forced_page)
-            .or(bookmarked_page)
-            .unwrap_or_default()
-            .min(page_count.saturating_sub(1));
+        self.current_page = selected_open_page(
+            source.as_ref(),
+            forced_page,
+            reading_position.as_ref(),
+            pending_page,
+        );
         let clear_pending_bookmark_jump = pending_page.is_some()
             || self
                 .pending_bookmark_jump
@@ -722,7 +757,10 @@ impl SuiSuiViewApp {
         self.edge_prompt = None;
         self.transition = None;
         self.last_nav_direction = NavigationDirection::Forward;
-        self.target_long_edge = PREVIEW_TARGET_LONG_EDGE;
+        self.target_long_edge = seeded_page
+            .as_ref()
+            .map_or(PREVIEW_TARGET_LONG_EDGE, |seed| seed.key.target_long_edge);
+        self.insert_seeded_page_if_current(seeded_page);
         self.worker.load_book(
             source.clone(),
             self.worker_center_page(),
@@ -739,6 +777,182 @@ impl SuiSuiViewApp {
         ));
         self.persist_current_bookmark();
         self.refresh_ai_prefetch_queue();
+        self.request_adjacent_seed_prefetch();
+    }
+
+    fn insert_seeded_page_if_current(&mut self, seeded_page: Option<SeededPreparedPage>) {
+        let Some(seed) = seeded_page else {
+            return;
+        };
+        if seed.index != self.current_page {
+            return;
+        }
+        if seed.key.target_long_edge != self.target_long_edge
+            || seed.key.decode != self.decode_options()
+        {
+            return;
+        }
+        self.page_metrics
+            .insert(seed.index, PageMetrics::from_page(&seed.page));
+        self.insert_prepared_page(seed.key, seed.page);
+        self.prune_decoded_cache();
+    }
+
+    fn drain_adjacent_seed_events(&mut self) {
+        let mut dropped = Vec::new();
+        while let Ok(event) = self.adjacent_seed_rx.try_recv() {
+            if event.generation != self.adjacent_seed_generation {
+                if let Some(cache) = event.cache {
+                    dropped.push(cache);
+                }
+                continue;
+            }
+            let Some(cache) = event.cache else {
+                continue;
+            };
+
+            let mut retained = Vec::with_capacity(self.adjacent_seed_cache.len());
+            for cached in self.adjacent_seed_cache.drain(..) {
+                if cached.direction == cache.direction {
+                    dropped.push(cached);
+                } else {
+                    retained.push(cached);
+                }
+            }
+            self.adjacent_seed_cache = retained;
+            self.adjacent_seed_cache.push(cache);
+            if self.adjacent_seed_cache.len() > 2 {
+                dropped.push(self.adjacent_seed_cache.remove(0));
+            }
+        }
+        drop_adjacent_seed_caches_off_thread(dropped);
+    }
+
+    fn clear_adjacent_seed_cache(&mut self) {
+        self.adjacent_seed_generation = self.adjacent_seed_generation.wrapping_add(1);
+        self.adjacent_seed_generation_token
+            .store(self.adjacent_seed_generation, Ordering::Relaxed);
+        self.pending_adjacent_seed_prefetch_at = None;
+        drop_adjacent_seed_caches_off_thread(std::mem::take(&mut self.adjacent_seed_cache));
+    }
+
+    fn request_adjacent_seed_prefetch(&mut self) {
+        if !perf::adjacent_seed_prefetch_enabled() || self.source.is_none() {
+            return;
+        }
+        if self.pending_adjacent_seed_prefetch_at.is_none() {
+            self.egui_ctx
+                .request_repaint_after(Duration::from_millis(1));
+        }
+        self.pending_adjacent_seed_prefetch_at = Some(Instant::now() + Duration::from_millis(1));
+    }
+
+    fn run_pending_adjacent_seed_prefetch(&mut self) {
+        let Some(schedule_at) = self.pending_adjacent_seed_prefetch_at else {
+            return;
+        };
+        let now = Instant::now();
+        if now < schedule_at {
+            self.egui_ctx.request_repaint_after(schedule_at - now);
+            return;
+        }
+        self.pending_adjacent_seed_prefetch_at = None;
+        self.schedule_adjacent_seed_prefetches();
+    }
+
+    fn schedule_adjacent_seed_prefetches(&mut self) {
+        if !perf::adjacent_seed_prefetch_enabled() {
+            return;
+        }
+        let Some(current) = self.current_book_reference_path() else {
+            return;
+        };
+
+        self.adjacent_seed_generation = self.adjacent_seed_generation.wrapping_add(1);
+        self.adjacent_seed_generation_token
+            .store(self.adjacent_seed_generation, Ordering::Relaxed);
+        drop_adjacent_seed_caches_off_thread(std::mem::take(&mut self.adjacent_seed_cache));
+        let generation = self.adjacent_seed_generation;
+        let generation_token = self.adjacent_seed_generation_token.clone();
+        let target_long_edge = self.target_long_edge;
+        let decode = self.decode_options();
+        let store = self.store.clone();
+        let resume_by_file_identity = self.settings.resume_by_file_identity;
+        let tx = self.adjacent_seed_tx.clone();
+        let ctx = self.egui_ctx.clone();
+
+        let _ = thread::Builder::new()
+            .name("suisuiview-adjacent-seed".to_owned())
+            .spawn(move || {
+                for (path, direction, label) in adjacent_sibling_book_paths(&current) {
+                    if !adjacent_seed_generation_matches(&generation_token, generation) {
+                        break;
+                    }
+                    let Some(origin) = open_origin_for_source_kind(classify_path(&path)) else {
+                        continue;
+                    };
+                    let started = Instant::now();
+                    let cache = prepare_adjacent_seed_cache(
+                        path,
+                        direction,
+                        origin,
+                        target_long_edge,
+                        decode,
+                        &store,
+                        resume_by_file_identity,
+                        &generation_token,
+                        generation,
+                    );
+                    perf::record_adjacent_seed_prefetch_prepare(
+                        started,
+                        origin.perf_label(),
+                        label,
+                        cache.as_ref().map_or(0, |cache| cache.seeded_page.index),
+                        target_long_edge,
+                        cache.is_some(),
+                    );
+                    let _ = tx.send(AdjacentSeedEvent { generation, cache });
+                    ctx.request_repaint();
+                }
+            });
+    }
+
+    fn take_adjacent_seed_for_direction(&mut self, direction: isize) -> Option<AdjacentSeedCache> {
+        if !perf::adjacent_seed_prefetch_enabled() {
+            return None;
+        }
+        let position = self
+            .adjacent_seed_cache
+            .iter()
+            .position(|cache| cache.direction == direction.signum())?;
+        let mut caches = std::mem::take(&mut self.adjacent_seed_cache);
+        let cache = caches.remove(position);
+        drop_adjacent_seed_caches_off_thread(caches);
+        if cache.target_long_edge != self.target_long_edge || cache.decode != self.decode_options()
+        {
+            drop_adjacent_seed_caches_off_thread(vec![cache]);
+            return None;
+        }
+
+        let reading_position = reading_position_for_open(
+            &self.store,
+            cache.source.as_ref(),
+            cache.origin,
+            &cache.path,
+            self.settings.resume_by_file_identity,
+        );
+        let selected_page = selected_open_page(
+            cache.source.as_ref(),
+            cache.forced_page,
+            reading_position.as_ref(),
+            None,
+        );
+        if selected_page == cache.seeded_page.index {
+            Some(cache)
+        } else {
+            drop_adjacent_seed_caches_off_thread(vec![cache]);
+            None
+        }
     }
 
     fn persist_current_bookmark(&mut self) {
@@ -1478,6 +1692,7 @@ impl SuiSuiViewApp {
             self.open_to_first_visible_trace = None;
         }
         self.transition = None;
+        self.clear_adjacent_seed_cache();
         self.set_status(status);
     }
 
@@ -2235,6 +2450,29 @@ impl SuiSuiViewApp {
             self.set_status("No current book to move from.");
             return;
         };
+        if perf::adjacent_seed_prefetch_enabled() {
+            if let Some(cache) = self.take_adjacent_seed_for_direction(direction) {
+                perf::record_adjacent_seed_prefetch_hit(true, cache.target_long_edge);
+                self.pending_bookmark_jump = None;
+                self.loader_generation = self.loader_generation.wrapping_add(1);
+                self.clear_adjacent_seed_cache();
+                #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+                {
+                    self.open_to_first_visible_trace = Some(perf::OpenToFirstVisibleTrace::new(
+                        cache.origin.perf_label(),
+                    ));
+                }
+                self.install_source(
+                    cache.source,
+                    cache.forced_page,
+                    cache.origin,
+                    cache.path,
+                    Some(cache.seeded_page),
+                );
+                return;
+            }
+            perf::record_adjacent_seed_prefetch_hit(false, self.target_long_edge);
+        }
         let Some(next) = sibling_book_path(&current, direction) else {
             self.set_status("No sibling folder, ZIP, or CBZ found.");
             return;
@@ -3103,6 +3341,7 @@ impl SuiSuiViewApp {
             self.worker_options(),
         );
         self.refresh_ai_prefetch_queue();
+        self.request_adjacent_seed_prefetch();
         ctx.request_repaint();
     }
 
@@ -3490,6 +3729,8 @@ impl eframe::App for SuiSuiViewApp {
         self.drain_worker_events();
         self.drain_debug_compare_events();
         self.drain_upscale_events();
+        self.run_pending_adjacent_seed_prefetch();
+        self.drain_adjacent_seed_events();
         self.bookmark_thumbnails.drain(ctx);
         self.handle_dropped_files(ctx);
         if !self.settings_is_capturing_keyboard() {
@@ -4019,6 +4260,47 @@ fn ai_prefetch_pages_for(
 }
 
 fn sibling_book_path(current: &Path, direction: isize) -> Option<PathBuf> {
+    let entries = sibling_book_entries(current)?;
+    if entries.len() <= 1 {
+        return None;
+    }
+    let current_index = sibling_book_current_index(&entries, current);
+    let next_index = if direction >= 0 {
+        (current_index + 1) % entries.len()
+    } else {
+        (current_index + entries.len() - 1) % entries.len()
+    };
+    Some(entries[next_index].clone())
+}
+
+fn adjacent_sibling_book_paths(current: &Path) -> Vec<(PathBuf, isize, &'static str)> {
+    let Some(entries) = sibling_book_entries(current) else {
+        return Vec::new();
+    };
+    if entries.len() <= 1 {
+        return Vec::new();
+    }
+    let current_index = sibling_book_current_index(&entries, current);
+    let mut siblings = Vec::with_capacity(2);
+    for (direction, label) in [(1, "next"), (-1, "previous")] {
+        let index = if direction >= 0 {
+            (current_index + 1) % entries.len()
+        } else {
+            (current_index + entries.len() - 1) % entries.len()
+        };
+        let path = entries[index].clone();
+        if siblings
+            .iter()
+            .any(|(existing, _, _): &(PathBuf, isize, &'static str)| same_path(existing, &path))
+        {
+            continue;
+        }
+        siblings.push((path, direction, label));
+    }
+    siblings
+}
+
+fn sibling_book_entries(current: &Path) -> Option<Vec<PathBuf>> {
     let parent = current.parent()?;
     let mut entries = fs::read_dir(parent)
         .ok()?
@@ -4036,10 +4318,11 @@ fn sibling_book_path(current: &Path, direction: isize) -> Option<PathBuf> {
             .unwrap_or_default();
         cmp_natural(&left_name, &right_name)
     });
-    if entries.len() <= 1 {
-        return None;
-    }
-    let current_index = entries
+    Some(entries)
+}
+
+fn sibling_book_current_index(entries: &[PathBuf], current: &Path) -> usize {
+    entries
         .iter()
         .position(|path| same_path(path, current))
         .unwrap_or_else(|| {
@@ -4047,13 +4330,7 @@ fn sibling_book_path(current: &Path, direction: isize) -> Option<PathBuf> {
                 .iter()
                 .position(|path| path == current)
                 .unwrap_or_default()
-        });
-    let next_index = if direction >= 0 {
-        (current_index + 1) % entries.len()
-    } else {
-        (current_index + entries.len() - 1) % entries.len()
-    };
-    Some(entries[next_index].clone())
+        })
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
@@ -4084,6 +4361,139 @@ fn bookmark_path_for_open<'a>(
     } else {
         source.source_path()
     }
+}
+
+fn open_origin_for_source_kind(kind: SourceKind) -> Option<OpenOrigin> {
+    match kind {
+        SourceKind::Folder => Some(OpenOrigin::Folder),
+        SourceKind::ZipCbz => Some(OpenOrigin::ZipCbz),
+        SourceKind::SingleImage => Some(OpenOrigin::SingleImage),
+        SourceKind::Unsupported | SourceKind::UnsupportedRar => None,
+    }
+}
+
+fn reading_position_for_open(
+    store: &StateStore,
+    source: &dyn BookSource,
+    origin: OpenOrigin,
+    opened_path: &Path,
+    resume_by_file_identity: bool,
+) -> Option<crate::core::state::ReadingPosition> {
+    let bookmark_path = bookmark_path_for_open(origin, opened_path, source);
+    store.reading_position(source.book_id(), bookmark_path, resume_by_file_identity)
+}
+
+fn selected_open_page(
+    source: &dyn BookSource,
+    forced_page: Option<usize>,
+    reading_position: Option<&crate::core::state::ReadingPosition>,
+    pending_page: Option<usize>,
+) -> usize {
+    let page_count = source.page_count();
+    if page_count == 0 {
+        return 0;
+    }
+    let bookmarked_page = reading_position.and_then(|position| {
+        position
+            .last_page_name
+            .as_deref()
+            .and_then(|page_name| page_index_for_name(source, page_name))
+            .or(Some(position.last_page))
+    });
+    pending_page
+        .or(forced_page)
+        .or(bookmarked_page)
+        .unwrap_or_default()
+        .min(page_count.saturating_sub(1))
+}
+
+fn prepare_seeded_first_page(
+    source: &dyn BookSource,
+    index: usize,
+    target_long_edge: u32,
+    decode: DecodeOptions,
+) -> Option<SeededPreparedPage> {
+    let page_count = source.page_count();
+    if page_count == 0 {
+        return None;
+    }
+    let index = index.min(page_count - 1);
+    let bytes = source.read_page(index).ok()?;
+    let page = Arc::new(prepare_image_with_options(&bytes, target_long_edge, decode).ok()?);
+    Some(SeededPreparedPage {
+        index,
+        key: PageCacheKey {
+            index,
+            target_long_edge,
+            decode,
+        },
+        page,
+    })
+}
+
+fn prepare_adjacent_seed_cache(
+    path: PathBuf,
+    direction: isize,
+    origin: OpenOrigin,
+    target_long_edge: u32,
+    decode: DecodeOptions,
+    store: &StateStore,
+    resume_by_file_identity: bool,
+    generation_token: &AtomicU64,
+    generation: u64,
+) -> Option<AdjacentSeedCache> {
+    if !adjacent_seed_generation_matches(generation_token, generation) {
+        return None;
+    }
+    let (source, forced_page) = open_source_from_path(&path).ok()?;
+    if !adjacent_seed_generation_matches(generation_token, generation) {
+        return None;
+    }
+    let reading_position = reading_position_for_open(
+        store,
+        source.as_ref(),
+        origin,
+        &path,
+        resume_by_file_identity,
+    );
+    let seed_page = selected_open_page(
+        source.as_ref(),
+        forced_page,
+        reading_position.as_ref(),
+        None,
+    );
+    if !adjacent_seed_generation_matches(generation_token, generation) {
+        return None;
+    }
+    let seeded_page =
+        prepare_seeded_first_page(source.as_ref(), seed_page, target_long_edge, decode)?;
+    if !adjacent_seed_generation_matches(generation_token, generation) {
+        return None;
+    }
+
+    Some(AdjacentSeedCache {
+        path,
+        direction,
+        origin,
+        source,
+        forced_page,
+        target_long_edge,
+        decode,
+        seeded_page,
+    })
+}
+
+fn adjacent_seed_generation_matches(generation_token: &AtomicU64, generation: u64) -> bool {
+    generation_token.load(Ordering::Relaxed) == generation
+}
+
+fn drop_adjacent_seed_caches_off_thread(caches: Vec<AdjacentSeedCache>) {
+    if caches.is_empty() {
+        return;
+    }
+    let _ = thread::Builder::new()
+        .name("suisuiview-adjacent-seed-drop".to_owned())
+        .spawn(move || drop(caches));
 }
 
 fn page_index_for_name(source: &dyn BookSource, page_name: &str) -> Option<usize> {
@@ -4203,16 +4613,16 @@ mod tests {
     #[cfg(target_os = "windows")]
     use super::windows_explorer_select_arguments;
     use super::{
-        ai_prefetch_pages_for, apply_effects_to_image, best_page_key_at_or_below_in_cache,
-        best_page_key_in_cache, command_for_shortcut, delete_target_for, double_spread_indices,
-        gpu_visual_needs_wgsl, korean_font_candidates, load_first_existing_font,
-        lower_resolution_page_keys, ordered_spread_indices, page_cache_state_from_hit,
-        preferred_page_key_in_cache, preview_prefetch_indices, relative_difference,
-        sanitize_font_name, should_allow_cpu_display_upscale, sibling_book_path,
-        smart_spread_indices_for_metrics, texture_cache_budget_bytes_for, transformed_page_size,
-        transition_paint_params, transition_screen_sign, worker_center_page_for_mode, AppCommand,
-        DeleteMode, ImageFilter, OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey,
-        ViewEffects, ViewMode, ViewTransform,
+        adjacent_sibling_book_paths, ai_prefetch_pages_for, apply_effects_to_image,
+        best_page_key_at_or_below_in_cache, best_page_key_in_cache, command_for_shortcut,
+        delete_target_for, double_spread_indices, gpu_visual_needs_wgsl, korean_font_candidates,
+        load_first_existing_font, lower_resolution_page_keys, ordered_spread_indices,
+        page_cache_state_from_hit, preferred_page_key_in_cache, preview_prefetch_indices,
+        relative_difference, sanitize_font_name, should_allow_cpu_display_upscale,
+        sibling_book_path, smart_spread_indices_for_metrics, texture_cache_budget_bytes_for,
+        transformed_page_size, transition_paint_params, transition_screen_sign,
+        worker_center_page_for_mode, AppCommand, DeleteMode, ImageFilter, OpenOrigin, PageCacheKey,
+        PageMetrics, TextureCacheKey, ViewEffects, ViewMode, ViewTransform,
     };
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
@@ -4959,6 +5369,20 @@ mod tests {
             sibling_book_path(&dir.join("book-1.cbz"), -1),
             Some(dir.join("book-10"))
         );
+    }
+
+    #[test]
+    fn adjacent_sibling_books_report_next_then_previous() {
+        let dir = temp_test_dir("adjacent-siblings");
+        fs::create_dir_all(dir.join("book-2")).unwrap();
+        fs::create_dir_all(dir.join("book-10")).unwrap();
+        fs::write(dir.join("book-1.cbz"), b"placeholder").unwrap();
+
+        let adjacent = adjacent_sibling_book_paths(&dir.join("book-1.cbz"));
+
+        assert_eq!(adjacent.len(), 2);
+        assert_eq!(adjacent[0], (dir.join("book-2"), 1, "next"));
+        assert_eq!(adjacent[1], (dir.join("book-10"), -1, "previous"));
     }
 
     #[test]

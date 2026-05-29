@@ -4,10 +4,10 @@
 )]
 
 use crate::core::perf_trace::{self, PerfField};
-#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::env;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use sysinfo::{ProcessesToUpdate, System};
@@ -22,6 +22,7 @@ const AUTO_PAGE_TURN_INTERVAL_MS_ENV: &str = "SUISUIVIEW_PERF_AUTO_PAGE_TURN_INT
 const AUTO_PAGE_TURN_CLOSE_DELAY_MS_ENV: &str = "SUISUIVIEW_PERF_AUTO_PAGE_TURN_CLOSE_DELAY_MS";
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 const START_PAGE_INDEX_ENV: &str = "SUISUIVIEW_PERF_START_PAGE_INDEX";
+const ADJACENT_SEED_PREFETCH_ENV: &str = "SUISUIVIEW_EXPERIMENT_ADJACENT_SEED_PREFETCH";
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 const AUTO_PAGE_TURN_INITIAL_DELAY: Duration = Duration::from_millis(1500);
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -153,6 +154,56 @@ pub(super) fn record_open_source(started: Instant, origin: &'static str, success
         &[
             PerfField::Str("origin", origin),
             PerfField::Bool("success", success),
+        ],
+    );
+}
+
+pub(super) fn adjacent_seed_prefetch_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        adjacent_seed_prefetch_value_enabled(env::var(ADJACENT_SEED_PREFETCH_ENV).ok().as_deref())
+    })
+}
+
+fn adjacent_seed_prefetch_value_enabled(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(str::trim),
+        Some(value)
+            if value.eq_ignore_ascii_case("0")
+                || value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off")
+                || value.eq_ignore_ascii_case("no")
+    )
+}
+
+pub(super) fn record_adjacent_seed_prefetch_prepare(
+    started: Instant,
+    origin: &'static str,
+    direction: &'static str,
+    page: usize,
+    target_long_edge: u32,
+    success: bool,
+) {
+    perf_trace::record_duration(
+        "adjacent_seed_prefetch_prepare",
+        started.elapsed(),
+        &[
+            PerfField::Str("origin", origin),
+            PerfField::Str("direction", direction),
+            PerfField::Usize("page", page),
+            PerfField::U32("target_long_edge", target_long_edge),
+            PerfField::Bool("success", success),
+        ],
+    );
+}
+
+pub(super) fn record_adjacent_seed_prefetch_hit(hit: bool, target_long_edge: u32) {
+    perf_trace::record_duration(
+        "adjacent_seed_prefetch_hit",
+        Duration::ZERO,
+        &[
+            PerfField::Bool("hit", hit),
+            PerfField::U32("target_long_edge", target_long_edge),
         ],
     );
 }
@@ -371,4 +422,21 @@ pub(super) fn record_app_shutdown(
 
 pub(super) fn flush() {
     let _ = perf_trace::flush_timeout(PERF_FLUSH_TIMEOUT);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::adjacent_seed_prefetch_value_enabled;
+
+    #[test]
+    fn adjacent_seed_prefetch_is_default_on_with_explicit_opt_out() {
+        assert!(adjacent_seed_prefetch_value_enabled(None));
+        assert!(adjacent_seed_prefetch_value_enabled(Some("")));
+        assert!(adjacent_seed_prefetch_value_enabled(Some("1")));
+        assert!(adjacent_seed_prefetch_value_enabled(Some("true")));
+        assert!(!adjacent_seed_prefetch_value_enabled(Some("0")));
+        assert!(!adjacent_seed_prefetch_value_enabled(Some("false")));
+        assert!(!adjacent_seed_prefetch_value_enabled(Some("OFF")));
+        assert!(!adjacent_seed_prefetch_value_enabled(Some(" no ")));
+    }
 }
