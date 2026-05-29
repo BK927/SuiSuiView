@@ -3,7 +3,9 @@ use super::{
     SuiSuiViewApp, Transition, ViewMode,
 };
 use crate::core::effects::{transform_status_suffix, ViewEffects};
-use crate::core::state::{CommandId, EdgePageAction, FitMode, PageTransitionStyle, ReadingDirection};
+use crate::core::state::{
+    CommandId, EdgePageAction, FitMode, PageTransitionStyle, ReadingDirection,
+};
 use crate::core::worker::{DecodeOptions, NavigationDirection};
 use eframe::egui::{self, Color32, Pos2, RichText, Stroke, Vec2};
 use std::path::PathBuf;
@@ -209,7 +211,11 @@ impl SuiSuiViewApp {
         }
     }
 
-    pub(in crate::app) fn edge_action_button_text(&self, label: &str, command: CommandId) -> String {
+    pub(in crate::app) fn edge_action_button_text(
+        &self,
+        label: &str,
+        command: CommandId,
+    ) -> String {
         self.shortcut_hint_for_command(command).map_or_else(
             || label.to_owned(),
             |shortcut| format!("{label} ({shortcut})"),
@@ -331,7 +337,10 @@ impl SuiSuiViewApp {
         self.persist_current_bookmark();
     }
 
-    pub(in crate::app) fn request_page_if_decode_changed(&mut self, previous_decode: DecodeOptions) {
+    pub(in crate::app) fn request_page_if_decode_changed(
+        &mut self,
+        previous_decode: DecodeOptions,
+    ) {
         if self.source.is_some() && previous_decode != self.decode_options() {
             self.worker.set_page(
                 self.worker_center_page(),
@@ -457,7 +466,6 @@ impl SuiSuiViewApp {
             }
         }
     }
-
 }
 
 fn random_offset(max: usize) -> usize {
@@ -467,4 +475,3 @@ fn random_offset(max: usize) -> usize {
         .unwrap_or(1);
     nanos % max + 1
 }
-

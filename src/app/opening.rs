@@ -1,10 +1,10 @@
 use super::{perf, PageCacheKey, PageMetrics, PendingBookmarkJump, SuiSuiViewApp};
 use crate::core::effects::ViewEffects;
 use crate::core::formats::unsupported_message_for_extension;
+use crate::core::natural::cmp_natural;
 use crate::core::source::{
     classify_path, open_source_from_path, BookSource, SharedSource, SourceKind,
 };
-use crate::core::natural::cmp_natural;
 use crate::core::state::StateStore;
 use crate::core::worker::{
     prepare_image_with_options, DecodeOptions, NavigationDirection, PreparedPage,
@@ -71,7 +71,12 @@ impl SuiSuiViewApp {
         self.open_path_inner(path);
     }
 
-    pub(in crate::app) fn open_path_for_bookmark(&mut self, path: PathBuf, book_id: String, page: usize) {
+    pub(in crate::app) fn open_path_for_bookmark(
+        &mut self,
+        path: PathBuf,
+        book_id: String,
+        page: usize,
+    ) {
         self.pending_bookmark_jump = Some(PendingBookmarkJump {
             book_id,
             path: path.clone(),
@@ -270,7 +275,10 @@ impl SuiSuiViewApp {
         self.request_adjacent_seed_prefetch();
     }
 
-    pub(in crate::app) fn insert_seeded_page_if_current(&mut self, seeded_page: Option<SeededPreparedPage>) {
+    pub(in crate::app) fn insert_seeded_page_if_current(
+        &mut self,
+        seeded_page: Option<SeededPreparedPage>,
+    ) {
         let Some(seed) = seeded_page else {
             return;
         };
@@ -407,7 +415,10 @@ impl SuiSuiViewApp {
             });
     }
 
-    pub(in crate::app) fn take_adjacent_seed_for_direction(&mut self, direction: isize) -> Option<AdjacentSeedCache> {
+    pub(in crate::app) fn take_adjacent_seed_for_direction(
+        &mut self,
+        direction: isize,
+    ) -> Option<AdjacentSeedCache> {
         if !perf::adjacent_seed_prefetch_enabled() {
             return None;
         }
@@ -460,7 +471,9 @@ pub(in crate::app) fn sibling_book_path(current: &Path, direction: isize) -> Opt
     Some(entries[next_index].clone())
 }
 
-pub(in crate::app) fn adjacent_sibling_book_paths(current: &Path) -> Vec<(PathBuf, isize, &'static str)> {
+pub(in crate::app) fn adjacent_sibling_book_paths(
+    current: &Path,
+) -> Vec<(PathBuf, isize, &'static str)> {
     let Some(entries) = sibling_book_entries(current) else {
         return Vec::new();
     };
@@ -659,7 +672,10 @@ pub(in crate::app) fn prepare_adjacent_seed_cache(
     })
 }
 
-pub(in crate::app) fn adjacent_seed_generation_matches(generation_token: &AtomicU64, generation: u64) -> bool {
+pub(in crate::app) fn adjacent_seed_generation_matches(
+    generation_token: &AtomicU64,
+    generation: u64,
+) -> bool {
     generation_token.load(Ordering::Relaxed) == generation
 }
 
@@ -672,7 +688,9 @@ pub(in crate::app) fn drop_adjacent_seed_caches_off_thread(caches: Vec<AdjacentS
         .spawn(move || drop(caches));
 }
 
-pub(in crate::app) fn page_index_for_name(source: &dyn BookSource, page_name: &str) -> Option<usize> {
+pub(in crate::app) fn page_index_for_name(
+    source: &dyn BookSource,
+    page_name: &str,
+) -> Option<usize> {
     (0..source.page_count()).find(|index| source.page_name(*index) == Some(page_name))
 }
-

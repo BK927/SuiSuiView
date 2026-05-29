@@ -10,7 +10,7 @@ allowed_bad_module_paths = []
 [[files]]
 path = "src/app.rs"
 kind = "legacy-large"
-baseline_lines = 2686
+baseline_lines = 2163
 growth_warn_lines = 100
 growth_fail_lines = 200
 purpose = "Application shell, durable SuiSuiViewApp state, and top-level egui update orchestration."
@@ -102,8 +102,3 @@ signals = ["prioritized_jobs", "prioritized_indices", "prune_worker_cache", "cle
 # reason = "Temporary wiring while extracting app/ui modules."
 # expires = "2026-06-15"
 
-[[waivers]]
-path = "src/app.rs"
-rule = "legacy_growth"
-reason = "Temporary first-visible diagnostics wiring until viewer rendering is extracted."
-expires = "2026-06-15"

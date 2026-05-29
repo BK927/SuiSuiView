@@ -1,6 +1,6 @@
-use super::{ai_prefetch_pages_for, gpu_paint, SuiSuiViewApp};
 #[cfg(any(test, feature = "perf-dev", feature = "perf-diagnostics"))]
 use super::perf;
+use super::{ai_prefetch_pages_for, gpu_paint, SuiSuiViewApp};
 use crate::core::effects::ViewEffects;
 use crate::core::state::{AppSettings, CacheMemoryMode, DisplayUpscaler, FitMode};
 use crate::core::worker::{

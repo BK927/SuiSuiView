@@ -287,33 +287,36 @@ impl SuiSuiViewApp {
                             );
                             ui.label(RichText::new(note).size(12.5).color(theme::TEXT_MUTED));
                             ui.add_space(16.0);
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui
-                                    .add_sized(
-                                        [82.0, 34.0],
-                                        egui::Button::new("삭제")
-                                            .fill(theme::ACCENT)
-                                            .stroke(Stroke::new(1.0, theme::ACCENT_HOVER)),
-                                    )
-                                    .clicked()
-                                {
-                                    delete_clicked = true;
-                                }
-                                if ui
-                                    .add_sized(
-                                        [82.0, 34.0],
-                                        egui::Button::new("취소")
-                                            .fill(Color32::from_rgb(38, 41, 47))
-                                            .stroke(Stroke::new(
-                                                1.0,
-                                                Color32::from_rgb(58, 64, 73),
-                                            )),
-                                    )
-                                    .clicked()
-                                {
-                                    cancel_clicked = true;
-                                }
-                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .add_sized(
+                                            [82.0, 34.0],
+                                            egui::Button::new("삭제")
+                                                .fill(theme::ACCENT)
+                                                .stroke(Stroke::new(1.0, theme::ACCENT_HOVER)),
+                                        )
+                                        .clicked()
+                                    {
+                                        delete_clicked = true;
+                                    }
+                                    if ui
+                                        .add_sized(
+                                            [82.0, 34.0],
+                                            egui::Button::new("취소")
+                                                .fill(Color32::from_rgb(38, 41, 47))
+                                                .stroke(Stroke::new(
+                                                    1.0,
+                                                    Color32::from_rgb(58, 64, 73),
+                                                )),
+                                        )
+                                        .clicked()
+                                    {
+                                        cancel_clicked = true;
+                                    }
+                                },
+                            );
                         });
                 });
             });

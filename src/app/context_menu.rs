@@ -1,10 +1,17 @@
-use super::{commands::{AppCommand, DeleteMode}, SuiSuiViewApp};
+use super::{
+    commands::{AppCommand, DeleteMode},
+    SuiSuiViewApp,
+};
 use crate::core::effects::ImageFilter;
 use crate::core::state::{FitMode, ReadingDirection};
 use eframe::egui;
 
 impl SuiSuiViewApp {
-    pub(in crate::app) fn show_context_menu(&mut self, ctx: &egui::Context, response: &egui::Response) {
+    pub(in crate::app) fn show_context_menu(
+        &mut self,
+        ctx: &egui::Context,
+        response: &egui::Response,
+    ) {
         response.context_menu(|ui| {
             ui.set_min_width(280.0);
             let has_book = self.source.is_some();
@@ -413,7 +420,6 @@ impl SuiSuiViewApp {
             ui.close();
         }
     }
-
 }
 
 fn context_button(ui: &mut egui::Ui, label: &str, shortcut: &str, enabled: bool) -> egui::Response {
@@ -437,4 +443,3 @@ fn context_selectable(
             .shortcut_text(shortcut.to_owned()),
     )
 }
-
