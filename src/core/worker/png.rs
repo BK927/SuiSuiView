@@ -8,6 +8,7 @@ use ::png::{
     Transformations as PngTransformations,
 };
 use std::io::{BufRead, Cursor, Seek};
+use std::sync::Arc;
 
 pub(super) fn prepare_image_with_png_rows(
     bytes: &[u8],
@@ -24,6 +25,56 @@ pub(super) fn prepare_exact_original_with_png_rows(
         PngRowResult::ExactOriginal(page) => Ok(Some(page)),
         PngRowResult::Unsupported | PngRowResult::Sampled(_) => Ok(None),
     }
+}
+
+#[allow(dead_code)]
+pub(super) fn prepare_exact_original_region_with_png_rows(
+    bytes: &[u8],
+    region: PngRegion,
+) -> Result<Option<PngRegionImage>, PngRowError> {
+    if !is_png(bytes) {
+        return Ok(None);
+    }
+
+    let mut decoder = PngDecoder::new(Cursor::new(bytes));
+    decoder.set_transformations(PngTransformations::normalize_to_color8());
+    let mut reader = decoder
+        .read_info()
+        .map_err(|error| PngRowError::ExactOriginal(error.to_string()))?;
+    let info = reader.info();
+    if info.interlaced || info.is_animated() {
+        return Ok(None);
+    }
+
+    let width = info.width;
+    let height = info.height;
+    reject_oversized_dimensions(width, height).map_err(PngRowError::ExactOriginal)?;
+    validate_png_region(region, width, height).map_err(PngRowError::ExactOriginal)?;
+    reject_oversized_original(region.width, region.height).map_err(PngRowError::ExactOriginal)?;
+
+    let (color_type, bit_depth) = reader.output_color_type();
+    if bit_depth != PngBitDepth::Eight {
+        return Ok(None);
+    }
+    let channels = png_channel_count(color_type).map_err(PngRowError::ExactOriginal)?;
+    let line_size = reader
+        .output_line_size(width)
+        .ok_or_else(|| "PNG output row size exceeds platform limits".to_owned())
+        .map_err(PngRowError::ExactOriginal)?;
+    let mut row = vec![0u8; line_size];
+    let raw =
+        copy_png_region_rows_to_rgba(&mut reader, &mut row, color_type, channels, width, region)
+            .map_err(PngRowError::ExactOriginal)?;
+    let byte_size = raw.len();
+
+    Ok(Some(PngRegionImage {
+        rgba: Arc::<[u8]>::from(raw.into_boxed_slice()),
+        original_width: width,
+        original_height: height,
+        region,
+        byte_size,
+        decode_backend: DecodeBackend::PngExactRows,
+    }))
 }
 
 fn prepare_image_with_png_rows_for_mode(
@@ -121,9 +172,30 @@ pub(super) enum PngRowResult {
     ExactOriginal(PreparedPage),
 }
 
+#[derive(Debug)]
 pub(super) enum PngRowError {
     ExactOriginal(String),
     FallbackAllowed(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(super) struct PngRegion {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone)]
+#[allow(dead_code)]
+pub(super) struct PngRegionImage {
+    pub rgba: Arc<[u8]>,
+    pub original_width: u32,
+    pub original_height: u32,
+    pub region: PngRegion,
+    pub byte_size: usize,
+    pub decode_backend: DecodeBackend,
 }
 
 #[derive(Clone, Copy)]
@@ -152,6 +224,33 @@ fn png_channel_count(color_type: PngColorType) -> Result<usize, String> {
         PngColorType::Rgba => Ok(4),
         PngColorType::Indexed => Err("Indexed PNG was not expanded to RGB".to_owned()),
     }
+}
+
+#[allow(dead_code)]
+fn validate_png_region(
+    region: PngRegion,
+    source_width: u32,
+    source_height: u32,
+) -> Result<(), String> {
+    if region.width == 0 || region.height == 0 {
+        return Err("PNG original region must be non-empty".to_owned());
+    }
+
+    let right = region
+        .x
+        .checked_add(region.width)
+        .ok_or_else(|| "PNG original region width overflows image bounds".to_owned())?;
+    let bottom = region
+        .y
+        .checked_add(region.height)
+        .ok_or_else(|| "PNG original region height overflows image bounds".to_owned())?;
+    if right > source_width || bottom > source_height {
+        return Err(format!(
+            "PNG original region {region:?} is outside image bounds {source_width}x{source_height}"
+        ));
+    }
+
+    Ok(())
 }
 
 struct PngSamplePlan {
@@ -208,6 +307,61 @@ fn sample_png_rows_to_rgba<R: BufRead + Seek>(
     Ok(raw)
 }
 
+#[allow(dead_code)]
+fn copy_png_region_rows_to_rgba<R: BufRead + Seek>(
+    reader: &mut PngReader<R>,
+    row: &mut [u8],
+    color_type: PngColorType,
+    channels: usize,
+    source_width: u32,
+    region: PngRegion,
+) -> Result<Vec<u8>, String> {
+    let byte_size = decoded_byte_size(region.width, region.height)?;
+    let mut raw = vec![0u8; byte_size];
+    let source_width = source_width as usize;
+    let region_x = region.x as usize;
+    let region_y = region.y as usize;
+    let region_width = region.width as usize;
+    let region_height = region.height as usize;
+    let output_stride = region_width
+        .checked_mul(4)
+        .ok_or_else(|| "PNG region output row size overflows memory limits".to_owned())?;
+    let rows_to_read = region_y
+        .checked_add(region_height)
+        .ok_or_else(|| "PNG region row range overflows memory limits".to_owned())?;
+
+    for source_y in 0..rows_to_read {
+        if reader
+            .read_row(row)
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            return Err("PNG ended before the requested region was decoded".to_owned());
+        }
+
+        if source_y < region_y {
+            continue;
+        }
+
+        let output_y = source_y - region_y;
+        let output_start = output_y
+            .checked_mul(output_stride)
+            .ok_or_else(|| "PNG region output offset overflows memory limits".to_owned())?;
+        let output_end = output_start + output_stride;
+        copy_png_row_region_to_rgba(
+            row,
+            &mut raw[output_start..output_end],
+            color_type,
+            channels,
+            source_width,
+            region_x,
+            region_width,
+        )?;
+    }
+
+    Ok(raw)
+}
+
 fn copy_png_rows_to_rgba<R: BufRead + Seek>(
     reader: &mut PngReader<R>,
     row: &mut [u8],
@@ -244,6 +398,35 @@ fn copy_png_rows_to_rgba<R: BufRead + Seek>(
     }
 
     Ok(raw)
+}
+
+#[allow(dead_code)]
+fn copy_png_row_region_to_rgba(
+    row: &[u8],
+    output: &mut [u8],
+    color_type: PngColorType,
+    channels: usize,
+    source_width: usize,
+    x: usize,
+    width: usize,
+) -> Result<(), String> {
+    let expected_input = source_width
+        .checked_mul(channels)
+        .ok_or_else(|| "PNG source row size overflows memory limits".to_owned())?;
+    let start = x
+        .checked_mul(channels)
+        .ok_or_else(|| "PNG region row offset overflows memory limits".to_owned())?;
+    let byte_width = width
+        .checked_mul(channels)
+        .ok_or_else(|| "PNG region row size overflows memory limits".to_owned())?;
+    let end = start
+        .checked_add(byte_width)
+        .ok_or_else(|| "PNG region row end overflows memory limits".to_owned())?;
+    if row.len() < expected_input || end > row.len() {
+        return Err("PNG row ended before the requested region".to_owned());
+    }
+
+    copy_png_row_to_rgba(&row[start..end], output, color_type, channels, width)
 }
 
 fn copy_png_row_to_rgba(
@@ -411,6 +594,84 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn exact_original_region_png_rows_decode_only_requested_pixels() {
+        let bytes = encoded_xy_png(6, 4);
+        let region = super::PngRegion {
+            x: 2,
+            y: 1,
+            width: 3,
+            height: 2,
+        };
+        let image = super::prepare_exact_original_region_with_png_rows(&bytes, region)
+            .unwrap()
+            .expect("PNG region image");
+
+        assert_eq!(image.original_width, 6);
+        assert_eq!(image.original_height, 4);
+        assert_eq!(image.region, region);
+        assert_eq!(image.byte_size, 3 * 2 * 4);
+        assert_eq!(image.decode_backend, DecodeBackend::PngExactRows);
+
+        let mut expected = Vec::new();
+        for y in 1..3 {
+            for x in 2..5 {
+                expected.extend_from_slice(&xy_rgba(x, y));
+            }
+        }
+        assert_eq!(&*image.rgba, expected.as_slice());
+    }
+
+    #[test]
+    fn exact_original_region_png_rows_rejects_out_of_bounds_region() {
+        let bytes = encoded_xy_png(6, 4);
+        let region = super::PngRegion {
+            x: 4,
+            y: 2,
+            width: 3,
+            height: 2,
+        };
+        let error = match super::prepare_exact_original_region_with_png_rows(&bytes, region) {
+            Err(super::PngRowError::ExactOriginal(error)) => error,
+            _ => panic!("out-of-bounds PNG region unexpectedly decoded"),
+        };
+
+        assert!(error.contains("outside image bounds"), "{error}");
+    }
+
+    #[test]
+    fn exact_original_region_png_rows_rejects_oversized_region_before_decode() {
+        let bytes = png_header_only(10_000, 10_000);
+        let region = super::PngRegion {
+            x: 0,
+            y: 0,
+            width: 10_000,
+            height: 10_000,
+        };
+        let error = match super::prepare_exact_original_region_with_png_rows(&bytes, region) {
+            Err(super::PngRowError::ExactOriginal(error)) => error,
+            _ => panic!("oversized PNG region unexpectedly decoded"),
+        };
+
+        assert!(error.contains("Decoded page is too large"), "{error}");
+    }
+
+    #[test]
+    fn exact_original_region_png_rows_skips_non_png() {
+        assert!(matches!(
+            super::prepare_exact_original_region_with_png_rows(
+                b"not a png",
+                super::PngRegion {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+            ),
+            Ok(None)
+        ));
+    }
+
     fn encoded_png(width: u32, height: u32) -> Vec<u8> {
         let image = ImageBuffer::from_fn(width, height, |x, _y| {
             let value = (x % 251) as u8;
@@ -421,6 +682,19 @@ mod tests {
             .write_to(&mut cursor, ImageFormat::Png)
             .expect("encode PNG fixture");
         cursor.into_inner()
+    }
+
+    fn encoded_xy_png(width: u32, height: u32) -> Vec<u8> {
+        let image = ImageBuffer::from_fn(width, height, |x, y| Rgba(xy_rgba(x, y)));
+        let mut cursor = Cursor::new(Vec::new());
+        image
+            .write_to(&mut cursor, ImageFormat::Png)
+            .expect("encode XY PNG fixture");
+        cursor.into_inner()
+    }
+
+    fn xy_rgba(x: u32, y: u32) -> [u8; 4] {
+        [(x * 17) as u8, (y * 31) as u8, ((x + y) * 13) as u8, 255]
     }
 
     fn png_header_only(width: u32, height: u32) -> Vec<u8> {
