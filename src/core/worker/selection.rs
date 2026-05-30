@@ -71,8 +71,13 @@ fn prepare_png_with_preference(
 ) -> Result<PreparedPage, String> {
     match options.decoder_preferences.png {
         DecoderPreference::Default => {
-            if let Ok(Some(page)) = png::prepare_image_with_sampled_png(bytes, target_long_edge) {
-                return Ok(page);
+            match png::prepare_image_with_png_rows(bytes, target_long_edge) {
+                Ok(png::PngRowResult::ExactOriginal(page) | png::PngRowResult::Sampled(page)) => {
+                    return Ok(page);
+                }
+                Ok(png::PngRowResult::Unsupported) => {}
+                Err(png::PngRowError::ExactOriginal(error)) => return Err(error),
+                Err(png::PngRowError::FallbackAllowed(_error)) => {}
             }
             prepare_direct_or_image_fallback(
                 bytes,
@@ -85,13 +90,21 @@ fn prepare_png_with_preference(
         DecoderPreference::ImageCrate => {
             prepare_image_with_image_crate(bytes, target_long_edge, options)
         }
-        DecoderPreference::PngCrate => prepare_direct_or_image_fallback(
-            bytes,
-            target_long_edge,
-            options,
-            DecodeBackend::PngCrate,
-            decoder_backend::decode_png_crate,
-        ),
+        DecoderPreference::PngCrate => {
+            match png::prepare_exact_original_with_png_rows(bytes, target_long_edge) {
+                Ok(Some(page)) => return Ok(page),
+                Ok(None) => {}
+                Err(png::PngRowError::ExactOriginal(error)) => return Err(error),
+                Err(png::PngRowError::FallbackAllowed(_error)) => {}
+            }
+            prepare_direct_or_image_fallback(
+                bytes,
+                target_long_edge,
+                options,
+                DecodeBackend::PngCrate,
+                decoder_backend::decode_png_crate,
+            )
+        }
         DecoderPreference::ZunePng => prepare_direct_or_image_fallback(
             bytes,
             target_long_edge,

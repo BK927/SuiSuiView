@@ -1,7 +1,7 @@
 use super::{
     clamp_target_long_edge, decoded_byte_size, display_dimensions, prepared_page_from_rgba,
-    reject_oversized_original, sampled_source_index, DecodeBackend, PreparedPage,
-    PNG_SAMPLED_MIN_RATIO,
+    reject_oversized_dimensions, reject_oversized_original, sampled_source_index, DecodeBackend,
+    PreparedPage, MAX_TARGET_LONG_EDGE, PNG_SAMPLED_MIN_RATIO,
 };
 use ::png::{
     BitDepth as PngBitDepth, ColorType as PngColorType, Decoder as PngDecoder, Reader as PngReader,
@@ -9,53 +9,92 @@ use ::png::{
 };
 use std::io::{BufRead, Cursor, Seek};
 
-pub(super) fn prepare_image_with_sampled_png(
+pub(super) fn prepare_image_with_png_rows(
     bytes: &[u8],
     target_long_edge: u32,
-) -> Result<Option<PreparedPage>, String> {
+) -> Result<PngRowResult, PngRowError> {
+    prepare_image_with_png_rows_for_mode(bytes, target_long_edge, PngRowMode::Default)
+}
+
+pub(super) fn prepare_exact_original_with_png_rows(
+    bytes: &[u8],
+    target_long_edge: u32,
+) -> Result<Option<PreparedPage>, PngRowError> {
+    match prepare_image_with_png_rows_for_mode(bytes, target_long_edge, PngRowMode::ExactOnly)? {
+        PngRowResult::ExactOriginal(page) => Ok(Some(page)),
+        PngRowResult::Unsupported | PngRowResult::Sampled(_) => Ok(None),
+    }
+}
+
+fn prepare_image_with_png_rows_for_mode(
+    bytes: &[u8],
+    target_long_edge: u32,
+    mode: PngRowMode,
+) -> Result<PngRowResult, PngRowError> {
     if !is_png(bytes) {
-        return Ok(None);
+        return Ok(PngRowResult::Unsupported);
     }
 
     let target_long_edge = clamp_target_long_edge(target_long_edge);
     let mut decoder = PngDecoder::new(Cursor::new(bytes));
     decoder.set_transformations(PngTransformations::normalize_to_color8());
-    let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
+    let mut reader = decoder
+        .read_info()
+        .map_err(|error| PngRowError::FallbackAllowed(error.to_string()))?;
     let info = reader.info();
     if info.interlaced || info.is_animated() {
-        return Ok(None);
+        return Ok(PngRowResult::Unsupported);
     }
 
     let width = info.width;
     let height = info.height;
-    reject_oversized_original(width, height)?;
+    reject_oversized_dimensions(width, height).map_err(PngRowError::FallbackAllowed)?;
 
-    let (display_width, display_height) = display_dimensions(width, height, target_long_edge)?;
-    if width.max(height) < target_long_edge * PNG_SAMPLED_MIN_RATIO {
-        return Ok(None);
+    let (display_width, display_height) = display_dimensions(width, height, target_long_edge)
+        .map_err(PngRowError::FallbackAllowed)?;
+    let exact_original_target = target_long_edge > MAX_TARGET_LONG_EDGE
+        && display_width == width
+        && display_height == height;
+    let sampled_display_target = matches!(mode, PngRowMode::Default)
+        && width.max(height) >= target_long_edge.saturating_mul(PNG_SAMPLED_MIN_RATIO);
+    if !exact_original_target && !sampled_display_target {
+        return Ok(PngRowResult::Unsupported);
+    }
+    if exact_original_target {
+        reject_oversized_original(width, height).map_err(PngRowError::ExactOriginal)?;
     }
 
     let (color_type, bit_depth) = reader.output_color_type();
     if bit_depth != PngBitDepth::Eight {
-        return Ok(None);
+        return Ok(PngRowResult::Unsupported);
     }
-    let channels = png_channel_count(color_type)?;
+    let channels = png_channel_count(color_type).map_err(PngRowError::FallbackAllowed)?;
     let line_size = reader
         .output_line_size(width)
-        .ok_or_else(|| "PNG output row size exceeds platform limits".to_owned())?;
+        .ok_or_else(|| "PNG output row size exceeds platform limits".to_owned())
+        .map_err(|error| png_row_error(exact_original_target, error))?;
     let mut row = vec![0u8; line_size];
-    let raw = sample_png_rows_to_rgba(
-        &mut reader,
-        &mut row,
-        PngSamplePlan {
-            color_type,
-            channels,
-            width,
-            height,
-            display_width,
-            display_height,
-        },
-    )?;
+    let plan = PngSamplePlan {
+        color_type,
+        channels,
+        width,
+        height,
+        display_width,
+        display_height,
+    };
+    let (raw, backend) = if exact_original_target {
+        (
+            copy_png_rows_to_rgba(&mut reader, &mut row, plan)
+                .map_err(PngRowError::ExactOriginal)?,
+            DecodeBackend::PngExactRows,
+        )
+    } else {
+        (
+            sample_png_rows_to_rgba(&mut reader, &mut row, plan)
+                .map_err(PngRowError::FallbackAllowed)?,
+            DecodeBackend::PngSampled,
+        )
+    };
 
     prepared_page_from_rgba(
         raw,
@@ -64,9 +103,41 @@ pub(super) fn prepare_image_with_sampled_png(
         display_width,
         display_height,
         target_long_edge,
-        DecodeBackend::PngSampled,
+        backend,
     )
-    .map(Some)
+    .map_err(|error| png_row_error(exact_original_target, error))
+    .map(|page| {
+        if exact_original_target {
+            PngRowResult::ExactOriginal(page)
+        } else {
+            PngRowResult::Sampled(page)
+        }
+    })
+}
+
+pub(super) enum PngRowResult {
+    Unsupported,
+    Sampled(PreparedPage),
+    ExactOriginal(PreparedPage),
+}
+
+pub(super) enum PngRowError {
+    ExactOriginal(String),
+    FallbackAllowed(String),
+}
+
+#[derive(Clone, Copy)]
+enum PngRowMode {
+    Default,
+    ExactOnly,
+}
+
+fn png_row_error(exact_original_target: bool, error: String) -> PngRowError {
+    if exact_original_target {
+        PngRowError::ExactOriginal(error)
+    } else {
+        PngRowError::FallbackAllowed(error)
+    }
 }
 
 fn is_png(bytes: &[u8]) -> bool {
@@ -137,6 +208,92 @@ fn sample_png_rows_to_rgba<R: BufRead + Seek>(
     Ok(raw)
 }
 
+fn copy_png_rows_to_rgba<R: BufRead + Seek>(
+    reader: &mut PngReader<R>,
+    row: &mut [u8],
+    plan: PngSamplePlan,
+) -> Result<Vec<u8>, String> {
+    let byte_size = decoded_byte_size(plan.width, plan.height)?;
+    let mut raw = vec![0u8; byte_size];
+    let width = plan.width as usize;
+    let height = plan.height as usize;
+    let output_stride = width
+        .checked_mul(4)
+        .ok_or_else(|| "PNG output row size overflows memory limits".to_owned())?;
+
+    for source_y in 0..height {
+        if reader
+            .read_row(row)
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            return Err("PNG ended before all rows were decoded".to_owned());
+        }
+
+        let output_start = source_y
+            .checked_mul(output_stride)
+            .ok_or_else(|| "PNG output offset overflows memory limits".to_owned())?;
+        let output_end = output_start + output_stride;
+        copy_png_row_to_rgba(
+            row,
+            &mut raw[output_start..output_end],
+            plan.color_type,
+            plan.channels,
+            width,
+        )?;
+    }
+
+    Ok(raw)
+}
+
+fn copy_png_row_to_rgba(
+    row: &[u8],
+    output: &mut [u8],
+    color_type: PngColorType,
+    channels: usize,
+    width: usize,
+) -> Result<(), String> {
+    let expected_input = width
+        .checked_mul(channels)
+        .ok_or_else(|| "PNG row size overflows memory limits".to_owned())?;
+    let expected_output = width
+        .checked_mul(4)
+        .ok_or_else(|| "PNG output row size overflows memory limits".to_owned())?;
+    if row.len() < expected_input || output.len() < expected_output {
+        return Err("PNG row ended unexpectedly".to_owned());
+    }
+
+    match color_type {
+        PngColorType::Grayscale => {
+            for (gray, rgba) in row[..width].iter().zip(output.chunks_exact_mut(4)) {
+                rgba.copy_from_slice(&[*gray, *gray, *gray, 255]);
+            }
+        }
+        PngColorType::GrayscaleAlpha => {
+            for (pair, rgba) in row[..expected_input]
+                .chunks_exact(2)
+                .zip(output.chunks_exact_mut(4))
+            {
+                rgba.copy_from_slice(&[pair[0], pair[0], pair[0], pair[1]]);
+            }
+        }
+        PngColorType::Rgb => {
+            for (rgb, rgba) in row[..expected_input]
+                .chunks_exact(3)
+                .zip(output.chunks_exact_mut(4))
+            {
+                rgba.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+            }
+        }
+        PngColorType::Rgba => {
+            output[..expected_input].copy_from_slice(&row[..expected_input]);
+        }
+        PngColorType::Indexed => return Err("Indexed PNG row was not expanded".to_owned()),
+    }
+
+    Ok(())
+}
+
 fn sample_png_row_to_rgba(
     row: &[u8],
     raw: &mut [u8],
@@ -188,4 +345,116 @@ fn sample_png_row_to_rgba(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::worker::{
+        prepare_image_with_strategy, DecodeBackend, DecodeStrategy, MAX_TARGET_LONG_EDGE,
+    };
+    use image::{ImageBuffer, ImageFormat, Rgba};
+    use std::io::Cursor;
+
+    #[test]
+    fn auto_strategy_uses_exact_row_png_for_original_inspection_target() {
+        let target = MAX_TARGET_LONG_EDGE + 1;
+        let bytes = encoded_png(target, 2);
+        let page = prepare_image_with_strategy(&bytes, target, DecodeStrategy::Auto).unwrap();
+
+        assert_eq!(page.decode_backend, DecodeBackend::PngExactRows);
+        assert_eq!(page.original_width, target as usize);
+        assert_eq!(page.original_height, 2);
+        assert_eq!(page.display_width, target as usize);
+        assert_eq!(page.display_height, 2);
+        assert_eq!(page.rgba.len(), target as usize * 2 * 4);
+        assert_eq!(
+            &page.rgba[..12],
+            &[0, 0, 0, 255, 1, 1, 1, 255, 2, 2, 2, 255]
+        );
+    }
+
+    #[test]
+    fn oversized_original_png_rows_do_not_fallback_to_full_decode() {
+        let bytes = png_header_only(8192, 8193);
+        let error = match prepare_image_with_strategy(&bytes, 8193, DecodeStrategy::Auto) {
+            Ok(_) => panic!("oversized original PNG unexpectedly decoded"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("Decoded page is too large"), "{error}");
+        assert!(!error.contains("png-crate failed"), "{error}");
+    }
+
+    #[test]
+    fn sampled_png_row_error_can_fallback_to_full_decoder() {
+        let bytes = png_header_only(10_000, 10_000);
+        let error = match prepare_image_with_strategy(&bytes, 5000, DecodeStrategy::Auto) {
+            Ok(_) => panic!("malformed sampled PNG unexpectedly decoded"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("png-crate failed"), "{error}");
+    }
+
+    #[test]
+    fn exact_original_row_helper_skips_sampled_targets() {
+        let target = MAX_TARGET_LONG_EDGE;
+        let bytes = encoded_png(target * 2, 1);
+
+        assert!(matches!(
+            super::prepare_exact_original_with_png_rows(&bytes, target),
+            Ok(None)
+        ));
+        assert!(matches!(
+            super::prepare_image_with_png_rows(&bytes, target),
+            Ok(super::PngRowResult::Sampled(_))
+        ));
+    }
+
+    fn encoded_png(width: u32, height: u32) -> Vec<u8> {
+        let image = ImageBuffer::from_fn(width, height, |x, _y| {
+            let value = (x % 251) as u8;
+            Rgba([value, value, value, 255])
+        });
+        let mut cursor = Cursor::new(Vec::new());
+        image
+            .write_to(&mut cursor, ImageFormat::Png)
+            .expect("encode PNG fixture");
+        cursor.into_inner()
+    }
+
+    fn png_header_only(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::with_capacity(13);
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 0, 0, 0, 0]);
+        push_png_chunk(&mut bytes, *b"IHDR", &ihdr);
+        push_png_chunk(&mut bytes, *b"IDAT", &[]);
+        push_png_chunk(&mut bytes, *b"IEND", &[]);
+        bytes
+    }
+
+    fn push_png_chunk(bytes: &mut Vec<u8>, name: [u8; 4], data: &[u8]) {
+        bytes.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&name);
+        bytes.extend_from_slice(data);
+
+        let mut crc_input = Vec::with_capacity(name.len() + data.len());
+        crc_input.extend_from_slice(&name);
+        crc_input.extend_from_slice(data);
+        bytes.extend_from_slice(&crc32(&crc_input).to_be_bytes());
+    }
+
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xffff_ffffu32;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                let mask = 0u32.wrapping_sub(crc & 1);
+                crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+            }
+        }
+        !crc
+    }
 }

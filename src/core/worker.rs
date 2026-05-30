@@ -275,6 +275,7 @@ pub enum DecodeBackend {
     BmpSampled,
     GifSampled,
     PngSampled,
+    PngExactRows,
     ZuneJpeg,
     PngCrate,
     ZunePng,
@@ -296,6 +297,7 @@ impl DecodeBackend {
             Self::BmpSampled => "bmp-sampled",
             Self::GifSampled => "gif-sampled",
             Self::PngSampled => "png-sampled",
+            Self::PngExactRows => "png-exact-rows",
             Self::ZuneJpeg => "zune-jpeg",
             Self::PngCrate => "png-crate",
             Self::ZunePng => "zune-png",
@@ -558,12 +560,7 @@ fn skips_image_metadata_probe(format: Option<DecoderFormat>) -> bool {
 }
 
 fn reject_oversized_original(width: u32, height: u32) -> Result<(), String> {
-    if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
-        return Err(format!(
-            "Image dimensions exceed limit: {}x{}",
-            width, height
-        ));
-    }
+    reject_oversized_dimensions(width, height)?;
 
     let decoded_bytes = decoded_byte_size(width, height)?;
     if decoded_bytes > MAX_DECODED_PAGE_BYTES {
@@ -574,6 +571,14 @@ fn reject_oversized_original(width: u32, height: u32) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn reject_oversized_dimensions(width: u32, height: u32) -> Result<(), String> {
+    if width <= MAX_IMAGE_DIMENSION && height <= MAX_IMAGE_DIMENSION {
+        return Ok(());
+    }
+
+    Err(format!("Image dimensions exceed limit: {width}x{height}"))
 }
 
 fn sampled_source_index(out_index: usize, out_len: usize, source_len: usize) -> usize {
