@@ -7,6 +7,8 @@ use libwebp_sys::{
     VP8StatusCode, WebPBitstreamFeatures, WebPDecode, WebPDecoderConfig, WebPGetFeatures,
     WebPRGBABuffer, WEBP_CSP_MODE,
 };
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use std::time::Instant;
 
 pub(super) fn prepare_image_with_scaled_libwebp(
     bytes: &[u8],
@@ -40,7 +42,21 @@ pub(super) fn prepare_image_with_scaled_libwebp(
         return Ok(None);
     }
 
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    let decode_started = Instant::now();
     let raw = decode_scaled_rgba(bytes, display_width, display_height)?;
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    super::record_prepare_stage(
+        "libwebp_scaled_decode",
+        DecodeBackend::LibWebpScaled,
+        decode_started.elapsed(),
+        target_long_edge,
+        bytes.len(),
+        original_width,
+        original_height,
+        display_width,
+        display_height,
+    );
     prepared_page_from_rgba(
         raw,
         original_width,

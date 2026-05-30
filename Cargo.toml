@@ -6,7 +6,7 @@ license = "GPL-3.0-only"
 default-run = "suisuiview"
 
 [features]
-default = []
+default = ["native-webp"]
 bench-native = [
     "bench-native-jpeg-turbo",
     "bench-native-webp",

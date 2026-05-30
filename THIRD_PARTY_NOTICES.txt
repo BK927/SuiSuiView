@@ -4,10 +4,11 @@ SuiSuiView Third-Party Notices
 This application includes third-party open-source software. This notice is
 shown in the About window and should also be shipped with packaged releases.
 The Rust dependency list below was generated from Cargo.lock with cargo-about
-for the x86_64-pc-windows-msvc default release target. Optional native and
-benchmark-only components that are not part of the default binary are called
-out separately below. Regenerate this file when dependencies, bundled assets,
-native binaries, or distribution targets change.
+for the x86_64-pc-windows-msvc default release target. Native WebP support is
+included in the default binary; other optional native and benchmark-only
+components that are not part of the default binary are called out separately
+below. Regenerate this file when dependencies, bundled assets, native binaries,
+or distribution targets change.
 
 Application
 -----------
@@ -22,7 +23,7 @@ Rust Dependencies
 -----------------
 
 Generated target: x86_64-pc-windows-msvc
-Generated packages: 281
+Generated packages: 284
 
 ab_glyph 0.2.32
 License: Apache-2.0
@@ -512,6 +513,10 @@ libm 0.2.16
 License: MIT
 Source: https://github.com/rust-lang/compiler-builtins
 
+libwebp-sys 0.9.6
+License: MIT
+Source: https://github.com/NoXF/libwebp-sys
+
 litemap 0.8.2
 License: Unicode-3.0
 Source: https://github.com/unicode-org/icu4x
@@ -876,6 +881,10 @@ web-time 1.1.0
 License: MIT OR Apache-2.0
 Source: https://github.com/daxpedda/web-time
 
+webp 0.3.1
+License: MIT OR Apache-2.0
+Source: https://github.com/jaredforth/webp
+
 webbrowser 1.2.1
 License: MIT OR Apache-2.0
 Source: https://github.com/amodm/webbrowser-rs
@@ -1170,14 +1179,81 @@ Real-ESRGAN ncnn-vulkan support is optional. SuiSuiView lets the user choose
 their own executable and model paths. SuiSuiView does not bundle Python,
 PyTorch, Real-ESRGAN binaries, ncnn binaries, or model files.
 
-Optional native codec features are explicit build choices and are not enabled
-in the default binary. If a release enables native-webp, native-avif, or
+Native WebP Codec
+-----------------
+
+The default binary uses the Rust webp crate and libwebp-sys to build and call
+libwebp for still WebP decoding.
+License: MIT OR Apache-2.0 for the webp crate, MIT for libwebp-sys, and
+BSD-3-Clause-style terms plus the WebM patent grant for the vendored libwebp
+source.
+Source: https://crates.io/crates/webp and https://chromium.googlesource.com/webm/libwebp
+
+libwebp license text:
+
+Copyright (c) 2010, Google Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+  * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+
+  * Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in
+    the documentation and/or other materials provided with the
+    distribution.
+
+  * Neither the name of Google nor the names of its contributors may
+    be used to endorse or promote products derived from this software
+    without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+WebM patent grant:
+
+Additional IP Rights Grant (Patents)
+------------------------------------
+
+"These implementations" means the copyrightable works that implement the WebM
+codecs distributed by Google as part of the WebM Project.
+
+Google hereby grants to you a perpetual, worldwide, non-exclusive, no-charge,
+royalty-free, irrevocable (except as stated in this section) patent license to
+make, have made, use, offer to sell, sell, import, transfer, and otherwise
+run, modify and propagate the contents of these implementations of WebM, where
+such license applies only to those patent claims, both currently owned by
+Google and acquired in the future, licensable by Google that are necessarily
+infringed by these implementations of WebM. This grant does not include claims
+that would be infringed only as a consequence of further modification of these
+implementations. If you or your agent or exclusive licensee institute or order
+or agree to the institution of patent litigation or any other patent
+enforcement activity against any entity (including a cross-claim or
+counterclaim in a lawsuit) alleging that any of these implementations of WebM
+or any code incorporated within any of these implementations of WebM
+constitute direct or contributory patent infringement, or inducement of
+patent infringement, then any patent rights granted to you under this License
+for these implementations of WebM shall terminate as of the date such
+litigation is filed.
+
+Optional Native Codecs
+----------------------
+
+Optional native codec features other than native-webp are explicit build choices
+and are not enabled in the default binary. If a release enables native-avif or
 native-ai, the release bundle must include the license text and attribution for
 the corresponding native library and all packaged runtime binaries.
-
-native-webp uses the Rust webp crate to call libwebp.
-License: MIT OR Apache-2.0 for the Rust crate; libwebp uses BSD-style terms.
-Source: https://crates.io/crates/webp and https://chromium.googlesource.com/webm/libwebp
 
 native-avif uses the Rust libavif crate with libavif and dav1d.
 License: BSD-2-Clause for libavif-rs; libavif and dav1d use BSD-style terms.
