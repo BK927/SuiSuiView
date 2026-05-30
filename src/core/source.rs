@@ -23,6 +23,9 @@ pub trait BookSource: Send + Sync {
     fn page_file_path(&self, _index: usize) -> Option<PathBuf> {
         None
     }
+    fn page_byte_size(&self, _index: usize) -> Option<u64> {
+        None
+    }
     fn page_display_path(&self, index: usize) -> Option<String> {
         if let Some(path) = self.page_file_path(index) {
             return Some(path.display().to_string());
@@ -242,6 +245,10 @@ impl BookSource for FolderSource {
         self.pages.get(index).map(|page| page.path.clone())
     }
 
+    fn page_byte_size(&self, index: usize) -> Option<u64> {
+        self.pages.get(index).map(|page| page.byte_size)
+    }
+
     fn read_page(&self, index: usize) -> Result<Vec<u8>, SourceError> {
         let page = self.pages.get(index).ok_or(SourceError::InvalidPage {
             index,
@@ -345,6 +352,10 @@ impl BookSource for ZipCbzSource {
 
     fn page_name(&self, index: usize) -> Option<&str> {
         self.pages.get(index).map(|page| page.name.as_str())
+    }
+
+    fn page_byte_size(&self, index: usize) -> Option<u64> {
+        self.pages.get(index).map(|page| page.uncompressed_size)
     }
 
     fn read_page(&self, index: usize) -> Result<Vec<u8>, SourceError> {

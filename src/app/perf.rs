@@ -23,6 +23,7 @@ const AUTO_PAGE_TURN_CLOSE_DELAY_MS_ENV: &str = "SUISUIVIEW_PERF_AUTO_PAGE_TURN_
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 const START_PAGE_INDEX_ENV: &str = "SUISUIVIEW_PERF_START_PAGE_INDEX";
 const ADJACENT_SEED_PREFETCH_ENV: &str = "SUISUIVIEW_EXPERIMENT_ADJACENT_SEED_PREFETCH";
+const ADJACENT_SEED_MEMORY_GUARD_ENV: &str = "SUISUIVIEW_EXPERIMENT_ADJACENT_SEED_MEMORY_GUARD";
 const TEXTURE_PREWARM_ENV: &str = "SUISUIVIEW_EXPERIMENT_TEXTURE_PREWARM";
 const ORIGINAL_TEXTURE_ONLY_ENV: &str = "SUISUIVIEW_EXPERIMENT_ORIGINAL_TEXTURE_ONLY";
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -167,6 +168,15 @@ pub(super) fn adjacent_seed_prefetch_enabled() -> bool {
     })
 }
 
+pub(super) fn adjacent_seed_memory_guard_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        adjacent_seed_memory_guard_value_enabled(
+            env::var(ADJACENT_SEED_MEMORY_GUARD_ENV).ok().as_deref(),
+        )
+    })
+}
+
 pub(super) fn texture_prewarm_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -183,6 +193,10 @@ pub(super) fn original_texture_only_enabled() -> bool {
 
 fn adjacent_seed_prefetch_value_enabled(value: Option<&str>) -> bool {
     default_enabled_experiment_value(value)
+}
+
+fn adjacent_seed_memory_guard_value_enabled(value: Option<&str>) -> bool {
+    opt_in_experiment_value_enabled(value)
 }
 
 fn default_enabled_experiment_value(value: Option<&str>) -> bool {
@@ -475,7 +489,10 @@ pub(super) fn flush() {
 
 #[cfg(test)]
 mod tests {
-    use super::{adjacent_seed_prefetch_value_enabled, opt_in_experiment_value_enabled};
+    use super::{
+        adjacent_seed_memory_guard_value_enabled, adjacent_seed_prefetch_value_enabled,
+        opt_in_experiment_value_enabled,
+    };
 
     #[test]
     fn adjacent_seed_prefetch_is_default_on_with_explicit_opt_out() {
@@ -487,6 +504,16 @@ mod tests {
         assert!(!adjacent_seed_prefetch_value_enabled(Some("false")));
         assert!(!adjacent_seed_prefetch_value_enabled(Some("OFF")));
         assert!(!adjacent_seed_prefetch_value_enabled(Some(" no ")));
+    }
+
+    #[test]
+    fn adjacent_seed_memory_guard_is_opt_in() {
+        assert!(!adjacent_seed_memory_guard_value_enabled(None));
+        assert!(!adjacent_seed_memory_guard_value_enabled(Some("")));
+        assert!(!adjacent_seed_memory_guard_value_enabled(Some("0")));
+        assert!(adjacent_seed_memory_guard_value_enabled(Some("1")));
+        assert!(adjacent_seed_memory_guard_value_enabled(Some("true")));
+        assert!(adjacent_seed_memory_guard_value_enabled(Some(" ON ")));
     }
 
     #[test]

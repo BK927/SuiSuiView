@@ -11,12 +11,17 @@ use crate::core::worker::{
     MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
 use eframe::egui::Vec2;
+use image::ImageReader;
 use std::fs;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+const ADJACENT_SEED_LARGE_SOURCE_BYTES: u64 = 4 * 1024 * 1024;
+const ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE: u32 = 8192;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) enum OpenOrigin {
@@ -381,6 +386,7 @@ impl SuiSuiViewApp {
         let decode = self.decode_options();
         let store = self.store.clone();
         let resume_by_file_identity = self.settings.resume_by_file_identity;
+        let large_source_guard = perf::adjacent_seed_memory_guard_enabled();
         let tx = self.adjacent_seed_tx.clone();
         let ctx = self.egui_ctx.clone();
 
@@ -405,17 +411,24 @@ impl SuiSuiViewApp {
                         resume_by_file_identity,
                         &generation_token,
                         generation,
+                        large_source_guard,
                     );
+                    let success = cache.is_some();
                     perf::record_adjacent_seed_prefetch_prepare(
                         started,
                         origin.perf_label(),
                         label,
                         cache.as_ref().map_or(0, |cache| cache.seeded_page.index),
                         target_long_edge,
-                        cache.is_some(),
+                        success,
                     );
-                    let _ = tx.send(AdjacentSeedEvent { generation, cache });
-                    ctx.request_repaint();
+                    if let Some(cache) = cache {
+                        let _ = tx.send(AdjacentSeedEvent {
+                            generation,
+                            cache: Some(cache),
+                        });
+                        ctx.request_repaint();
+                    }
                 }
             });
     }
@@ -606,13 +619,20 @@ pub(in crate::app) fn prepare_seeded_first_page(
     index: usize,
     target_long_edge: u32,
     decode: DecodeOptions,
+    large_source_guard: bool,
 ) -> Option<SeededPreparedPage> {
     let page_count = source.page_count();
     if page_count == 0 {
         return None;
     }
     let index = index.min(page_count - 1);
+    if large_source_guard && should_skip_memory_aware_adjacent_seed_source(source, index) {
+        return None;
+    }
     let bytes = source.read_page(index).ok()?;
+    if large_source_guard && should_skip_memory_aware_adjacent_seed(&bytes) {
+        return None;
+    }
     let page = Arc::new(prepare_image_with_options(&bytes, target_long_edge, decode).ok()?);
     Some(SeededPreparedPage {
         index,
@@ -635,6 +655,7 @@ pub(in crate::app) fn prepare_adjacent_seed_cache(
     resume_by_file_identity: bool,
     generation_token: &AtomicU64,
     generation: u64,
+    large_source_guard: bool,
 ) -> Option<AdjacentSeedCache> {
     if !adjacent_seed_generation_matches(generation_token, generation) {
         return None;
@@ -659,8 +680,13 @@ pub(in crate::app) fn prepare_adjacent_seed_cache(
     if !adjacent_seed_generation_matches(generation_token, generation) {
         return None;
     }
-    let seeded_page =
-        prepare_seeded_first_page(source.as_ref(), seed_page, target_long_edge, decode)?;
+    let seeded_page = prepare_seeded_first_page(
+        source.as_ref(),
+        seed_page,
+        target_long_edge,
+        decode,
+        large_source_guard,
+    )?;
     if !adjacent_seed_generation_matches(generation_token, generation) {
         return None;
     }
@@ -698,4 +724,120 @@ pub(in crate::app) fn page_index_for_name(
     page_name: &str,
 ) -> Option<usize> {
     (0..source.page_count()).find(|index| source.page_name(*index) == Some(page_name))
+}
+
+fn should_skip_memory_aware_adjacent_seed(bytes: &[u8]) -> bool {
+    source_dimensions_from_bytes(bytes)
+        .is_some_and(|(width, height)| width.max(height) >= ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE)
+}
+
+fn should_skip_memory_aware_adjacent_seed_source(source: &dyn BookSource, index: usize) -> bool {
+    source
+        .page_byte_size(index)
+        .is_some_and(|byte_size| byte_size >= ADJACENT_SEED_LARGE_SOURCE_BYTES)
+}
+
+fn source_dimensions_from_bytes(bytes: &[u8]) -> Option<(u32, u32)> {
+    ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        should_skip_memory_aware_adjacent_seed, should_skip_memory_aware_adjacent_seed_source,
+        ADJACENT_SEED_LARGE_SOURCE_BYTES, ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE,
+    };
+    use crate::core::source::{BookSource, SourceError};
+    use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn memory_aware_adjacent_seed_skips_8192px_sources() {
+        let bytes = png_bytes(ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE, 1);
+
+        assert!(should_skip_memory_aware_adjacent_seed(&bytes));
+    }
+
+    #[test]
+    fn memory_aware_adjacent_seed_keeps_smaller_sources() {
+        let bytes = png_bytes(ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE - 1, 1);
+
+        assert!(!should_skip_memory_aware_adjacent_seed(&bytes));
+    }
+
+    #[test]
+    fn memory_aware_adjacent_seed_keeps_unknown_dimensions() {
+        assert!(!should_skip_memory_aware_adjacent_seed(b"not an image"));
+    }
+
+    #[test]
+    fn memory_aware_adjacent_seed_skips_large_known_source_bytes() {
+        let source = TestSource {
+            byte_size: Some(ADJACENT_SEED_LARGE_SOURCE_BYTES),
+        };
+
+        assert!(should_skip_memory_aware_adjacent_seed_source(&source, 0));
+    }
+
+    #[test]
+    fn memory_aware_adjacent_seed_keeps_small_or_unknown_source_bytes() {
+        let small = TestSource {
+            byte_size: Some(ADJACENT_SEED_LARGE_SOURCE_BYTES - 1),
+        };
+        let unknown = TestSource { byte_size: None };
+
+        assert!(!should_skip_memory_aware_adjacent_seed_source(&small, 0));
+        assert!(!should_skip_memory_aware_adjacent_seed_source(&unknown, 0));
+    }
+
+    fn png_bytes(width: u32, height: u32) -> Vec<u8> {
+        let pixels = vec![0; width as usize * height as usize * 4];
+        let mut bytes = Vec::new();
+        PngEncoder::new(&mut bytes)
+            .write_image(&pixels, width, height, ColorType::Rgba8.into())
+            .expect("test PNG should encode");
+        bytes
+    }
+
+    struct TestSource {
+        byte_size: Option<u64>,
+    }
+
+    impl BookSource for TestSource {
+        fn title(&self) -> &str {
+            "test"
+        }
+
+        fn source_path(&self) -> &Path {
+            Path::new("test")
+        }
+
+        fn book_id(&self) -> &str {
+            "test"
+        }
+
+        fn page_count(&self) -> usize {
+            1
+        }
+
+        fn page_name(&self, _index: usize) -> Option<&str> {
+            Some("page.png")
+        }
+
+        fn page_file_path(&self, _index: usize) -> Option<PathBuf> {
+            None
+        }
+
+        fn page_byte_size(&self, _index: usize) -> Option<u64> {
+            self.byte_size
+        }
+
+        fn read_page(&self, _index: usize) -> Result<Vec<u8>, SourceError> {
+            Ok(Vec::new())
+        }
+    }
 }
