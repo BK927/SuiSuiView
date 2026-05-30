@@ -11,6 +11,8 @@ use eframe::egui::{
     Vec2,
 };
 use std::sync::Arc;
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use std::time::Instant;
 
 mod interaction;
 mod model;

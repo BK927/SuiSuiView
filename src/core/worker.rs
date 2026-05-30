@@ -17,6 +17,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 mod bmp;
+mod cache;
 #[cfg(test)]
 mod decoder_tests;
 mod gif;
@@ -27,6 +28,12 @@ mod png;
 mod scheduler;
 mod selection;
 
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use cache::record_worker_cache_snapshot;
+use cache::{
+    clear_cache_on_book_or_decode_change, insert_worker_cache_with_budget, page_cache_key,
+    prune_worker_cache, update_book_epoch,
+};
 use image_crate::{prepare_image_with_image_crate, prepare_image_with_image_crate_and_icc};
 use metadata::{apply_exif_orientation_to_page, read_image_metadata, ImageMetadata};
 use scheduler::{prioritized_jobs, should_skip_ai_preview_or_prefetch};
@@ -897,8 +904,16 @@ fn run_worker(
                     Ok(page) => {
                         let page = Arc::new(page);
 
-                        insert_worker_cache(&mut cache, &mut cache_bytes, key, page.clone());
-                        prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
+                        let cached = insert_worker_cache_with_budget(
+                            &mut cache,
+                            &mut cache_bytes,
+                            key,
+                            &page,
+                            options.cache_bytes,
+                        );
+                        if cached {
+                            prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
+                        }
                         let _ = event_tx.send(WorkerEvent::PageReady {
                             book_id: book_id.clone(),
                             index: job.index,
@@ -918,7 +933,11 @@ fn run_worker(
                         );
                         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
                         record_worker_cache_snapshot(
-                            "publish_miss",
+                            if cached {
+                                "publish_miss"
+                            } else {
+                                "publish_miss_uncached_oversize"
+                            },
                             job.index,
                             job.target_long_edge,
                             cache.len(),
@@ -978,18 +997,6 @@ fn run_worker(
     }
 }
 
-fn insert_worker_cache(
-    cache: &mut LruCache<String, Arc<PreparedPage>>,
-    cache_bytes: &mut usize,
-    key: String,
-    page: Arc<PreparedPage>,
-) {
-    if let Some((_evicted_key, evicted_page)) = cache.push(key, page.clone()) {
-        *cache_bytes = (*cache_bytes).saturating_sub(evicted_page.byte_size);
-    }
-    *cache_bytes = (*cache_bytes).saturating_add(page.byte_size);
-}
-
 fn decoded_byte_size(width: u32, height: u32) -> Result<usize, String> {
     (width as usize)
         .checked_mul(height as usize)
@@ -1010,70 +1017,6 @@ fn prepared_page_byte_size(upload_bytes: usize) -> Result<usize, String> {
 
 fn retained_page_byte_size(upload_bytes: usize) -> usize {
     upload_bytes
-}
-
-fn clear_cache_on_book_or_decode_change(
-    source: &Option<SharedSource>,
-    previous_book_id: Option<&str>,
-    previous_decode: DecodeOptions,
-    current_decode: DecodeOptions,
-    cache: &mut LruCache<String, Arc<PreparedPage>>,
-    cache_bytes: &mut usize,
-) {
-    let current_book_id = source.as_ref().map(|source| source.book_id());
-    if previous_book_id != current_book_id || previous_decode != current_decode {
-        cache.clear();
-        *cache_bytes = 0;
-    }
-}
-
-fn update_book_epoch(
-    book_epoch: &mut usize,
-    source: &Option<SharedSource>,
-    previous_book_id: Option<&str>,
-) {
-    let current_book_id = source.as_ref().map(|source| source.book_id());
-    if current_book_id.is_some() && previous_book_id != current_book_id {
-        *book_epoch = book_epoch.saturating_add(1);
-    }
-}
-
-fn prune_worker_cache(
-    cache: &mut LruCache<String, Arc<PreparedPage>>,
-    cache_bytes: &mut usize,
-    budget_bytes: usize,
-) {
-    while *cache_bytes > budget_bytes {
-        let Some((_key, page)) = cache.pop_lru() else {
-            break;
-        };
-        *cache_bytes = (*cache_bytes).saturating_sub(page.byte_size);
-    }
-}
-
-#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-fn record_worker_cache_snapshot(
-    reason: &'static str,
-    page: usize,
-    target_long_edge: u32,
-    cache_pages: usize,
-    cache_bytes: usize,
-    cache_budget_bytes: usize,
-    cache_hit: bool,
-) {
-    perf_trace::record_duration(
-        "page_worker_cache_snapshot",
-        Duration::ZERO,
-        &[
-            PerfField::Str("reason", reason),
-            PerfField::Usize("page", page),
-            PerfField::U32("target_long_edge", target_long_edge),
-            PerfField::Usize("cache_pages", cache_pages),
-            PerfField::Usize("cache_bytes", cache_bytes),
-            PerfField::Usize("cache_budget_bytes", cache_budget_bytes),
-            PerfField::Bool("cache_hit", cache_hit),
-        ],
-    );
 }
 
 fn apply_command(
@@ -1138,24 +1081,11 @@ fn drain_latest_command(command_rx: &Receiver<WorkerCommand>) -> Option<WorkerCo
     latest
 }
 
-fn page_cache_key(
-    book_id: &str,
-    index: usize,
-    target_long_edge: u32,
-    decode: DecodeOptions,
-) -> String {
-    format!(
-        "{book_id}:{index}:{}:{}",
-        clamp_target_long_edge(target_long_edge),
-        decode.cache_token()
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         clamp_navigation_target_long_edge, clamp_target_long_edge, display_dimensions,
-        display_dimensions_with_upscale, image_filter_type, page_cache_key, prepare_image,
+        display_dimensions_with_upscale, image_filter_type, prepare_image,
         prepare_image_with_options, prepare_image_with_strategy,
         prepare_unavailable_or_image_fallback, run_worker, CachedPageKey, DecodeBackend,
         DecodeOptions, DecodeStrategy, NavigationDirection, WorkerCommand, WorkerEvent,
@@ -1474,66 +1404,6 @@ mod tests {
         let original_key = CachedPageKey::new(3, MAX_TARGET_LONG_EDGE + 1, decode);
         assert!(original_key.covers(3, MAX_TARGET_LONG_EDGE + 1, decode));
         assert!(!original_key.covers(3, MAX_TARGET_LONG_EDGE, decode));
-    }
-
-    #[test]
-    fn worker_cache_key_tracks_decode_options() {
-        let normal = page_cache_key("book", 1, 2048, DecodeOptions::default());
-        let exif = page_cache_key(
-            "book",
-            1,
-            2048,
-            DecodeOptions {
-                apply_exif_orientation: true,
-                ..DecodeOptions::default()
-            },
-        );
-        let icc = page_cache_key(
-            "book",
-            1,
-            2048,
-            DecodeOptions {
-                apply_embedded_icc: true,
-                ..DecodeOptions::default()
-            },
-        );
-        let lanczos = page_cache_key(
-            "book",
-            1,
-            2048,
-            DecodeOptions {
-                resize_filter: ResizeFilter::Lanczos3,
-                ..DecodeOptions::default()
-            },
-        );
-        let upscaled = page_cache_key(
-            "book",
-            1,
-            2048,
-            DecodeOptions {
-                allow_display_upscale: true,
-                ..DecodeOptions::default()
-            },
-        );
-
-        assert_ne!(normal, exif);
-        assert_ne!(normal, icc);
-        assert_ne!(normal, lanczos);
-        assert_ne!(normal, upscaled);
-
-        let zune_jpeg = page_cache_key(
-            "book",
-            1,
-            2048,
-            DecodeOptions {
-                decoder_preferences: DecoderPreferences {
-                    jpeg: DecoderPreference::ZuneJpeg,
-                    ..DecoderPreferences::default()
-                },
-                ..DecodeOptions::default()
-            },
-        );
-        assert_ne!(normal, zune_jpeg);
     }
 
     fn encoded_test_image(format: ImageFormat) -> Vec<u8> {
