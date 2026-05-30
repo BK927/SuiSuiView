@@ -25,6 +25,7 @@ mod image_crate;
 mod jpeg;
 mod metadata;
 mod png;
+mod read_ahead;
 mod region;
 mod resize;
 mod scheduler;
@@ -69,6 +70,7 @@ pub(super) fn record_prepare_stage(
     );
 }
 use metadata::{apply_exif_orientation_to_page, read_image_metadata, ImageMetadata};
+use read_ahead::{clear_pending as clear_pending_read_ahead, consume_matching, ReadAhead};
 pub use region::{prepare_original_region_with_options, OriginalRegion, PreparedRegion};
 use resize::{image_filter_type, resize_rgba};
 use scheduler::{is_visible_page_index, prioritized_jobs, should_skip_ai_preview_or_prefetch};
@@ -727,11 +729,13 @@ fn run_worker(
     let mut cache_bytes = 0usize;
     let mut book_epoch = 0usize;
     let mut published_app_cache_hints = PublishedAppCacheHints::new();
+    let mut read_ahead: Option<ReadAhead> = None;
 
     while !shutdown_requested.load(Ordering::Acquire) {
         let Ok(command) = command_rx.recv() else {
             break;
         };
+        clear_pending_read_ahead(&mut read_ahead, "command");
         let previous_book_id = source.as_ref().map(|source| source.book_id().to_owned());
         let previous_decode = options.decode;
         let previous_target_long_edge = target_long_edge;
@@ -784,7 +788,7 @@ fn run_worker(
                 options.progressive_preview_enabled,
             );
 
-            for job in jobs {
+            for (job_position, job) in jobs.iter().copied().enumerate() {
                 if shutdown_requested.load(Ordering::Acquire) {
                     break 'work;
                 }
@@ -798,6 +802,7 @@ fn run_worker(
                     continue;
                 }
                 if let Some(command) = drain_latest_command(&command_rx) {
+                    clear_pending_read_ahead(&mut read_ahead, "command");
                     let previous_book_id =
                         source.as_ref().map(|source| source.book_id().to_owned());
                     let previous_decode = options.decode;
@@ -893,24 +898,47 @@ fn run_worker(
                     continue;
                 }
 
-                #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-                let read_started = Instant::now();
-                let read_result = active_source
-                    .read_page(job.index)
-                    .map_err(|error| error.to_string());
-                #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-                perf_trace::record_duration_if_at_least(
-                    "page_read",
-                    read_started.elapsed(),
-                    Duration::from_millis(25),
-                    &[
-                        PerfField::Usize("page", job.index),
-                        PerfField::Usize("book_epoch", book_epoch),
-                        PerfField::Bool("success", read_result.is_ok()),
-                    ],
-                );
+                let read_result =
+                    consume_matching(&mut read_ahead, &book_id, book_epoch, job.index)
+                        .unwrap_or_else(|| {
+                            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+                            let read_started = Instant::now();
+                            let read_result = active_source
+                                .read_page(job.index)
+                                .map_err(|error| error.to_string());
+                            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+                            perf_trace::record_duration_if_at_least(
+                                "page_read",
+                                read_started.elapsed(),
+                                Duration::from_millis(25),
+                                &[
+                                    PerfField::Usize("page", job.index),
+                                    PerfField::Usize("book_epoch", book_epoch),
+                                    PerfField::Bool("success", read_result.is_ok()),
+                                    PerfField::Bool("read_ahead", false),
+                                ],
+                            );
+                            read_result
+                        });
                 if shutdown_requested.load(Ordering::Acquire) {
                     break 'work;
+                }
+
+                if read_result.is_ok() {
+                    read_ahead::maybe_start(
+                        &mut read_ahead,
+                        &command_rx,
+                        &active_source,
+                        &book_id,
+                        book_epoch,
+                        &jobs,
+                        job_position.saturating_add(1),
+                        center,
+                        visible_pages,
+                        &options,
+                        &cache,
+                        &published_app_cache_hints,
+                    );
                 }
 
                 let result = read_result.and_then(|bytes| {
@@ -1002,6 +1030,7 @@ fn run_worker(
                         ctx.request_repaint();
 
                         if let Some(command) = drain_latest_command(&command_rx) {
+                            clear_pending_read_ahead(&mut read_ahead, "command");
                             let previous_book_id =
                                 source.as_ref().map(|source| source.book_id().to_owned());
                             let previous_decode = options.decode;
