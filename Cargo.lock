@@ -3807,6 +3807,7 @@ dependencies = [
  "kamadak-exif",
  "lcms2",
  "libavif",
+ "libwebp-sys",
  "lru",
  "pdfium-render",
  "png",

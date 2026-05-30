@@ -30,6 +30,8 @@ mod region;
 mod resize;
 mod scheduler;
 mod selection;
+#[cfg(feature = "native-webp")]
+mod webp;
 
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use cache::record_worker_cache_snapshot;
@@ -325,6 +327,7 @@ pub enum DecodeBackend {
     ZunePng,
     ImageWebp,
     LibWebp,
+    LibWebpScaled,
     GifCrate,
     BmpFastPath,
     IcoFastPath,
@@ -347,6 +350,7 @@ impl DecodeBackend {
             Self::ZunePng => "zune-png",
             Self::ImageWebp => "image-webp",
             Self::LibWebp => "libwebp",
+            Self::LibWebpScaled => "libwebp-scaled",
             Self::GifCrate => "gif-crate",
             Self::BmpFastPath => "bmp-fast",
             Self::IcoFastPath => "ico-fast",
