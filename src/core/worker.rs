@@ -38,6 +38,35 @@ use cache::{
     PublishedAppCacheHints,
 };
 use image_crate::{prepare_image_with_image_crate, prepare_image_with_image_crate_and_icc};
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+pub(super) fn record_prepare_stage(
+    stage: &'static str,
+    backend: DecodeBackend,
+    duration: Duration,
+    target_long_edge: u32,
+    source_bytes: usize,
+    original_width: u32,
+    original_height: u32,
+    display_width: u32,
+    display_height: u32,
+) {
+    perf_trace::record_duration_if_at_least(
+        "page_prepare_stage",
+        duration,
+        Duration::from_millis(1),
+        &[
+            PerfField::Str("stage", stage),
+            PerfField::Str("backend", backend.as_str()),
+            PerfField::U32("target_long_edge", target_long_edge),
+            PerfField::Usize("source_bytes", source_bytes),
+            PerfField::U32("original_width", original_width),
+            PerfField::U32("original_height", original_height),
+            PerfField::U32("display_width", display_width),
+            PerfField::U32("display_height", display_height),
+        ],
+    );
+}
 use metadata::{apply_exif_orientation_to_page, read_image_metadata, ImageMetadata};
 pub use region::{prepare_original_region_with_options, OriginalRegion, PreparedRegion};
 use scheduler::{is_visible_page_index, prioritized_jobs, should_skip_ai_preview_or_prefetch};

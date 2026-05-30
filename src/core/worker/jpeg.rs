@@ -6,6 +6,8 @@ use super::{
 use image::RgbaImage;
 use jpeg_decoder::{Decoder as JpegDecoder, PixelFormat};
 use std::io::Cursor;
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use std::time::Instant;
 
 pub(super) fn prepare_image_with_scaled_jpeg(
     bytes: &[u8],
@@ -17,6 +19,8 @@ pub(super) fn prepare_image_with_scaled_jpeg(
     }
 
     let target_long_edge = clamp_target_long_edge(target_long_edge);
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    let header_started = Instant::now();
     let mut decoder = JpegDecoder::new(Cursor::new(bytes));
     decoder.read_info().map_err(|error| error.to_string())?;
     let info = decoder
@@ -24,6 +28,18 @@ pub(super) fn prepare_image_with_scaled_jpeg(
         .ok_or_else(|| "JPEG header did not include dimensions".to_owned())?;
     let original_width = u32::from(info.width);
     let original_height = u32::from(info.height);
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    super::record_prepare_stage(
+        "jpeg_scaled_header",
+        DecodeBackend::JpegScaled,
+        header_started.elapsed(),
+        target_long_edge,
+        bytes.len(),
+        original_width,
+        original_height,
+        original_width,
+        original_height,
+    );
     reject_oversized_original(original_width, original_height)?;
 
     let (display_width, display_height) = display_dimensions_with_upscale(
@@ -41,25 +57,84 @@ pub(super) fn prepare_image_with_scaled_jpeg(
         PixelFormat::CMYK32 | PixelFormat::L16 => return Ok(None),
     }
 
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    let scale_started = Instant::now();
     decoder
         .scale(display_width as u16, display_height as u16)
         .map_err(|error| error.to_string())?;
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    super::record_prepare_stage(
+        "jpeg_scaled_choose_scale",
+        DecodeBackend::JpegScaled,
+        scale_started.elapsed(),
+        target_long_edge,
+        bytes.len(),
+        original_width,
+        original_height,
+        display_width,
+        display_height,
+    );
+
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    let decode_started = Instant::now();
     let pixels = decoder.decode().map_err(|error| error.to_string())?;
     let scaled_info = decoder
         .info()
         .ok_or_else(|| "JPEG decoder did not report scaled dimensions".to_owned())?;
     let scaled_width = u32::from(scaled_info.width);
     let scaled_height = u32::from(scaled_info.height);
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    super::record_prepare_stage(
+        "jpeg_scaled_decode",
+        DecodeBackend::JpegScaled,
+        decode_started.elapsed(),
+        target_long_edge,
+        bytes.len(),
+        original_width,
+        original_height,
+        scaled_width,
+        scaled_height,
+    );
+
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    let rgba_started = Instant::now();
     let rgba = jpeg_pixels_to_rgba(
         &pixels,
         scaled_info.pixel_format,
         scaled_width,
         scaled_height,
     )?;
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    super::record_prepare_stage(
+        "jpeg_scaled_rgba_expand",
+        DecodeBackend::JpegScaled,
+        rgba_started.elapsed(),
+        target_long_edge,
+        bytes.len(),
+        scaled_width,
+        scaled_height,
+        scaled_width,
+        scaled_height,
+    );
     let display = if scaled_width == display_width && scaled_height == display_height {
         rgba
     } else {
-        resize_rgba(&rgba, display_width, display_height, options.resize_filter)
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let resize_started = Instant::now();
+        let display = resize_rgba(&rgba, display_width, display_height, options.resize_filter);
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        super::record_prepare_stage(
+            "jpeg_scaled_resize",
+            DecodeBackend::JpegScaled,
+            resize_started.elapsed(),
+            target_long_edge,
+            bytes.len(),
+            scaled_width,
+            scaled_height,
+            display_width,
+            display_height,
+        );
+        display
     };
 
     prepared_page_from_rgba(

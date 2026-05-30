@@ -6,6 +6,8 @@ use super::{
 use crate::core::decoder_backend::{self, DecodedRgba, DecoderFormat};
 use crate::core::state::DecoderPreference;
 use image::RgbaImage;
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use std::time::Instant;
 
 pub(super) fn prepare_image_with_selected_decoder(
     bytes: &[u8],
@@ -362,8 +364,24 @@ fn prepare_direct_or_image_fallback(
     backend: DecodeBackend,
     decode: fn(&[u8]) -> Result<DecodedRgba, String>,
 ) -> Result<PreparedPage, String> {
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    let decode_started = Instant::now();
     match decode(bytes) {
-        Ok(decoded) => prepare_decoded_rgba(decoded, target_long_edge, options, backend),
+        Ok(decoded) => {
+            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+            super::record_prepare_stage(
+                "direct_decode",
+                backend,
+                decode_started.elapsed(),
+                target_long_edge,
+                bytes.len(),
+                decoded.width,
+                decoded.height,
+                decoded.width,
+                decoded.height,
+            );
+            prepare_decoded_rgba(decoded, target_long_edge, options, backend, bytes.len())
+        }
         Err(error) => {
             prepare_unavailable_or_image_fallback(bytes, target_long_edge, options, backend, &error)
         }
@@ -378,7 +396,7 @@ fn prepare_required_direct(
     decode: fn(&[u8]) -> Result<DecodedRgba, String>,
 ) -> Result<PreparedPage, String> {
     let decoded = decode(bytes)?;
-    prepare_decoded_rgba(decoded, target_long_edge, options, backend)
+    prepare_decoded_rgba(decoded, target_long_edge, options, backend, bytes.len())
 }
 
 #[cfg(feature = "native-ai")]
@@ -388,7 +406,13 @@ fn prepare_pdfium_ai_or_error(
     options: DecodeOptions,
 ) -> Result<PreparedPage, String> {
     let decoded = decoder_backend::decode_pdfium_ai(bytes, target_long_edge)?;
-    prepare_decoded_rgba(decoded, target_long_edge, options, DecodeBackend::PdfiumAi)
+    prepare_decoded_rgba(
+        decoded,
+        target_long_edge,
+        options,
+        DecodeBackend::PdfiumAi,
+        bytes.len(),
+    )
 }
 
 #[cfg(not(feature = "native-ai"))]
@@ -427,6 +451,7 @@ fn prepare_decoded_rgba(
     target_long_edge: u32,
     options: DecodeOptions,
     decode_backend: DecodeBackend,
+    _source_bytes: usize,
 ) -> Result<PreparedPage, String> {
     reject_oversized_original(decoded.width, decoded.height)?;
     let rgba = RgbaImage::from_raw(decoded.width, decoded.height, decoded.pixels)
@@ -441,7 +466,22 @@ fn prepare_decoded_rgba(
     let display = if display_width == decoded.width && display_height == decoded.height {
         rgba
     } else {
-        resize_rgba(&rgba, display_width, display_height, options.resize_filter)
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let resize_started = Instant::now();
+        let display = resize_rgba(&rgba, display_width, display_height, options.resize_filter);
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        super::record_prepare_stage(
+            "direct_resize",
+            decode_backend,
+            resize_started.elapsed(),
+            target_long_edge,
+            _source_bytes,
+            decoded.width,
+            decoded.height,
+            display_width,
+            display_height,
+        );
+        display
     };
     prepared_page_from_rgba(
         display.into_raw(),
