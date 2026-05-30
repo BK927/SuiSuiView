@@ -41,6 +41,7 @@ mod settings;
 mod settings_bookmarks;
 mod settings_input;
 mod settings_performance;
+mod texture_prewarm;
 mod ui;
 mod viewer;
 mod window;
@@ -1165,6 +1166,7 @@ impl eframe::App for SuiSuiViewApp {
         self.show_bookmark_popover(ctx);
         self.show_edge_prompt(ctx);
         self.drive_queued_page_turn_after_paint(ctx);
+        self.prewarm_neighbor_textures(ctx);
 
         if self.transition.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));

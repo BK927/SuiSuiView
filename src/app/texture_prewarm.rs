@@ -1,0 +1,222 @@
+use super::perf;
+use super::{
+    texture_options_for_target, PageCacheKey, SuiSuiViewApp, TextureCacheKey, TextureEntry,
+};
+use crate::core::effects::ViewEffects;
+use crate::core::worker::{NavigationDirection, MAX_TARGET_LONG_EDGE};
+use eframe::egui::{self, ImageData};
+use std::sync::Arc;
+use std::time::Duration;
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use std::time::Instant;
+
+const MAX_TEXTURE_PREWARMS_PER_FRAME: usize = 1;
+const PRIMARY_DIRECTION_TURNS: usize = 2;
+const SECONDARY_DIRECTION_TURNS: usize = 1;
+const PREWARM_REPAINT_DELAY: Duration = Duration::from_millis(16);
+
+impl SuiSuiViewApp {
+    pub(in crate::app) fn prewarm_neighbor_textures(&mut self, ctx: &egui::Context) {
+        if !self.can_prewarm_neighbor_textures() {
+            return;
+        }
+
+        let Some(source) = self.source.as_ref() else {
+            return;
+        };
+        if source.page_count() == 0 {
+            return;
+        }
+
+        let candidates = prewarm_candidate_pages_from_turns(
+            self.current_page,
+            self.last_nav_direction,
+            PRIMARY_DIRECTION_TURNS,
+            SECONDARY_DIRECTION_TURNS,
+            |page, direction| self.page_turn_target_from(page, direction),
+        );
+        let visible = self.spread_indices();
+        let mut uploads = 0usize;
+
+        'candidates: for page in candidates {
+            for index in self.spread_indices_for(page) {
+                if visible.contains(&index) {
+                    continue;
+                }
+                if !self.prewarm_page_texture(ctx, index) {
+                    continue;
+                }
+                uploads += 1;
+                if uploads >= MAX_TEXTURE_PREWARMS_PER_FRAME {
+                    break 'candidates;
+                }
+            }
+        }
+
+        if uploads >= MAX_TEXTURE_PREWARMS_PER_FRAME {
+            ctx.request_repaint_after(PREWARM_REPAINT_DELAY);
+        }
+    }
+
+    fn can_prewarm_neighbor_textures(&self) -> bool {
+        self.settings.prefetch_enabled
+            && perf::texture_prewarm_enabled()
+            && self.source.is_some()
+            && self.target_long_edge <= MAX_TARGET_LONG_EDGE
+            && self.effects == ViewEffects::default()
+            && !self.can_paint_wgsl_effects()
+            && !self.debug_compare.enabled
+            && self.transition.is_none()
+            && self.pending_page_turn.is_none()
+    }
+
+    fn prewarm_page_texture(&mut self, ctx: &egui::Context, index: usize) -> bool {
+        let requested = PageCacheKey {
+            index,
+            target_long_edge: self.target_long_edge,
+            decode: self.decode_options(),
+        };
+        let (best_key, upscaled) =
+            if let Some(best_key) = self.preferred_upscaled_page_key(requested) {
+                (best_key, true)
+            } else if let Some(best_key) = self.final_quality_page_key(requested) {
+                (best_key, false)
+            } else {
+                return false;
+            };
+        let texture_key = TextureCacheKey {
+            page: best_key,
+            effects: self.effects,
+            upscaled,
+        };
+        if self.textures.peek(&texture_key).is_some() {
+            return false;
+        }
+
+        let page = if upscaled {
+            self.upscaled_pages.get(&best_key)
+        } else {
+            self.decoded_pages.get(&best_key)
+        }
+        .cloned();
+        let Some(page) = page else {
+            return false;
+        };
+        if !self.texture_cache_has_room_for(page.byte_size) {
+            return false;
+        }
+
+        let image = Arc::new(page.color_image());
+        let byte_size = page.byte_size;
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let texture_started = Instant::now();
+        let texture = ctx.load_texture(
+            format!(
+                "page-{index}-{}-{}-{:?}",
+                best_key.target_long_edge,
+                if upscaled { "ai" } else { "base" },
+                self.effects
+            ),
+            ImageData::Color(image),
+            texture_options_for_target(best_key.target_long_edge),
+        );
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        perf::record_texture_prewarm(texture_started, index, best_key.target_long_edge, upscaled);
+        self.textures
+            .put(texture_key, TextureEntry { texture, byte_size });
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        self.record_cache_snapshot("texture_prewarm");
+        true
+    }
+
+    fn texture_cache_has_room_for(&self, byte_size: usize) -> bool {
+        self.texture_cache_bytes().saturating_add(byte_size) <= self.texture_cache_budget_bytes()
+    }
+}
+
+fn prewarm_candidate_pages_from_turns(
+    current_page: usize,
+    direction: NavigationDirection,
+    primary_turns: usize,
+    secondary_turns: usize,
+    mut page_turn_target_from: impl FnMut(usize, NavigationDirection) -> Option<usize>,
+) -> Vec<usize> {
+    let mut pages = Vec::with_capacity(primary_turns.saturating_add(secondary_turns));
+    push_direction_pages(
+        &mut pages,
+        current_page,
+        direction,
+        primary_turns,
+        &mut page_turn_target_from,
+    );
+    push_direction_pages(
+        &mut pages,
+        current_page,
+        opposite_direction(direction),
+        secondary_turns,
+        &mut page_turn_target_from,
+    );
+    pages
+}
+
+fn push_direction_pages(
+    pages: &mut Vec<usize>,
+    mut page: usize,
+    direction: NavigationDirection,
+    turns: usize,
+    page_turn_target_from: &mut impl FnMut(usize, NavigationDirection) -> Option<usize>,
+) {
+    for _ in 0..turns {
+        let Some(next_page) = page_turn_target_from(page, direction) else {
+            return;
+        };
+        page = next_page;
+        if !pages.contains(&page) {
+            pages.push(page);
+        }
+    }
+}
+
+fn opposite_direction(direction: NavigationDirection) -> NavigationDirection {
+    match direction {
+        NavigationDirection::Forward => NavigationDirection::Backward,
+        NavigationDirection::Backward => NavigationDirection::Forward,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn candidate_pages_prefer_last_navigation_direction() {
+        let pages = prewarm_candidate_pages_from_turns(
+            10,
+            NavigationDirection::Forward,
+            2,
+            1,
+            |page, direction| match direction {
+                NavigationDirection::Forward => Some(page + 2),
+                NavigationDirection::Backward => page.checked_sub(2),
+            },
+        );
+
+        assert_eq!(pages, vec![12, 14, 8]);
+    }
+
+    #[test]
+    fn candidate_pages_skip_duplicates_and_edges() {
+        let pages = prewarm_candidate_pages_from_turns(
+            0,
+            NavigationDirection::Backward,
+            2,
+            2,
+            |page, direction| match direction {
+                NavigationDirection::Forward => Some(page + 1),
+                NavigationDirection::Backward => page.checked_sub(1),
+            },
+        );
+
+        assert_eq!(pages, vec![1, 2]);
+    }
+}

@@ -23,6 +23,7 @@ const AUTO_PAGE_TURN_CLOSE_DELAY_MS_ENV: &str = "SUISUIVIEW_PERF_AUTO_PAGE_TURN_
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 const START_PAGE_INDEX_ENV: &str = "SUISUIVIEW_PERF_START_PAGE_INDEX";
 const ADJACENT_SEED_PREFETCH_ENV: &str = "SUISUIVIEW_EXPERIMENT_ADJACENT_SEED_PREFETCH";
+const TEXTURE_PREWARM_ENV: &str = "SUISUIVIEW_EXPERIMENT_TEXTURE_PREWARM";
 const ORIGINAL_TEXTURE_ONLY_ENV: &str = "SUISUIVIEW_EXPERIMENT_ORIGINAL_TEXTURE_ONLY";
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 const AUTO_PAGE_TURN_INITIAL_DELAY: Duration = Duration::from_millis(1500);
@@ -166,6 +167,13 @@ pub(super) fn adjacent_seed_prefetch_enabled() -> bool {
     })
 }
 
+pub(super) fn texture_prewarm_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        default_enabled_experiment_value(env::var(TEXTURE_PREWARM_ENV).ok().as_deref())
+    })
+}
+
 pub(super) fn original_texture_only_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -174,6 +182,10 @@ pub(super) fn original_texture_only_enabled() -> bool {
 }
 
 fn adjacent_seed_prefetch_value_enabled(value: Option<&str>) -> bool {
+    default_enabled_experiment_value(value)
+}
+
+fn default_enabled_experiment_value(value: Option<&str>) -> bool {
     !matches!(
         value.map(str::trim),
         Some(value)
@@ -372,6 +384,24 @@ pub(super) fn record_texture_load(
 ) {
     perf_trace::record_duration_if_at_least(
         "texture_load",
+        started.elapsed(),
+        Duration::from_millis(16),
+        &[
+            PerfField::Usize("page", page),
+            PerfField::U32("target_long_edge", target_long_edge),
+            PerfField::Bool("upscaled", upscaled),
+        ],
+    );
+}
+
+pub(super) fn record_texture_prewarm(
+    started: Instant,
+    page: usize,
+    target_long_edge: u32,
+    upscaled: bool,
+) {
+    perf_trace::record_duration_if_at_least(
+        "texture_prewarm",
         started.elapsed(),
         Duration::from_millis(16),
         &[
