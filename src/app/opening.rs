@@ -251,6 +251,7 @@ impl SuiSuiViewApp {
         self.ai_upscale_failures.clear();
         self.edge_prompt = None;
         self.transition = None;
+        self.clear_pending_page_turns();
         self.last_nav_direction = NavigationDirection::Forward;
         self.target_long_edge = seeded_page
             .as_ref()

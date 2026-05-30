@@ -5,6 +5,7 @@ use crate::core::effects::ViewEffects;
 use crate::core::state::{AppSettings, CacheMemoryMode, DisplayUpscaler, FitMode};
 use crate::core::worker::{
     clamp_target_long_edge, preview_prefetch_indices, CachedPageKey, DecodeOptions,
+    NavigationDirection, FULL_QUALITY_PREFETCH_BACKWARD_PAGES, FULL_QUALITY_PREFETCH_FORWARD_PAGES,
     MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
 use eframe::egui::{Rect, TextureHandle};
@@ -215,6 +216,8 @@ impl SuiSuiViewApp {
 
     fn pinned_page_indices(&self) -> HashSet<PageCacheKey> {
         let mut pinned = self.pin_keys_for_indices(&self.spread_indices(), self.target_long_edge);
+        pinned.extend(self.full_quality_prefetch_pin_keys());
+        pinned.extend(self.queued_page_turn_pin_keys());
         pinned.extend(self.debug_compare_pin_keys());
         if let Some(transition) = self.transition.as_ref() {
             pinned.extend(
@@ -226,6 +229,94 @@ impl SuiSuiViewApp {
             .saturating_sub(self.cached_decoded_bytes_for_keys(&pinned));
         pinned.extend(self.preview_prefetch_pin_keys(&pinned, preview_budget));
         pinned
+    }
+
+    fn full_quality_prefetch_pin_keys(&self) -> HashSet<PageCacheKey> {
+        if !self.settings.prefetch_enabled || self.target_long_edge > MAX_TARGET_LONG_EDGE {
+            return HashSet::new();
+        }
+        let Some(source) = self.source.as_ref() else {
+            return HashSet::new();
+        };
+        let indices = full_quality_prefetch_indices(
+            self.worker_center_page(),
+            source.page_count(),
+            self.last_nav_direction,
+        );
+        self.exact_prefetch_pin_keys_for_indices(&indices, self.exact_prefetch_pin_budget_bytes())
+    }
+
+    fn queued_page_turn_pin_keys(&self) -> HashSet<PageCacheKey> {
+        let Some(source) = self.source.as_ref() else {
+            return HashSet::new();
+        };
+        if source.page_count() == 0 {
+            return HashSet::new();
+        }
+
+        let mut keys = HashSet::new();
+        let mut page = self.current_page;
+        let mut direction = None;
+        if let Some(pending) = self.pending_page_turn {
+            page = pending.target;
+            direction = Some(pending.direction);
+            keys.extend(
+                self.pin_keys_for_indices(&self.spread_indices_for(page), self.target_long_edge),
+            );
+        }
+
+        let Some(queued) = self.queued_page_turns else {
+            return keys;
+        };
+        let direction = direction.unwrap_or(queued.direction);
+        if queued.direction != direction {
+            return keys;
+        }
+
+        let mut queued_indices = Vec::new();
+        for _ in 0..queued.remaining.min(MAX_QUEUED_PINNED_PAGE_TURNS) {
+            let Some(next_page) = self.page_turn_target_from(page, direction) else {
+                break;
+            };
+            page = next_page;
+            queued_indices.extend(self.spread_indices_for(page));
+        }
+        keys.extend(self.exact_prefetch_pin_keys_for_indices(
+            &queued_indices,
+            self.exact_prefetch_pin_budget_bytes(),
+        ));
+        keys
+    }
+
+    fn exact_prefetch_pin_budget_bytes(&self) -> usize {
+        self.cpu_cache_budget_bytes()
+            .saturating_mul(3)
+            .clamp(MIN_EXACT_PREFETCH_PIN_BYTES, MAX_EXACT_PREFETCH_PIN_BYTES)
+    }
+
+    fn exact_prefetch_pin_keys_for_indices(
+        &self,
+        indices: &[usize],
+        budget_bytes: usize,
+    ) -> HashSet<PageCacheKey> {
+        let mut keys = HashSet::new();
+        let mut pinned_bytes = 0usize;
+        for index in indices {
+            let key = PageCacheKey {
+                index: *index,
+                target_long_edge: self.target_long_edge,
+                decode: self.decode_options(),
+            };
+            let Some(byte_size) = self.decoded_page_byte_size(key) else {
+                continue;
+            };
+            if pinned_bytes.saturating_add(byte_size) > budget_bytes {
+                continue;
+            }
+            pinned_bytes = pinned_bytes.saturating_add(byte_size);
+            keys.insert(key);
+        }
+        keys
     }
 
     fn preview_prefetch_pin_keys(
@@ -346,6 +437,13 @@ impl SuiSuiViewApp {
         best_page_key_in_cache(&self.decoded_pages, requested)
     }
 
+    pub(in crate::app) fn final_quality_page_key(
+        &self,
+        requested: PageCacheKey,
+    ) -> Option<PageCacheKey> {
+        final_quality_page_key_in_cache(&self.decoded_pages, requested)
+    }
+
     pub(in crate::app) fn best_upscaled_page_key(
         &self,
         requested: PageCacheKey,
@@ -361,7 +459,7 @@ impl SuiSuiViewApp {
         if let Some(key) = self.preferred_upscaled_page_key(requested) {
             return page_cache_state_from_hit(Some(key), requested, true);
         }
-        if let Some(key) = self.best_page_key(requested) {
+        if let Some(key) = self.final_quality_page_key(requested) {
             return page_cache_state_from_hit(Some(key), requested, false);
         }
         perf::PageCacheState::Miss
@@ -437,8 +535,9 @@ const MAX_WORKER_CACHE_BYTES: usize = 48 * 1024 * 1024;
 const MAX_UPSCALED_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const MIN_TEXTURE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TEXTURE_CACHE_BYTES: usize = 128 * 1024 * 1024;
-const PREFETCH_FORWARD_PAGES: usize = 3;
-const PREFETCH_BACKWARD_PAGES: usize = 1;
+const MIN_EXACT_PREFETCH_PIN_BYTES: usize = 128 * 1024 * 1024;
+const MAX_EXACT_PREFETCH_PIN_BYTES: usize = 192 * 1024 * 1024;
+const MAX_QUEUED_PINNED_PAGE_TURNS: usize = 24;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CacheBudgetSummary {
@@ -484,8 +583,8 @@ fn worker_cache_budget_bytes_for(
 ) -> usize {
     let nearby_page_goal = visible_pages
         .max(1)
-        .saturating_add(PREFETCH_FORWARD_PAGES)
-        .saturating_add(PREFETCH_BACKWARD_PAGES);
+        .saturating_add(FULL_QUALITY_PREFETCH_FORWARD_PAGES)
+        .saturating_add(FULL_QUALITY_PREFETCH_BACKWARD_PAGES);
     let desired_prefetch_bytes =
         estimated_page_bytes_for_target(target_long_edge).saturating_mul(nearby_page_goal);
     let cpu_bounded_goal = desired_prefetch_bytes.min(cpu_budget_bytes.max(MIN_WORKER_CACHE_BYTES));
@@ -530,12 +629,58 @@ fn estimated_page_capacity(budget_bytes: usize, page_bytes: usize) -> usize {
     (budget_bytes / page_bytes).max(1)
 }
 
+fn full_quality_prefetch_indices(
+    center: usize,
+    page_count: usize,
+    direction: NavigationDirection,
+) -> Vec<usize> {
+    let mut indices = Vec::with_capacity(
+        FULL_QUALITY_PREFETCH_FORWARD_PAGES
+            .saturating_add(FULL_QUALITY_PREFETCH_BACKWARD_PAGES)
+            .saturating_add(1),
+    );
+    push_prefetch_index(&mut indices, center, page_count);
+    match direction {
+        NavigationDirection::Forward => {
+            for offset in 1..=FULL_QUALITY_PREFETCH_FORWARD_PAGES {
+                if let Some(index) = center.checked_add(offset) {
+                    push_prefetch_index(&mut indices, index, page_count);
+                }
+            }
+            for offset in 1..=FULL_QUALITY_PREFETCH_BACKWARD_PAGES {
+                if let Some(index) = center.checked_sub(offset) {
+                    push_prefetch_index(&mut indices, index, page_count);
+                }
+            }
+        }
+        NavigationDirection::Backward => {
+            for offset in 1..=FULL_QUALITY_PREFETCH_FORWARD_PAGES {
+                if let Some(index) = center.checked_sub(offset) {
+                    push_prefetch_index(&mut indices, index, page_count);
+                }
+            }
+            for offset in 1..=FULL_QUALITY_PREFETCH_BACKWARD_PAGES {
+                if let Some(index) = center.checked_add(offset) {
+                    push_prefetch_index(&mut indices, index, page_count);
+                }
+            }
+        }
+    }
+    indices
+}
+
+fn push_prefetch_index(indices: &mut Vec<usize>, index: usize, page_count: usize) {
+    if index < page_count && !indices.contains(&index) {
+        indices.push(index);
+    }
+}
+
 pub(in crate::app) fn best_page_key_in_cache(
     cache: &LruCache<PageCacheKey, Arc<crate::core::worker::PreparedPage>>,
     requested: PageCacheKey,
 ) -> Option<PageCacheKey> {
-    if cache.peek(&requested).is_some() {
-        return Some(requested);
+    if let Some(final_key) = final_quality_page_key_in_cache(cache, requested) {
+        return Some(final_key);
     }
 
     let mut best_smaller = None;
@@ -562,6 +707,28 @@ pub(in crate::app) fn best_page_key_in_cache(
     }
 
     best_smaller.or(smallest_any)
+}
+
+pub(in crate::app) fn final_quality_page_key_in_cache(
+    cache: &LruCache<PageCacheKey, Arc<crate::core::worker::PreparedPage>>,
+    requested: PageCacheKey,
+) -> Option<PageCacheKey> {
+    let requested_allows_original = requested.target_long_edge > MAX_TARGET_LONG_EDGE;
+    cache
+        .iter()
+        .filter_map(|(key, _page)| {
+            if key.index != requested.index || key.decode != requested.decode {
+                return None;
+            }
+            if key.target_long_edge < requested.target_long_edge {
+                return None;
+            }
+            if !requested_allows_original && key.target_long_edge > MAX_TARGET_LONG_EDGE {
+                return None;
+            }
+            Some(*key)
+        })
+        .min_by_key(|key| key.target_long_edge)
 }
 
 pub(in crate::app) fn best_page_key_at_or_below_in_cache(

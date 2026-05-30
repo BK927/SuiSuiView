@@ -89,6 +89,7 @@ impl SuiSuiViewApp {
         }
 
         self.target_long_edge = next;
+        self.clear_pending_page_turns();
         self.worker.set_page(
             self.worker_center_page(),
             self.last_nav_direction,

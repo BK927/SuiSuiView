@@ -52,8 +52,9 @@ use crate::core::worker::preview_prefetch_indices;
 #[cfg(test)]
 use cache::{
     automatic_cache_budget_bytes_for_total, best_page_key_at_or_below_in_cache,
-    best_page_key_in_cache, cache_budget_bytes, lower_resolution_page_keys,
-    page_cache_state_from_hit, preferred_page_key_in_cache, texture_cache_budget_bytes_for,
+    best_page_key_in_cache, cache_budget_bytes, final_quality_page_key_in_cache,
+    lower_resolution_page_keys, page_cache_state_from_hit, preferred_page_key_in_cache,
+    texture_cache_budget_bytes_for,
 };
 pub(in crate::app) use cache::{
     cache_budget_summary, gpu_visual_needs_wgsl, rect_target_size,
@@ -69,11 +70,11 @@ pub(in crate::app) use opening::{
 #[cfg(test)]
 use viewer::{
     double_spread_indices, ordered_spread_indices, relative_difference,
-    smart_spread_indices_for_metrics, transition_paint_params, worker_center_page_for_mode,
+    smart_spread_indices_for_metrics, transition_paint_params,
 };
 pub(in crate::app) use viewer::{
-    page_visual_size, texture_options_for_target, transition_screen_sign, PageMetrics, PageVisual,
-    Transition, ViewMode,
+    page_visual_size, texture_options_for_target, transition_screen_sign,
+    worker_center_page_for_mode, PageMetrics, PageVisual, Transition, ViewMode,
 };
 
 #[cfg(test)]
@@ -110,6 +111,18 @@ impl WindowTitleSnapshot {
 struct BookmarkDeleteDialog {
     scope: BookmarkFilter,
     count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingPageTurn {
+    target: usize,
+    direction: NavigationDirection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QueuedPageTurns {
+    direction: NavigationDirection,
+    remaining: usize,
 }
 
 pub struct SuiSuiViewApp {
@@ -169,6 +182,9 @@ pub struct SuiSuiViewApp {
     ai_upscale_failures: HashSet<PageCacheKey>,
     last_nav_direction: NavigationDirection,
     transition: Option<Transition>,
+    pending_page_turn: Option<PendingPageTurn>,
+    queued_page_turns: Option<QueuedPageTurns>,
+    page_turn_paint_hold: bool,
     fullscreen: bool,
     maximized: bool,
     window_position_checked: bool,
@@ -275,6 +291,9 @@ impl SuiSuiViewApp {
             ai_upscale_failures: HashSet::new(),
             last_nav_direction: NavigationDirection::Forward,
             transition: None,
+            pending_page_turn: None,
+            queued_page_turns: None,
+            page_turn_paint_hold: false,
             fullscreen: false,
             maximized: false,
             window_position_checked: false,
@@ -447,25 +466,9 @@ impl SuiSuiViewApp {
                         .insert(index, PageMetrics::from_page(&page));
                     self.insert_prepared_page(key, page);
                     self.prune_decoded_cache();
+                    self.commit_pending_page_turn_if_ready();
                     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
                     self.record_cache_snapshot("page_ready");
-                    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-                    if self
-                        .page_turn_started_at
-                        .as_ref()
-                        .is_some_and(|(page, _started)| *page == index)
-                    {
-                        let (_page, started) = self
-                            .page_turn_started_at
-                            .take()
-                            .expect("checked pending page turn");
-                        perf::record_page_turn_ready(
-                            started,
-                            perf::PageCacheState::Miss,
-                            index,
-                            key.target_long_edge,
-                        );
-                    }
                 }
                 WorkerEvent::PageFailed {
                     book_id,
@@ -478,6 +481,7 @@ impl SuiSuiViewApp {
                     && self.target_is_relevant(target_long_edge) =>
                 {
                     self.page_errors.insert(index, message);
+                    self.commit_pending_page_turn_if_ready();
                 }
                 _ => {}
             }
@@ -1153,6 +1157,7 @@ impl eframe::App for SuiSuiViewApp {
 
         self.show_bookmark_popover(ctx);
         self.show_edge_prompt(ctx);
+        self.drive_queued_page_turn_after_paint(ctx);
 
         if self.transition.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));
@@ -1312,14 +1317,15 @@ mod tests {
     use super::{
         adjacent_sibling_book_paths, ai_prefetch_pages_for, apply_effects_to_image,
         best_page_key_at_or_below_in_cache, best_page_key_in_cache, command_for_shortcut,
-        delete_target_for, double_spread_indices, gpu_visual_needs_wgsl, korean_font_candidates,
-        load_first_existing_font, lower_resolution_page_keys, ordered_spread_indices,
-        page_cache_state_from_hit, platform, preferred_page_key_in_cache, preview_prefetch_indices,
-        relative_difference, sanitize_font_name, should_allow_cpu_display_upscale,
-        sibling_book_path, smart_spread_indices_for_metrics, texture_cache_budget_bytes_for,
-        transformed_page_size, transition_paint_params, transition_screen_sign,
-        worker_center_page_for_mode, AppCommand, DeleteMode, ImageFilter, OpenOrigin, PageCacheKey,
-        PageMetrics, TextureCacheKey, ViewEffects, ViewMode, ViewTransform,
+        delete_target_for, double_spread_indices, final_quality_page_key_in_cache,
+        gpu_visual_needs_wgsl, korean_font_candidates, load_first_existing_font,
+        lower_resolution_page_keys, ordered_spread_indices, page_cache_state_from_hit, platform,
+        preferred_page_key_in_cache, preview_prefetch_indices, relative_difference,
+        sanitize_font_name, should_allow_cpu_display_upscale, sibling_book_path,
+        smart_spread_indices_for_metrics, texture_cache_budget_bytes_for, transformed_page_size,
+        transition_paint_params, transition_screen_sign, worker_center_page_for_mode, AppCommand,
+        DeleteMode, ImageFilter, OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey,
+        ViewEffects, ViewMode, ViewTransform,
     };
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
@@ -1494,6 +1500,37 @@ mod tests {
 
         assert_eq!(best_page_key_in_cache(&cache, requested), None);
         assert_eq!(best_page_key_in_cache(&cache, original), Some(original));
+    }
+
+    #[test]
+    fn final_quality_page_key_rejects_previews_for_navigation_commit() {
+        let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let requested = PageCacheKey {
+            index: 7,
+            target_long_edge: 2048,
+            decode: DecodeOptions::default(),
+        };
+        let preview = PageCacheKey {
+            target_long_edge: PREVIEW_TARGET_LONG_EDGE,
+            ..requested
+        };
+        let exact_or_better = PageCacheKey {
+            target_long_edge: 4096,
+            ..requested
+        };
+
+        cache.put(preview, dummy_page(PREVIEW_TARGET_LONG_EDGE));
+        assert_eq!(final_quality_page_key_in_cache(&cache, requested), None);
+
+        cache.put(exact_or_better, dummy_page(4096));
+        assert_eq!(
+            final_quality_page_key_in_cache(&cache, requested),
+            Some(exact_or_better)
+        );
+        assert_eq!(
+            best_page_key_in_cache(&cache, requested),
+            Some(exact_or_better)
+        );
     }
 
     #[test]

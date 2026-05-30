@@ -1,6 +1,6 @@
 use super::{
-    edge_prompt_button, perf, sibling_book_path, transition_screen_sign, ui, OpenOrigin,
-    SuiSuiViewApp, Transition, ViewMode,
+    edge_prompt_button, perf, sibling_book_path, transition_screen_sign, ui,
+    worker_center_page_for_mode, OpenOrigin, PageCacheKey, SuiSuiViewApp, Transition, ViewMode,
 };
 use crate::core::effects::{transform_status_suffix, ViewEffects};
 use crate::core::state::{
@@ -9,7 +9,10 @@ use crate::core::state::{
 use crate::core::worker::{DecodeOptions, NavigationDirection};
 use eframe::egui::{self, Color32, Pos2, RichText, Stroke, Vec2};
 use std::path::PathBuf;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const MAX_QUEUED_PAGE_TURNS: usize = 128;
+const MAX_QUEUED_WORKER_VISIBLE_PAGES: usize = 25;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) struct EdgePrompt {
@@ -18,48 +21,53 @@ pub(in crate::app) struct EdgePrompt {
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn next_page(&mut self) {
-        let Some(source) = self.source.as_ref() else {
-            return;
-        };
-        let max_page = source.page_count().saturating_sub(1);
-        let target = if self.view_mode.is_smart() {
-            let indices = self.spread_indices_for_unordered(self.current_page);
-            let last = indices.last().copied().unwrap_or(self.current_page);
-            if last >= max_page {
-                self.handle_edge_page(NavigationDirection::Forward);
-                return;
-            }
-            last.saturating_add(1).min(max_page)
+        let direction = NavigationDirection::Forward;
+        if let Some(target) = self.page_turn_target(direction) {
+            self.set_page(target, direction);
         } else {
-            if self.current_page >= max_page {
-                self.handle_edge_page(NavigationDirection::Forward);
-                return;
-            }
-            self.current_page
-                .saturating_add(self.view_mode.step())
-                .min(max_page)
-        };
-        self.set_page(target, NavigationDirection::Forward);
+            self.handle_edge_page(direction);
+        }
     }
 
     pub(in crate::app) fn previous_page(&mut self) {
-        let target = if self.view_mode.is_smart() {
-            let indices = self.spread_indices_for_unordered(self.current_page);
-            let first = indices.first().copied().unwrap_or(self.current_page);
-            if first == 0 {
-                self.handle_edge_page(NavigationDirection::Backward);
-                return;
-            }
-            first.saturating_sub(1)
+        let direction = NavigationDirection::Backward;
+        if let Some(target) = self.page_turn_target(direction) {
+            self.set_page(target, direction);
         } else {
-            if self.current_page == 0 {
-                self.handle_edge_page(NavigationDirection::Backward);
-                return;
+            self.handle_edge_page(direction);
+        }
+    }
+
+    fn page_turn_target(&self, direction: NavigationDirection) -> Option<usize> {
+        self.page_turn_target_from(self.current_page, direction)
+    }
+
+    pub(in crate::app) fn page_turn_target_from(
+        &self,
+        page: usize,
+        direction: NavigationDirection,
+    ) -> Option<usize> {
+        let source = self.source.as_ref()?;
+        let max_page = source.page_count().saturating_sub(1);
+        let page = page.min(max_page);
+        match direction {
+            NavigationDirection::Forward if self.view_mode.is_smart() => {
+                let indices = self.spread_indices_for_unordered(page);
+                let last = indices.last().copied().unwrap_or(page);
+                (last < max_page).then(|| last.saturating_add(1).min(max_page))
             }
-            let step = self.view_mode.step();
-            self.current_page.saturating_sub(step)
-        };
-        self.set_page(target, NavigationDirection::Backward);
+            NavigationDirection::Forward => {
+                (page < max_page).then(|| page.saturating_add(self.view_mode.step()).min(max_page))
+            }
+            NavigationDirection::Backward if self.view_mode.is_smart() => {
+                let indices = self.spread_indices_for_unordered(page);
+                let first = indices.first().copied().unwrap_or(page);
+                (first > 0).then(|| first.saturating_sub(1))
+            }
+            NavigationDirection::Backward => {
+                (page > 0).then(|| page.saturating_sub(self.view_mode.step()))
+            }
+        }
     }
 
     pub(in crate::app) fn move_pages(&mut self, delta: isize) {
@@ -254,6 +262,10 @@ impl SuiSuiViewApp {
         if target == self.current_page {
             return;
         }
+        if self.pending_page_turn.is_some() || self.page_turn_paint_hold {
+            self.queue_page_turn(direction);
+            return;
+        }
         self.edge_prompt = None;
 
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -267,10 +279,6 @@ impl SuiSuiViewApp {
             };
             self.page_turn_cache_state(requested_key)
         };
-        let previous_indices = self.spread_indices_for(self.current_page);
-        self.current_page = target;
-        self.last_nav_direction = direction;
-        self.pan = Vec2::ZERO;
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::record_page_turn_request(cache_state, target, self.target_long_edge);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -282,6 +290,185 @@ impl SuiSuiViewApp {
         }
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         self.record_cache_snapshot("page_turn");
+
+        if !self.page_turn_target_ready(target) {
+            self.defer_page_turn(target, direction);
+            return;
+        }
+
+        self.commit_page_turn(target, direction);
+    }
+
+    fn defer_page_turn(&mut self, target: usize, direction: NavigationDirection) {
+        self.pending_page_turn = Some(super::PendingPageTurn { target, direction });
+        self.last_nav_direction = direction;
+        self.request_pending_page_turn_work();
+    }
+
+    pub(in crate::app) fn commit_pending_page_turn_if_ready(&mut self) {
+        let Some(pending) = self.pending_page_turn else {
+            return;
+        };
+        if !self.page_turn_target_ready(pending.target) {
+            return;
+        }
+        self.pending_page_turn = None;
+        self.commit_page_turn(pending.target, pending.direction);
+        self.page_turn_paint_hold = true;
+        self.egui_ctx
+            .request_repaint_after(Duration::from_millis(16));
+    }
+
+    fn queue_page_turn(&mut self, direction: NavigationDirection) {
+        self.edge_prompt = None;
+        if let Some(pending) = self.pending_page_turn {
+            if pending.direction != direction {
+                self.cancel_or_rewind_queued_page_turn(direction);
+                return;
+            }
+        }
+
+        match self.queued_page_turns.as_mut() {
+            Some(queued) if queued.direction == direction => {
+                queued.remaining = queued
+                    .remaining
+                    .saturating_add(1)
+                    .min(MAX_QUEUED_PAGE_TURNS);
+            }
+            Some(queued) if queued.remaining > 1 => {
+                queued.remaining -= 1;
+            }
+            Some(_) => {
+                self.queued_page_turns = None;
+            }
+            None => {
+                self.queued_page_turns = Some(super::QueuedPageTurns {
+                    direction,
+                    remaining: 1,
+                });
+            }
+        }
+        self.request_pending_page_turn_work();
+        self.egui_ctx
+            .request_repaint_after(Duration::from_millis(16));
+    }
+
+    fn cancel_or_rewind_queued_page_turn(&mut self, direction: NavigationDirection) {
+        match self.queued_page_turns.as_mut() {
+            Some(queued) if queued.remaining > 1 => {
+                queued.remaining -= 1;
+            }
+            Some(_) => {
+                self.queued_page_turns = None;
+            }
+            None => {
+                self.clear_pending_page_turns();
+                self.queue_page_turn(direction);
+            }
+        }
+    }
+
+    pub(in crate::app) fn drive_queued_page_turn_after_paint(&mut self, ctx: &egui::Context) {
+        self.page_turn_paint_hold = false;
+        if self.pending_page_turn.is_some() {
+            return;
+        }
+        let Some(mut queued) = self.queued_page_turns.take() else {
+            return;
+        };
+        if queued.remaining == 0 {
+            return;
+        }
+        let direction = queued.direction;
+        queued.remaining -= 1;
+
+        if let Some(target) = self.page_turn_target(direction) {
+            if queued.remaining > 0 {
+                self.queued_page_turns = Some(queued);
+            }
+            self.set_page(target, direction);
+            if self.queued_page_turns.is_some() || self.pending_page_turn.is_some() {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
+        } else {
+            self.handle_edge_page(direction);
+        }
+    }
+
+    pub(in crate::app) fn clear_pending_page_turns(&mut self) {
+        self.pending_page_turn = None;
+        self.queued_page_turns = None;
+        self.page_turn_paint_hold = false;
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        {
+            self.page_turn_started_at = None;
+        }
+    }
+
+    fn request_pending_page_turn_work(&mut self) {
+        let Some(pending) = self.pending_page_turn else {
+            return;
+        };
+        self.worker.set_page(
+            worker_center_page_for_mode(pending.target, self.view_mode),
+            pending.direction,
+            self.target_long_edge,
+            self.queued_worker_visible_page_count(),
+            self.worker_options(),
+        );
+    }
+
+    fn queued_worker_visible_page_count(&self) -> usize {
+        self.visible_page_count()
+            .saturating_add(
+                self.queued_page_turns
+                    .map(|queued| queued.remaining)
+                    .unwrap_or(0),
+            )
+            .clamp(1, MAX_QUEUED_WORKER_VISIBLE_PAGES)
+    }
+
+    fn page_turn_target_ready(&self, target: usize) -> bool {
+        let indices = self.spread_indices_for(target);
+        if indices.is_empty() {
+            return false;
+        }
+        let decode = self.decode_options();
+        indices.iter().all(|index| {
+            self.page_errors.contains_key(index)
+                || self
+                    .final_quality_page_key(PageCacheKey {
+                        index: *index,
+                        target_long_edge: self.target_long_edge,
+                        decode,
+                    })
+                    .is_some()
+        })
+    }
+
+    fn commit_page_turn(&mut self, target: usize, direction: NavigationDirection) {
+        let previous_indices = self.spread_indices_for(self.current_page);
+        self.current_page = target;
+        self.last_nav_direction = direction;
+        self.pan = Vec2::ZERO;
+
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        if self
+            .page_turn_started_at
+            .as_ref()
+            .is_some_and(|(page, _started)| *page == target)
+        {
+            let (_page, started) = self
+                .page_turn_started_at
+                .take()
+                .expect("checked pending page turn");
+            perf::record_page_turn_ready(
+                started,
+                perf::PageCacheState::Miss,
+                target,
+                self.target_long_edge,
+            );
+        }
 
         let transition_style = self.active_page_transition_style();
         if transition_style != PageTransitionStyle::None {
@@ -300,7 +487,7 @@ impl SuiSuiViewApp {
             self.worker_center_page(),
             direction,
             self.target_long_edge,
-            self.visible_page_count(),
+            self.queued_worker_visible_page_count(),
             self.worker_options(),
         );
         self.persist_current_bookmark_deferred();
@@ -313,6 +500,7 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn adjust_zoom(&mut self, factor: f32) {
         let previous_decode = self.decode_options();
+        self.clear_pending_page_turns();
         self.fit_mode = FitMode::Manual;
         self.manual_zoom = (self.manual_zoom * factor).clamp(0.1, 8.0);
         self.request_page_if_decode_changed(previous_decode);
@@ -321,6 +509,7 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn adjust_zoom_by_delta(&mut self, delta: f32) {
         let previous_decode = self.decode_options();
+        self.clear_pending_page_turns();
         self.fit_mode = FitMode::Manual;
         self.manual_zoom = (self.manual_zoom + delta).clamp(0.1, 8.0);
         self.request_page_if_decode_changed(previous_decode);
@@ -329,6 +518,7 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn set_fit_mode(&mut self, mode: FitMode) {
         let previous_decode = self.decode_options();
+        self.clear_pending_page_turns();
         self.fit_mode = mode;
         if mode == FitMode::Original {
             self.manual_zoom = 1.0;
@@ -354,6 +544,7 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn set_double_mode(&mut self, direction: ReadingDirection) {
+        self.clear_pending_page_turns();
         self.view_mode = match direction {
             ReadingDirection::LeftToRight => ViewMode::DoubleLeftToRight,
             ReadingDirection::RightToLeft => ViewMode::DoubleRightToLeft,
@@ -371,6 +562,7 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn toggle_double_mode(&mut self) {
+        self.clear_pending_page_turns();
         self.view_mode = match self.view_mode {
             ViewMode::Single => match self.reading_direction {
                 ReadingDirection::LeftToRight => ViewMode::DoubleLeftToRight,
