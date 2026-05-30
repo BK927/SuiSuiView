@@ -182,20 +182,26 @@ impl SuiSuiViewApp {
             return;
         }
 
-        let (scroll_y, ctrl) = ui.input(|input| (input.raw_scroll_delta.y, input.modifiers.ctrl));
-        if scroll_y.abs() < 1.0 {
-            return;
-        }
-
+        let (scroll_y, ctrl, zoom_delta) = ui.input(|input| {
+            (
+                input.raw_scroll_delta.y,
+                input.modifiers.ctrl,
+                input.zoom_delta(),
+            )
+        });
         if ctrl {
-            let gesture = if scroll_y > 0.0 {
-                MouseGesture::CtrlWheelUp
-            } else {
-                MouseGesture::CtrlWheelDown
+            let Some(gesture) = ctrl_wheel_gesture(scroll_y, zoom_delta) else {
+                return;
             };
             if let Some(command) = command_for_mouse_gesture(gesture, &self.settings) {
                 self.apply_command(ui.ctx(), command);
             }
+        } else if let Some(gesture) = zoom_delta_gesture(zoom_delta) {
+            if let Some(command) = command_for_mouse_gesture(gesture, &self.settings) {
+                self.apply_command(ui.ctx(), command);
+            }
+        } else if scroll_y.abs() < 1.0 {
+            return;
         } else if self.settings.wheel_mode == WheelMode::ScrollWhenZoomed
             && self.fit_mode == FitMode::Manual
             && self.manual_zoom > 1.01
@@ -213,6 +219,27 @@ impl SuiSuiViewApp {
                 self.apply_command(ui.ctx(), command);
             }
         }
+    }
+}
+
+fn ctrl_wheel_gesture(scroll_y: f32, zoom_delta: f32) -> Option<MouseGesture> {
+    if scroll_y.abs() >= 1.0 {
+        return Some(if scroll_y > 0.0 {
+            MouseGesture::CtrlWheelUp
+        } else {
+            MouseGesture::CtrlWheelDown
+        });
+    }
+    zoom_delta_gesture(zoom_delta)
+}
+
+fn zoom_delta_gesture(zoom_delta: f32) -> Option<MouseGesture> {
+    if zoom_delta > 1.001 {
+        Some(MouseGesture::CtrlWheelUp)
+    } else if zoom_delta < 0.999 {
+        Some(MouseGesture::CtrlWheelDown)
+    } else {
+        None
     }
 }
 
@@ -274,8 +301,8 @@ fn original_inspection_target_long_edge(
 
 #[cfg(test)]
 mod tests {
-    use super::target_long_edge_for_view;
-    use crate::core::state::FitMode;
+    use super::{ctrl_wheel_gesture, target_long_edge_for_view, zoom_delta_gesture};
+    use crate::core::state::{FitMode, MouseGesture};
     use crate::core::worker::MAX_TARGET_LONG_EDGE;
     use eframe::egui::Vec2;
 
@@ -326,6 +353,38 @@ mod tests {
         assert_eq!(
             target_long_edge_for_view(FitMode::Original, 1.0, Vec2::new(1200.0, 1600.0), 1.0, None,),
             2560
+        );
+    }
+
+    #[test]
+    fn ctrl_wheel_gesture_accepts_egui_zoom_delta() {
+        assert_eq!(
+            ctrl_wheel_gesture(0.0, 1.1),
+            Some(MouseGesture::CtrlWheelUp)
+        );
+        assert_eq!(
+            ctrl_wheel_gesture(0.0, 0.9),
+            Some(MouseGesture::CtrlWheelDown)
+        );
+        assert_eq!(ctrl_wheel_gesture(0.0, 1.0), None);
+    }
+
+    #[test]
+    fn zoom_delta_gesture_does_not_require_modifier_state() {
+        assert_eq!(zoom_delta_gesture(1.1), Some(MouseGesture::CtrlWheelUp));
+        assert_eq!(zoom_delta_gesture(0.9), Some(MouseGesture::CtrlWheelDown));
+        assert_eq!(zoom_delta_gesture(1.0), None);
+    }
+
+    #[test]
+    fn ctrl_wheel_gesture_prefers_raw_scroll_direction() {
+        assert_eq!(
+            ctrl_wheel_gesture(120.0, 0.9),
+            Some(MouseGesture::CtrlWheelUp)
+        );
+        assert_eq!(
+            ctrl_wheel_gesture(-120.0, 1.1),
+            Some(MouseGesture::CtrlWheelDown)
         );
     }
 }
