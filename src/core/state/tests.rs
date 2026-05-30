@@ -1,7 +1,7 @@
 use super::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, DecodeMode,
-    DecoderPreferences, DisplayUpscaler, EdgePageAction, GpuEffectMode, PersistedState,
-    RendererMode, ResizeFilter, WheelMode, WindowPlacement,
+    DecoderPreferences, DisplayUpscaler, EdgePageAction, GpuEffectMode, PageTransitionStyle,
+    PersistedState, RendererMode, ResizeFilter, WheelMode, WindowPlacement,
 };
 
 #[test]
@@ -42,6 +42,13 @@ fn settings_defaults_match_viewer_policy() {
     assert_eq!(settings.gpu_effect_mode, GpuEffectMode::Auto);
     assert_eq!(settings.renderer_mode, RendererMode::LowMemoryGlow);
     assert_eq!(settings.display_upscaler, DisplayUpscaler::None);
+    assert!(settings.prefetch_enabled);
+    assert!(!settings.progressive_preview_enabled);
+    assert!(!settings.transition_effect);
+    assert_eq!(
+        settings.effective_page_transition_style(),
+        PageTransitionStyle::None
+    );
     assert_eq!(settings.cache_memory_mode, CacheMemoryMode::Auto);
     assert_eq!(settings.manual_cache_mb, 160);
     assert!(settings.apply_exif_orientation);

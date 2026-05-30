@@ -440,14 +440,14 @@ pub struct AppSettings {
     pub display_upscaler: DisplayUpscaler,
     #[serde(default = "default_true")]
     pub prefetch_enabled: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub progressive_preview_enabled: bool,
     #[serde(default)]
     pub cache_memory_mode: CacheMemoryMode,
     #[serde(default = "default_manual_cache_mb")]
     pub manual_cache_mb: u32,
 
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub transition_effect: bool,
     #[serde(default)]
     pub page_transition_style: PageTransitionStyle,
@@ -537,10 +537,10 @@ impl Default for AppSettings {
             renderer_mode: RendererMode::LowMemoryGlow,
             display_upscaler: DisplayUpscaler::None,
             prefetch_enabled: true,
-            progressive_preview_enabled: true,
+            progressive_preview_enabled: false,
             cache_memory_mode: CacheMemoryMode::Auto,
             manual_cache_mb: default_manual_cache_mb(),
-            transition_effect: true,
+            transition_effect: false,
             page_transition_style: PageTransitionStyle::SlideFade,
             large_image_anchor: LargeImageAnchor::Center,
             remember_zoom_per_book: false,

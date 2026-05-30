@@ -576,8 +576,8 @@ mod tests {
     }
 
     #[test]
-    fn settings_default_uses_slide_fade_transition() {
-        assert!(AppSettings::default().transition_effect);
+    fn settings_default_keeps_transition_off_for_parity() {
+        assert!(!AppSettings::default().transition_effect);
         assert_eq!(
             AppSettings::default().page_transition_style,
             super::super::PageTransitionStyle::SlideFade
