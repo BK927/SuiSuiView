@@ -25,6 +25,7 @@ mod image_crate;
 mod jpeg;
 mod metadata;
 mod png;
+mod region;
 mod scheduler;
 mod selection;
 
@@ -36,6 +37,7 @@ use cache::{
 };
 use image_crate::{prepare_image_with_image_crate, prepare_image_with_image_crate_and_icc};
 use metadata::{apply_exif_orientation_to_page, read_image_metadata, ImageMetadata};
+pub use region::{prepare_original_region_with_options, OriginalRegion, PreparedRegion};
 use scheduler::{prioritized_jobs, should_skip_ai_preview_or_prefetch};
 #[cfg(test)]
 use selection::prepare_unavailable_or_image_fallback;

@@ -7,6 +7,7 @@ pub mod gpu_copy_bench;
 pub mod gpu_effect;
 pub mod image_info;
 pub mod natural;
+pub mod original_region_bench;
 pub mod perf;
 pub mod perf_trace;
 pub mod quality;

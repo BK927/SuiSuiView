@@ -1,9 +1,13 @@
-use crate::core::worker::{DecodeStrategy, DEFAULT_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE};
+use crate::core::worker::{
+    DecodeStrategy, OriginalRegion, DEFAULT_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE,
+};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod decoder_bench_args;
+mod gpu_copy_args;
+mod original_region_args;
 
 const CLI_NAME: &str = "suisuiview-cli";
 
@@ -21,6 +25,7 @@ Usage:
   suisuiview-cli --upscale-quality-scan <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-quality-report <report.json>] [--upscale-quality-report-default] [--upscale-quality-visuals <dir>]
   suisuiview-cli --gpu-copy-bench <path> [--target-long-edge <px>] [--gpu-copy-iterations <count>] [--gpu-copy-max-pages <count>] [--gpu-copy-report <report.json>] [--gpu-copy-report-default]
   suisuiview-cli --decoder-bench <path> [--decoder-iterations <count>] [--decoder-max-pages <count>] [--decoder-report <report.json>] [--decoder-report-default]
+  suisuiview-cli --original-region-bench <path> --region <x,y,width,height> [--page-index <index>] [--region-iterations <count>] [--region-report <report.json>] [--region-report-default]
 
 Options:
   -h, --help    Show this help.
@@ -77,6 +82,13 @@ pub enum CliCommand {
         path: PathBuf,
         iterations: usize,
         max_pages: usize,
+        report_path: Option<PathBuf>,
+    },
+    OriginalRegionBench {
+        path: PathBuf,
+        page_index: usize,
+        region: OriginalRegion,
+        iterations: usize,
         report_path: Option<PathBuf>,
     },
 }
@@ -145,10 +157,13 @@ pub fn parse_args(args: Vec<OsString>) -> Result<CliAction, CliError> {
         return parse_upscale_quality_scan(args).map(CliAction::Command);
     }
     if first == "--gpu-copy-bench" {
-        return parse_gpu_copy_bench(args).map(CliAction::Command);
+        return gpu_copy_args::parse(args).map(CliAction::Command);
     }
     if first == "--decoder-bench" {
         return decoder_bench_args::parse(args).map(CliAction::Command);
+    }
+    if first == "--original-region-bench" {
+        return original_region_args::parse(args).map(CliAction::Command);
     }
 
     Err(CliError::new(format!(
@@ -173,6 +188,7 @@ fn is_cli_command_arg(arg: &OsString) -> bool {
         || arg == "--upscale-quality-scan"
         || arg == "--gpu-copy-bench"
         || arg == "--decoder-bench"
+        || arg == "--original-region-bench"
 }
 
 impl CliCommand {
@@ -262,6 +278,20 @@ impl CliCommand {
                 max_pages,
             )
             .map_err(|error| format!("decoder bench failed: {error}")),
+            Self::OriginalRegionBench {
+                path,
+                page_index,
+                region,
+                iterations,
+                report_path,
+            } => crate::core::original_region_bench::run_original_region_bench(
+                &path,
+                report_path.as_deref(),
+                page_index,
+                region,
+                iterations,
+            )
+            .map_err(|error| format!("original region bench failed: {error}")),
         }
     }
 }
@@ -424,41 +454,6 @@ fn parse_upscale_quality_scan(
     })
 }
 
-fn parse_gpu_copy_bench(mut args: impl Iterator<Item = OsString>) -> Result<CliCommand, CliError> {
-    let path = required_path(&mut args, "usage: suisuiview-cli --gpu-copy-bench <path>")?;
-    let mut target_long_edge = DEFAULT_TARGET_LONG_EDGE;
-    let mut iterations = crate::core::gpu_copy_bench::default_gpu_copy_iterations();
-    let mut max_pages = crate::core::gpu_copy_bench::default_gpu_copy_max_pages();
-    let mut report_path = None;
-
-    while let Some(arg) = args.next() {
-        if arg == "--target-long-edge" {
-            target_long_edge = required_u32(&mut args, "--target-long-edge")?;
-        } else if arg == "--gpu-copy-iterations" {
-            iterations = required_usize(&mut args, "--gpu-copy-iterations")?;
-        } else if arg == "--gpu-copy-max-pages" {
-            max_pages = required_usize(&mut args, "--gpu-copy-max-pages")?;
-        } else if arg == "--gpu-copy-report" {
-            report_path = Some(required_path(
-                &mut args,
-                "--gpu-copy-report requires a path",
-            )?);
-        } else if arg == "--gpu-copy-report-default" {
-            report_path = Some(crate::core::gpu_copy_bench::default_gpu_copy_report_path());
-        } else {
-            return Err(unknown_arg(arg));
-        }
-    }
-
-    Ok(CliCommand::GpuCopyBench {
-        path,
-        target_long_edge,
-        iterations: iterations.max(1),
-        max_pages: max_pages.max(1),
-        report_path,
-    })
-}
-
 fn required_path(
     args: &mut impl Iterator<Item = OsString>,
     message: &'static str,
@@ -560,39 +555,5 @@ mod tests {
         assert!(!is_gui_cli_redirect_arg(&OsString::from(
             "C:/books/book.cbz"
         )));
-    }
-
-    #[test]
-    fn gpu_copy_bench_preserves_iteration_flags() {
-        let action = parse_args(vec![
-            OsString::from("--gpu-copy-bench"),
-            OsString::from("book.cbz"),
-            OsString::from("--target-long-edge"),
-            OsString::from("4096"),
-            OsString::from("--gpu-copy-iterations"),
-            OsString::from("7"),
-            OsString::from("--gpu-copy-max-pages"),
-            OsString::from("3"),
-            OsString::from("--gpu-copy-report"),
-            OsString::from("gpu-copy.json"),
-        ])
-        .unwrap();
-
-        let CliAction::Command(CliCommand::GpuCopyBench {
-            path,
-            target_long_edge,
-            iterations,
-            max_pages,
-            report_path,
-        }) = action
-        else {
-            panic!("expected gpu copy bench command");
-        };
-
-        assert_eq!(path, PathBuf::from("book.cbz"));
-        assert_eq!(target_long_edge, 4096);
-        assert_eq!(iterations, 7);
-        assert_eq!(max_pages, 3);
-        assert_eq!(report_path, Some(PathBuf::from("gpu-copy.json")));
     }
 }
