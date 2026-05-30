@@ -5,7 +5,7 @@ use crate::core::source::SharedSource;
 use crate::core::state::{DecoderPreferences, ResizeFilter};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use eframe::egui::{ColorImage, Context};
-use image::{imageops::FilterType, ImageReader, Limits, RgbaImage};
+use image::{ImageReader, Limits};
 use lru::LruCache;
 use std::io::Cursor;
 use std::num::NonZeroUsize;
@@ -26,6 +26,7 @@ mod jpeg;
 mod metadata;
 mod png;
 mod region;
+mod resize;
 mod scheduler;
 mod selection;
 
@@ -69,6 +70,7 @@ pub(super) fn record_prepare_stage(
 }
 use metadata::{apply_exif_orientation_to_page, read_image_metadata, ImageMetadata};
 pub use region::{prepare_original_region_with_options, OriginalRegion, PreparedRegion};
+use resize::{image_filter_type, resize_rgba};
 use scheduler::{is_visible_page_index, prioritized_jobs, should_skip_ai_preview_or_prefetch};
 #[cfg(test)]
 use selection::prepare_unavailable_or_image_fallback;
@@ -658,24 +660,6 @@ fn image_reader(bytes: &[u8]) -> Result<ImageReader<Cursor<&[u8]>>, String> {
     Ok(reader)
 }
 
-fn resize_rgba(
-    image: &RgbaImage,
-    width: u32,
-    height: u32,
-    resize_filter: ResizeFilter,
-) -> RgbaImage {
-    image::imageops::resize(image, width, height, image_filter_type(resize_filter))
-}
-
-fn image_filter_type(resize_filter: ResizeFilter) -> FilterType {
-    match resize_filter {
-        ResizeFilter::Bicubic => FilterType::CatmullRom,
-        ResizeFilter::Lanczos3 => FilterType::Lanczos3,
-        ResizeFilter::FastTriangle => FilterType::Triangle,
-        ResizeFilter::Nearest => FilterType::Nearest,
-    }
-}
-
 fn decode_limits() -> Limits {
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
@@ -1165,14 +1149,14 @@ fn drain_latest_command(command_rx: &Receiver<WorkerCommand>) -> Option<WorkerCo
 mod tests {
     use super::{
         clamp_navigation_target_long_edge, clamp_target_long_edge, display_dimensions,
-        display_dimensions_with_upscale, image_filter_type, prepare_image,
-        prepare_image_with_options, prepare_image_with_strategy,
-        prepare_unavailable_or_image_fallback, run_worker, CachedPageKey, DecodeBackend,
-        DecodeOptions, DecodeStrategy, NavigationDirection, WorkerCommand, WorkerEvent,
-        WorkerOptions, MAX_ORIGINAL_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE,
+        display_dimensions_with_upscale, prepare_image, prepare_image_with_options,
+        prepare_image_with_strategy, prepare_unavailable_or_image_fallback, run_worker,
+        CachedPageKey, DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection,
+        WorkerCommand, WorkerEvent, WorkerOptions, MAX_ORIGINAL_TARGET_LONG_EDGE,
+        MAX_TARGET_LONG_EDGE,
     };
     use crate::core::source::{BookSource, SharedSource, SourceError};
-    use crate::core::state::{DecoderPreference, DecoderPreferences, ResizeFilter};
+    use crate::core::state::{DecoderPreference, DecoderPreferences};
     use crossbeam_channel::unbounded;
     use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
     use std::io::Cursor;
@@ -1394,26 +1378,6 @@ mod tests {
         assert_eq!(
             display_dimensions_with_upscale(640, 320, 2048, false).unwrap(),
             (640, 320)
-        );
-    }
-
-    #[test]
-    fn resize_filters_map_to_image_filters() {
-        assert_eq!(
-            image_filter_type(ResizeFilter::Bicubic),
-            image::imageops::FilterType::CatmullRom
-        );
-        assert_eq!(
-            image_filter_type(ResizeFilter::Lanczos3),
-            image::imageops::FilterType::Lanczos3
-        );
-        assert_eq!(
-            image_filter_type(ResizeFilter::FastTriangle),
-            image::imageops::FilterType::Triangle
-        );
-        assert_eq!(
-            image_filter_type(ResizeFilter::Nearest),
-            image::imageops::FilterType::Nearest
         );
     }
 

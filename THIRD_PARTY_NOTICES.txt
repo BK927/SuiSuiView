@@ -22,7 +22,7 @@ Rust Dependencies
 -----------------
 
 Generated target: x86_64-pc-windows-msvc
-Generated packages: 280
+Generated packages: 281
 
 ab_glyph 0.2.32
 License: Apache-2.0
@@ -295,6 +295,10 @@ Source: https://github.com/johannesvollmer/exrs
 fax 0.2.7
 License: MIT
 Source: https://github.com/pdf-rs/fax
+
+fast_image_resize 6.0.0
+License: MIT OR Apache-2.0
+Source: https://github.com/cykooz/fast_image_resize
 
 fdeflate 0.3.7
 License: MIT OR Apache-2.0
