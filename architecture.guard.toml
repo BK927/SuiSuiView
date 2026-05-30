@@ -102,3 +102,9 @@ signals = ["prioritized_jobs", "prioritized_indices", "prune_worker_cache", "cle
 # reason = "Temporary wiring while extracting app/ui modules."
 # expires = "2026-06-15"
 
+[[waivers]]
+path = "src/core/worker.rs"
+rule = "legacy_growth"
+reason = "Temporary opt-in decode-ahead experiment wiring; move remaining worker-loop hooks after rollout decision."
+expires = "2026-06-14"
+

@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 mod bmp;
 mod cache;
+mod decode_ahead;
 #[cfg(test)]
 mod decoder_tests;
 mod gif;
@@ -25,6 +26,7 @@ mod image_crate;
 mod jpeg;
 mod metadata;
 mod png;
+mod prepare;
 mod read_ahead;
 mod region;
 mod resize;
@@ -71,7 +73,12 @@ pub(super) fn record_prepare_stage(
         ],
     );
 }
+use decode_ahead::{
+    cancel_pending_decode_if_not_scheduled, clear_pending_decode as clear_pending_decode_ahead,
+    clear_pending_decode_if_context_changed, consume_matching_decode, DecodeAhead,
+};
 use metadata::{apply_exif_orientation_to_page, read_image_metadata, ImageMetadata};
+use prepare::prepare_page_with_perf;
 use read_ahead::{clear_pending as clear_pending_read_ahead, consume_matching, ReadAhead};
 pub use region::{prepare_original_region_with_options, OriginalRegion, PreparedRegion};
 use resize::{image_filter_type, resize_rgba};
@@ -734,6 +741,7 @@ fn run_worker(
     let mut book_epoch = 0usize;
     let mut published_app_cache_hints = PublishedAppCacheHints::new();
     let mut read_ahead: Option<ReadAhead> = None;
+    let mut decode_ahead: Option<DecodeAhead> = None;
 
     while !shutdown_requested.load(Ordering::Acquire) {
         let Ok(command) = command_rx.recv() else {
@@ -773,6 +781,13 @@ fn run_worker(
             &mut cache_bytes,
         );
         prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
+        clear_decode_ahead_if_context_changed(
+            &mut decode_ahead,
+            &source,
+            book_epoch,
+            target_long_edge,
+            options.decode,
+        );
 
         'work: loop {
             if shutdown_requested.load(Ordering::Acquire) {
@@ -790,6 +805,18 @@ fn run_worker(
                 visible_pages,
                 options.prefetch_enabled,
                 options.progressive_preview_enabled,
+            );
+            cancel_pending_decode_if_not_scheduled(
+                &mut decode_ahead,
+                &active_source,
+                &book_id,
+                book_epoch,
+                &jobs,
+                center,
+                visible_pages,
+                &options,
+                &cache,
+                &published_app_cache_hints,
             );
 
             for (job_position, job) in jobs.iter().copied().enumerate() {
@@ -841,6 +868,13 @@ fn run_worker(
                         &mut cache_bytes,
                     );
                     prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
+                    clear_decode_ahead_if_context_changed(
+                        &mut decode_ahead,
+                        &source,
+                        book_epoch,
+                        target_long_edge,
+                        options.decode,
+                    );
                     continue 'work;
                 }
 
@@ -902,81 +936,79 @@ fn run_worker(
                     continue;
                 }
 
-                let read_result =
-                    consume_matching(&mut read_ahead, &book_id, book_epoch, job.index)
-                        .unwrap_or_else(|| {
-                            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-                            let read_started = Instant::now();
-                            let read_result = active_source
-                                .read_page(job.index)
-                                .map_err(|error| error.to_string());
-                            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-                            perf_trace::record_duration_if_at_least(
-                                "page_read",
-                                read_started.elapsed(),
-                                Duration::from_millis(25),
-                                &[
-                                    PerfField::Usize("page", job.index),
-                                    PerfField::Usize("book_epoch", book_epoch),
-                                    PerfField::Bool("success", read_result.is_ok()),
-                                    PerfField::Bool("read_ahead", false),
-                                ],
+                let result = consume_matching_decode(
+                    &mut decode_ahead,
+                    &book_id,
+                    book_epoch,
+                    job.index,
+                    job.target_long_edge,
+                    options.decode,
+                )
+                .unwrap_or_else(|| {
+                    let read_result =
+                        consume_matching(&mut read_ahead, &book_id, book_epoch, job.index)
+                            .unwrap_or_else(|| {
+                                #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+                                let read_started = Instant::now();
+                                let read_result = active_source
+                                    .read_page(job.index)
+                                    .map_err(|error| error.to_string());
+                                #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+                                perf_trace::record_duration_if_at_least(
+                                    "page_read",
+                                    read_started.elapsed(),
+                                    Duration::from_millis(25),
+                                    &[
+                                        PerfField::Usize("page", job.index),
+                                        PerfField::Usize("book_epoch", book_epoch),
+                                        PerfField::Bool("success", read_result.is_ok()),
+                                        PerfField::Bool("read_ahead", false),
+                                        PerfField::Bool("decode_ahead", false),
+                                    ],
+                                );
+                                read_result
+                            });
+                    if shutdown_requested.load(Ordering::Acquire) {
+                        return Err("Page worker shutdown requested".to_owned());
+                    }
+
+                    if read_result.is_ok() {
+                        if decode_ahead::decode_ahead_enabled() {
+                            decode_ahead::maybe_start_decode(
+                                &mut decode_ahead,
+                                &command_rx,
+                                &active_source,
+                                &book_id,
+                                book_epoch,
+                                &jobs,
+                                job_position.saturating_add(1),
+                                center,
+                                visible_pages,
+                                &options,
+                                &cache,
+                                &published_app_cache_hints,
                             );
-                            read_result
-                        });
-                if shutdown_requested.load(Ordering::Acquire) {
-                    break 'work;
-                }
+                        } else {
+                            read_ahead::maybe_start(
+                                &mut read_ahead,
+                                &command_rx,
+                                &active_source,
+                                &book_id,
+                                book_epoch,
+                                &jobs,
+                                job_position.saturating_add(1),
+                                center,
+                                visible_pages,
+                                &options,
+                                &cache,
+                                &published_app_cache_hints,
+                            );
+                        }
+                    }
 
-                if read_result.is_ok() {
-                    read_ahead::maybe_start(
-                        &mut read_ahead,
-                        &command_rx,
-                        &active_source,
-                        &book_id,
-                        book_epoch,
-                        &jobs,
-                        job_position.saturating_add(1),
-                        center,
-                        visible_pages,
-                        &options,
-                        &cache,
-                        &published_app_cache_hints,
-                    );
-                }
-
-                let result = read_result.and_then(|bytes| {
-                    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-                    let prepare_started = Instant::now();
-                    let prepared =
-                        prepare_image_with_options(&bytes, job.target_long_edge, options.decode);
-                    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-                    perf_trace::record_duration_if_at_least(
-                        "page_prepare",
-                        prepare_started.elapsed(),
-                        Duration::from_millis(40),
-                        &[
-                            PerfField::Usize("page", job.index),
-                            PerfField::Usize("book_epoch", book_epoch),
-                            PerfField::U32("target_long_edge", job.target_long_edge),
-                            PerfField::Str("decode_strategy", options.decode.strategy.as_str()),
-                            PerfField::Str("resize_filter", options.decode.resize_filter.token()),
-                            PerfField::Bool(
-                                "allow_display_upscale",
-                                options.decode.allow_display_upscale,
-                            ),
-                            PerfField::Bool(
-                                "apply_exif_orientation",
-                                options.decode.apply_exif_orientation,
-                            ),
-                            PerfField::Bool(
-                                "apply_embedded_icc",
-                                options.decode.apply_embedded_icc,
-                            ),
-                            PerfField::Bool("success", prepared.is_ok()),
-                        ],
-                    );
-                    prepared
+                    read_result.and_then(|bytes| {
+                        prepare_page_with_perf(&bytes, job, book_epoch, options.decode, false)
+                    })
                 });
                 if shutdown_requested.load(Ordering::Acquire) {
                     break 'work;
@@ -1073,6 +1105,13 @@ fn run_worker(
                                 &mut cache_bytes,
                             );
                             prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
+                            clear_decode_ahead_if_context_changed(
+                                &mut decode_ahead,
+                                &source,
+                                book_epoch,
+                                target_long_edge,
+                                options.decode,
+                            );
                             continue 'work;
                         }
                     }
@@ -1092,6 +1131,23 @@ fn run_worker(
             break;
         }
     }
+    clear_pending_decode_ahead(&mut decode_ahead, "worker_exit");
+}
+
+fn clear_decode_ahead_if_context_changed(
+    decode_ahead: &mut Option<DecodeAhead>,
+    source: &Option<SharedSource>,
+    book_epoch: usize,
+    target_long_edge: u32,
+    decode: DecodeOptions,
+) {
+    clear_pending_decode_if_context_changed(
+        decode_ahead,
+        source.as_ref().map(|source| source.book_id()),
+        book_epoch,
+        target_long_edge,
+        decode,
+    );
 }
 
 fn decoded_byte_size(width: u32, height: u32) -> Result<usize, String> {

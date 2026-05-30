@@ -36,7 +36,14 @@ impl ReadAhead {
             .spawn(move || {
                 let started = Instant::now();
                 let result = source.read_page(index).map_err(|error| error.to_string());
-                record_page_read(index, book_epoch, true, started.elapsed(), result.is_ok());
+                record_page_read(
+                    index,
+                    book_epoch,
+                    true,
+                    false,
+                    started.elapsed(),
+                    result.is_ok(),
+                );
                 ReadAheadResult { result }
             })
             .expect("page read-ahead thread should start");
@@ -134,7 +141,7 @@ pub(super) fn maybe_start(
     ));
 }
 
-fn next_job(
+pub(super) fn next_job(
     source: &SharedSource,
     book_id: &str,
     jobs: &[PageJob],
@@ -196,10 +203,11 @@ pub(super) fn clear_pending(pending: &mut Option<ReadAhead>, reason: &'static st
 }
 
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-fn record_page_read(
+pub(super) fn record_page_read(
     index: usize,
     book_epoch: usize,
     read_ahead: bool,
+    decode_ahead: bool,
     duration: Duration,
     success: bool,
 ) {
@@ -212,15 +220,17 @@ fn record_page_read(
             PerfField::Usize("book_epoch", book_epoch),
             PerfField::Bool("success", success),
             PerfField::Bool("read_ahead", read_ahead),
+            PerfField::Bool("decode_ahead", decode_ahead),
         ],
     );
 }
 
 #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
-fn record_page_read(
+pub(super) fn record_page_read(
     _index: usize,
     _book_epoch: usize,
     _read_ahead: bool,
+    _decode_ahead: bool,
     _duration: Duration,
     _success: bool,
 ) {
