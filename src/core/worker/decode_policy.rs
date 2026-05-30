@@ -69,11 +69,21 @@ impl DecodeAheadPolicy {
         }
     }
 
-    pub(super) fn needs_prepare_timing(&self) -> bool {
-        self.mode == DecodeAheadMode::Adaptive
+    pub(super) fn needs_prepare_timing_for(&self, source: &SharedSource, index: usize) -> bool {
+        match self.mode {
+            DecodeAheadMode::Disabled | DecodeAheadMode::Forced => false,
+            DecodeAheadMode::Adaptive if self.adaptive_active => true,
+            DecodeAheadMode::Adaptive => is_webp_page(source.page_name(index)),
+        }
     }
 
-    pub(super) fn observe_prepare(&mut self, page: &PreparedPage, duration: Option<Duration>) {
+    pub(super) fn observe_prepare(
+        &mut self,
+        source: &SharedSource,
+        index: usize,
+        page: &PreparedPage,
+        duration: Option<Duration>,
+    ) {
         if self.mode != DecodeAheadMode::Adaptive {
             return;
         }
@@ -83,10 +93,14 @@ impl DecodeAheadPolicy {
 
         if is_adaptive_slow_backend(page.decode_backend) && duration >= ADAPTIVE_SLOW_PREPARE {
             self.fast_prepare_count = 0;
-            if !self.adaptive_active {
-                self.adaptive_active = true;
-                record_adaptive_state("enable_slow_webp", true, self.fast_prepare_count);
+            if self.adaptive_active {
+                return;
             }
+            if !DecodeAheadCandidate::WebpCluster.matches_job(source, index) {
+                return;
+            }
+            self.adaptive_active = true;
+            record_adaptive_state("enable_slow_webp", true, self.fast_prepare_count);
             return;
         }
 
@@ -201,14 +215,19 @@ mod tests {
     #[test]
     fn adaptive_policy_activates_only_after_slow_webp_prepare() {
         let mut policy = DecodeAheadPolicy::new(DecodeAheadMode::Adaptive);
+        let source = named_source(vec!["page-0.jpg", "page-1.webp", "page-2.webp"]);
 
         policy.observe_prepare(
+            &source,
+            0,
             &prepared_page(DecodeBackend::PngSampled),
             Some(Duration::from_millis(900)),
         );
         assert_eq!(policy.candidate(), None);
 
         policy.observe_prepare(
+            &source,
+            1,
             &prepared_page(DecodeBackend::LibWebpScaled),
             Some(Duration::from_millis(900)),
         );
@@ -218,8 +237,14 @@ mod tests {
     #[test]
     fn adaptive_policy_ignores_missing_prepare_timing() {
         let mut policy = DecodeAheadPolicy::new(DecodeAheadMode::Adaptive);
+        let source = named_source(vec!["page-0.webp", "page-1.webp"]);
 
-        policy.observe_prepare(&prepared_page(DecodeBackend::LibWebpScaled), None);
+        policy.observe_prepare(
+            &source,
+            0,
+            &prepared_page(DecodeBackend::LibWebpScaled),
+            None,
+        );
 
         assert_eq!(policy.candidate(), None);
     }
@@ -227,13 +252,18 @@ mod tests {
     #[test]
     fn adaptive_policy_turns_off_after_fast_prepare_window() {
         let mut policy = DecodeAheadPolicy::new(DecodeAheadMode::Adaptive);
+        let source = named_source(vec!["page-0.webp", "page-1.webp"]);
         policy.observe_prepare(
+            &source,
+            0,
             &prepared_page(DecodeBackend::LibWebpScaled),
             Some(Duration::from_millis(900)),
         );
 
         for _ in 0..super::ADAPTIVE_FAST_DISABLE_COUNT {
             policy.observe_prepare(
+                &source,
+                0,
                 &prepared_page(DecodeBackend::ZuneJpeg),
                 Some(Duration::from_millis(40)),
             );
@@ -243,16 +273,61 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_policy_times_only_webp_while_inactive() {
+        let policy = DecodeAheadPolicy::new(DecodeAheadMode::Adaptive);
+        let source = named_source(vec!["page-0.jpg", "page-1.webp"]);
+
+        assert!(!policy.needs_prepare_timing_for(&source, 0));
+        assert!(policy.needs_prepare_timing_for(&source, 1));
+    }
+
+    #[test]
+    fn adaptive_policy_times_all_pages_while_active() {
+        let mut policy = DecodeAheadPolicy::new(DecodeAheadMode::Adaptive);
+        let source = named_source(vec!["page-0.webp", "page-1.webp", "page-2.jpg"]);
+        policy.observe_prepare(
+            &source,
+            0,
+            &prepared_page(DecodeBackend::LibWebpScaled),
+            Some(Duration::from_millis(900)),
+        );
+
+        assert!(policy.needs_prepare_timing_for(&source, 2));
+    }
+
+    #[test]
+    fn adaptive_policy_ignores_isolated_slow_webp() {
+        let mut policy = DecodeAheadPolicy::new(DecodeAheadMode::Adaptive);
+        let source = named_source(vec!["page-0.jpg", "page-1.webp", "page-2.png"]);
+
+        policy.observe_prepare(
+            &source,
+            1,
+            &prepared_page(DecodeBackend::LibWebpScaled),
+            Some(Duration::from_millis(900)),
+        );
+
+        assert_eq!(policy.candidate(), None);
+    }
+
+    #[test]
     fn webp_cluster_candidate_requires_neighboring_webp_page() {
-        let source: SharedSource = Arc::new(NamedSource {
-            page_names: vec!["page-0.jpg", "page-1.WEBP", "page-2.webp", "page-3.png"],
-        });
+        let source = named_source(vec![
+            "page-0.jpg",
+            "page-1.WEBP",
+            "page-2.webp",
+            "page-3.png",
+        ]);
 
         assert!(DecodeAheadCandidate::WebpCluster.matches_job(&source, 1));
         assert!(DecodeAheadCandidate::WebpCluster.matches_job(&source, 2));
         assert!(!DecodeAheadCandidate::WebpCluster.matches_job(&source, 0));
         assert!(!DecodeAheadCandidate::WebpCluster.matches_job(&source, 3));
         assert!(DecodeAheadCandidate::Any.matches_job(&source, 3));
+    }
+
+    fn named_source(page_names: Vec<&'static str>) -> SharedSource {
+        Arc::new(NamedSource { page_names })
     }
 
     struct NamedSource {

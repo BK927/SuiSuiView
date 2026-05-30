@@ -1010,7 +1010,8 @@ fn run_worker(
                                 &cache,
                                 &published_app_cache_hints,
                                 candidate,
-                                decode_ahead_policy.needs_prepare_timing(),
+                                decode_ahead_policy
+                                    .needs_prepare_timing_for(&active_source, job.index),
                             );
                             if !decode_ahead_reserved {
                                 read_ahead::maybe_start(
@@ -1053,7 +1054,7 @@ fn run_worker(
                             book_epoch,
                             options.decode,
                             false,
-                            decode_ahead_policy.needs_prepare_timing(),
+                            decode_ahead_policy.needs_prepare_timing_for(&active_source, job.index),
                         )
                     })
                 });
@@ -1113,8 +1114,12 @@ fn run_worker(
                         );
                         ctx.request_repaint();
 
-                        decode_ahead_policy
-                            .observe_prepare(page.as_ref(), prepared.prepare_duration);
+                        decode_ahead_policy.observe_prepare(
+                            &active_source,
+                            job.index,
+                            page.as_ref(),
+                            prepared.prepare_duration,
+                        );
                         if decode_ahead_policy.candidate().is_none() {
                             cancel_pending_decode_ahead(&mut decode_ahead, "policy");
                         }
