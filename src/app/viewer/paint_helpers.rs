@@ -106,8 +106,16 @@ impl SuiSuiViewApp {
             },
         );
         self.prune_texture_cache();
+        let dropped_original = !source_key.upscaled
+            && self.drop_original_after_texture_upload_if_enabled(source_key.page);
+        #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
+        let _ = dropped_original;
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        self.record_cache_snapshot("gpu_fallback_texture_upload");
+        self.record_cache_snapshot(if dropped_original {
+            "original_texture_only_drop"
+        } else {
+            "gpu_fallback_texture_upload"
+        });
         texture
     }
 

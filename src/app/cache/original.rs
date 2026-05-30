@@ -1,4 +1,5 @@
 use super::{PageCacheKey, TextureCacheKey, TextureEntry};
+use crate::app::perf;
 use crate::app::SuiSuiViewApp;
 use crate::core::worker::{PreparedPage, MAX_TARGET_LONG_EDGE};
 use eframe::egui;
@@ -47,6 +48,57 @@ impl SuiSuiViewApp {
         self.record_cache_snapshot("leave_original_inspection");
     }
 
+    pub(in crate::app) fn drop_original_after_texture_upload_if_enabled(
+        &mut self,
+        key: PageCacheKey,
+    ) -> bool {
+        if !perf::original_texture_only_enabled() {
+            return false;
+        }
+        if let Some(byte_size) =
+            drop_original_page_after_texture_upload_from_cache(&mut self.decoded_pages, key)
+        {
+            self.decoded_bytes = self.decoded_bytes.saturating_sub(byte_size);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(in crate::app) fn request_original_texture_only_decode_if_needed(&mut self) {
+        if !perf::original_texture_only_enabled()
+            || self.target_long_edge <= MAX_TARGET_LONG_EDGE
+            || self.source.is_none()
+        {
+            return;
+        }
+
+        let decode = self.decode_options();
+        let missing_visible_original = self.spread_indices().iter().any(|index| {
+            !self.page_errors.contains_key(index)
+                && self
+                    .decoded_pages
+                    .peek(&PageCacheKey {
+                        index: *index,
+                        target_long_edge: self.target_long_edge,
+                        decode,
+                    })
+                    .is_none()
+        });
+        if !missing_visible_original {
+            return;
+        }
+
+        self.worker.set_page(
+            self.worker_center_page(),
+            self.last_nav_direction,
+            self.target_long_edge,
+            self.visible_page_count(),
+            self.worker_options(),
+        );
+        self.refresh_ai_prefetch_queue();
+    }
+
     fn drop_original_inspection_cache_entries(&mut self) {
         for (key, byte_size) in drop_original_inspection_pages_from_cache(&mut self.decoded_pages) {
             self.decoded_bytes = self.decoded_bytes.saturating_sub(byte_size);
@@ -63,6 +115,16 @@ impl SuiSuiViewApp {
             let _ = self.textures.pop(&key);
         }
     }
+}
+
+fn drop_original_page_after_texture_upload_from_cache(
+    cache: &mut LruCache<PageCacheKey, Arc<PreparedPage>>,
+    key: PageCacheKey,
+) -> Option<usize> {
+    if key.target_long_edge <= MAX_TARGET_LONG_EDGE {
+        return None;
+    }
+    cache.pop(&key).map(|page| page.byte_size)
 }
 
 fn drop_original_inspection_pages_from_cache(
@@ -96,7 +158,10 @@ fn original_inspection_texture_keys(
 
 #[cfg(test)]
 mod tests {
-    use super::{drop_original_inspection_pages_from_cache, original_inspection_page_keys};
+    use super::{
+        drop_original_inspection_pages_from_cache,
+        drop_original_page_after_texture_upload_from_cache, original_inspection_page_keys,
+    };
     use crate::app::PageCacheKey;
     use crate::core::worker::{
         DecodeBackend, DecodeOptions, PreparedPage, MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
@@ -147,6 +212,35 @@ mod tests {
         assert!(cache.peek(&navigation).is_some());
         assert!(cache.peek(&original).is_none());
         assert!(cache.peek(&other_original).is_none());
+    }
+
+    #[test]
+    fn original_texture_upload_drop_removes_only_decoded_original() {
+        let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let decode = DecodeOptions::default();
+        let original = PageCacheKey {
+            index: 3,
+            target_long_edge: MAX_TARGET_LONG_EDGE + 1,
+            decode,
+        };
+        let normal = PageCacheKey {
+            target_long_edge: MAX_TARGET_LONG_EDGE,
+            ..original
+        };
+
+        cache.put(normal, test_prepared_page(MAX_TARGET_LONG_EDGE, 8));
+        cache.put(original, test_prepared_page(MAX_TARGET_LONG_EDGE + 1, 16));
+
+        assert_eq!(
+            drop_original_page_after_texture_upload_from_cache(&mut cache, normal),
+            None
+        );
+        assert_eq!(
+            drop_original_page_after_texture_upload_from_cache(&mut cache, original),
+            Some(16)
+        );
+        assert!(cache.peek(&normal).is_some());
+        assert!(cache.peek(&original).is_none());
     }
 
     fn test_prepared_page(target_long_edge: u32, byte_size: usize) -> Arc<PreparedPage> {

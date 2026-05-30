@@ -23,6 +23,7 @@ const AUTO_PAGE_TURN_CLOSE_DELAY_MS_ENV: &str = "SUISUIVIEW_PERF_AUTO_PAGE_TURN_
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 const START_PAGE_INDEX_ENV: &str = "SUISUIVIEW_PERF_START_PAGE_INDEX";
 const ADJACENT_SEED_PREFETCH_ENV: &str = "SUISUIVIEW_EXPERIMENT_ADJACENT_SEED_PREFETCH";
+const ORIGINAL_TEXTURE_ONLY_ENV: &str = "SUISUIVIEW_EXPERIMENT_ORIGINAL_TEXTURE_ONLY";
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 const AUTO_PAGE_TURN_INITIAL_DELAY: Duration = Duration::from_millis(1500);
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -165,6 +166,13 @@ pub(super) fn adjacent_seed_prefetch_enabled() -> bool {
     })
 }
 
+pub(super) fn original_texture_only_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        opt_in_experiment_value_enabled(env::var(ORIGINAL_TEXTURE_ONLY_ENV).ok().as_deref())
+    })
+}
+
 fn adjacent_seed_prefetch_value_enabled(value: Option<&str>) -> bool {
     !matches!(
         value.map(str::trim),
@@ -173,6 +181,17 @@ fn adjacent_seed_prefetch_value_enabled(value: Option<&str>) -> bool {
                 || value.eq_ignore_ascii_case("false")
                 || value.eq_ignore_ascii_case("off")
                 || value.eq_ignore_ascii_case("no")
+    )
+}
+
+fn opt_in_experiment_value_enabled(value: Option<&str>) -> bool {
+    matches!(
+        value.map(str::trim),
+        Some(value)
+            if value.eq_ignore_ascii_case("1")
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("on")
+                || value.eq_ignore_ascii_case("yes")
     )
 }
 
@@ -426,7 +445,7 @@ pub(super) fn flush() {
 
 #[cfg(test)]
 mod tests {
-    use super::adjacent_seed_prefetch_value_enabled;
+    use super::{adjacent_seed_prefetch_value_enabled, opt_in_experiment_value_enabled};
 
     #[test]
     fn adjacent_seed_prefetch_is_default_on_with_explicit_opt_out() {
@@ -438,5 +457,18 @@ mod tests {
         assert!(!adjacent_seed_prefetch_value_enabled(Some("false")));
         assert!(!adjacent_seed_prefetch_value_enabled(Some("OFF")));
         assert!(!adjacent_seed_prefetch_value_enabled(Some(" no ")));
+    }
+
+    #[test]
+    fn opt_in_experiment_requires_affirmative_value() {
+        assert!(!opt_in_experiment_value_enabled(None));
+        assert!(!opt_in_experiment_value_enabled(Some("")));
+        assert!(opt_in_experiment_value_enabled(Some("1")));
+        assert!(opt_in_experiment_value_enabled(Some("true")));
+        assert!(opt_in_experiment_value_enabled(Some("ON")));
+        assert!(opt_in_experiment_value_enabled(Some(" yes ")));
+        assert!(!opt_in_experiment_value_enabled(Some("0")));
+        assert!(!opt_in_experiment_value_enabled(Some("false")));
+        assert!(!opt_in_experiment_value_enabled(Some("off")));
     }
 }

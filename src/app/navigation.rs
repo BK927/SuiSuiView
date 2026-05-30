@@ -601,6 +601,7 @@ impl SuiSuiViewApp {
     pub(in crate::app) fn update_effects(&mut self, update: impl FnOnce(&mut ViewEffects)) {
         update(&mut self.effects);
         self.textures.clear();
+        self.request_original_texture_only_decode_if_needed();
         self.set_status(format!(
             "{}{}{}{}",
             self.effects.filter.label(),

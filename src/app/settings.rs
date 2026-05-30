@@ -236,6 +236,7 @@ impl SuiSuiViewApp {
         let previous_gpu_effect_mode = self.settings.gpu_effect_mode;
         let previous_display_upscaler = self.settings.display_upscaler;
         let previous_max_remembered_books = self.settings.max_remembered_books;
+        let mut textures_invalidated = false;
 
         self.settings = settings;
         self.store.update_settings(self.settings.clone());
@@ -254,6 +255,7 @@ impl SuiSuiViewApp {
             self.upscaled_pages.clear();
             self.upscaled_bytes = 0;
             self.textures.clear();
+            textures_invalidated = true;
             self.page_errors.clear();
             self.ai_upscale_failures.clear();
         } else if previous_cache_budget != self.cpu_cache_budget_bytes() {
@@ -269,6 +271,7 @@ impl SuiSuiViewApp {
             self.upscaled_pages.clear();
             self.upscaled_bytes = 0;
             self.textures.clear();
+            textures_invalidated = true;
             self.upscale_generation = self.upscale_generation.wrapping_add(1);
             self.upscale_inflight = None;
             self.clear_queued_ai_upscale_pages();
@@ -281,6 +284,7 @@ impl SuiSuiViewApp {
             || previous_display_upscaler != self.settings.display_upscaler
         {
             self.textures.clear();
+            textures_invalidated = true;
             ctx.request_repaint();
         }
 
@@ -300,6 +304,9 @@ impl SuiSuiViewApp {
         }
         if ai_output_changed || ai_prefetch_changed {
             self.refresh_ai_prefetch_queue();
+        }
+        if textures_invalidated {
+            self.request_original_texture_only_decode_if_needed();
         }
         if previous_max_remembered_books != self.settings.max_remembered_books {
             self.store

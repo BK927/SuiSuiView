@@ -1,11 +1,11 @@
 use super::gpu_paint::{GpuPaintRequest, GpuPaintSourceKey};
-#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use super::perf;
 use super::{ui, PageCacheKey, SuiSuiViewApp, TextureCacheKey, TextureEntry, BYTES_PER_RGBA_PIXEL};
 use crate::core::effects::{
     apply_effects_to_image, compose_images_horizontally, transformed_page_size, ViewEffects,
 };
 use crate::core::state::PageTransitionStyle;
+use crate::core::worker::MAX_TARGET_LONG_EDGE;
 use eframe::egui::{
     self, Align2, Color32, ColorImage, FontId, ImageData, Pos2, Rect, Sense, Stroke, StrokeKind,
     Vec2,
@@ -143,6 +143,9 @@ impl SuiSuiViewApp {
             target_long_edge,
             decode: self.decode_options(),
         };
+        if let Some(visual) = self.original_texture_only_visual(key) {
+            return visual;
+        }
         let (best_key, upscaled) = if let Some(best_key) = self.preferred_upscaled_page_key(key) {
             (best_key, true)
         } else if let Some(best_key) = self.best_page_key(key) {
@@ -261,8 +264,16 @@ impl SuiSuiViewApp {
             },
         );
         self.prune_texture_cache();
+        let dropped_original =
+            !upscaled && self.drop_original_after_texture_upload_if_enabled(best_key);
+        #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
+        let _ = dropped_original;
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        self.record_cache_snapshot("texture_upload");
+        self.record_cache_snapshot(if dropped_original {
+            "original_texture_only_drop"
+        } else {
+            "texture_upload"
+        });
 
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::record_open_to_first_visible_if_pending(
@@ -280,6 +291,36 @@ impl SuiSuiViewApp {
                 self.effects.transform,
             ),
         }
+    }
+
+    fn original_texture_only_visual(&mut self, requested: PageCacheKey) -> Option<PageVisual> {
+        if !perf::original_texture_only_enabled()
+            || requested.target_long_edge <= MAX_TARGET_LONG_EDGE
+        {
+            return None;
+        }
+        let texture_key = TextureCacheKey {
+            page: requested,
+            effects: self.effects,
+            upscaled: false,
+        };
+        let texture = self
+            .textures
+            .get(&texture_key)
+            .map(|entry| entry.texture.clone())?;
+        let metrics = self.page_metrics.get(&requested.index).copied()?;
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        perf::record_open_to_first_visible_if_pending(
+            &mut self.open_to_first_visible_trace,
+            self.book_id.as_deref(),
+            requested.index,
+            requested.target_long_edge,
+            false,
+        );
+        Some(PageVisual::Ready {
+            texture,
+            size: transformed_page_size(metrics.width, metrics.height, self.effects.transform),
+        })
     }
 
     pub(in crate::app) fn show_viewer(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
