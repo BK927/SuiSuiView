@@ -1,5 +1,6 @@
 use super::cache::PublishedAppCacheHints;
-use super::prepare::prepare_page_with_perf;
+use super::decode_policy::DecodeAheadCandidate;
+use super::prepare::{prepare_page_with_perf, PreparedPageWithTiming};
 use super::read_ahead::{next_job, record_page_read};
 use super::scheduler::PageJob;
 use super::{DecodeOptions, PreparedPage, WorkerCommand, WorkerOptions};
@@ -8,14 +9,12 @@ use crate::core::source::SharedSource;
 use crate::core::{perf_trace, perf_trace::PerfField};
 use crossbeam_channel::Receiver;
 use lru::LruCache;
-use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const DECODE_AHEAD_STACK_BYTES: usize = 1024 * 1024;
-const DECODE_AHEAD_ENV: &str = "SUISUIVIEW_EXPERIMENT_DECODE_AHEAD";
 const DECODE_AHEAD_CANCELLED: &str = "Page decode-ahead was cancelled";
 
 pub(super) struct DecodeAhead {
@@ -30,7 +29,7 @@ pub(super) struct DecodeAhead {
 }
 
 struct DecodeAheadResult {
-    result: Result<PreparedPage, String>,
+    result: Result<PreparedPageWithTiming, String>,
 }
 
 impl DecodeAhead {
@@ -40,6 +39,7 @@ impl DecodeAhead {
         book_epoch: usize,
         job: PageJob,
         decode: DecodeOptions,
+        measure_prepare_timing: bool,
     ) -> Self {
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_for_thread = cancel.clone();
@@ -65,7 +65,14 @@ impl DecodeAhead {
                     };
                 }
                 let result = result.and_then(|bytes| {
-                    prepare_page_with_perf(&bytes, job, book_epoch, decode, true)
+                    prepare_page_with_perf(
+                        &bytes,
+                        job,
+                        book_epoch,
+                        decode,
+                        true,
+                        measure_prepare_timing,
+                    )
                 });
                 let result = if cancel_for_thread.load(Ordering::Acquire) {
                     Err(DECODE_AHEAD_CANCELLED.to_owned())
@@ -104,7 +111,7 @@ impl DecodeAhead {
             && self.decode == decode
     }
 
-    fn finish(mut self, reason: &'static str) -> Result<PreparedPage, String> {
+    fn finish(mut self, reason: &'static str) -> Result<PreparedPageWithTiming, String> {
         self.join(reason)
     }
 
@@ -135,7 +142,7 @@ impl DecodeAhead {
         self.index == job.index && self.target_long_edge == job.target_long_edge
     }
 
-    fn join(&mut self, reason: &'static str) -> Result<PreparedPage, String> {
+    fn join(&mut self, reason: &'static str) -> Result<PreparedPageWithTiming, String> {
         let Some(handle) = self.handle.take() else {
             return Err("Page decode-ahead thread was unavailable".to_owned());
         };
@@ -164,23 +171,6 @@ impl Drop for DecodeAhead {
     }
 }
 
-pub(super) fn decode_ahead_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED
-        .get_or_init(|| opt_in_experiment_value_enabled(env::var(DECODE_AHEAD_ENV).ok().as_deref()))
-}
-
-fn opt_in_experiment_value_enabled(value: Option<&str>) -> bool {
-    matches!(
-        value.map(str::trim),
-        Some(value)
-            if value.eq_ignore_ascii_case("1")
-                || value.eq_ignore_ascii_case("true")
-                || value.eq_ignore_ascii_case("on")
-                || value.eq_ignore_ascii_case("yes")
-    )
-}
-
 pub(super) fn maybe_start_decode(
     decode_ahead: &mut Option<DecodeAhead>,
     command_rx: &Receiver<WorkerCommand>,
@@ -194,13 +184,15 @@ pub(super) fn maybe_start_decode(
     options: &WorkerOptions,
     cache: &LruCache<String, Arc<PreparedPage>>,
     published_app_cache_hints: &PublishedAppCacheHints,
-) {
+    candidate: DecodeAheadCandidate,
+    measure_prepare_timing: bool,
+) -> bool {
     discard_finished_decode(decode_ahead, "discard_finished");
     if decode_ahead.is_some() {
-        return;
+        return true;
     }
     if !command_rx.is_empty() {
-        return;
+        return true;
     }
 
     let Some(job) = next_job(
@@ -214,8 +206,11 @@ pub(super) fn maybe_start_decode(
         cache,
         published_app_cache_hints,
     ) else {
-        return;
+        return false;
     };
+    if !candidate.matches_job(source, job.index) {
+        return false;
+    }
 
     *decode_ahead = Some(DecodeAhead::start(
         source.clone(),
@@ -223,7 +218,9 @@ pub(super) fn maybe_start_decode(
         book_epoch,
         job,
         options.decode,
+        measure_prepare_timing,
     ));
+    true
 }
 
 pub(super) fn consume_matching_decode(
@@ -233,7 +230,7 @@ pub(super) fn consume_matching_decode(
     index: usize,
     target_long_edge: u32,
     decode: DecodeOptions,
-) -> Option<Result<PreparedPage, String>> {
+) -> Option<Result<PreparedPageWithTiming, String>> {
     if pending.as_ref().is_some_and(|decode_ahead| {
         decode_ahead.matches(book_id, book_epoch, index, target_long_edge, decode)
     }) {
@@ -388,6 +385,7 @@ mod tests {
     };
     use crate::core::source::{BookSource, SharedSource, SourceError};
     use crate::core::worker::cache::PublishedAppCacheHints;
+    use crate::core::worker::decode_policy::DecodeAheadCandidate;
     use crate::core::worker::scheduler::PageJob;
     use crate::core::worker::{CachedPageKey, DecodeOptions, WorkerCommand, WorkerOptions};
     use crossbeam_channel::unbounded;
@@ -438,6 +436,8 @@ mod tests {
             &options,
             &cache,
             &hints,
+            DecodeAheadCandidate::Any,
+            false,
         );
 
         assert!(
@@ -449,6 +449,57 @@ mod tests {
         assert!(read_log.iter().any(|(index, thread_name)| {
             *index == 1 && thread_name.as_deref() == Some("suisuiview-page-decode-ahead")
         }));
+    }
+
+    #[test]
+    fn adaptive_candidate_does_not_skip_nearer_non_matching_job() {
+        let (_command_tx, command_rx) = unbounded::<WorkerCommand>();
+        let source: SharedSource = Arc::new(NamedSource {
+            path: PathBuf::from("named-source"),
+            names: vec!["page-0000.jpg", "page-0001.webp", "page-0002.webp"],
+            bytes: vec![1, 2, 3, 4],
+        });
+        let options = WorkerOptions {
+            progressive_preview_enabled: false,
+            ..WorkerOptions::default()
+        };
+        let cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let hints = PublishedAppCacheHints::new();
+        let jobs = [
+            PageJob {
+                index: 0,
+                target_long_edge: 2048,
+            },
+            PageJob {
+                index: 1,
+                target_long_edge: 2048,
+            },
+            PageJob {
+                index: 2,
+                target_long_edge: 2048,
+            },
+        ];
+        let mut pending = None;
+
+        let reserved = maybe_start_decode(
+            &mut pending,
+            &command_rx,
+            &source,
+            "book",
+            7,
+            &jobs,
+            0,
+            0,
+            1,
+            &options,
+            &cache,
+            &hints,
+            DecodeAheadCandidate::WebpCluster,
+            false,
+        );
+
+        assert!(!reserved);
+        assert!(pending.is_none());
     }
 
     #[test]
@@ -472,6 +523,7 @@ mod tests {
                 target_long_edge: 2048,
             },
             DecodeOptions::default(),
+            false,
         ));
         started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
 
@@ -498,6 +550,7 @@ mod tests {
                 target_long_edge: 2048,
             },
             DecodeOptions::default(),
+            false,
         ));
 
         clear_pending_decode_if_context_changed(
@@ -533,6 +586,7 @@ mod tests {
                 target_long_edge: 2048,
             },
             DecodeOptions::default(),
+            false,
         ));
         started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
 
@@ -567,6 +621,7 @@ mod tests {
                 target_long_edge: 2048,
             },
             DecodeOptions::default(),
+            false,
         ));
         let options = WorkerOptions {
             progressive_preview_enabled: false,
@@ -699,6 +754,12 @@ mod tests {
         read_log: Arc<Mutex<Vec<(usize, Option<String>)>>>,
     }
 
+    struct NamedSource {
+        path: PathBuf,
+        names: Vec<&'static str>,
+        bytes: Vec<u8>,
+    }
+
     impl BookSource for ThreadRecordingSource {
         fn title(&self) -> &str {
             "thread-recording"
@@ -734,6 +795,38 @@ mod tests {
 
             let thread_name = thread::current().name().map(str::to_owned);
             self.read_log.lock().unwrap().push((index, thread_name));
+            Ok(self.bytes.clone())
+        }
+    }
+
+    impl BookSource for NamedSource {
+        fn title(&self) -> &str {
+            "named"
+        }
+
+        fn source_path(&self) -> &Path {
+            &self.path
+        }
+
+        fn book_id(&self) -> &str {
+            "named-book"
+        }
+
+        fn page_count(&self) -> usize {
+            self.names.len()
+        }
+
+        fn page_name(&self, index: usize) -> Option<&str> {
+            self.names.get(index).copied()
+        }
+
+        fn read_page(&self, index: usize) -> Result<Vec<u8>, SourceError> {
+            if index >= self.page_count() {
+                return Err(SourceError::InvalidPage {
+                    index,
+                    page_count: self.page_count(),
+                });
+            }
             Ok(self.bytes.clone())
         }
     }

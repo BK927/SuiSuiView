@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 mod bmp;
 mod cache;
 mod decode_ahead;
+mod decode_policy;
 #[cfg(test)]
 mod decoder_tests;
 mod gif;
@@ -74,9 +75,11 @@ pub(super) fn record_prepare_stage(
     );
 }
 use decode_ahead::{
-    cancel_pending_decode_if_not_scheduled, clear_pending_decode as clear_pending_decode_ahead,
-    clear_pending_decode_if_context_changed, consume_matching_decode, DecodeAhead,
+    cancel_pending_decode as cancel_pending_decode_ahead, cancel_pending_decode_if_not_scheduled,
+    clear_pending_decode as clear_pending_decode_ahead, clear_pending_decode_if_context_changed,
+    consume_matching_decode, DecodeAhead,
 };
+use decode_policy::DecodeAheadPolicy;
 use metadata::{apply_exif_orientation_to_page, read_image_metadata, ImageMetadata};
 use prepare::prepare_page_with_perf;
 use read_ahead::{clear_pending as clear_pending_read_ahead, consume_matching, ReadAhead};
@@ -742,6 +745,7 @@ fn run_worker(
     let mut published_app_cache_hints = PublishedAppCacheHints::new();
     let mut read_ahead: Option<ReadAhead> = None;
     let mut decode_ahead: Option<DecodeAhead> = None;
+    let mut decode_ahead_policy = DecodeAheadPolicy::from_env();
 
     while !shutdown_requested.load(Ordering::Acquire) {
         let Ok(command) = command_rx.recv() else {
@@ -781,6 +785,15 @@ fn run_worker(
             &mut cache_bytes,
         );
         prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
+        reset_decode_ahead_policy_if_context_changed(
+            &mut decode_ahead_policy,
+            &source,
+            previous_book_id.as_deref(),
+            previous_decode,
+            previous_target_long_edge,
+            options.decode,
+            target_long_edge,
+        );
         clear_decode_ahead_if_context_changed(
             &mut decode_ahead,
             &source,
@@ -868,6 +881,15 @@ fn run_worker(
                         &mut cache_bytes,
                     );
                     prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
+                    reset_decode_ahead_policy_if_context_changed(
+                        &mut decode_ahead_policy,
+                        &source,
+                        previous_book_id.as_deref(),
+                        previous_decode,
+                        previous_target_long_edge,
+                        options.decode,
+                        target_long_edge,
+                    );
                     clear_decode_ahead_if_context_changed(
                         &mut decode_ahead,
                         &source,
@@ -973,8 +995,8 @@ fn run_worker(
                     }
 
                     if read_result.is_ok() {
-                        if decode_ahead::decode_ahead_enabled() {
-                            decode_ahead::maybe_start_decode(
+                        if let Some(candidate) = decode_ahead_policy.candidate() {
+                            let decode_ahead_reserved = decode_ahead::maybe_start_decode(
                                 &mut decode_ahead,
                                 &command_rx,
                                 &active_source,
@@ -987,7 +1009,25 @@ fn run_worker(
                                 &options,
                                 &cache,
                                 &published_app_cache_hints,
+                                candidate,
+                                decode_ahead_policy.needs_prepare_timing(),
                             );
+                            if !decode_ahead_reserved {
+                                read_ahead::maybe_start(
+                                    &mut read_ahead,
+                                    &command_rx,
+                                    &active_source,
+                                    &book_id,
+                                    book_epoch,
+                                    &jobs,
+                                    job_position.saturating_add(1),
+                                    center,
+                                    visible_pages,
+                                    &options,
+                                    &cache,
+                                    &published_app_cache_hints,
+                                );
+                            }
                         } else {
                             read_ahead::maybe_start(
                                 &mut read_ahead,
@@ -1007,7 +1047,14 @@ fn run_worker(
                     }
 
                     read_result.and_then(|bytes| {
-                        prepare_page_with_perf(&bytes, job, book_epoch, options.decode, false)
+                        prepare_page_with_perf(
+                            &bytes,
+                            job,
+                            book_epoch,
+                            options.decode,
+                            false,
+                            decode_ahead_policy.needs_prepare_timing(),
+                        )
                     })
                 });
                 if shutdown_requested.load(Ordering::Acquire) {
@@ -1015,7 +1062,8 @@ fn run_worker(
                 }
 
                 match result {
-                    Ok(page) => {
+                    Ok(prepared) => {
+                        let page = prepared.page;
                         let page = Arc::new(page);
 
                         let cached = insert_worker_cache_with_budget(
@@ -1032,7 +1080,7 @@ fn run_worker(
                             book_id: book_id.clone(),
                             index: job.index,
                             decode: options.decode,
-                            page,
+                            page: page.clone(),
                         });
                         remember_published_app_cache_hint(
                             &mut published_app_cache_hints,
@@ -1064,6 +1112,12 @@ fn run_worker(
                             false,
                         );
                         ctx.request_repaint();
+
+                        decode_ahead_policy
+                            .observe_prepare(page.as_ref(), prepared.prepare_duration);
+                        if decode_ahead_policy.candidate().is_none() {
+                            cancel_pending_decode_ahead(&mut decode_ahead, "policy");
+                        }
 
                         if let Some(command) = drain_latest_command(&command_rx) {
                             clear_pending_read_ahead(&mut read_ahead, "command");
@@ -1105,6 +1159,15 @@ fn run_worker(
                                 &mut cache_bytes,
                             );
                             prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
+                            reset_decode_ahead_policy_if_context_changed(
+                                &mut decode_ahead_policy,
+                                &source,
+                                previous_book_id.as_deref(),
+                                previous_decode,
+                                previous_target_long_edge,
+                                options.decode,
+                                target_long_edge,
+                            );
                             clear_decode_ahead_if_context_changed(
                                 &mut decode_ahead,
                                 &source,
@@ -1148,6 +1211,24 @@ fn clear_decode_ahead_if_context_changed(
         target_long_edge,
         decode,
     );
+}
+
+fn reset_decode_ahead_policy_if_context_changed(
+    policy: &mut DecodeAheadPolicy,
+    source: &Option<SharedSource>,
+    previous_book_id: Option<&str>,
+    previous_decode: DecodeOptions,
+    previous_target_long_edge: u32,
+    current_decode: DecodeOptions,
+    current_target_long_edge: u32,
+) {
+    let current_book_id = source.as_ref().map(|source| source.book_id());
+    if previous_book_id != current_book_id
+        || previous_decode != current_decode
+        || previous_target_long_edge != current_target_long_edge
+    {
+        policy.reset_context();
+    }
 }
 
 fn decoded_byte_size(width: u32, height: u32) -> Result<usize, String> {
