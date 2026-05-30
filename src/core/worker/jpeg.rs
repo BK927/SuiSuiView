@@ -1,6 +1,6 @@
 use super::{
     clamp_target_long_edge, display_dimensions_with_upscale, prepared_page_from_rgba,
-    reject_oversized_original, resize_rgba, DecodeBackend, DecodeOptions, PreparedPage,
+    reject_oversized_dimensions, resize_rgba, DecodeBackend, DecodeOptions, PreparedPage,
     JPEG_SCALED_MIN_RATIO,
 };
 use image::RgbaImage;
@@ -40,7 +40,7 @@ pub(super) fn prepare_image_with_scaled_jpeg(
         original_width,
         original_height,
     );
-    reject_oversized_original(original_width, original_height)?;
+    reject_oversized_dimensions(original_width, original_height)?;
 
     let (display_width, display_height) = display_dimensions_with_upscale(
         original_width,
