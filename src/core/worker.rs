@@ -32,13 +32,15 @@ mod selection;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use cache::record_worker_cache_snapshot;
 use cache::{
-    clear_cache_on_book_or_decode_change, insert_worker_cache_with_budget, page_cache_key,
-    prune_worker_cache, update_book_epoch,
+    clear_cache_on_book_or_decode_change, clear_published_app_cache_hints_on_context_change,
+    insert_worker_cache_with_budget, page_cache_key, prune_worker_cache,
+    remember_published_app_cache_hint, should_skip_published_app_cache_hint, update_book_epoch,
+    PublishedAppCacheHints,
 };
 use image_crate::{prepare_image_with_image_crate, prepare_image_with_image_crate_and_icc};
 use metadata::{apply_exif_orientation_to_page, read_image_metadata, ImageMetadata};
 pub use region::{prepare_original_region_with_options, OriginalRegion, PreparedRegion};
-use scheduler::{prioritized_jobs, should_skip_ai_preview_or_prefetch};
+use scheduler::{is_visible_page_index, prioritized_jobs, should_skip_ai_preview_or_prefetch};
 #[cfg(test)]
 use selection::prepare_unavailable_or_image_fallback;
 
@@ -711,6 +713,7 @@ fn run_worker(
         LruCache::new(NonZeroUsize::new(WORKER_CACHE_ENTRY_LIMIT).unwrap());
     let mut cache_bytes = 0usize;
     let mut book_epoch = 0usize;
+    let mut published_app_cache_hints = PublishedAppCacheHints::new();
 
     while !shutdown_requested.load(Ordering::Acquire) {
         let Ok(command) = command_rx.recv() else {
@@ -718,6 +721,7 @@ fn run_worker(
         };
         let previous_book_id = source.as_ref().map(|source| source.book_id().to_owned());
         let previous_decode = options.decode;
+        let previous_target_long_edge = target_long_edge;
         if !apply_command(
             command,
             &mut source,
@@ -730,6 +734,15 @@ fn run_worker(
             break;
         }
         update_book_epoch(&mut book_epoch, &source, previous_book_id.as_deref());
+        clear_published_app_cache_hints_on_context_change(
+            &source,
+            previous_book_id.as_deref(),
+            previous_decode,
+            previous_target_long_edge,
+            options.decode,
+            target_long_edge,
+            &mut published_app_cache_hints,
+        );
         clear_cache_on_book_or_decode_change(
             &source,
             previous_book_id.as_deref(),
@@ -775,6 +788,7 @@ fn run_worker(
                     let previous_book_id =
                         source.as_ref().map(|source| source.book_id().to_owned());
                     let previous_decode = options.decode;
+                    let previous_target_long_edge = target_long_edge;
                     if !apply_command(
                         command,
                         &mut source,
@@ -787,6 +801,15 @@ fn run_worker(
                         return;
                     }
                     update_book_epoch(&mut book_epoch, &source, previous_book_id.as_deref());
+                    clear_published_app_cache_hints_on_context_change(
+                        &source,
+                        previous_book_id.as_deref(),
+                        previous_decode,
+                        previous_target_long_edge,
+                        options.decode,
+                        target_long_edge,
+                        &mut published_app_cache_hints,
+                    );
                     clear_cache_on_book_or_decode_change(
                         &source,
                         previous_book_id.as_deref(),
@@ -839,9 +862,21 @@ fn run_worker(
                         true,
                     );
                     ctx.request_repaint();
+                    remember_published_app_cache_hint(
+                        &mut published_app_cache_hints,
+                        CachedPageKey::new(job.index, job.target_long_edge, options.decode),
+                    );
                     continue;
                 }
-                if options.app_cache_covers(job.index, job.target_long_edge) {
+                if options.app_cache_covers(job.index, job.target_long_edge)
+                    || should_skip_published_app_cache_hint(
+                        &published_app_cache_hints,
+                        is_visible_page_index(job.index, center, visible_pages),
+                        job.index,
+                        job.target_long_edge,
+                        options.decode,
+                    )
+                {
                     continue;
                 }
 
@@ -922,6 +957,10 @@ fn run_worker(
                             decode: options.decode,
                             page,
                         });
+                        remember_published_app_cache_hint(
+                            &mut published_app_cache_hints,
+                            CachedPageKey::new(job.index, job.target_long_edge, options.decode),
+                        );
                         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
                         perf_trace::record_duration(
                             "page_worker_publish",
@@ -953,6 +992,7 @@ fn run_worker(
                             let previous_book_id =
                                 source.as_ref().map(|source| source.book_id().to_owned());
                             let previous_decode = options.decode;
+                            let previous_target_long_edge = target_long_edge;
                             if !apply_command(
                                 command,
                                 &mut source,
@@ -968,6 +1008,15 @@ fn run_worker(
                                 &mut book_epoch,
                                 &source,
                                 previous_book_id.as_deref(),
+                            );
+                            clear_published_app_cache_hints_on_context_change(
+                                &source,
+                                previous_book_id.as_deref(),
+                                previous_decode,
+                                previous_target_long_edge,
+                                options.decode,
+                                target_long_edge,
+                                &mut published_app_cache_hints,
                             );
                             clear_cache_on_book_or_decode_change(
                                 &source,

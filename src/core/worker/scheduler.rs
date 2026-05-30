@@ -93,7 +93,7 @@ fn visible_indices(center: usize, page_count: usize, visible_pages: usize) -> Ve
     indices
 }
 
-fn is_visible_page_index(index: usize, center: usize, visible_pages: usize) -> bool {
+pub(super) fn is_visible_page_index(index: usize, center: usize, visible_pages: usize) -> bool {
     index >= center && index < center.saturating_add(visible_pages.max(1))
 }
 
