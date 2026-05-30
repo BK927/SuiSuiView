@@ -58,6 +58,11 @@ impl SuiSuiViewApp {
         page: Arc<crate::core::worker::PreparedPage>,
     ) {
         self.drop_lower_resolution_pages_for(key);
+        if key.target_long_edge > MAX_TARGET_LONG_EDGE {
+            let visible = self.spread_indices();
+            let decode = self.decode_options();
+            touch_normal_navigation_page_keys(&mut self.decoded_pages, &visible, decode);
+        }
         if let Some((evicted_key, evicted_page)) = self.decoded_pages.push(key, page.clone()) {
             self.decoded_bytes = self.decoded_bytes.saturating_sub(evicted_page.byte_size);
             self.drop_textures_for_page(evicted_key);
@@ -216,6 +221,9 @@ impl SuiSuiViewApp {
 
     fn pinned_page_indices(&self) -> HashSet<PageCacheKey> {
         let mut pinned = self.pin_keys_for_indices(&self.spread_indices(), self.target_long_edge);
+        if self.target_long_edge > MAX_TARGET_LONG_EDGE {
+            pinned.extend(self.normal_navigation_pin_keys_for_visible_pages());
+        }
         pinned.extend(self.full_quality_prefetch_pin_keys());
         pinned.extend(self.queued_page_turn_pin_keys());
         pinned.extend(self.debug_compare_pin_keys());
@@ -384,6 +392,14 @@ impl SuiSuiViewApp {
             }
         }
         keys
+    }
+
+    fn normal_navigation_pin_keys_for_visible_pages(&self) -> HashSet<PageCacheKey> {
+        normal_navigation_page_keys_in_cache(
+            &self.decoded_pages,
+            &self.spread_indices(),
+            self.decode_options(),
+        )
     }
 
     fn preview_pin_keys_for_indices(
@@ -754,15 +770,45 @@ pub(in crate::app) fn lower_resolution_page_keys(
     cache: &LruCache<PageCacheKey, Arc<crate::core::worker::PreparedPage>>,
     inserted: PageCacheKey,
 ) -> Vec<PageCacheKey> {
+    let inserted_is_original = inserted.target_long_edge > MAX_TARGET_LONG_EDGE;
     cache
         .iter()
         .filter_map(|(key, _page)| {
             (key.index == inserted.index
                 && key.decode == inserted.decode
-                && key.target_long_edge < inserted.target_long_edge)
+                && key.target_long_edge < inserted.target_long_edge
+                && (!inserted_is_original || key.target_long_edge > MAX_TARGET_LONG_EDGE))
                 .then_some(*key)
         })
         .collect()
+}
+
+pub(in crate::app) fn normal_navigation_page_keys_in_cache(
+    cache: &LruCache<PageCacheKey, Arc<crate::core::worker::PreparedPage>>,
+    visible_indices: &[usize],
+    decode: DecodeOptions,
+) -> HashSet<PageCacheKey> {
+    cache
+        .iter()
+        .filter_map(|(key, _page)| {
+            (visible_indices.contains(&key.index)
+                && key.decode == decode
+                && key.target_long_edge > PREVIEW_TARGET_LONG_EDGE
+                && key.target_long_edge <= MAX_TARGET_LONG_EDGE)
+                .then_some(*key)
+        })
+        .collect()
+}
+
+pub(in crate::app) fn touch_normal_navigation_page_keys(
+    cache: &mut LruCache<PageCacheKey, Arc<crate::core::worker::PreparedPage>>,
+    visible_indices: &[usize],
+    decode: DecodeOptions,
+) {
+    let keys = normal_navigation_page_keys_in_cache(cache, visible_indices, decode);
+    for key in keys {
+        let _ = cache.get(&key);
+    }
 }
 
 #[cfg(any(test, feature = "perf-dev", feature = "perf-diagnostics"))]

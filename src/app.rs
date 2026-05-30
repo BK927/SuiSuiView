@@ -54,7 +54,7 @@ use cache::{
     automatic_cache_budget_bytes_for_total, best_page_key_at_or_below_in_cache,
     best_page_key_in_cache, cache_budget_bytes, final_quality_page_key_in_cache,
     lower_resolution_page_keys, page_cache_state_from_hit, preferred_page_key_in_cache,
-    texture_cache_budget_bytes_for,
+    texture_cache_budget_bytes_for, touch_normal_navigation_page_keys,
 };
 pub(in crate::app) use cache::{
     cache_budget_summary, gpu_visual_needs_wgsl, rect_target_size,
@@ -1322,10 +1322,11 @@ mod tests {
         lower_resolution_page_keys, ordered_spread_indices, page_cache_state_from_hit, platform,
         preferred_page_key_in_cache, preview_prefetch_indices, relative_difference,
         sanitize_font_name, should_allow_cpu_display_upscale, sibling_book_path,
-        smart_spread_indices_for_metrics, texture_cache_budget_bytes_for, transformed_page_size,
-        transition_paint_params, transition_screen_sign, worker_center_page_for_mode, AppCommand,
-        DeleteMode, ImageFilter, OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey,
-        ViewEffects, ViewMode, ViewTransform,
+        smart_spread_indices_for_metrics, texture_cache_budget_bytes_for,
+        touch_normal_navigation_page_keys, transformed_page_size, transition_paint_params,
+        transition_screen_sign, worker_center_page_for_mode, AppCommand, DeleteMode, ImageFilter,
+        OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey, ViewEffects, ViewMode,
+        ViewTransform,
     };
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
@@ -1534,6 +1535,28 @@ mod tests {
     }
 
     #[test]
+    fn final_quality_page_key_rejects_original_for_navigation_commit() {
+        let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let requested = PageCacheKey {
+            index: 7,
+            target_long_edge: MAX_TARGET_LONG_EDGE,
+            decode: DecodeOptions::default(),
+        };
+        let original = PageCacheKey {
+            target_long_edge: MAX_TARGET_LONG_EDGE + 1,
+            ..requested
+        };
+
+        cache.put(original, dummy_page(MAX_TARGET_LONG_EDGE + 1));
+
+        assert_eq!(final_quality_page_key_in_cache(&cache, requested), None);
+        assert_eq!(
+            final_quality_page_key_in_cache(&cache, original),
+            Some(original)
+        );
+    }
+
+    #[test]
     fn lower_resolution_page_keys_only_matches_same_page_and_decode() {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let decode = DecodeOptions::default();
@@ -1568,6 +1591,76 @@ mod tests {
         cache.put(larger, dummy_page(8192));
 
         assert_eq!(lower_resolution_page_keys(&cache, inserted), vec![preview]);
+    }
+
+    #[test]
+    fn lower_resolution_page_keys_keeps_navigation_keys_for_original_insert() {
+        let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let inserted = PageCacheKey {
+            index: 7,
+            target_long_edge: MAX_TARGET_LONG_EDGE + 2,
+            decode: DecodeOptions::default(),
+        };
+        let preview = PageCacheKey {
+            target_long_edge: PREVIEW_TARGET_LONG_EDGE,
+            ..inserted
+        };
+        let navigation = PageCacheKey {
+            target_long_edge: MAX_TARGET_LONG_EDGE,
+            ..inserted
+        };
+        let smaller_original = PageCacheKey {
+            target_long_edge: MAX_TARGET_LONG_EDGE + 1,
+            ..inserted
+        };
+
+        cache.put(preview, dummy_page(PREVIEW_TARGET_LONG_EDGE));
+        cache.put(navigation, dummy_page(MAX_TARGET_LONG_EDGE));
+        cache.put(smaller_original, dummy_page(MAX_TARGET_LONG_EDGE + 1));
+
+        assert_eq!(
+            lower_resolution_page_keys(&cache, inserted),
+            vec![smaller_original]
+        );
+    }
+
+    #[test]
+    fn original_insert_touches_visible_navigation_key_before_lru_push() {
+        let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let decode = DecodeOptions::default();
+        let navigation = PageCacheKey {
+            index: 7,
+            target_long_edge: MAX_TARGET_LONG_EDGE,
+            decode,
+        };
+        let filler_a = PageCacheKey {
+            index: 8,
+            ..navigation
+        };
+        let filler_b = PageCacheKey {
+            index: 9,
+            ..navigation
+        };
+        let filler_c = PageCacheKey {
+            index: 10,
+            ..navigation
+        };
+        let original = PageCacheKey {
+            target_long_edge: MAX_TARGET_LONG_EDGE + 1,
+            ..navigation
+        };
+
+        cache.put(navigation, dummy_page(MAX_TARGET_LONG_EDGE));
+        cache.put(filler_a, dummy_page(MAX_TARGET_LONG_EDGE));
+        cache.put(filler_b, dummy_page(MAX_TARGET_LONG_EDGE));
+        cache.put(filler_c, dummy_page(MAX_TARGET_LONG_EDGE));
+
+        touch_normal_navigation_page_keys(&mut cache, &[navigation.index], decode);
+        let evicted = cache.push(original, dummy_page(MAX_TARGET_LONG_EDGE + 1));
+
+        assert_eq!(evicted.map(|(key, _page)| key), Some(filler_a));
+        assert!(cache.peek(&navigation).is_some());
+        assert!(cache.peek(&original).is_some());
     }
 
     #[test]
