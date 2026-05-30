@@ -104,6 +104,47 @@ impl SuiSuiViewApp {
         ));
         true
     }
+
+    pub(super) fn paint_pending_gpu_original_inspection_cleanup(
+        &mut self,
+        painter: &egui::Painter,
+        rect: Rect,
+    ) {
+        if !self.pending_gpu_original_inspection_cleanup {
+            return;
+        }
+        self.pending_gpu_original_inspection_cleanup = false;
+        painter.add(egui_wgpu::Callback::new_paint_callback(
+            rect,
+            GpuOriginalInspectionCleanupCallback,
+        ));
+    }
+}
+
+struct GpuOriginalInspectionCleanupCallback;
+
+impl CallbackTrait for GpuOriginalInspectionCleanupCallback {
+    fn prepare(
+        &self,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _screen_descriptor: &ScreenDescriptor,
+        _egui_encoder: &mut wgpu::CommandEncoder,
+        callback_resources: &mut CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        if let Some(resources) = callback_resources.get_mut::<GpuPaintResources>() {
+            resources.drop_original_inspection_sources();
+        }
+        Vec::new()
+    }
+
+    fn paint(
+        &self,
+        _info: PaintCallbackInfo,
+        _render_pass: &mut wgpu::RenderPass<'static>,
+        _callback_resources: &CallbackResources,
+    ) {
+    }
 }
 
 struct GpuEffectCallback {
@@ -620,6 +661,32 @@ impl GpuPaintResources {
             };
             self.source_texture_bytes = self.source_texture_bytes.saturating_sub(texture.byte_size);
         }
+    }
+
+    fn drop_original_inspection_sources(&mut self) {
+        let keys = self
+            .source_textures
+            .iter()
+            .filter_map(|(key, _texture)| {
+                (key.page.target_long_edge > crate::core::worker::MAX_TARGET_LONG_EDGE)
+                    .then_some(*key)
+            })
+            .collect::<Vec<_>>();
+        if keys.is_empty() {
+            return;
+        }
+
+        for key in keys {
+            if let Some(texture) = self.source_textures.pop(&key) {
+                self.source_texture_bytes =
+                    self.source_texture_bytes.saturating_sub(texture.byte_size);
+            }
+        }
+
+        self.draw_bind_groups.clear();
+        self.draw_state_intermediate_bytes = 0;
+        self.intermediate_textures.clear();
+        self.intermediate_texture_bytes = 0;
     }
 
     fn prune_intermediate_textures(&mut self) {

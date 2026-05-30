@@ -286,6 +286,7 @@ impl SuiSuiViewApp {
         let available = ui.available_size();
         let (rect, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
+        self.paint_pending_gpu_original_inspection_cleanup(&painter, rect);
 
         painter.rect_filled(rect, 0.0, ui::theme::VIEWER_BG);
         if self.settings.show_main_border {

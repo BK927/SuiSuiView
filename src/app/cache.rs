@@ -13,6 +13,8 @@ use lru::LruCache;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
+mod original;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(in crate::app) struct PageCacheKey {
     pub(in crate::app) index: usize,
@@ -63,6 +65,13 @@ impl SuiSuiViewApp {
             let decode = self.decode_options();
             touch_normal_navigation_page_keys(&mut self.decoded_pages, &visible, decode);
         }
+        if self
+            .decoded_pages
+            .get(&key)
+            .is_some_and(|cached| Arc::ptr_eq(cached, &page))
+        {
+            return;
+        }
         if let Some((evicted_key, evicted_page)) = self.decoded_pages.push(key, page.clone()) {
             self.decoded_bytes = self.decoded_bytes.saturating_sub(evicted_page.byte_size);
             self.drop_textures_for_page(evicted_key);
@@ -75,6 +84,13 @@ impl SuiSuiViewApp {
         key: PageCacheKey,
         page: Arc<crate::core::worker::PreparedPage>,
     ) {
+        if self
+            .upscaled_pages
+            .get(&key)
+            .is_some_and(|cached| Arc::ptr_eq(cached, &page))
+        {
+            return;
+        }
         if let Some((evicted_key, evicted_page)) = self.upscaled_pages.push(key, page.clone()) {
             self.upscaled_bytes = self.upscaled_bytes.saturating_sub(evicted_page.byte_size);
             self.drop_textures_for_page(evicted_key);

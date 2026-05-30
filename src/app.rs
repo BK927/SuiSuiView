@@ -185,6 +185,8 @@ pub struct SuiSuiViewApp {
     pending_page_turn: Option<PendingPageTurn>,
     queued_page_turns: Option<QueuedPageTurns>,
     page_turn_paint_hold: bool,
+    pending_original_inspection_cache_cleanup_at: Option<Instant>,
+    pending_gpu_original_inspection_cleanup: bool,
     fullscreen: bool,
     maximized: bool,
     window_position_checked: bool,
@@ -294,6 +296,8 @@ impl SuiSuiViewApp {
             pending_page_turn: None,
             queued_page_turns: None,
             page_turn_paint_hold: false,
+            pending_original_inspection_cache_cleanup_at: None,
+            pending_gpu_original_inspection_cleanup: false,
             fullscreen: false,
             maximized: false,
             window_position_checked: false,
@@ -465,7 +469,9 @@ impl SuiSuiViewApp {
                     self.page_metrics
                         .insert(index, PageMetrics::from_page(&page));
                     self.insert_prepared_page(key, page);
-                    self.prune_decoded_cache();
+                    if !self.original_inspection_cache_cleanup_pending() {
+                        self.prune_decoded_cache();
+                    }
                     self.commit_pending_page_turn_if_ready();
                     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
                     self.record_cache_snapshot("page_ready");
@@ -1135,6 +1141,7 @@ impl eframe::App for SuiSuiViewApp {
         self.drain_upscale_events();
         self.run_pending_adjacent_seed_prefetch();
         self.drain_adjacent_seed_events();
+        self.drain_pending_original_inspection_cache_cleanup(ctx);
         self.bookmark_thumbnails.drain(ctx);
         self.handle_dropped_files(ctx);
         if !self.settings_is_capturing_keyboard() {

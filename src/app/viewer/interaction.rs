@@ -88,7 +88,12 @@ impl SuiSuiViewApp {
             return;
         }
 
+        let leaving_original_inspection =
+            self.target_long_edge > MAX_TARGET_LONG_EDGE && next <= MAX_TARGET_LONG_EDGE;
         self.target_long_edge = next;
+        if leaving_original_inspection {
+            self.schedule_original_inspection_cache_cleanup(ctx);
+        }
         self.clear_pending_page_turns();
         self.worker.set_page(
             self.worker_center_page(),
