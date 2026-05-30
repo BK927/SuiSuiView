@@ -5,7 +5,7 @@ use crate::core::effects::ViewEffects;
 use crate::core::state::{AppSettings, CacheMemoryMode, DisplayUpscaler, FitMode};
 use crate::core::worker::{
     clamp_target_long_edge, preview_prefetch_indices, CachedPageKey, DecodeOptions,
-    PREVIEW_TARGET_LONG_EDGE,
+    MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
 use eframe::egui::{Rect, TextureHandle};
 use lru::LruCache;
@@ -235,6 +235,7 @@ impl SuiSuiViewApp {
     ) -> HashSet<PageCacheKey> {
         if !self.settings.prefetch_enabled
             || !self.settings.progressive_preview_enabled
+            || self.target_long_edge > MAX_TARGET_LONG_EDGE
             || self.target_long_edge <= PREVIEW_TARGET_LONG_EDGE
         {
             return HashSet::new();
@@ -282,6 +283,7 @@ impl SuiSuiViewApp {
             });
             if self.settings.progressive_preview_enabled
                 && target_long_edge > PREVIEW_TARGET_LONG_EDGE
+                && target_long_edge <= MAX_TARGET_LONG_EDGE
             {
                 keys.insert(PageCacheKey {
                     index: *index,
@@ -538,6 +540,7 @@ pub(in crate::app) fn best_page_key_in_cache(
 
     let mut best_smaller = None;
     let mut smallest_any = None;
+    let requested_allows_original = requested.target_long_edge > MAX_TARGET_LONG_EDGE;
     for (key, _page) in cache.iter() {
         if key.index != requested.index || key.decode != requested.decode {
             continue;
@@ -547,6 +550,9 @@ pub(in crate::app) fn best_page_key_in_cache(
                 .is_none_or(|best: PageCacheKey| key.target_long_edge > best.target_long_edge)
         {
             best_smaller = Some(*key);
+        }
+        if !requested_allows_original && key.target_long_edge > MAX_TARGET_LONG_EDGE {
+            continue;
         }
         if smallest_any
             .is_none_or(|smallest: PageCacheKey| key.target_long_edge < smallest.target_long_edge)

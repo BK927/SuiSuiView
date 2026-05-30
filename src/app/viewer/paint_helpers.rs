@@ -4,6 +4,7 @@ use crate::app::{
 };
 use crate::core::effects::ViewEffects;
 use crate::core::state::{FitMode, LargeImageAnchor};
+use crate::core::worker::MAX_TARGET_LONG_EDGE;
 use eframe::egui::{
     self, Align2, Color32, ColorImage, FontId, ImageData, Pos2, Rect, Stroke, StrokeKind,
     TextureHandle, TextureOptions, Vec2,
@@ -95,7 +96,7 @@ impl SuiSuiViewApp {
                 effects
             ),
             ImageData::Color(image),
-            TextureOptions::LINEAR,
+            texture_options_for_target(source_key.page.target_long_edge),
         );
         self.textures.put(
             texture_key,
@@ -138,15 +139,57 @@ impl SuiSuiViewApp {
         Pos2::new(x + self.pan.x + offset.x, y + self.pan.y + offset.y)
     }
 
-    pub(in crate::app) fn scale_for(&self, viewport: Vec2, natural: Vec2) -> f32 {
+    pub(in crate::app) fn scale_for(
+        &self,
+        viewport: Vec2,
+        natural: Vec2,
+        pixels_per_point: f32,
+    ) -> f32 {
         let safe = Vec2::new(natural.x.max(1.0), natural.y.max(1.0));
         match self.fit_mode {
             FitMode::FitPage => (viewport.x / safe.x).min(viewport.y / safe.y),
             FitMode::FitWidth => viewport.x / safe.x,
             FitMode::FitHeight => viewport.y / safe.y,
-            FitMode::Original => 1.0,
-            FitMode::Manual => self.manual_zoom,
+            FitMode::Original => source_pixel_scale(pixels_per_point),
+            FitMode::Manual => self.manual_zoom * source_pixel_scale(pixels_per_point),
         }
         .clamp(0.02, 16.0)
+    }
+}
+
+fn source_pixel_scale(pixels_per_point: f32) -> f32 {
+    1.0 / pixels_per_point.max(0.1)
+}
+
+pub(in crate::app) fn texture_options_for_target(target_long_edge: u32) -> TextureOptions {
+    if target_long_edge > MAX_TARGET_LONG_EDGE {
+        TextureOptions::NEAREST
+    } else {
+        TextureOptions::LINEAR
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{source_pixel_scale, texture_options_for_target};
+    use crate::core::worker::MAX_TARGET_LONG_EDGE;
+    use eframe::egui::TextureOptions;
+
+    #[test]
+    fn source_pixel_scale_maps_one_image_pixel_to_one_physical_pixel() {
+        assert_eq!(source_pixel_scale(1.25), 0.8);
+        assert_eq!(source_pixel_scale(1.0), 1.0);
+    }
+
+    #[test]
+    fn original_inspection_texture_uses_nearest_sampler() {
+        assert_eq!(
+            texture_options_for_target(MAX_TARGET_LONG_EDGE + 1),
+            TextureOptions::NEAREST
+        );
+        assert_eq!(
+            texture_options_for_target(MAX_TARGET_LONG_EDGE),
+            TextureOptions::LINEAR
+        );
     }
 }

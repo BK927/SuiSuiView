@@ -1,13 +1,14 @@
 use super::{
     gpu_paint::{GpuPaintRequest, GpuPaintSourceKey},
-    page_visual_size, PageCacheKey, PageVisual, SuiSuiViewApp, TextureCacheKey, TextureEntry,
+    page_visual_size, texture_options_for_target, PageCacheKey, PageVisual, SuiSuiViewApp,
+    TextureCacheKey, TextureEntry,
 };
 use crate::core::effects::ViewEffects;
 use crate::core::source::SharedSource;
 use crate::core::state::{DisplayUpscaler, ResizeFilter};
 use crate::core::worker::{prepare_image_with_options, DecodeOptions, PreparedPage};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
-use eframe::egui::{self, Align2, Color32, ImageData, Pos2, Rect, TextureOptions, Vec2};
+use eframe::egui::{self, Align2, Color32, ImageData, Pos2, Rect, Vec2};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -276,7 +277,7 @@ impl SuiSuiViewApp {
     ) {
         let visual = self.compare_visual(ctx, target);
         let natural = page_visual_size(&visual);
-        let scale = self.scale_for(viewport.size(), natural);
+        let scale = self.scale_for(viewport.size(), natural, ctx.pixels_per_point());
         let page_size = natural * scale;
         let page_rect =
             Rect::from_min_size(self.spread_origin(viewport, page_size, self.pan), page_size);
@@ -490,7 +491,7 @@ impl SuiSuiViewApp {
                 if upscaled { "ai" } else { "base" }
             ),
             ImageData::Color(Arc::new(page.color_image())),
-            TextureOptions::LINEAR,
+            texture_options_for_target(best_key.target_long_edge),
         );
         self.textures.put(
             texture_key,

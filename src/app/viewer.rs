@@ -8,7 +8,7 @@ use crate::core::effects::{
 use crate::core::state::PageTransitionStyle;
 use eframe::egui::{
     self, Align2, Color32, ColorImage, FontId, ImageData, Pos2, Rect, Sense, Stroke, StrokeKind,
-    TextureOptions, Vec2,
+    Vec2,
 };
 use std::sync::Arc;
 
@@ -24,6 +24,7 @@ pub(in crate::app) use model::{
     smart_spread_indices_for_metrics, worker_center_page_for_mode, PageMetrics, PageVisual,
     Transition, ViewMode,
 };
+pub(in crate::app) use paint_helpers::texture_options_for_target;
 pub(in crate::app) use transition::{
     paint_book_flip_shadow, transition_paint_params, transition_screen_sign,
 };
@@ -246,7 +247,7 @@ impl SuiSuiViewApp {
                 self.effects
             ),
             ImageData::Color(image),
-            TextureOptions::LINEAR,
+            texture_options_for_target(best_key.target_long_edge),
         );
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::record_texture_load(texture_started, index, best_key.target_long_edge, upscaled);
@@ -439,6 +440,7 @@ impl SuiSuiViewApp {
         let scale = self.scale_for(
             request.viewport.size(),
             Vec2::new(natural_width, natural_height),
+            ctx.pixels_per_point(),
         );
         let spread_width = natural_width * scale * request.scale.x;
         let spread_height = natural_height * scale * request.scale.y;

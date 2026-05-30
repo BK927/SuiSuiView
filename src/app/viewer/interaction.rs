@@ -3,7 +3,8 @@ use crate::app::commands::command_for_mouse_gesture;
 use crate::app::{ui, SuiSuiViewApp};
 use crate::core::state::{FitMode, MouseGesture, WheelMode};
 use crate::core::worker::{
-    clamp_target_long_edge, NavigationDirection, MAX_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE,
+    clamp_navigation_target_long_edge, clamp_target_long_edge, NavigationDirection,
+    MAX_TARGET_LONG_EDGE,
 };
 use eframe::egui::{self, Align2, Color32, Rect, Vec2};
 
@@ -78,8 +79,11 @@ impl SuiSuiViewApp {
         }
 
         let next = self.target_long_edge_for(ctx, viewport);
+        let original_inspection_target =
+            next > MAX_TARGET_LONG_EDGE || self.target_long_edge > MAX_TARGET_LONG_EDGE;
         if next == self.target_long_edge
-            || next.abs_diff(self.target_long_edge) < TARGET_EDGE_HYSTERESIS
+            || (!original_inspection_target
+                && next.abs_diff(self.target_long_edge) < TARGET_EDGE_HYSTERESIS)
         {
             return;
         }
@@ -103,23 +107,22 @@ impl SuiSuiViewApp {
         } else {
             Vec2::new((viewport.x - SPREAD_GAP_POINTS).max(1.0) * 0.5, viewport.y)
         };
-        let base_points = match self.fit_mode {
-            FitMode::FitWidth => page_viewport.x,
-            FitMode::FitHeight => page_viewport.y,
-            _ => page_viewport.x.max(page_viewport.y),
-        };
-        let viewport_pixels = base_points * ctx.pixels_per_point();
-        let zoom_multiplier = match self.fit_mode {
-            FitMode::Manual => self.manual_zoom.max(1.0),
-            _ => 1.0,
-        };
-        let oversample = match self.fit_mode {
-            FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight => 1.0,
-            FitMode::Manual | FitMode::Original => 1.5,
-        };
-        let raw = viewport_pixels * oversample * zoom_multiplier;
-        let quantized = ((raw / 256.0).ceil() * 256.0) as u32;
-        clamp_target_long_edge(quantized.clamp(MIN_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE))
+        target_long_edge_for_view(
+            self.fit_mode,
+            self.manual_zoom,
+            page_viewport,
+            ctx.pixels_per_point(),
+            self.visible_original_long_edge(),
+        )
+    }
+
+    fn visible_original_long_edge(&self) -> Option<u32> {
+        let mut longest = 0.0_f32;
+        for index in self.spread_indices() {
+            let metrics = self.page_metrics.get(&index)?;
+            longest = longest.max(metrics.width.max(metrics.height));
+        }
+        (longest > 0.0).then(|| longest.ceil() as u32)
     }
 
     fn page_viewport_count_for_target(&self) -> usize {
@@ -204,5 +207,119 @@ impl SuiSuiViewApp {
                 self.apply_command(ui.ctx(), command);
             }
         }
+    }
+}
+
+fn target_long_edge_for_view(
+    fit_mode: FitMode,
+    manual_zoom: f32,
+    page_viewport: Vec2,
+    pixels_per_point: f32,
+    original_long_edge: Option<u32>,
+) -> u32 {
+    let display_target =
+        display_target_long_edge_for_view(fit_mode, manual_zoom, page_viewport, pixels_per_point);
+    original_inspection_target_long_edge(fit_mode, manual_zoom, original_long_edge)
+        .map_or(display_target, |original_target| {
+            original_target.max(display_target)
+        })
+}
+
+fn display_target_long_edge_for_view(
+    fit_mode: FitMode,
+    manual_zoom: f32,
+    page_viewport: Vec2,
+    pixels_per_point: f32,
+) -> u32 {
+    let base_points = match fit_mode {
+        FitMode::FitWidth => page_viewport.x,
+        FitMode::FitHeight => page_viewport.y,
+        _ => page_viewport.x.max(page_viewport.y),
+    };
+    let viewport_pixels = base_points * pixels_per_point;
+    let zoom_multiplier = match fit_mode {
+        FitMode::Manual => manual_zoom.max(1.0),
+        _ => 1.0,
+    };
+    let oversample = match fit_mode {
+        FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight => 1.0,
+        FitMode::Manual | FitMode::Original => 1.5,
+    };
+    let raw = viewport_pixels * oversample * zoom_multiplier;
+    let quantized = ((raw / 256.0).ceil() * 256.0) as u32;
+    clamp_navigation_target_long_edge(quantized)
+}
+
+fn original_inspection_target_long_edge(
+    fit_mode: FitMode,
+    manual_zoom: f32,
+    original_long_edge: Option<u32>,
+) -> Option<u32> {
+    let needs_original_pixels = match fit_mode {
+        FitMode::Original => true,
+        FitMode::Manual => manual_zoom >= 1.0,
+        FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight => false,
+    };
+    if !needs_original_pixels {
+        return None;
+    }
+    original_long_edge.map(clamp_target_long_edge)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::target_long_edge_for_view;
+    use crate::core::state::FitMode;
+    use crate::core::worker::MAX_TARGET_LONG_EDGE;
+    use eframe::egui::Vec2;
+
+    #[test]
+    fn fit_modes_stay_on_navigation_target_cap() {
+        assert_eq!(
+            target_long_edge_for_view(
+                FitMode::FitPage,
+                1.0,
+                Vec2::new(10_000.0, 10_000.0),
+                1.0,
+                Some(8192),
+            ),
+            MAX_TARGET_LONG_EDGE
+        );
+    }
+
+    #[test]
+    fn original_mode_requests_source_long_edge_when_known() {
+        assert_eq!(
+            target_long_edge_for_view(
+                FitMode::Original,
+                1.0,
+                Vec2::new(1200.0, 1600.0),
+                1.0,
+                Some(8192),
+            ),
+            8192
+        );
+    }
+
+    #[test]
+    fn manual_zoom_at_original_scale_requests_source_long_edge() {
+        assert_eq!(
+            target_long_edge_for_view(
+                FitMode::Manual,
+                1.1,
+                Vec2::new(1200.0, 1600.0),
+                1.0,
+                Some(8192),
+            ),
+            8192
+        );
+    }
+
+    #[test]
+    fn original_mode_without_metrics_uses_display_target() {
+        assert_eq!(
+            target_long_edge_for_view(FitMode::Original, 1.0, Vec2::new(1200.0, 1600.0), 1.0, None,),
+            2560
+        );
     }
 }

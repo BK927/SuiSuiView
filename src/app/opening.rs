@@ -8,7 +8,7 @@ use crate::core::source::{
 use crate::core::state::StateStore;
 use crate::core::worker::{
     prepare_image_with_options, DecodeOptions, NavigationDirection, PreparedPage,
-    PREVIEW_TARGET_LONG_EDGE,
+    MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
 use eframe::egui::Vec2;
 use std::fs;
@@ -336,6 +336,10 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn request_adjacent_seed_prefetch(&mut self) {
         if !perf::adjacent_seed_prefetch_enabled() || self.source.is_none() {
+            return;
+        }
+        if self.target_long_edge > MAX_TARGET_LONG_EDGE {
+            self.clear_adjacent_seed_cache();
             return;
         }
         if self.pending_adjacent_seed_prefetch_at.is_none() {

@@ -72,7 +72,8 @@ use viewer::{
     smart_spread_indices_for_metrics, transition_paint_params, worker_center_page_for_mode,
 };
 pub(in crate::app) use viewer::{
-    page_visual_size, transition_screen_sign, PageMetrics, PageVisual, Transition, ViewMode,
+    page_visual_size, texture_options_for_target, transition_screen_sign, PageMetrics, PageVisual,
+    Transition, ViewMode,
 };
 
 #[cfg(test)]
@@ -1327,7 +1328,7 @@ mod tests {
     };
     use crate::core::worker::{
         DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PreparedPage,
-        PREVIEW_TARGET_LONG_EDGE,
+        MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
     };
     use eframe::egui::{Color32, ColorImage, Pos2, Rect, Vec2};
     use lru::LruCache;
@@ -1474,6 +1475,25 @@ mod tests {
 
         cache.put(exact_key, dummy_page(4096));
         assert_eq!(best_page_key_in_cache(&cache, exact_key), Some(exact_key));
+    }
+
+    #[test]
+    fn best_page_key_keeps_original_targets_out_of_navigation_fallback() {
+        let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let requested = PageCacheKey {
+            index: 7,
+            target_long_edge: MAX_TARGET_LONG_EDGE,
+            decode: DecodeOptions::default(),
+        };
+        let original = PageCacheKey {
+            target_long_edge: MAX_TARGET_LONG_EDGE + 1,
+            ..requested
+        };
+
+        cache.put(original, dummy_page(MAX_TARGET_LONG_EDGE + 1));
+
+        assert_eq!(best_page_key_in_cache(&cache, requested), None);
+        assert_eq!(best_page_key_in_cache(&cache, original), Some(original));
     }
 
     #[test]

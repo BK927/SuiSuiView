@@ -1,6 +1,7 @@
 use super::{
-    clamp_target_long_edge, preview_prefetch_indices, NavigationDirection,
-    PREVIEW_PREFETCH_BACKWARD_PAGES, PREVIEW_PREFETCH_FORWARD_PAGES, PREVIEW_TARGET_LONG_EDGE,
+    clamp_target_long_edge, is_original_inspection_target, preview_prefetch_indices,
+    NavigationDirection, PREVIEW_PREFETCH_BACKWARD_PAGES, PREVIEW_PREFETCH_FORWARD_PAGES,
+    PREVIEW_TARGET_LONG_EDGE,
 };
 use std::path::Path;
 
@@ -20,12 +21,17 @@ pub(super) fn prioritized_jobs(
     progressive_preview_enabled: bool,
 ) -> Vec<PageJob> {
     let target_long_edge = clamp_target_long_edge(target_long_edge);
-    let full_indices = if prefetch_enabled {
+    let original_inspection = is_original_inspection_target(target_long_edge);
+    let full_indices = if original_inspection {
+        visible_indices(center, page_count, visible_pages)
+    } else if prefetch_enabled {
         prioritized_indices(center, page_count, direction)
     } else {
         visible_indices(center, page_count, visible_pages)
     };
-    let preview_capacity = if progressive_preview_enabled
+    let preview_capacity = if original_inspection {
+        0
+    } else if progressive_preview_enabled
         && target_long_edge > PREVIEW_TARGET_LONG_EDGE
         && prefetch_enabled
     {
@@ -40,7 +46,10 @@ pub(super) fn prioritized_jobs(
     };
     let mut jobs = Vec::with_capacity(full_indices.len().saturating_add(preview_capacity));
 
-    if progressive_preview_enabled && target_long_edge > PREVIEW_TARGET_LONG_EDGE {
+    if !original_inspection
+        && progressive_preview_enabled
+        && target_long_edge > PREVIEW_TARGET_LONG_EDGE
+    {
         let preview_indices = if prefetch_enabled {
             preview_prefetch_indices(center, page_count, direction, visible_pages)
         } else {
@@ -154,7 +163,9 @@ mod tests {
     use super::{
         prioritized_indices, prioritized_jobs, should_skip_ai_preview_or_prefetch, PageJob,
     };
-    use crate::core::worker::{NavigationDirection, PREVIEW_TARGET_LONG_EDGE};
+    use crate::core::worker::{
+        NavigationDirection, MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
+    };
 
     #[test]
     fn priority_tracks_forward_reading() {
@@ -271,6 +282,31 @@ mod tests {
                 PageJob {
                     index: 6,
                     target_long_edge: 2048
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn original_inspection_jobs_stay_visible_and_exact() {
+        assert_eq!(
+            prioritized_jobs(
+                5,
+                12,
+                NavigationDirection::Forward,
+                MAX_TARGET_LONG_EDGE + 1,
+                2,
+                true,
+                true,
+            ),
+            vec![
+                PageJob {
+                    index: 5,
+                    target_long_edge: MAX_TARGET_LONG_EDGE + 1
+                },
+                PageJob {
+                    index: 6,
+                    target_long_edge: MAX_TARGET_LONG_EDGE + 1
                 },
             ]
         );

@@ -44,6 +44,7 @@ const PNG_SAMPLED_MIN_RATIO: u32 = 2;
 pub const DEFAULT_TARGET_LONG_EDGE: u32 = 2048;
 pub const MIN_TARGET_LONG_EDGE: u32 = 1024;
 pub const MAX_TARGET_LONG_EDGE: u32 = 4096;
+pub const MAX_ORIGINAL_TARGET_LONG_EDGE: u32 = MAX_IMAGE_DIMENSION;
 pub const PREVIEW_TARGET_LONG_EDGE: u32 = MIN_TARGET_LONG_EDGE;
 pub const PREVIEW_PREFETCH_FORWARD_PAGES: usize = 24;
 pub const PREVIEW_PREFETCH_BACKWARD_PAGES: usize = 2;
@@ -220,7 +221,12 @@ impl CachedPageKey {
     }
 
     fn covers(self, index: usize, target_long_edge: u32, decode: DecodeOptions) -> bool {
-        self.index == index && self.decode == decode && self.target_long_edge >= target_long_edge
+        let requested_target = clamp_target_long_edge(target_long_edge);
+        if requested_target <= MAX_TARGET_LONG_EDGE && self.target_long_edge > MAX_TARGET_LONG_EDGE
+        {
+            return false;
+        }
+        self.index == index && self.decode == decode && self.target_long_edge >= requested_target
     }
 }
 
@@ -632,7 +638,15 @@ fn decode_limits() -> Limits {
 }
 
 pub fn clamp_target_long_edge(target_long_edge: u32) -> u32 {
+    target_long_edge.clamp(MIN_TARGET_LONG_EDGE, MAX_ORIGINAL_TARGET_LONG_EDGE)
+}
+
+pub fn clamp_navigation_target_long_edge(target_long_edge: u32) -> u32 {
     target_long_edge.clamp(MIN_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE)
+}
+
+pub fn is_original_inspection_target(target_long_edge: u32) -> bool {
+    clamp_target_long_edge(target_long_edge) > MAX_TARGET_LONG_EDGE
 }
 
 pub fn display_dimensions(
@@ -1133,11 +1147,12 @@ fn page_cache_key(
 #[cfg(test)]
 mod tests {
     use super::{
-        display_dimensions, display_dimensions_with_upscale, image_filter_type, page_cache_key,
-        prepare_image, prepare_image_with_options, prepare_image_with_strategy,
+        clamp_navigation_target_long_edge, clamp_target_long_edge, display_dimensions,
+        display_dimensions_with_upscale, image_filter_type, page_cache_key, prepare_image,
+        prepare_image_with_options, prepare_image_with_strategy,
         prepare_unavailable_or_image_fallback, run_worker, CachedPageKey, DecodeBackend,
         DecodeOptions, DecodeStrategy, NavigationDirection, WorkerCommand, WorkerEvent,
-        WorkerOptions, MAX_TARGET_LONG_EDGE,
+        WorkerOptions, MAX_ORIGINAL_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE,
     };
     use crate::core::source::{BookSource, SharedSource, SourceError};
     use crate::core::state::{DecoderPreference, DecoderPreferences, ResizeFilter};
@@ -1337,7 +1352,19 @@ mod tests {
         assert_eq!(display_dimensions(8000, 4000, 2000).unwrap(), (2000, 1000));
         assert_eq!(
             display_dimensions(3000, 9000, MAX_TARGET_LONG_EDGE + 500).unwrap(),
-            (1365, 4096)
+            (1532, 4596)
+        );
+        assert_eq!(
+            clamp_target_long_edge(MAX_ORIGINAL_TARGET_LONG_EDGE + 500),
+            MAX_ORIGINAL_TARGET_LONG_EDGE
+        );
+    }
+
+    #[test]
+    fn navigation_target_clamp_keeps_display_path_capped() {
+        assert_eq!(
+            clamp_navigation_target_long_edge(MAX_TARGET_LONG_EDGE + 500),
+            MAX_TARGET_LONG_EDGE
         );
     }
 
@@ -1436,6 +1463,10 @@ mod tests {
                 ..decode
             }
         ));
+
+        let original_key = CachedPageKey::new(3, MAX_TARGET_LONG_EDGE + 1, decode);
+        assert!(original_key.covers(3, MAX_TARGET_LONG_EDGE + 1, decode));
+        assert!(!original_key.covers(3, MAX_TARGET_LONG_EDGE, decode));
     }
 
     #[test]
