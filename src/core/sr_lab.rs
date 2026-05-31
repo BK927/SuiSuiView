@@ -3,12 +3,16 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod blob;
+pub mod cpu;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SrLabFamily {
     Rfdn,
     RepRfn,
     Span,
+    SpanS,
 }
 
 impl SrLabFamily {
@@ -17,6 +21,7 @@ impl SrLabFamily {
             Self::Rfdn => "RFDN",
             Self::RepRfn => "RepRFN",
             Self::Span => "SPAN",
+            Self::SpanS => "SPAN-S",
         }
     }
 }
@@ -30,6 +35,12 @@ pub enum SrLabLayerKind {
     LeakyRelu,
     ResidualAdd,
     PixelShuffle2x,
+    PixelShuffle3x,
+    PixelShuffle4x,
+    MeanShift,
+    Silu,
+    SpanGate,
+    Concat4,
     SpanAttention,
 }
 
@@ -60,29 +71,67 @@ pub struct SrLabLayer {
 pub struct SrLabManifest {
     pub name: String,
     pub family: SrLabFamily,
+    #[serde(default)]
+    pub variant: Option<String>,
     pub scale: u32,
     pub input_channels: u32,
     pub output_channels: u32,
     pub weights_format: String,
+    #[serde(default)]
+    pub weights_file: Option<String>,
     pub weights_sha256: String,
     pub source: String,
+    #[serde(default)]
+    pub source_commit: Option<String>,
+    #[serde(default)]
+    pub source_checkpoint_url: Option<String>,
+    #[serde(default)]
+    pub source_checkpoint_archive_sha256: Option<String>,
+    #[serde(default)]
+    pub source_checkpoint_file: Option<String>,
+    #[serde(default)]
+    pub source_checkpoint_sha256: Option<String>,
     pub license: String,
+    #[serde(default)]
+    pub notes: Vec<String>,
+    #[serde(default)]
+    pub span: Option<SrLabSpanMetadata>,
     pub layers: Vec<SrLabLayer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SrLabSpanMetadata {
+    pub feature_channels: u32,
+    pub block_count: u32,
+    pub reparameterized_conv3xc: bool,
+    pub img_range: f32,
+    pub rgb_mean: [f32; 3],
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SrLabInspectReport {
     pub name: String,
     pub family: String,
+    pub variant: Option<String>,
     pub scale: u32,
     pub layer_count: usize,
     pub weights_format: String,
+    pub weights_file: Option<String>,
     pub weights_sha256: String,
     pub source: String,
+    pub source_commit: Option<String>,
     pub license: String,
+    pub span: Option<SrLabSpanSummary>,
     pub tiny_wgsl_supported: bool,
     pub unsupported_ops: Vec<String>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SrLabSpanSummary {
+    pub feature_channels: u32,
+    pub block_count: u32,
+    pub reparameterized_conv3xc: bool,
 }
 
 pub fn run_sr_lab_inspect(
@@ -120,15 +169,19 @@ pub fn inspect_manifest(
         .map(|layer| format!("{}:{:?}", layer.name, layer.kind))
         .collect();
     let mut warnings = Vec::new();
-    if manifest.family == SrLabFamily::Span
+    if matches!(manifest.family, SrLabFamily::Span | SrLabFamily::SpanS)
         && manifest
             .layers
             .iter()
-            .all(|layer| layer.kind != SrLabLayerKind::SpanAttention)
+            .all(|layer| layer.kind != SrLabLayerKind::SpanGate)
     {
         warnings.push(
-            "SPAN-family manifests normally need attention ops; this manifest has none".to_owned(),
+            "SPAN-family manifests normally need span_gate ops; this manifest has none".to_owned(),
         );
+    }
+    if matches!(manifest.family, SrLabFamily::Span | SrLabFamily::SpanS) && manifest.span.is_none()
+    {
+        warnings.push("SPAN-family manifests should include span metadata".to_owned());
     }
     let license_lower = manifest.license.to_ascii_lowercase();
     if license_lower.contains("noncommercial") || license_lower.contains("cc-by-nc") {
@@ -138,12 +191,20 @@ pub fn inspect_manifest(
     Ok(SrLabInspectReport {
         name: manifest.name.clone(),
         family: manifest.family.label().to_owned(),
+        variant: manifest.variant.clone(),
         scale: manifest.scale,
         layer_count: manifest.layers.len(),
         weights_format: manifest.weights_format.clone(),
+        weights_file: manifest.weights_file.clone(),
         weights_sha256: manifest.weights_sha256.clone(),
         source: manifest.source.clone(),
+        source_commit: manifest.source_commit.clone(),
         license: manifest.license.clone(),
+        span: manifest.span.as_ref().map(|span| SrLabSpanSummary {
+            feature_channels: span.feature_channels,
+            block_count: span.block_count,
+            reparameterized_conv3xc: span.reparameterized_conv3xc,
+        }),
         tiny_wgsl_supported: unsupported_ops.is_empty(),
         unsupported_ops,
         warnings,
@@ -172,6 +233,22 @@ fn validate_manifest(manifest: &SrLabManifest) -> Result<(), Box<dyn std::error:
     if manifest.license.trim().is_empty() {
         return Err("SR Lab manifest license is empty".into());
     }
+    if let Some(weights_file) = &manifest.weights_file {
+        if weights_file.trim().is_empty() {
+            return Err("SR Lab manifest weights_file is empty".into());
+        }
+    }
+    if let Some(span) = &manifest.span {
+        if span.feature_channels == 0 || span.block_count == 0 {
+            return Err("SPAN metadata channels and block count must be positive".into());
+        }
+        if !span.img_range.is_finite() || span.img_range <= 0.0 {
+            return Err("SPAN metadata img_range must be positive and finite".into());
+        }
+        if !span.rgb_mean.iter().all(|value| value.is_finite()) {
+            return Err("SPAN metadata rgb_mean values must be finite".into());
+        }
+    }
     if manifest.layers.is_empty() {
         return Err("SR Lab manifest has no layers".into());
     }
@@ -197,6 +274,10 @@ pub fn default_sr_lab_report_path() -> PathBuf {
     PathBuf::from("perf-fixtures").join("sr-lab-inspect.json")
 }
 
+pub fn default_span_cpu_reference_report_path() -> PathBuf {
+    PathBuf::from("perf-fixtures").join("sr-lab-span-cpu-reference.json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{inspect_manifest, SrLabFamily, SrLabLayer, SrLabLayerKind, SrLabManifest};
@@ -205,13 +286,22 @@ mod tests {
         SrLabManifest {
             name: "tiny rfdn smoke".to_owned(),
             family: SrLabFamily::Rfdn,
+            variant: None,
             scale: 2,
             input_channels: 3,
             output_channels: 3,
             weights_format: "suisui-srlab-v1".to_owned(),
+            weights_file: None,
             weights_sha256: "0".repeat(64),
             source: "local-test".to_owned(),
+            source_commit: None,
+            source_checkpoint_url: None,
+            source_checkpoint_archive_sha256: None,
+            source_checkpoint_file: None,
+            source_checkpoint_sha256: None,
             license: "MIT".to_owned(),
+            notes: Vec::new(),
+            span: None,
             layers,
         }
     }
@@ -245,19 +335,75 @@ mod tests {
     }
 
     #[test]
-    fn span_attention_blocks_tiny_wgsl_support() {
+    fn span_gate_blocks_tiny_wgsl_support() {
         let mut manifest = base_manifest(vec![SrLabLayer {
             name: "attention0".to_owned(),
-            kind: SrLabLayerKind::SpanAttention,
+            kind: SrLabLayerKind::SpanGate,
             input_channels: Some(16),
             output_channels: Some(16),
         }]);
         manifest.family = SrLabFamily::Span;
+        manifest.span = Some(super::SrLabSpanMetadata {
+            feature_channels: 16,
+            block_count: 1,
+            reparameterized_conv3xc: true,
+            img_range: 255.0,
+            rgb_mean: [0.4488, 0.4371, 0.4040],
+        });
 
         let report = inspect_manifest(&manifest).unwrap();
 
         assert!(!report.tiny_wgsl_supported);
         assert_eq!(report.unsupported_ops.len(), 1);
+    }
+
+    #[test]
+    fn converted_span_s_manifest_shape_is_accepted() {
+        let manifest: SrLabManifest = serde_json::from_str(
+            r#"{
+                "name": "SPAN-S x2",
+                "family": "span-s",
+                "variant": "SPAN-S",
+                "scale": 2,
+                "input_channels": 3,
+                "output_channels": 3,
+                "weights_format": "suisui-srlab-v1",
+                "weights_file": "weights.srlab",
+                "weights_sha256": "506ca7af17f69988dfddb951cf934ba060057d39860c8960779c7bc2790267b9",
+                "source": "https://github.com/hongyuanyu/SPAN",
+                "source_commit": "c77a5917759f09e66fbc7124220c5afc5ee221e5",
+                "license": "Apache-2.0",
+                "span": {
+                    "feature_channels": 48,
+                    "block_count": 6,
+                    "reparameterized_conv3xc": true,
+                    "img_range": 255.0,
+                    "rgb_mean": [0.4488, 0.4371, 0.4040]
+                },
+                "layers": [
+                    {"name": "mean_shift", "kind": "mean_shift", "input_channels": 3, "output_channels": 3},
+                    {"name": "conv_1", "kind": "conv2d3x3", "input_channels": 3, "output_channels": 48},
+                    {"name": "block_1.act1", "kind": "silu"},
+                    {"name": "block_1.gate", "kind": "span_gate", "input_channels": 48, "output_channels": 48},
+                    {"name": "concat_feature_b6_b1_b5_2", "kind": "concat4", "input_channels": 48, "output_channels": 192},
+                    {"name": "pixel_shuffle2x", "kind": "pixel_shuffle2x", "input_channels": 12, "output_channels": 3}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let report = inspect_manifest(&manifest).unwrap();
+
+        assert_eq!(report.family, "SPAN-S");
+        assert_eq!(report.variant.as_deref(), Some("SPAN-S"));
+        assert_eq!(
+            report.span.as_ref().map(|span| span.feature_channels),
+            Some(48)
+        );
+        assert!(report
+            .unsupported_ops
+            .iter()
+            .any(|op| op.contains("MeanShift")));
     }
 
     #[test]

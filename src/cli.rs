@@ -96,6 +96,13 @@ pub enum CliCommand {
         manifest_path: PathBuf,
         report_path: Option<PathBuf>,
     },
+    SrLabSpanCpuReference {
+        manifest_path: PathBuf,
+        input_path: PathBuf,
+        long_edge: Option<u32>,
+        output_path: Option<PathBuf>,
+        report_path: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +180,9 @@ pub fn parse_args(args: Vec<OsString>) -> Result<CliAction, CliError> {
     if first == "--sr-lab-inspect" {
         return parse_sr_lab_inspect(args).map(CliAction::Command);
     }
+    if first == "--sr-lab-span-cpu-reference" {
+        return parse_sr_lab_span_cpu_reference(args).map(CliAction::Command);
+    }
 
     Err(CliError::new(format!(
         "unknown {CLI_NAME} command: {}",
@@ -198,6 +208,7 @@ fn is_cli_command_arg(arg: &OsString) -> bool {
         || arg == "--decoder-bench"
         || arg == "--original-region-bench"
         || arg == "--sr-lab-inspect"
+        || arg == "--sr-lab-span-cpu-reference"
 }
 
 impl CliCommand {
@@ -306,6 +317,20 @@ impl CliCommand {
                 report_path,
             } => crate::core::sr_lab::run_sr_lab_inspect(&manifest_path, report_path.as_deref())
                 .map_err(|error| format!("SR Lab inspect failed: {error}")),
+            Self::SrLabSpanCpuReference {
+                manifest_path,
+                input_path,
+                long_edge,
+                output_path,
+                report_path,
+            } => crate::core::sr_lab::cpu::run_span_cpu_reference(
+                &manifest_path,
+                &input_path,
+                long_edge,
+                output_path.as_deref(),
+                report_path.as_deref(),
+            )
+            .map_err(|error| format!("SR Lab SPAN CPU reference failed: {error}")),
         }
     }
 }
@@ -491,6 +516,44 @@ fn parse_sr_lab_inspect(mut args: impl Iterator<Item = OsString>) -> Result<CliC
     })
 }
 
+fn parse_sr_lab_span_cpu_reference(
+    mut args: impl Iterator<Item = OsString>,
+) -> Result<CliCommand, CliError> {
+    let manifest_path = required_path(
+        &mut args,
+        "usage: suisuiview-cli --sr-lab-span-cpu-reference <manifest.json> <image>",
+    )?;
+    let input_path = required_path(
+        &mut args,
+        "usage: suisuiview-cli --sr-lab-span-cpu-reference <manifest.json> <image>",
+    )?;
+    let mut long_edge = None;
+    let mut output_path = None;
+    let mut report_path = None;
+
+    while let Some(arg) = args.next() {
+        if arg == "--sr-lab-long-edge" {
+            long_edge = Some(required_u32(&mut args, "--sr-lab-long-edge")?);
+        } else if arg == "--sr-lab-output" {
+            output_path = Some(required_path(&mut args, "--sr-lab-output requires a path")?);
+        } else if arg == "--sr-lab-report" {
+            report_path = Some(required_path(&mut args, "--sr-lab-report requires a path")?);
+        } else if arg == "--sr-lab-report-default" {
+            report_path = Some(crate::core::sr_lab::default_span_cpu_reference_report_path());
+        } else {
+            return Err(unknown_arg(arg));
+        }
+    }
+
+    Ok(CliCommand::SrLabSpanCpuReference {
+        manifest_path,
+        input_path,
+        long_edge,
+        output_path,
+        report_path,
+    })
+}
+
 fn required_path(
     args: &mut impl Iterator<Item = OsString>,
     message: &'static str,
@@ -647,6 +710,39 @@ mod tests {
         };
 
         assert_eq!(manifest_path, PathBuf::from("model.json"));
+        assert_eq!(report_path, Some(PathBuf::from("report.json")));
+    }
+
+    #[test]
+    fn sr_lab_span_cpu_reference_preserves_flags() {
+        let action = parse_args(vec![
+            OsString::from("--sr-lab-span-cpu-reference"),
+            OsString::from("manifest.json"),
+            OsString::from("input.png"),
+            OsString::from("--sr-lab-long-edge"),
+            OsString::from("32"),
+            OsString::from("--sr-lab-output"),
+            OsString::from("out.png"),
+            OsString::from("--sr-lab-report"),
+            OsString::from("report.json"),
+        ])
+        .unwrap();
+
+        let CliAction::Command(CliCommand::SrLabSpanCpuReference {
+            manifest_path,
+            input_path,
+            long_edge,
+            output_path,
+            report_path,
+        }) = action
+        else {
+            panic!("expected SPAN CPU reference command");
+        };
+
+        assert_eq!(manifest_path, PathBuf::from("manifest.json"));
+        assert_eq!(input_path, PathBuf::from("input.png"));
+        assert_eq!(long_edge, Some(32));
+        assert_eq!(output_path, Some(PathBuf::from("out.png")));
         assert_eq!(report_path, Some(PathBuf::from("report.json")));
     }
 }
