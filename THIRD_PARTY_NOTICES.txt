@@ -1303,6 +1303,15 @@ Source: https://github.com/bloc97/Anime4K
   `glsl/Upscale/Anime4K_Upscale_CNN_x2_M.glsl`. The benchmark harness uses
   the same checked-in WGSL ports for quality and performance comparison.
 
+ArtCNN
+License: MIT
+Copyright: Copyright (c) 2024 Joao Chrisostomo, Kacper Michajłow
+Source: https://github.com/Artoriuz/ArtCNN
+  Note: The `--upscale-bench` experiment includes a generated WGSL port
+  derived from `GLSL/ArtCNN_C4F16.glsl`. The port predicts luma and merges
+  source chroma in the final pass. It is not exposed as a user-facing display
+  mode yet.
+
 ACNetGLSL
 License: MIT
 Copyright: Copyright (c) 2020 TianZer

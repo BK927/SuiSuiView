@@ -68,16 +68,25 @@ pub fn run_upscale_bench(
     report_path: Option<&Path>,
     source_long_edge: u32,
     target_long_edge: u32,
+    method_filter: Option<DisplayUpscaler>,
+    max_pages: Option<usize>,
 ) -> Result<(), String> {
     let report = scan_upscalers(
         path,
         clamp_source_long_edge(source_long_edge),
         clamp_target_long_edge(target_long_edge),
+        method_filter,
+        max_pages,
     )?;
+    let selected_method_error =
+        method_filter.and_then(|method| selected_method_failure(&report, method));
     print_report(&report);
     if let Some(report_path) = report_path {
         write_report(report_path, &report)?;
         println!("Report: {}", report_path.display());
+    }
+    if let Some(error) = selected_method_error {
+        return Err(error);
     }
     Ok(())
 }
@@ -86,8 +95,10 @@ pub fn scan_upscalers(
     path: &Path,
     source_long_edge: u32,
     target_long_edge: u32,
+    method_filter: Option<DisplayUpscaler>,
+    max_pages: Option<usize>,
 ) -> Result<UpscaleBenchReport, String> {
-    let gpu = match GpuUpscaleBench::new() {
+    let gpu = match GpuUpscaleBench::new_for_method(method_filter) {
         Ok(gpu) => Some(gpu),
         Err(error) => {
             eprintln!("WGSL upscale bench disabled: {error}");
@@ -101,6 +112,8 @@ pub fn scan_upscalers(
         path,
         source_long_edge,
         target_long_edge,
+        method_filter,
+        max_pages,
         gpu.as_ref(),
         gpu_error,
     )
@@ -110,15 +123,25 @@ fn scan_upscalers_with_gpu(
     path: &Path,
     source_long_edge: u32,
     target_long_edge: u32,
+    method_filter: Option<DisplayUpscaler>,
+    max_pages: Option<usize>,
     gpu: Option<&GpuUpscaleBench>,
     gpu_error: Option<String>,
 ) -> Result<UpscaleBenchReport, String> {
     let (source, _forced_page) = open_source_from_path(path).map_err(|error| error.to_string())?;
     let mut failures = 0usize;
-    let mut pages = Vec::with_capacity(source.page_count());
+    let page_count = source.page_count();
+    let scanned_page_count = max_pages
+        .filter(|pages| *pages > 0)
+        .map_or(page_count, |pages| page_count.min(pages));
+    let mut pages = Vec::with_capacity(scanned_page_count);
     let mut summaries = BTreeMap::<String, SummaryAccumulator>::new();
+    let single_method = method_filter.map(|method| [method]);
+    let gpu_methods: &[DisplayUpscaler] = single_method
+        .as_ref()
+        .map_or(&DisplayUpscaler::GPU_METHODS, |methods| &methods[..]);
 
-    for index in 0..source.page_count() {
+    for index in 0..scanned_page_count {
         let mut page = PageUpscaleBench {
             index,
             name: source.page_name(index).unwrap_or("").to_owned(),
@@ -174,13 +197,13 @@ fn scan_upscalers_with_gpu(
                 );
 
                 if let Some(gpu) = &gpu {
-                    for method in DisplayUpscaler::GPU_METHODS {
+                    for method in gpu_methods {
                         run_gpu_case(
                             gpu,
                             &input_image,
                             &baseline_image,
                             output_size,
-                            method,
+                            *method,
                             &mut page,
                             &mut summaries,
                         );
@@ -199,7 +222,7 @@ fn scan_upscalers_with_gpu(
     Ok(UpscaleBenchReport {
         path: path.display().to_string(),
         title: source.title().to_owned(),
-        page_count: source.page_count(),
+        page_count,
         source_long_edge,
         target_long_edge,
         gpu_available: gpu.is_some(),
@@ -388,8 +411,9 @@ fn print_report(report: &UpscaleBenchReport) {
     println!("Path: {}", report.path);
     println!("Book: {}", report.title);
     println!(
-        "Pages: {} ok / {} failed",
-        report.page_count.saturating_sub(report.failures),
+        "Pages: {} scanned / {} total, {} failed",
+        report.pages.len(),
+        report.page_count,
         report.failures
     );
     println!("Source long edge: {}", report.source_long_edge);
@@ -412,6 +436,47 @@ fn print_report(report: &UpscaleBenchReport) {
             summary.different_pixel_ratio * 100.0
         );
     }
+}
+
+fn selected_method_failure(report: &UpscaleBenchReport, method: DisplayUpscaler) -> Option<String> {
+    let label = method.label();
+    if !report.gpu_available {
+        return Some(format!(
+            "{label} was requested but WGSL upscale is unavailable: {}",
+            report.gpu_error.as_deref().unwrap_or("unknown error")
+        ));
+    }
+
+    let mut first_error = None;
+    let mut error_count = 0usize;
+    for run in report
+        .pages
+        .iter()
+        .flat_map(|page| page.runs.iter())
+        .filter(|run| run.method == label)
+    {
+        if let Some(error) = &run.error {
+            first_error.get_or_insert(error.as_str());
+            error_count += 1;
+        }
+    }
+    if error_count > 0 {
+        return Some(format!(
+            "{label} failed on {error_count} page(s); first error: {}",
+            first_error.unwrap_or("unknown error")
+        ));
+    }
+
+    let successful_pages = report
+        .methods
+        .iter()
+        .find(|summary| summary.method == label)
+        .map_or(0, |summary| summary.pages);
+    if successful_pages == 0 {
+        return Some(format!("{label} produced no successful GPU runs"));
+    }
+
+    None
 }
 
 fn write_report(path: &Path, report: &UpscaleBenchReport) -> Result<(), String> {
@@ -444,8 +509,11 @@ pub fn default_upscale_report_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{resize_color_image, scan_upscalers_with_gpu};
-    use crate::core::state::ResizeFilter;
+    use super::{
+        resize_color_image, scan_upscalers_with_gpu, selected_method_failure, PageUpscaleBench,
+        UpscaleBenchReport, UpscaleBenchRun,
+    };
+    use crate::core::state::{DisplayUpscaler, ResizeFilter};
     use eframe::egui::{Color32, ColorImage};
     use image::{ImageBuffer, ImageFormat, Rgba};
     use std::fs;
@@ -484,6 +552,8 @@ mod tests {
             1024,
             2048,
             None,
+            None,
+            None,
             Some("disabled in unit test".to_owned()),
         )
         .unwrap();
@@ -496,5 +566,42 @@ mod tests {
             .iter()
             .any(|method| method.method == "cpu_lanczos3"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn filtered_upscale_bench_reports_selected_method_error() {
+        let method = DisplayUpscaler::WgslArtcnnC4F16;
+        let report = UpscaleBenchReport {
+            path: "book.cbz".to_owned(),
+            title: "book".to_owned(),
+            page_count: 1,
+            source_long_edge: 1024,
+            target_long_edge: 2048,
+            gpu_available: true,
+            gpu_error: None,
+            failures: 0,
+            methods: Vec::new(),
+            pages: vec![PageUpscaleBench {
+                index: 0,
+                name: "001.png".to_owned(),
+                source_width: Some(1024),
+                source_height: Some(1024),
+                output_width: Some(2048),
+                output_height: Some(2048),
+                runs: vec![UpscaleBenchRun {
+                    method: method.label().to_owned(),
+                    ms: 0.0,
+                    max_channel_diff: 0,
+                    mean_abs_diff: 0.0,
+                    different_pixel_ratio: 0.0,
+                    error: Some("boom".to_owned()),
+                }],
+                error: None,
+            }],
+        };
+
+        let error = selected_method_failure(&report, method).unwrap();
+        assert!(error.contains("ArtCNN C4F16 failed"), "{error}");
+        assert!(error.contains("boom"), "{error}");
     }
 }

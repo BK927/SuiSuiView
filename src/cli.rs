@@ -21,7 +21,7 @@ Usage:
   suisuiview-cli --perf-scan <path> [--perf-report <report.json>] [--perf-report-default] [--target-long-edge <px>] [--decode-strategy auto|image-crate]
   suisuiview-cli --quality-scan <path> [--target-long-edge <px>] [--quality-report <report.json>]
   suisuiview-cli --effect-bench <path> [--target-long-edge <px>] [--effect-report <report.json>] [--effect-report-default]
-  suisuiview-cli --upscale-bench <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-report <report.json>] [--upscale-report-default]
+  suisuiview-cli --upscale-bench <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-method <token>] [--upscale-max-pages <count>] [--upscale-report <report.json>] [--upscale-report-default]
   suisuiview-cli --upscale-quality-scan <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-quality-report <report.json>] [--upscale-quality-report-default] [--upscale-quality-visuals <dir>]
   suisuiview-cli --gpu-copy-bench <path> [--target-long-edge <px>] [--gpu-copy-iterations <count>] [--gpu-copy-max-pages <count>] [--gpu-copy-report <report.json>] [--gpu-copy-report-default]
   suisuiview-cli --decoder-bench <path> [--decoder-iterations <count>] [--decoder-max-pages <count>] [--decoder-report <report.json>] [--decoder-report-default]
@@ -63,6 +63,8 @@ pub enum CliCommand {
         path: PathBuf,
         source_long_edge: u32,
         target_long_edge: u32,
+        method_filter: Option<crate::core::state::DisplayUpscaler>,
+        max_pages: Option<usize>,
         report_path: Option<PathBuf>,
     },
     UpscaleQualityScan {
@@ -250,12 +252,16 @@ impl CliCommand {
                 path,
                 source_long_edge,
                 target_long_edge,
+                method_filter,
+                max_pages,
                 report_path,
             } => crate::core::upscale_bench::run_upscale_bench(
                 &path,
                 report_path.as_deref(),
                 source_long_edge,
                 target_long_edge,
+                method_filter,
+                max_pages,
             )
             .map_err(|error| format!("upscale bench failed: {error}")),
             Self::UpscaleQualityScan {
@@ -421,6 +427,8 @@ fn parse_upscale_bench(mut args: impl Iterator<Item = OsString>) -> Result<CliCo
     let path = required_path(&mut args, "usage: suisuiview-cli --upscale-bench <path>")?;
     let mut target_long_edge = DEFAULT_TARGET_LONG_EDGE;
     let mut source_long_edge = None;
+    let mut method_filter = None;
+    let mut max_pages = None;
     let mut report_path = None;
 
     while let Some(arg) = args.next() {
@@ -428,6 +436,10 @@ fn parse_upscale_bench(mut args: impl Iterator<Item = OsString>) -> Result<CliCo
             target_long_edge = required_u32(&mut args, "--target-long-edge")?;
         } else if arg == "--source-long-edge" {
             source_long_edge = Some(required_u32(&mut args, "--source-long-edge")?);
+        } else if arg == "--upscale-method" {
+            method_filter = Some(required_upscale_method(&mut args)?);
+        } else if arg == "--upscale-max-pages" {
+            max_pages = Some(required_usize(&mut args, "--upscale-max-pages")?);
         } else if arg == "--upscale-report" {
             report_path = Some(required_path(
                 &mut args,
@@ -445,6 +457,8 @@ fn parse_upscale_bench(mut args: impl Iterator<Item = OsString>) -> Result<CliCo
         source_long_edge: source_long_edge
             .unwrap_or_else(|| (target_long_edge / 2).max(MIN_TARGET_LONG_EDGE)),
         target_long_edge,
+        method_filter,
+        max_pages,
         report_path,
     })
 }
@@ -581,6 +595,20 @@ fn required_usize(
         .ok_or_else(|| CliError::new(format!("{flag} requires a positive integer")))
 }
 
+fn required_upscale_method(
+    args: &mut impl Iterator<Item = OsString>,
+) -> Result<crate::core::state::DisplayUpscaler, CliError> {
+    let token = args
+        .next()
+        .ok_or_else(|| CliError::new("--upscale-method requires a token"))?;
+    let token = token.to_string_lossy();
+    crate::core::state::DisplayUpscaler::GPU_METHODS
+        .iter()
+        .copied()
+        .find(|method| method.token() == token)
+        .ok_or_else(|| CliError::new(format!("unknown upscale method token: {token}")))
+}
+
 fn unknown_arg(arg: OsString) -> CliError {
     CliError::new(format!("unknown argument: {}", arg.to_string_lossy()))
 }
@@ -645,6 +673,33 @@ mod tests {
         };
 
         assert_eq!(source_long_edge, 2048);
+    }
+
+    #[test]
+    fn upscale_bench_accepts_method_and_max_pages() {
+        let action = parse_args(vec![
+            OsString::from("--upscale-bench"),
+            OsString::from("book.cbz"),
+            OsString::from("--upscale-method"),
+            OsString::from("artcnn_c4f16"),
+            OsString::from("--upscale-max-pages"),
+            OsString::from("1"),
+        ])
+        .unwrap();
+
+        let CliAction::Command(CliCommand::UpscaleBench {
+            method_filter,
+            max_pages,
+            ..
+        }) = action
+        else {
+            panic!("expected upscale bench command");
+        };
+        assert_eq!(
+            method_filter,
+            Some(crate::core::state::DisplayUpscaler::WgslArtcnnC4F16)
+        );
+        assert_eq!(max_pages, Some(1));
     }
 
     #[test]
