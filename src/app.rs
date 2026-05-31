@@ -39,6 +39,7 @@ mod navigation;
 mod opening;
 mod perf;
 mod platform;
+mod realtime_sr;
 mod settings;
 mod settings_bookmarks;
 mod settings_input;

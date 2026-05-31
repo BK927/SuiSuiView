@@ -26,6 +26,7 @@ Usage:
   suisuiview-cli --gpu-copy-bench <path> [--target-long-edge <px>] [--gpu-copy-iterations <count>] [--gpu-copy-max-pages <count>] [--gpu-copy-report <report.json>] [--gpu-copy-report-default]
   suisuiview-cli --decoder-bench <path> [--decoder-iterations <count>] [--decoder-max-pages <count>] [--decoder-report <report.json>] [--decoder-report-default]
   suisuiview-cli --original-region-bench <path> --region <x,y,width,height> [--page-index <index>] [--region-iterations <count>] [--region-report <report.json>] [--region-report-default]
+  suisuiview-cli --sr-lab-inspect <manifest.json> [--sr-lab-report <report.json>] [--sr-lab-report-default]
 
 Options:
   -h, --help    Show this help.
@@ -89,6 +90,10 @@ pub enum CliCommand {
         page_index: usize,
         region: OriginalRegion,
         iterations: usize,
+        report_path: Option<PathBuf>,
+    },
+    SrLabInspect {
+        manifest_path: PathBuf,
         report_path: Option<PathBuf>,
     },
 }
@@ -165,6 +170,9 @@ pub fn parse_args(args: Vec<OsString>) -> Result<CliAction, CliError> {
     if first == "--original-region-bench" {
         return original_region_args::parse(args).map(CliAction::Command);
     }
+    if first == "--sr-lab-inspect" {
+        return parse_sr_lab_inspect(args).map(CliAction::Command);
+    }
 
     Err(CliError::new(format!(
         "unknown {CLI_NAME} command: {}",
@@ -189,6 +197,7 @@ fn is_cli_command_arg(arg: &OsString) -> bool {
         || arg == "--gpu-copy-bench"
         || arg == "--decoder-bench"
         || arg == "--original-region-bench"
+        || arg == "--sr-lab-inspect"
 }
 
 impl CliCommand {
@@ -292,6 +301,11 @@ impl CliCommand {
                 iterations,
             )
             .map_err(|error| format!("original region bench failed: {error}")),
+            Self::SrLabInspect {
+                manifest_path,
+                report_path,
+            } => crate::core::sr_lab::run_sr_lab_inspect(&manifest_path, report_path.as_deref())
+                .map_err(|error| format!("SR Lab inspect failed: {error}")),
         }
     }
 }
@@ -454,6 +468,29 @@ fn parse_upscale_quality_scan(
     })
 }
 
+fn parse_sr_lab_inspect(mut args: impl Iterator<Item = OsString>) -> Result<CliCommand, CliError> {
+    let manifest_path = required_path(
+        &mut args,
+        "usage: suisuiview-cli --sr-lab-inspect <manifest.json>",
+    )?;
+    let mut report_path = None;
+
+    while let Some(arg) = args.next() {
+        if arg == "--sr-lab-report" {
+            report_path = Some(required_path(&mut args, "--sr-lab-report requires a path")?);
+        } else if arg == "--sr-lab-report-default" {
+            report_path = Some(crate::core::sr_lab::default_sr_lab_report_path());
+        } else {
+            return Err(unknown_arg(arg));
+        }
+    }
+
+    Ok(CliCommand::SrLabInspect {
+        manifest_path,
+        report_path,
+    })
+}
+
 fn required_path(
     args: &mut impl Iterator<Item = OsString>,
     message: &'static str,
@@ -555,5 +592,61 @@ mod tests {
         assert!(!is_gui_cli_redirect_arg(&OsString::from(
             "C:/books/book.cbz"
         )));
+    }
+
+    #[test]
+    fn gpu_copy_bench_preserves_iteration_flags() {
+        let action = parse_args(vec![
+            OsString::from("--gpu-copy-bench"),
+            OsString::from("book.cbz"),
+            OsString::from("--target-long-edge"),
+            OsString::from("4096"),
+            OsString::from("--gpu-copy-iterations"),
+            OsString::from("7"),
+            OsString::from("--gpu-copy-max-pages"),
+            OsString::from("3"),
+            OsString::from("--gpu-copy-report"),
+            OsString::from("gpu-copy.json"),
+        ])
+        .unwrap();
+
+        let CliAction::Command(CliCommand::GpuCopyBench {
+            path,
+            target_long_edge,
+            iterations,
+            max_pages,
+            report_path,
+        }) = action
+        else {
+            panic!("expected gpu copy bench command");
+        };
+
+        assert_eq!(path, PathBuf::from("book.cbz"));
+        assert_eq!(target_long_edge, 4096);
+        assert_eq!(iterations, 7);
+        assert_eq!(max_pages, 3);
+        assert_eq!(report_path, Some(PathBuf::from("gpu-copy.json")));
+    }
+
+    #[test]
+    fn sr_lab_inspect_preserves_report_flag() {
+        let action = parse_args(vec![
+            OsString::from("--sr-lab-inspect"),
+            OsString::from("model.json"),
+            OsString::from("--sr-lab-report"),
+            OsString::from("report.json"),
+        ])
+        .unwrap();
+
+        let CliAction::Command(CliCommand::SrLabInspect {
+            manifest_path,
+            report_path,
+        }) = action
+        else {
+            panic!("expected SR Lab inspect command");
+        };
+
+        assert_eq!(manifest_path, PathBuf::from("model.json"));
+        assert_eq!(report_path, Some(PathBuf::from("report.json")));
     }
 }

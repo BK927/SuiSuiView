@@ -12,6 +12,7 @@ pub mod perf;
 pub mod perf_trace;
 pub mod quality;
 pub mod source;
+pub mod sr_lab;
 pub mod state;
 pub mod upscale;
 pub mod upscale_bench;

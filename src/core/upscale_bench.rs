@@ -87,7 +87,6 @@ pub fn scan_upscalers(
     source_long_edge: u32,
     target_long_edge: u32,
 ) -> Result<UpscaleBenchReport, String> {
-    let (source, _forced_page) = open_source_from_path(path).map_err(|error| error.to_string())?;
     let gpu = match GpuUpscaleBench::new() {
         Ok(gpu) => Some(gpu),
         Err(error) => {
@@ -98,7 +97,23 @@ pub fn scan_upscalers(
     let gpu_error = gpu
         .is_none()
         .then(|| "WGSL upscale backend unavailable".to_owned());
+    scan_upscalers_with_gpu(
+        path,
+        source_long_edge,
+        target_long_edge,
+        gpu.as_ref(),
+        gpu_error,
+    )
+}
 
+fn scan_upscalers_with_gpu(
+    path: &Path,
+    source_long_edge: u32,
+    target_long_edge: u32,
+    gpu: Option<&GpuUpscaleBench>,
+    gpu_error: Option<String>,
+) -> Result<UpscaleBenchReport, String> {
+    let (source, _forced_page) = open_source_from_path(path).map_err(|error| error.to_string())?;
     let mut failures = 0usize;
     let mut pages = Vec::with_capacity(source.page_count());
     let mut summaries = BTreeMap::<String, SummaryAccumulator>::new();
@@ -429,7 +444,7 @@ pub fn default_upscale_report_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{resize_color_image, scan_upscalers};
+    use super::{resize_color_image, scan_upscalers_with_gpu};
     use crate::core::state::ResizeFilter;
     use eframe::egui::{Color32, ColorImage};
     use image::{ImageBuffer, ImageFormat, Rgba};
@@ -464,9 +479,17 @@ mod tests {
         image.write_to(&mut bytes, ImageFormat::Png).unwrap();
         fs::write(dir.join("001.png"), bytes.into_inner()).unwrap();
 
-        let report = scan_upscalers(&dir, 1024, 2048).unwrap();
+        let report = scan_upscalers_with_gpu(
+            &dir,
+            1024,
+            2048,
+            None,
+            Some("disabled in unit test".to_owned()),
+        )
+        .unwrap();
 
         assert_eq!(report.page_count, 1);
+        assert!(!report.gpu_available);
         assert_eq!(report.failures, 0);
         assert!(report
             .methods

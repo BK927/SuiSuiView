@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod bookmarks;
 mod decoders;
+mod display;
 mod input;
 mod rendering;
 #[cfg(test)]
@@ -15,6 +16,7 @@ mod tests;
 use bookmarks::path_key;
 pub use bookmarks::{Bookmark, BookmarkInput, PageBookmark, PageBookmarkEntry, ReadingPosition};
 pub use decoders::{DecodeMode, DecoderPreference, DecoderPreferences};
+pub use display::{DisplayUpscaler, GpuEffectMode, ResizeFilter};
 pub use input::{
     default_key_bindings, default_mouse_bindings, CommandId, KeyBinding, KeyCode, KeyShortcut,
     MouseBinding, MouseGesture,
@@ -87,147 +89,6 @@ impl EdgePageAction {
             Self::NextBook => "다음/이전 폴더/파일로 넘어가기",
         }
     }
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ResizeFilter {
-    #[default]
-    Bicubic,
-    Lanczos3,
-    FastTriangle,
-    Nearest,
-}
-
-impl ResizeFilter {
-    pub const ALL: [Self; 4] = [
-        Self::Bicubic,
-        Self::Lanczos3,
-        Self::FastTriangle,
-        Self::Nearest,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Bicubic => "Bicubic",
-            Self::Lanczos3 => "Lanczos3",
-            Self::FastTriangle => "Fast / Triangle",
-            Self::Nearest => "Nearest",
-        }
-    }
-
-    pub fn token(self) -> &'static str {
-        match self {
-            Self::Bicubic => "bicubic",
-            Self::Lanczos3 => "lanczos3",
-            Self::FastTriangle => "triangle",
-            Self::Nearest => "nearest",
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GpuEffectMode {
-    #[default]
-    Auto,
-    CpuOnly,
-    Wgsl,
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum DisplayUpscaler {
-    Auto,
-    #[default]
-    None,
-    WgslBilinear,
-    WgslFsr1Style,
-    WgslFsr1EasuRcas,
-    WgslNisStyle,
-}
-
-impl DisplayUpscaler {
-    pub const ALL: [Self; 6] = [
-        Self::None,
-        Self::Auto,
-        Self::WgslBilinear,
-        Self::WgslFsr1Style,
-        Self::WgslFsr1EasuRcas,
-        Self::WgslNisStyle,
-    ];
-
-    pub const GPU_METHODS: [Self; 4] = [
-        Self::WgslBilinear,
-        Self::WgslFsr1Style,
-        Self::WgslFsr1EasuRcas,
-        Self::WgslNisStyle,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Auto => "자동",
-            Self::None => "없음",
-            Self::WgslBilinear => "WGSL Bilinear",
-            Self::WgslFsr1Style => "WGSL FSR-style",
-            Self::WgslFsr1EasuRcas => "WGSL FSR1 EASU+RCAS",
-            Self::WgslNisStyle => "WGSL NIS-style",
-        }
-    }
-
-    pub fn token(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::None => "none",
-            Self::WgslBilinear => "wgsl_bilinear",
-            Self::WgslFsr1Style => "wgsl_fsr1_style",
-            Self::WgslFsr1EasuRcas => "wgsl_fsr1_easu_rcas",
-            Self::WgslNisStyle => "wgsl_nis_style",
-        }
-    }
-
-    pub fn resolve_for_render(
-        self,
-        output_size: [usize; 2],
-        target_size: [u32; 2],
-    ) -> Option<Self> {
-        let target_is_larger =
-            target_size[0] > output_size[0] as u32 || target_size[1] > output_size[1] as u32;
-        match self {
-            Self::Auto if target_is_larger => {
-                if automatic_upscale_prefers_fsr1_easu_rcas(output_size, target_size) {
-                    Some(Self::WgslFsr1EasuRcas)
-                } else {
-                    Some(Self::WgslFsr1Style)
-                }
-            }
-            Self::Auto | Self::None => None,
-            other => Some(other),
-        }
-    }
-
-    pub fn shader_method_id(self) -> u32 {
-        match self {
-            Self::Auto | Self::None => 0,
-            Self::WgslBilinear => 1,
-            Self::WgslFsr1Style => 2,
-            Self::WgslNisStyle => 3,
-            Self::WgslFsr1EasuRcas => 4,
-        }
-    }
-
-    pub fn rcas_shader_method_id(self) -> Option<u32> {
-        match self {
-            Self::WgslFsr1EasuRcas => Some(5),
-            _ => None,
-        }
-    }
-}
-
-fn automatic_upscale_prefers_fsr1_easu_rcas(
-    output_size: [usize; 2],
-    target_size: [u32; 2],
-) -> bool {
-    let source_long = output_size[0].max(output_size[1]) as u32;
-    let target_long = target_size[0].max(target_size[1]);
-    source_long <= 1600 && target_long >= source_long.saturating_mul(3) / 2
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -487,6 +348,12 @@ pub struct AppSettings {
 }
 
 impl AppSettings {
+    pub fn normalize_product_choices(&mut self) {
+        if !self.display_upscaler.product_selectable() {
+            self.display_upscaler = DisplayUpscaler::Auto;
+        }
+    }
+
     pub fn effective_page_transition_style(&self) -> PageTransitionStyle {
         if self.transition_effect {
             self.page_transition_style
@@ -591,10 +458,11 @@ pub struct StateStore {
 impl StateStore {
     pub fn load() -> Self {
         let path = state_file_path();
-        let state = fs::read_to_string(&path)
+        let mut state = fs::read_to_string(&path)
             .ok()
             .and_then(|text| serde_json::from_str::<PersistedState>(&text).ok())
             .unwrap_or_default();
+        state.settings.normalize_product_choices();
 
         Self { path, state }
     }
@@ -623,7 +491,8 @@ impl StateStore {
         &self.state.settings
     }
 
-    pub fn update_settings(&mut self, settings: AppSettings) {
+    pub fn update_settings(&mut self, mut settings: AppSettings) {
+        settings.normalize_product_choices();
         self.state.settings = settings;
         self.state.version = 4;
         let _ = self.save();
@@ -636,6 +505,8 @@ impl StateStore {
         let Ok(state) = serde_json::from_str::<PersistedState>(&text) else {
             return false;
         };
+        let mut state = state;
+        state.settings.normalize_product_choices();
         self.state = state;
         true
     }
