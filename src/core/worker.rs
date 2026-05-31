@@ -33,6 +33,7 @@ mod region;
 mod resize;
 mod scheduler;
 mod selection;
+mod source_bytes;
 #[cfg(feature = "native-webp")]
 mod webp;
 
@@ -82,12 +83,13 @@ use decode_ahead::{
 use decode_policy::DecodeAheadPolicy;
 use metadata::{apply_exif_orientation_to_page, read_image_metadata, ImageMetadata};
 use prepare::prepare_page_with_perf;
-use read_ahead::{clear_pending as clear_pending_read_ahead, consume_matching, ReadAhead};
+use read_ahead::{clear_pending as clear_pending_read_ahead, ReadAhead};
 pub use region::{prepare_original_region_with_options, OriginalRegion, PreparedRegion};
 use resize::{image_filter_type, resize_rgba};
 use scheduler::{is_visible_page_index, prioritized_jobs, should_skip_ai_preview_or_prefetch};
 #[cfg(test)]
 use selection::prepare_unavailable_or_image_fallback;
+use source_bytes::{read_source_bytes, SourceBytesCache};
 
 const WORKER_CACHE_BYTES: usize = 48 * 1024 * 1024;
 const WORKER_CACHE_ENTRY_LIMIT: usize = 12;
@@ -746,6 +748,7 @@ fn run_worker(
     let mut read_ahead: Option<ReadAhead> = None;
     let mut decode_ahead: Option<DecodeAhead> = None;
     let mut decode_ahead_policy = DecodeAheadPolicy::from_env();
+    let mut source_bytes_cache = SourceBytesCache::from_env();
 
     while !shutdown_requested.load(Ordering::Acquire) {
         let Ok(command) = command_rx.recv() else {
@@ -783,6 +786,11 @@ fn run_worker(
             options.decode,
             &mut cache,
             &mut cache_bytes,
+        );
+        clear_source_bytes_cache_on_book_change(
+            &mut source_bytes_cache,
+            &source,
+            previous_book_id.as_deref(),
         );
         prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
         reset_decode_ahead_policy_if_context_changed(
@@ -880,6 +888,11 @@ fn run_worker(
                         &mut cache,
                         &mut cache_bytes,
                     );
+                    clear_source_bytes_cache_on_book_change(
+                        &mut source_bytes_cache,
+                        &source,
+                        previous_book_id.as_deref(),
+                    );
                     prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
                     reset_decode_ahead_policy_if_context_changed(
                         &mut decode_ahead_policy,
@@ -967,29 +980,14 @@ fn run_worker(
                     options.decode,
                 )
                 .unwrap_or_else(|| {
-                    let read_result =
-                        consume_matching(&mut read_ahead, &book_id, book_epoch, job.index)
-                            .unwrap_or_else(|| {
-                                #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-                                let read_started = Instant::now();
-                                let read_result = active_source
-                                    .read_page(job.index)
-                                    .map_err(|error| error.to_string());
-                                #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-                                perf_trace::record_duration_if_at_least(
-                                    "page_read",
-                                    read_started.elapsed(),
-                                    Duration::from_millis(25),
-                                    &[
-                                        PerfField::Usize("page", job.index),
-                                        PerfField::Usize("book_epoch", book_epoch),
-                                        PerfField::Bool("success", read_result.is_ok()),
-                                        PerfField::Bool("read_ahead", false),
-                                        PerfField::Bool("decode_ahead", false),
-                                    ],
-                                );
-                                read_result
-                            });
+                    let read_result = read_source_bytes(
+                        source_bytes_cache.as_mut(),
+                        &mut read_ahead,
+                        &active_source,
+                        &book_id,
+                        book_epoch,
+                        job.index,
+                    );
                     if shutdown_requested.load(Ordering::Acquire) {
                         return Err("Page worker shutdown requested".to_owned());
                     }
@@ -1049,7 +1047,7 @@ fn run_worker(
 
                     read_result.and_then(|bytes| {
                         prepare_page_with_perf(
-                            &bytes,
+                            bytes.as_ref(),
                             job,
                             book_epoch,
                             options.decode,
@@ -1163,6 +1161,11 @@ fn run_worker(
                                 &mut cache,
                                 &mut cache_bytes,
                             );
+                            clear_source_bytes_cache_on_book_change(
+                                &mut source_bytes_cache,
+                                &source,
+                                previous_book_id.as_deref(),
+                            );
                             prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
                             reset_decode_ahead_policy_if_context_changed(
                                 &mut decode_ahead_policy,
@@ -1233,6 +1236,19 @@ fn reset_decode_ahead_policy_if_context_changed(
         || previous_target_long_edge != current_target_long_edge
     {
         policy.reset_context();
+    }
+}
+
+fn clear_source_bytes_cache_on_book_change(
+    cache: &mut Option<SourceBytesCache>,
+    source: &Option<SharedSource>,
+    previous_book_id: Option<&str>,
+) {
+    let current_book_id = source.as_ref().map(|source| source.book_id());
+    if previous_book_id != current_book_id {
+        if let Some(cache) = cache {
+            cache.clear();
+        }
     }
 }
 

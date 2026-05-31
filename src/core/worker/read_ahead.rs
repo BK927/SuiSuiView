@@ -196,6 +196,21 @@ pub(super) fn consume_matching(
     None
 }
 
+pub(super) fn clear_matching(
+    pending: &mut Option<ReadAhead>,
+    book_id: &str,
+    book_epoch: usize,
+    index: usize,
+    reason: &'static str,
+) {
+    if pending
+        .as_ref()
+        .is_some_and(|read| read.matches(book_id, book_epoch, index))
+    {
+        clear_pending(pending, reason);
+    }
+}
+
 pub(super) fn clear_pending(pending: &mut Option<ReadAhead>, reason: &'static str) {
     if let Some(read) = pending.take() {
         read.detach(reason);
