@@ -330,6 +330,30 @@ pub(super) fn record_page_turn_request(
     );
 }
 
+pub(super) fn record_target_long_edge_update(
+    reason: &'static str,
+    current_page: usize,
+    previous_target_long_edge: u32,
+    next_target_long_edge: u32,
+    viewport_width: u32,
+    viewport_height: u32,
+    pixels_per_point_milli: u32,
+) {
+    perf_trace::record_duration(
+        "target_long_edge_update",
+        Duration::ZERO,
+        &[
+            PerfField::Str("reason", reason),
+            PerfField::Usize("current_page", current_page),
+            PerfField::U32("previous_target_long_edge", previous_target_long_edge),
+            PerfField::U32("next_target_long_edge", next_target_long_edge),
+            PerfField::U32("viewport_width", viewport_width),
+            PerfField::U32("viewport_height", viewport_height),
+            PerfField::U32("pixels_per_point_milli", pixels_per_point_milli),
+        ],
+    );
+}
+
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 #[derive(Debug, Clone, Copy)]
 pub(super) struct AppCacheSnapshot {

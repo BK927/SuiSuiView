@@ -1,12 +1,15 @@
 use super::{SPREAD_GAP_POINTS, TARGET_EDGE_HYSTERESIS};
 use crate::app::commands::command_for_mouse_gesture;
-use crate::app::{ui, SuiSuiViewApp};
+use crate::app::{perf, ui, SuiSuiViewApp};
 use crate::core::state::{FitMode, MouseGesture, WheelMode};
 use crate::core::worker::{
     clamp_navigation_target_long_edge, clamp_target_long_edge, NavigationDirection,
-    MAX_TARGET_LONG_EDGE,
+    MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
 use eframe::egui::{self, Align2, Color32, Rect, Vec2};
+use std::time::{Duration, Instant};
+
+const LARGE_TARGET_INCREASE_STABILITY_DELAY: Duration = Duration::from_millis(16);
 
 impl SuiSuiViewApp {
     pub(super) fn paint_page_arrows(
@@ -85,12 +88,26 @@ impl SuiSuiViewApp {
             || (!original_inspection_target
                 && next.abs_diff(self.target_long_edge) < TARGET_EDGE_HYSTERESIS)
         {
+            self.pending_target_long_edge_increase = None;
+            return;
+        }
+        let now = Instant::now();
+        if should_defer_large_normal_target_increase(
+            &mut self.pending_target_long_edge_increase,
+            self.target_long_edge,
+            next,
+            now,
+        ) {
+            self.record_view_target_update(ctx, viewport, "defer_large_increase", next);
+            ctx.request_repaint_after(LARGE_TARGET_INCREASE_STABILITY_DELAY);
             return;
         }
 
         let leaving_original_inspection =
             self.target_long_edge > MAX_TARGET_LONG_EDGE && next <= MAX_TARGET_LONG_EDGE;
+        self.record_view_target_update(ctx, viewport, "apply", next);
         self.target_long_edge = next;
+        self.pending_target_long_edge_increase = None;
         if leaving_original_inspection {
             self.schedule_original_inspection_cache_cleanup(ctx);
         }
@@ -105,6 +122,24 @@ impl SuiSuiViewApp {
         self.refresh_ai_prefetch_queue();
         self.request_adjacent_seed_prefetch();
         ctx.request_repaint();
+    }
+
+    fn record_view_target_update(
+        &self,
+        ctx: &egui::Context,
+        viewport: Vec2,
+        reason: &'static str,
+        next: u32,
+    ) {
+        perf::record_target_long_edge_update(
+            reason,
+            self.current_page,
+            self.target_long_edge,
+            next,
+            viewport.x.round().max(1.0) as u32,
+            viewport.y.round().max(1.0) as u32,
+            (ctx.pixels_per_point() * 1000.0).round().max(1.0) as u32,
+        );
     }
 
     fn target_long_edge_for(&self, ctx: &egui::Context, viewport: Vec2) -> u32 {
@@ -222,6 +257,39 @@ impl SuiSuiViewApp {
     }
 }
 
+fn should_defer_large_normal_target_increase(
+    pending: &mut Option<(u32, Instant)>,
+    current: u32,
+    next: u32,
+    now: Instant,
+) -> bool {
+    if !is_large_normal_target_increase(current, next) {
+        *pending = None;
+        return false;
+    }
+
+    match *pending {
+        Some((pending_target, first_seen_at))
+            if pending_target == next
+                && now.duration_since(first_seen_at) >= LARGE_TARGET_INCREASE_STABILITY_DELAY =>
+        {
+            false
+        }
+        Some((pending_target, _)) if pending_target == next => true,
+        _ => {
+            *pending = Some((next, now));
+            true
+        }
+    }
+}
+
+fn is_large_normal_target_increase(current: u32, next: u32) -> bool {
+    current > PREVIEW_TARGET_LONG_EDGE
+        && current <= MAX_TARGET_LONG_EDGE
+        && next <= MAX_TARGET_LONG_EDGE
+        && next.saturating_sub(current) > TARGET_EDGE_HYSTERESIS
+}
+
 fn ctrl_wheel_gesture(scroll_y: f32, zoom_delta: f32) -> Option<MouseGesture> {
     if scroll_y.abs() >= 1.0 {
         return Some(if scroll_y > 0.0 {
@@ -301,10 +369,14 @@ fn original_inspection_target_long_edge(
 
 #[cfg(test)]
 mod tests {
-    use super::{ctrl_wheel_gesture, target_long_edge_for_view, zoom_delta_gesture};
+    use super::{
+        ctrl_wheel_gesture, should_defer_large_normal_target_increase, target_long_edge_for_view,
+        zoom_delta_gesture, LARGE_TARGET_INCREASE_STABILITY_DELAY,
+    };
     use crate::core::state::{FitMode, MouseGesture};
     use crate::core::worker::MAX_TARGET_LONG_EDGE;
     use eframe::egui::Vec2;
+    use std::time::Instant;
 
     #[test]
     fn fit_modes_stay_on_navigation_target_cap() {
@@ -354,6 +426,72 @@ mod tests {
             target_long_edge_for_view(FitMode::Original, 1.0, Vec2::new(1200.0, 1600.0), 1.0, None,),
             2560
         );
+    }
+
+    #[test]
+    fn large_normal_target_increase_waits_for_one_stable_frame() {
+        let now = Instant::now();
+        let mut pending = None;
+
+        assert!(should_defer_large_normal_target_increase(
+            &mut pending,
+            1536,
+            3840,
+            now,
+        ));
+        assert!(should_defer_large_normal_target_increase(
+            &mut pending,
+            1536,
+            3840,
+            now + LARGE_TARGET_INCREASE_STABILITY_DELAY / 2,
+        ));
+        assert!(!should_defer_large_normal_target_increase(
+            &mut pending,
+            1536,
+            3840,
+            now + LARGE_TARGET_INCREASE_STABILITY_DELAY,
+        ));
+    }
+
+    #[test]
+    fn ordinary_target_increase_applies_immediately() {
+        let now = Instant::now();
+        let mut pending = Some((3840, now));
+
+        assert!(!should_defer_large_normal_target_increase(
+            &mut pending,
+            1024,
+            1536,
+            now,
+        ));
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn first_promotion_from_preview_target_applies_immediately() {
+        let now = Instant::now();
+        let mut pending = None;
+
+        assert!(!should_defer_large_normal_target_increase(
+            &mut pending,
+            1024,
+            2304,
+            now,
+        ));
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn moderate_transient_target_increase_is_deferred() {
+        let now = Instant::now();
+        let mut pending = None;
+
+        assert!(should_defer_large_normal_target_increase(
+            &mut pending,
+            1536,
+            2304,
+            now,
+        ));
     }
 
     #[test]
