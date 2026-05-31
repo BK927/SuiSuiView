@@ -691,7 +691,9 @@ impl DisplayUpscaler {
             target_size[0] > output_size[0] as u32 || target_size[1] > output_size[1] as u32;
         match self {
             Self::Auto if target_is_larger => Some(Self::WgslFsr1EasuRcas),
-            Self::Auto | Self::None | Self::NvidiaNis | Self::WgslArtcnnC4F16 => None,
+            Self::Auto | Self::None | Self::NvidiaNis => None,
+            Self::WgslArtcnnC4F16 if target_is_larger => Some(self),
+            Self::WgslArtcnnC4F16 => None,
             Self::WgslAnime4kV32CnnX2S | Self::WgslAnime4kV32CnnX2M if target_is_larger => {
                 Some(self)
             }
