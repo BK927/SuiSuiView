@@ -1,9 +1,7 @@
 use super::cache_budget_summary;
 use super::settings::{checkbox_with_help, grid_label_with_help, info_icon, setting_group};
 use super::ui::theme;
-use crate::core::state::{
-    AppSettings, CacheMemoryMode, DecodeMode, DecoderPreference, RendererMode,
-};
+use crate::core::state::{AppSettings, CacheMemoryMode, DecodeMode, DecoderPreference};
 use eframe::egui::{self, RichText};
 
 const JPEG_DECODER_OPTIONS: &[DecoderPreference] = &[
@@ -84,11 +82,25 @@ pub(in crate::app) fn show_decoder_settings(
     setting_group(
         ui,
         "포맷별 디코더",
-        "기본값은 현재 벤치 결과 기준 후보로 연결됩니다.",
+        "자동 모드에서 포맷별 디코더를 직접 지정합니다.",
         |ui| {
             let enabled = draft.decode_mode == DecodeMode::AutoFast;
+            let mode_help = (!enabled).then_some("디코딩 모드가 자동일 때만 변경할 수 있습니다.");
+            let avif_enabled = enabled && cfg!(feature = "native-avif");
+            let avif_help = if cfg!(feature = "native-avif") {
+                mode_help
+            } else {
+                Some("native-avif 빌드에서 사용 가능")
+            };
+            let ai_enabled = enabled && cfg!(feature = "native-ai");
+            let ai_help = if cfg!(feature = "native-ai") {
+                mode_help
+            } else {
+                Some("native-ai 빌드에서 사용 가능")
+            };
+
             egui::Grid::new("settings_decoder_preferences_grid")
-                .num_columns(3)
+                .num_columns(2)
                 .spacing([14.0, 8.0])
                 .show(ui, |ui| {
                     decoder_row(
@@ -96,7 +108,7 @@ pub(in crate::app) fn show_decoder_settings(
                         changed,
                         enabled,
                         "JPEG",
-                        "기본값: zune-jpeg",
+                        mode_help,
                         &mut draft.decoder_preferences.jpeg,
                         JPEG_DECODER_OPTIONS,
                     );
@@ -105,7 +117,7 @@ pub(in crate::app) fn show_decoder_settings(
                         changed,
                         enabled,
                         "PNG",
-                        "기본값: png crate",
+                        mode_help,
                         &mut draft.decoder_preferences.png,
                         PNG_DECODER_OPTIONS,
                     );
@@ -114,7 +126,7 @@ pub(in crate::app) fn show_decoder_settings(
                         changed,
                         enabled,
                         "WebP",
-                        webp_default_note(),
+                        mode_help,
                         &mut draft.decoder_preferences.webp,
                         WEBP_DECODER_OPTIONS,
                     );
@@ -123,7 +135,7 @@ pub(in crate::app) fn show_decoder_settings(
                         changed,
                         enabled,
                         "GIF",
-                        "기본값: gif crate",
+                        mode_help,
                         &mut draft.decoder_preferences.gif,
                         GIF_DECODER_OPTIONS,
                     );
@@ -132,7 +144,7 @@ pub(in crate::app) fn show_decoder_settings(
                         changed,
                         enabled,
                         "BMP",
-                        "기본값: BMP fast path",
+                        mode_help,
                         &mut draft.decoder_preferences.bmp,
                         BMP_DECODER_OPTIONS,
                     );
@@ -141,16 +153,16 @@ pub(in crate::app) fn show_decoder_settings(
                         changed,
                         enabled,
                         "ICO",
-                        "기본값: image crate",
+                        mode_help,
                         &mut draft.decoder_preferences.ico,
                         ICO_DECODER_OPTIONS,
                     );
                     decoder_row(
                         ui,
                         changed,
-                        enabled && cfg!(feature = "native-avif"),
+                        avif_enabled,
                         "AVIF",
-                        avif_default_note(),
+                        avif_help,
                         &mut draft.decoder_preferences.avif,
                         AVIF_DECODER_OPTIONS,
                     );
@@ -159,7 +171,7 @@ pub(in crate::app) fn show_decoder_settings(
                         changed,
                         false,
                         "SVG",
-                        "지원 예정: resvg",
+                        Some("지원 예정입니다."),
                         &mut draft.decoder_preferences.svg,
                         SVG_DECODER_OPTIONS,
                     );
@@ -168,16 +180,16 @@ pub(in crate::app) fn show_decoder_settings(
                         changed,
                         enabled,
                         "PSD",
-                        "기본값: zune-psd 미리보기",
+                        mode_help,
                         &mut draft.decoder_preferences.psd,
                         PSD_DECODER_OPTIONS,
                     );
                     decoder_row(
                         ui,
                         changed,
-                        enabled && cfg!(feature = "native-ai"),
+                        ai_enabled,
                         "AI",
-                        ai_default_note(),
+                        ai_help,
                         &mut draft.decoder_preferences.ai,
                         AI_DECODER_OPTIONS,
                     );
@@ -204,41 +216,6 @@ pub(in crate::app) fn show_performance_settings(
     visible_pages: usize,
     changed: &mut bool,
 ) {
-    setting_group(
-        ui,
-        "렌더러",
-        "앱 창을 그리는 백엔드입니다. 변경 사항은 앱을 다시 시작하면 적용됩니다.",
-        |ui| {
-            egui::Grid::new("settings_renderer_grid")
-                .num_columns(2)
-                .spacing([14.0, 8.0])
-                .show(ui, |ui| {
-                    grid_label_with_help(
-                        ui,
-                        "표시 백엔드",
-                        "기본값은 메모리와 페이지 넘김 응답성을 우선하는 OpenGL입니다. WGPU는 표시 업스케일러와 GPU shader 효과가 필요할 때 선택합니다.",
-                    );
-                    egui::ComboBox::from_id_salt("renderer_mode")
-                        .selected_text(draft.renderer_mode.label())
-                        .show_ui(ui, |ui| {
-                            for mode in RendererMode::ALL {
-                                *changed |= ui
-                                    .selectable_value(&mut draft.renderer_mode, mode, mode.label())
-                                    .changed();
-                            }
-                        });
-                    ui.end_row();
-                });
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new("WGPU로 바꾸면 GPU 표시 업스케일러를 사용할 수 있지만, 기본 메모리 사용량이 크게 늘 수 있습니다. 표시 백엔드를 바꾸면 설정 저장 후 앱이 자동으로 다시 시작됩니다.")
-                    .size(12.0)
-                    .color(theme::TEXT_MUTED),
-            );
-        },
-    );
-
-    ui.add_space(8.0);
     setting_group(
         ui,
         "미리 불러오기",
@@ -326,48 +303,30 @@ fn decoder_row(
     changed: &mut bool,
     enabled: bool,
     format: &str,
-    note: &str,
+    disabled_help: Option<&'static str>,
     value: &mut DecoderPreference,
     options: &[DecoderPreference],
 ) {
     ui.label(format);
-    ui.add_enabled_ui(enabled, |ui| {
-        egui::ComboBox::from_id_salt(("decoder_preference", format))
-            .selected_text(value.label())
-            .show_ui(ui, |ui| {
-                for option in options {
-                    *changed |= ui
-                        .selectable_value(value, *option, option.label())
-                        .changed();
-                }
-            });
-    });
-    ui.label(RichText::new(note).size(12.0).color(theme::TEXT_MUTED));
+    let response = ui
+        .add_enabled_ui(enabled, |ui| {
+            egui::ComboBox::from_id_salt(("decoder_preference", format))
+                .selected_text(value.label())
+                .show_ui(ui, |ui| {
+                    for option in options {
+                        *changed |= ui
+                            .selectable_value(value, *option, option.label())
+                            .changed();
+                    }
+                });
+        })
+        .response;
+    if !enabled {
+        if let Some(help) = disabled_help {
+            response.on_disabled_hover_text(help);
+        }
+    }
     ui.end_row();
-}
-
-fn webp_default_note() -> &'static str {
-    if cfg!(feature = "native-webp") {
-        "기본값: libwebp, 애니메이션은 image-webp"
-    } else {
-        "기본값: image crate, 애니메이션은 image-webp"
-    }
-}
-
-fn avif_default_note() -> &'static str {
-    if cfg!(feature = "native-avif") {
-        "기본값: libavif + dav1d"
-    } else {
-        "native-avif 빌드에서 사용 가능"
-    }
-}
-
-fn ai_default_note() -> &'static str {
-    if cfg!(feature = "native-ai") {
-        "기본값: PDFium 첫 페이지 미리보기"
-    } else {
-        "native-ai 빌드에서 사용 가능"
-    }
 }
 
 fn mib(bytes: usize) -> f32 {

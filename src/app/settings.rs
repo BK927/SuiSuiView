@@ -2,7 +2,7 @@ use super::ui::{dialog, icons, theme};
 use super::{platform, settings_bookmarks, settings_input, settings_performance, SuiSuiViewApp};
 use crate::core::state::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, DisplayUpscaler, EdgePageAction,
-    GpuEffectMode, PageTransitionStyle, ResizeFilter,
+    GpuEffectMode, PageTransitionStyle, RendererMode, ResizeFilter,
 };
 use eframe::egui::{self, RichText};
 use rfd::FileDialog;
@@ -12,21 +12,19 @@ pub(super) enum SettingsSection {
     #[default]
     General,
     View,
-    ImageProcessing,
+    Rendering,
     Decoders,
-    Performance,
     Bookmarks,
     Keyboard,
     Mouse,
 }
 
 impl SettingsSection {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 7] = [
         Self::General,
         Self::View,
-        Self::ImageProcessing,
+        Self::Rendering,
         Self::Decoders,
-        Self::Performance,
         Self::Bookmarks,
         Self::Keyboard,
         Self::Mouse,
@@ -36,9 +34,8 @@ impl SettingsSection {
         match self {
             Self::General => "일반",
             Self::View => "보기",
-            Self::ImageProcessing => "영상 처리",
+            Self::Rendering => "렌더링",
             Self::Decoders => "디코더",
-            Self::Performance => "성능",
             Self::Bookmarks => "책갈피",
             Self::Keyboard => "키보드",
             Self::Mouse => "마우스",
@@ -49,9 +46,8 @@ impl SettingsSection {
         match self {
             Self::General => "삭제 확인, 창 표시, 페이지 끝 동작",
             Self::View => "상단 도구막대, 상태바, 뷰어 보조 표시",
-            Self::ImageProcessing => "보간, 실시간 업스케일, 색상 보정",
+            Self::Rendering => "업스케일러, GPU 가속, 미리읽기, 캐시 정책",
             Self::Decoders => "디코딩 모드와 포맷별 디코더 선택",
-            Self::Performance => "미리보기, 프리로드, 캐시 정책",
             Self::Bookmarks => "이어보기, 책갈피 저장 범위와 기록 정리",
             Self::Keyboard => "현재 단축키 확인, 추가, 변경, 초기화",
             Self::Mouse => "더블클릭, 가운데 버튼, 휠 조작",
@@ -62,9 +58,8 @@ impl SettingsSection {
         match self {
             Self::General => (icons::SETTINGS, icons::IconStyle::Regular),
             Self::View => (icons::EYE, icons::IconStyle::Regular),
-            Self::ImageProcessing => (icons::WAND, icons::IconStyle::Regular),
+            Self::Rendering => (icons::WAND, icons::IconStyle::Regular),
             Self::Decoders => (icons::DOCUMENT, icons::IconStyle::Regular),
-            Self::Performance => (icons::DOCUMENT, icons::IconStyle::Regular),
             Self::Bookmarks => (icons::BOOKMARK, icons::IconStyle::Regular),
             Self::Keyboard => (icons::DOCUMENT, icons::IconStyle::Regular),
             Self::Mouse => (icons::PIN, icons::IconStyle::Regular),
@@ -158,10 +153,13 @@ impl SuiSuiViewApp {
                                             &mut changed,
                                         );
                                     }
-                                    SettingsSection::ImageProcessing => {
-                                        show_image_processing_settings(
+                                    SettingsSection::Rendering => {
+                                        show_rendering_settings(
                                             ui,
                                             &mut draft,
+                                            self.target_long_edge,
+                                            self.visible_page_count(),
+                                            &mut self.pending_gpu_acceleration,
                                             &mut changed,
                                         );
                                     }
@@ -169,15 +167,6 @@ impl SuiSuiViewApp {
                                         settings_performance::show_decoder_settings(
                                             ui,
                                             &mut draft,
-                                            &mut changed,
-                                        );
-                                    }
-                                    SettingsSection::Performance => {
-                                        settings_performance::show_performance_settings(
-                                            ui,
-                                            &mut draft,
-                                            self.target_long_edge,
-                                            self.visible_page_count(),
                                             &mut changed,
                                         );
                                     }
@@ -216,7 +205,9 @@ impl SuiSuiViewApp {
         if !self.settings_open {
             self.shortcut_capture = None;
             self.shortcut_conflict = None;
+            self.pending_gpu_acceleration = None;
         }
+        self.show_gpu_acceleration_confirm_dialog(ctx, &mut draft, &mut changed);
         if changed {
             draft.manual_cache_mb = draft.manual_cache_mb.clamp(64, 2048);
             draft.ai_upscale.ncnn.scale = draft.ai_upscale.ncnn.scale.clamp(2, 4);
@@ -224,6 +215,114 @@ impl SuiSuiViewApp {
                 draft.ai_upscale.ncnn.tile_size = draft.ai_upscale.ncnn.tile_size.clamp(32, 2048);
             }
             self.apply_settings(ctx, draft);
+        }
+    }
+
+    fn show_gpu_acceleration_confirm_dialog(
+        &mut self,
+        ctx: &egui::Context,
+        draft: &mut AppSettings,
+        changed: &mut bool,
+    ) {
+        let Some(enable_gpu) = self.pending_gpu_acceleration else {
+            return;
+        };
+
+        let viewport_rect = ctx.screen_rect();
+        let dialog_size = egui::vec2(360.0, 154.0);
+        let mut cancel_clicked = false;
+        let mut restart_clicked = false;
+
+        egui::Area::new(egui::Id::new("gpu_acceleration_confirm_dialog"))
+            .fixed_pos(viewport_rect.min)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let (overlay_rect, _) =
+                    ui.allocate_exact_size(viewport_rect.size(), egui::Sense::click());
+                ui.painter().rect_filled(
+                    overlay_rect,
+                    egui::CornerRadius::ZERO,
+                    egui::Color32::from_rgba_unmultiplied(0, 0, 0, 112),
+                );
+
+                let dialog_rect = egui::Rect::from_center_size(overlay_rect.center(), dialog_size);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(dialog_rect), |ui| {
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgb(23, 25, 29))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(76, 82, 92)))
+                        .corner_radius(egui::CornerRadius::same(8))
+                        .inner_margin(egui::Margin::symmetric(16, 14))
+                        .show(ui, |ui| {
+                            ui.set_min_size(dialog_size - egui::vec2(32.0, 28.0));
+                            ui.label(
+                                RichText::new("GPU 가속 변경")
+                                    .size(18.0)
+                                    .strong()
+                                    .color(theme::TEXT_PRIMARY),
+                            );
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new("앱을 다시 시작해야 적용됩니다.")
+                                    .size(14.0)
+                                    .color(theme::TEXT_PRIMARY),
+                            );
+                            let detail = if enable_gpu {
+                                "GPU 가속 업스케일러를 사용할 수 있으며 메모리 사용량이 늘 수 있습니다."
+                            } else {
+                                "기본 업스케일러만 사용할 수 있습니다."
+                            };
+                            ui.label(RichText::new(detail).size(12.5).color(theme::TEXT_MUTED));
+                            ui.add_space(16.0);
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .add_sized(
+                                            [112.0, 34.0],
+                                            egui::Button::new("지금 다시 시작")
+                                                .fill(theme::ACCENT)
+                                                .stroke(egui::Stroke::new(
+                                                    1.0,
+                                                    theme::ACCENT_HOVER,
+                                                )),
+                                        )
+                                        .clicked()
+                                    {
+                                        restart_clicked = true;
+                                    }
+                                    if ui
+                                        .add_sized(
+                                            [72.0, 34.0],
+                                            egui::Button::new("취소")
+                                                .fill(egui::Color32::from_rgb(38, 41, 47))
+                                                .stroke(egui::Stroke::new(
+                                                    1.0,
+                                                    egui::Color32::from_rgb(58, 64, 73),
+                                                )),
+                                        )
+                                        .clicked()
+                                    {
+                                        cancel_clicked = true;
+                                    }
+                                },
+                            );
+                        });
+                });
+            });
+
+        if restart_clicked {
+            draft.renderer_mode = if enable_gpu {
+                RendererMode::Wgpu
+            } else {
+                RendererMode::LowMemoryGlow
+            };
+            if enable_gpu && draft.display_upscaler == DisplayUpscaler::None {
+                draft.display_upscaler = DisplayUpscaler::Auto;
+            }
+            self.pending_gpu_acceleration = None;
+            *changed = true;
+        } else if cancel_clicked {
+            self.pending_gpu_acceleration = None;
         }
     }
 
@@ -248,12 +347,12 @@ impl SuiSuiViewApp {
         if previous_renderer_mode != self.settings.renderer_mode {
             match platform::restart_current_process() {
                 Ok(()) => {
-                    self.set_status("Renderer changed. Restarting SuiSuiView.");
+                    self.set_status("GPU acceleration changed. Restarting SuiSuiView.");
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     return;
                 }
                 Err(error) => {
-                    self.set_status(format!("Renderer changed. Restart failed: {error}"));
+                    self.set_status(format!("GPU acceleration changed. Restart failed: {error}"));
                 }
             }
         }
@@ -442,11 +541,18 @@ fn show_general_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed: &m
     );
 }
 
-fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed: &mut bool) {
+fn show_rendering_settings(
+    ui: &mut egui::Ui,
+    draft: &mut AppSettings,
+    target_long_edge: u32,
+    visible_pages: usize,
+    pending_gpu_acceleration: &mut Option<bool>,
+    changed: &mut bool,
+) {
     setting_group(
         ui,
         "화면 표시",
-        "페이지 전환, 보간, 실시간 업스케일 설정입니다.",
+        "페이지 전환 효과입니다.",
         |ui| {
             egui::Grid::new("settings_transition_grid")
                 .num_columns(2)
@@ -470,15 +576,25 @@ fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, ch
                     draft.set_page_transition_style(transition_style);
                     ui.end_row();
                 });
-            ui.add_space(6.0);
-            egui::Grid::new("settings_image_processing_grid")
+        },
+    );
+
+    ui.add_space(8.0);
+    setting_group(
+        ui,
+        "업스케일러",
+        "기본 경로와 GPU 가속 경로를 정합니다.",
+        |ui| {
+            let mut gpu_enabled = matches!(draft.renderer_mode, RendererMode::Wgpu);
+
+            egui::Grid::new("settings_upscaler_grid")
                 .num_columns(2)
                 .spacing([14.0, 8.0])
                 .show(ui, |ui| {
                     grid_label_with_help(
                         ui,
-                        "기본 업스케일러",
-                        "캐시에 저장할 표시용 이미지를 준비할 때 쓰는 기본 리사이즈 방식입니다. 큰 이미지를 줄이거나 GPU 가속 업스케일러를 사용할 수 없을 때의 표시 품질을 결정합니다.",
+                        "기본/fallback 업스케일러",
+                        "표시용 이미지를 준비할 때 쓰는 기본 리사이즈 방식입니다. GPU 가속이 꺼졌거나 적용되지 않는 경우에도 사용됩니다.",
                     );
                     egui::ComboBox::from_id_salt("resize_filter")
                         .selected_text(draft.resize_filter.label())
@@ -495,33 +611,67 @@ fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, ch
                         });
                     ui.end_row();
 
+                    let gpu_help =
+                        "GPU 업스케일러와 GPU 표시 효과를 사용합니다. 변경 시 앱을 다시 시작해야 합니다.";
+                    grid_label_with_help(ui, "GPU 가속", gpu_help);
+                    let gpu_changed = ui
+                        .checkbox(&mut gpu_enabled, "GPU 가속 활성화")
+                        .on_hover_text(gpu_help)
+                        .changed();
+                    if gpu_changed {
+                        *pending_gpu_acceleration = Some(gpu_enabled);
+                        ui.ctx().request_repaint();
+                        gpu_enabled = matches!(draft.renderer_mode, RendererMode::Wgpu);
+                    }
+                    ui.end_row();
+
                     grid_label_with_help(
                         ui,
                         "GPU 가속 업스케일러",
-                        "WGPU 표시 백엔드에서 화면 확대 시 GPU shader로 추가 보정합니다. 저메모리 OpenGL 기본값에서는 사용되지 않습니다.",
+                        "GPU 가속이 활성화된 경우 화면 확대에 사용할 업스케일러입니다.",
                     );
-                    egui::ComboBox::from_id_salt("display_upscaler")
-                        .selected_text(draft.display_upscaler.label())
-                        .show_ui(ui, |ui| {
-                            for upscaler in DisplayUpscaler::ALL {
-                                *changed |= ui
-                                    .selectable_value(
-                                        &mut draft.display_upscaler,
-                                        upscaler,
-                                        upscaler.label(),
-                                    )
-                                    .changed();
-                            }
-                        });
+                    let mut selected_upscaler =
+                        if gpu_enabled && draft.display_upscaler == DisplayUpscaler::None {
+                            DisplayUpscaler::Auto
+                        } else {
+                            draft.display_upscaler
+                        };
+                    let mut selected_upscaler_changed = false;
+                    let upscaler_response = ui.add_enabled_ui(gpu_enabled, |ui| {
+                        egui::ComboBox::from_id_salt("display_upscaler")
+                            .selected_text(selected_upscaler.label())
+                            .show_ui(ui, |ui| {
+                                for upscaler in DisplayUpscaler::ALL {
+                                    if upscaler == DisplayUpscaler::None {
+                                        continue;
+                                    }
+                                    selected_upscaler_changed |= ui
+                                        .selectable_value(
+                                            &mut selected_upscaler,
+                                            upscaler,
+                                            upscaler.label(),
+                                        )
+                                        .changed();
+                                }
+                            });
+                    }).response;
+                    if gpu_enabled {
+                        upscaler_response.on_hover_text("GPU 가속 업스케일러를 선택합니다.");
+                    } else {
+                        upscaler_response
+                            .on_disabled_hover_text("GPU 가속 활성화 시 선택할 수 있습니다.");
+                    }
+                    if selected_upscaler_changed {
+                        draft.display_upscaler = selected_upscaler;
+                        *changed = true;
+                    }
                     ui.end_row();
                 });
             ui.add_space(4.0);
             ui.label(
-                RichText::new(
-                    "기본 업스케일러는 캐시 준비와 CPU fallback에 쓰입니다. GPU 가속 업스케일러가 필요하면 성능 설정에서 WGPU 백엔드를 선택한 뒤 앱을 다시 시작하세요.",
-                )
-                .size(12.0)
-                .color(theme::TEXT_MUTED),
+                RichText::new("GPU 가속이 꺼져 있으면 기본 업스케일러만 사용할 수 있습니다.")
+                    .size(12.0)
+                    .color(theme::TEXT_MUTED),
             );
         },
     );
@@ -555,6 +705,15 @@ fn show_image_processing_settings(ui: &mut egui::Ui, draft: &mut AppSettings, ch
                 );
             }
         },
+    );
+
+    ui.add_space(8.0);
+    settings_performance::show_performance_settings(
+        ui,
+        draft,
+        target_long_edge,
+        visible_pages,
+        changed,
     );
 
     ui.add_space(8.0);
@@ -801,17 +960,21 @@ pub(in crate::app) fn checkbox_with_help(
 
 pub(in crate::app) fn grid_label_with_help(ui: &mut egui::Ui, label: &str, help: &'static str) {
     ui.horizontal(|ui| {
-        ui.label(label).on_hover_text(help);
+        ui.add(egui::Label::new(label).sense(egui::Sense::hover()))
+            .on_hover_text(help);
         info_icon(ui, help);
     });
 }
 
 pub(in crate::app) fn info_icon(ui: &mut egui::Ui, help: &'static str) {
-    ui.label(icons::icon(
-        icons::INFO,
-        icons::IconStyle::Regular,
-        13.0,
-        theme::TEXT_MUTED,
-    ))
+    ui.add(
+        egui::Label::new(icons::icon(
+            icons::INFO,
+            icons::IconStyle::Regular,
+            13.0,
+            theme::TEXT_MUTED,
+        ))
+        .sense(egui::Sense::hover()),
+    )
     .on_hover_text(help);
 }

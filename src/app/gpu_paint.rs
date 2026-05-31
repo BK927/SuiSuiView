@@ -6,7 +6,7 @@ use crate::core::gpu_effect::{
 };
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
-use crate::core::state::{DisplayUpscaler, GpuEffectMode};
+use crate::core::state::{DisplayUpscaler, GpuEffectMode, RendererMode};
 use eframe::egui::{self, PaintCallbackInfo, Rect};
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use lru::LruCache;
@@ -54,6 +54,7 @@ impl SuiSuiViewApp {
         if !self.gpu_effects_available
             || self.gpu_target_format.is_none()
             || matches!(self.settings.gpu_effect_mode, GpuEffectMode::CpuOnly)
+            || !matches!(self.settings.renderer_mode, RendererMode::Wgpu)
         {
             return DisplayUpscaler::None;
         }

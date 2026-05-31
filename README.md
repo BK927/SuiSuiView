@@ -132,18 +132,14 @@ state file.
 
 - General: delete confirmation, ESC exit, always-on-top, and first/last page
   behavior.
-- Image processing: transition effect, CPU resize filter, real-time WGSL
-  display upscaling, EXIF orientation, and embedded ICC conversion.
+- Rendering: transition effect, default/fallback upscaler, GPU acceleration,
+  GPU upscaler, EXIF orientation, embedded ICC conversion, prefetch, cache
+  memory, and experimental Real-ESRGAN AI upscale settings.
 - Decoders: decode mode and per-format decoder choices. `기본값` is shown as
   selected text, with the resolved backend summarized beside each format.
-- Performance: renderer backend, automatic or manual page-cache memory,
-  nearby-page prefetch, and progressive low-resolution preview.
 - View, keyboard, and mouse: large-image starting position, visible viewer UI,
   customizable keyboard shortcuts, double-click maximize, middle-click
   fullscreen, and wheel behavior.
-- Experimental AI upscale: Real-ESRGAN executable path, model name, optional
-  model folder, scale, tile size, output format, and optional current/next-page
-  AI prefetch.
 
 ## Bookmarks And State
 
