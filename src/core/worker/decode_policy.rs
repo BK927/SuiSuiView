@@ -132,16 +132,35 @@ impl DecodeAheadPolicy {
 
 pub(super) fn decode_ahead_mode() -> DecodeAheadMode {
     static MODE: OnceLock<DecodeAheadMode> = OnceLock::new();
-    *MODE.get_or_init(|| decode_ahead_mode_value(env::var(DECODE_AHEAD_ENV).ok().as_deref()))
+    *MODE.get_or_init(|| {
+        decode_ahead_mode_value(
+            env::var(DECODE_AHEAD_ENV).ok().as_deref(),
+            DecodeAheadMode::Adaptive,
+        )
+    })
 }
 
-fn decode_ahead_mode_value(value: Option<&str>) -> DecodeAheadMode {
-    match value.map(str::trim) {
+fn decode_ahead_mode_value(value: Option<&str>, default_mode: DecodeAheadMode) -> DecodeAheadMode {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        None => default_mode,
+        Some(value)
+            if value.eq_ignore_ascii_case("0")
+                || value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off")
+                || value.eq_ignore_ascii_case("no")
+                || value.eq_ignore_ascii_case("disabled")
+                || value.eq_ignore_ascii_case("disable")
+                || value.eq_ignore_ascii_case("none") =>
+        {
+            DecodeAheadMode::Disabled
+        }
         Some(value)
             if value.eq_ignore_ascii_case("1")
                 || value.eq_ignore_ascii_case("true")
                 || value.eq_ignore_ascii_case("on")
-                || value.eq_ignore_ascii_case("yes") =>
+                || value.eq_ignore_ascii_case("yes")
+                || value.eq_ignore_ascii_case("forced")
+                || value.eq_ignore_ascii_case("force") =>
         {
             DecodeAheadMode::Forced
         }
@@ -150,7 +169,7 @@ fn decode_ahead_mode_value(value: Option<&str>) -> DecodeAheadMode {
         {
             DecodeAheadMode::Adaptive
         }
-        _ => DecodeAheadMode::Disabled,
+        Some(_) => DecodeAheadMode::Disabled,
     }
 }
 
@@ -195,19 +214,53 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn decode_ahead_mode_parses_forced_and_adaptive_values() {
-        assert_eq!(decode_ahead_mode_value(Some("1")), DecodeAheadMode::Forced);
+    fn decode_ahead_mode_parses_forced_adaptive_and_disabled_values() {
         assert_eq!(
-            decode_ahead_mode_value(Some("adaptive")),
+            decode_ahead_mode_value(Some("1"), DecodeAheadMode::Adaptive),
+            DecodeAheadMode::Forced
+        );
+        assert_eq!(
+            decode_ahead_mode_value(Some("forced"), DecodeAheadMode::Adaptive),
+            DecodeAheadMode::Forced
+        );
+        assert_eq!(
+            decode_ahead_mode_value(Some("adaptive"), DecodeAheadMode::Disabled),
             DecodeAheadMode::Adaptive
         );
         assert_eq!(
-            decode_ahead_mode_value(Some("auto")),
+            decode_ahead_mode_value(Some("auto"), DecodeAheadMode::Disabled),
             DecodeAheadMode::Adaptive
         );
-        assert_eq!(decode_ahead_mode_value(None), DecodeAheadMode::Disabled);
         assert_eq!(
-            decode_ahead_mode_value(Some("0")),
+            decode_ahead_mode_value(Some("0"), DecodeAheadMode::Adaptive),
+            DecodeAheadMode::Disabled
+        );
+        assert_eq!(
+            decode_ahead_mode_value(Some("off"), DecodeAheadMode::Adaptive),
+            DecodeAheadMode::Disabled
+        );
+    }
+
+    #[test]
+    fn decode_ahead_mode_uses_supplied_default_when_unset_or_empty() {
+        assert_eq!(
+            decode_ahead_mode_value(None, DecodeAheadMode::Adaptive),
+            DecodeAheadMode::Adaptive
+        );
+        assert_eq!(
+            decode_ahead_mode_value(Some(""), DecodeAheadMode::Adaptive),
+            DecodeAheadMode::Adaptive
+        );
+        assert_eq!(
+            decode_ahead_mode_value(None, DecodeAheadMode::Disabled),
+            DecodeAheadMode::Disabled
+        );
+    }
+
+    #[test]
+    fn decode_ahead_mode_treats_unknown_values_as_disabled() {
+        assert_eq!(
+            decode_ahead_mode_value(Some("unknown"), DecodeAheadMode::Adaptive),
             DecodeAheadMode::Disabled
         );
     }
