@@ -4,16 +4,18 @@ use serde::{Deserialize, Serialize};
 pub enum DecodeMode {
     #[default]
     AutoFast,
-    HighQuality,
+    Compatibility,
+    Custom,
 }
 
 impl DecodeMode {
-    pub const ALL: [Self; 2] = [Self::AutoFast, Self::HighQuality];
+    pub const ALL: [Self; 3] = [Self::AutoFast, Self::Compatibility, Self::Custom];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::AutoFast => "Auto fast",
-            Self::HighQuality => "High quality / compatible",
+            Self::AutoFast => "Auto Fast",
+            Self::Compatibility => "호환성 우선",
+            Self::Custom => "커스텀",
         }
     }
 }

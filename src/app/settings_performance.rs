@@ -62,7 +62,7 @@ pub(in crate::app) fn show_decoder_settings(
                     grid_label_with_help(
                         ui,
                         "디코딩 모드",
-                        "자동 모드는 포맷별 설정과 빠른 경로를 사용합니다.",
+                        "Auto Fast는 기본 빠른 경로, 호환성 우선은 image crate 기준 경로, 커스텀은 포맷별 선택을 사용합니다.",
                     );
                     egui::ComboBox::from_id_salt("decode_mode")
                         .selected_text(draft.decode_mode.label())
@@ -82,10 +82,10 @@ pub(in crate::app) fn show_decoder_settings(
     setting_group(
         ui,
         "포맷별 디코더",
-        "자동 모드에서 포맷별 디코더를 직접 지정합니다.",
+        "커스텀 모드에서 포맷별 디코더를 직접 지정합니다.",
         |ui| {
-            let enabled = draft.decode_mode == DecodeMode::AutoFast;
-            let mode_help = (!enabled).then_some("디코딩 모드가 자동일 때만 변경할 수 있습니다.");
+            let enabled = draft.decode_mode == DecodeMode::Custom;
+            let mode_help = (!enabled).then_some("디코딩 모드가 커스텀일 때만 변경할 수 있습니다.");
             let avif_enabled = enabled && cfg!(feature = "native-avif");
             let avif_help = if cfg!(feature = "native-avif") {
                 mode_help
@@ -195,14 +195,21 @@ pub(in crate::app) fn show_decoder_settings(
                     );
                 });
 
-            if draft.decode_mode == DecodeMode::HighQuality {
+            if draft.decode_mode == DecodeMode::Compatibility {
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(
-                        "고품질 / 호환 모드에서는 PSD와 AI 미리보기를 제외한 포맷이 image crate 경로를 사용합니다.",
+                        "호환성 우선 모드에서는 PSD와 AI 미리보기를 제외한 포맷이 image crate 경로를 사용합니다.",
                     )
                     .size(12.0)
                     .color(theme::TEXT_MUTED),
+                );
+            } else if draft.decode_mode == DecodeMode::AutoFast {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Auto Fast 모드에서는 앱 기본 빠른 경로를 사용합니다.")
+                        .size(12.0)
+                        .color(theme::TEXT_MUTED),
                 );
             }
         },

@@ -24,7 +24,7 @@ full media-management suite.
 | Fast reading | Background decode, display-sized preparation, nearby-page cache, and lightweight transitions. |
 | Comic friendly | Folder, `.zip`, and `.cbz` support with single-page and two-page spread modes. |
 | Stable bookmarks | ZIP/CBZ bookmarks are based on book contents, so moving or renaming a book should keep your place. |
-| Tunable decoders | AutoFast can choose per-format fast paths, while compatible mode keeps the broad `image` baseline. |
+| Tunable decoders | Auto Fast uses the app default fast paths, compatibility mode keeps the broad `image` baseline, and custom mode lets you override per-format decoders. |
 | Safe viewing tools | Rotate, flip, invert, smooth, sharpen, and gamma effects are session-only and never rewrite the source image. |
 | Optional AI upscale | Real-ESRGAN ncnn-vulkan can be used for the current page when you provide your own local executable and models. |
 
@@ -83,7 +83,8 @@ The default build keeps native codec risk low: it uses Rust fast paths where
 they have been validated, and falls back to the broad `image` crate decoder when
 a selected backend cannot decode a page.
 
-AutoFast currently resolves `기본값` like this:
+Auto Fast uses these default decoder paths. Custom mode uses the same path when
+a format is set to `기본값`:
 
 | Format | Default backend |
 | --- | --- |

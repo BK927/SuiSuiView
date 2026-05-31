@@ -593,8 +593,9 @@ fn reading_direction_label(direction: ReadingDirection) -> &'static str {
 
 fn decode_mode_label(mode: DecodeMode) -> &'static str {
     match mode {
-        DecodeMode::AutoFast => "자동 / 빠름",
-        DecodeMode::HighQuality => "고품질 / 호환",
+        DecodeMode::AutoFast => "Auto Fast",
+        DecodeMode::Compatibility => "호환성 우선",
+        DecodeMode::Custom => "커스텀",
     }
 }
 

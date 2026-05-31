@@ -589,9 +589,10 @@ impl SuiSuiViewApp {
     fn decode_options(&self) -> DecodeOptions {
         let strategy = match self.settings.decode_mode {
             DecodeMode::AutoFast => DecodeStrategy::Auto,
-            DecodeMode::HighQuality => DecodeStrategy::ImageCrate,
+            DecodeMode::Compatibility => DecodeStrategy::ImageCrate,
+            DecodeMode::Custom => DecodeStrategy::Auto,
         };
-        let decoder_preferences = if matches!(strategy, DecodeStrategy::Auto) {
+        let decoder_preferences = if matches!(self.settings.decode_mode, DecodeMode::Custom) {
             self.settings.decoder_preferences
         } else {
             DecoderPreferences::default()
