@@ -622,24 +622,32 @@ impl SuiSuiViewApp {
         };
         if perf::adjacent_seed_prefetch_enabled() {
             if let Some(cache) = self.take_adjacent_seed_for_direction(direction) {
-                perf::record_adjacent_seed_prefetch_hit(true, cache.target_long_edge);
+                let target_long_edge = cache.target_long_edge;
+                let origin = cache.origin;
+                let source = cache.source;
+                let forced_page = cache.forced_page;
+                let path = cache.path;
+                let seeded_page = cache.seeded_page;
+                let seeded_followup_page = cache.seeded_followup_page;
+
+                perf::record_adjacent_seed_prefetch_hit(true, target_long_edge);
                 self.pending_bookmark_jump = None;
                 self.loader_generation = self.loader_generation.wrapping_add(1);
                 self.clear_adjacent_seed_cache();
                 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
                 {
-                    self.open_to_first_visible_trace = Some(perf::OpenToFirstVisibleTrace::new(
-                        cache.origin.perf_label(),
-                    ));
+                    self.open_to_first_visible_trace =
+                        Some(perf::OpenToFirstVisibleTrace::new(origin.perf_label()));
                 }
                 self.install_source(
-                    cache.source,
-                    cache.forced_page,
-                    cache.origin,
-                    cache.path,
-                    Some(cache.seeded_page),
+                    source,
+                    forced_page,
+                    origin,
+                    path,
+                    Some(seeded_page),
                     navigation_direction_for_sibling(direction),
                 );
+                self.insert_seeded_page_if_matching_target(seeded_followup_page);
                 return;
             }
             perf::record_adjacent_seed_prefetch_hit(false, self.target_long_edge);

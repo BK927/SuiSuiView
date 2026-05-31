@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 use ui::{BookmarkFilter, BookmarkRowsCache, BookmarkThumbnails};
 
 mod about;
+mod adjacent_seed;
 mod cache;
 mod commands;
 mod context_menu;
@@ -45,6 +46,7 @@ mod settings_performance;
 mod sibling_books;
 mod texture_prewarm;
 mod ui;
+mod update_loop;
 mod viewer;
 mod window;
 
@@ -52,6 +54,7 @@ mod window;
 use crate::core::effects::{apply_effects_to_image, transformed_page_size};
 #[cfg(test)]
 use crate::core::worker::preview_prefetch_indices;
+pub(in crate::app) use adjacent_seed::{AdjacentSeedCache, AdjacentSeedEvent, SeededPreparedPage};
 #[cfg(test)]
 use cache::{
     automatic_cache_budget_bytes_for_total, best_page_key_at_or_below_in_cache,
@@ -65,7 +68,7 @@ pub(in crate::app) use cache::{
     BYTES_PER_RGBA_PIXEL,
 };
 pub(in crate::app) use navigation::EdgePrompt;
-pub(in crate::app) use opening::{AdjacentSeedCache, AdjacentSeedEvent, LoaderEvent, OpenOrigin};
+pub(in crate::app) use opening::{LoaderEvent, OpenOrigin};
 #[cfg(test)]
 use sibling_books::adjacent_sibling_book_paths;
 pub(in crate::app) use sibling_books::{adjacent_sibling_book_paths_ordered, sibling_book_path};
@@ -1136,50 +1139,7 @@ impl SuiSuiViewApp {
 
 impl eframe::App for SuiSuiViewApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        let update_started = Instant::now();
-        self.drain_ipc_open_requests(ctx);
-        self.drain_loader_events();
-        self.drain_worker_events();
-        self.drain_debug_compare_events();
-        self.drain_upscale_events();
-        self.run_pending_adjacent_seed_prefetch();
-        self.drain_adjacent_seed_events();
-        self.drain_pending_original_inspection_cache_cleanup(ctx);
-        self.bookmark_thumbnails.drain(ctx);
-        self.handle_dropped_files(ctx);
-        if !self.settings_is_capturing_keyboard() {
-            self.handle_keyboard(ctx);
-        }
-        self.maintain_native_window_state(ctx);
-        self.update_window_title(ctx);
-        self.flush_deferred_state_save_if_due();
-        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        self.drive_auto_page_turn_diagnostics(ctx);
-
-        self.show_top_bar(ctx);
-        self.show_status_surfaces(ctx);
-        self.show_settings_window(ctx);
-        self.show_about_window(ctx);
-
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE)
-            .show(ctx, |ui| self.show_viewer(ui, ctx));
-
-        self.show_bookmark_popover(ctx);
-        self.show_edge_prompt(ctx);
-        self.drive_queued_page_turn_after_paint(ctx);
-        self.prewarm_neighbor_textures(ctx);
-
-        if self.transition.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(16));
-        }
-        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        perf::record_ui_update(
-            update_started,
-            self.source.is_some(),
-            self.transition.is_some(),
-        );
+        self.update_frame(ctx);
     }
 }
 

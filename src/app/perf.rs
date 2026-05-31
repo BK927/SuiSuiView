@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use sysinfo::{ProcessesToUpdate, System};
 
 const SLOW_UI_UPDATE: Duration = Duration::from_millis(50);
+const SLOW_APP_UPDATE_PHASE: Duration = Duration::from_millis(8);
 const PERF_FLUSH_TIMEOUT: Duration = Duration::from_millis(200);
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 const AUTO_PAGE_TURNS_ENV: &str = "SUISUIVIEW_PERF_AUTO_PAGE_TURNS";
@@ -483,6 +484,15 @@ pub(super) fn record_ui_update(started: Instant, has_book: bool, transition: boo
             PerfField::Bool("has_book", has_book),
             PerfField::Bool("transition", transition),
         ],
+    );
+}
+
+pub(super) fn record_app_update_phase(started: Instant, phase: &'static str) {
+    perf_trace::record_duration_if_at_least(
+        "app_update_phase",
+        started.elapsed(),
+        SLOW_APP_UPDATE_PHASE,
+        &[PerfField::Str("phase", phase)],
     );
 }
 
