@@ -56,6 +56,14 @@ pub(super) struct SpanGpuSession<'a> {
     workspace: SpanGpuWorkspace,
 }
 
+pub(super) struct SpanGpuReadbackSession<'a> {
+    executor: &'a SpanGpuExecutor,
+    manifest: &'a SrLabManifest,
+    model: &'a SpanGpuModel,
+    workspace: SpanGpuWorkspace,
+    readback: wgpu::Buffer,
+}
+
 struct SpanGpuWorkspace {
     input: GpuBuffer,
     shifted: GpuBuffer,
@@ -197,6 +205,25 @@ impl SpanGpuExecutor {
         })
     }
 
+    pub(super) fn create_readback_session<'a>(
+        &'a self,
+        manifest: &'a SrLabManifest,
+        model: &'a SpanGpuModel,
+        input: &FeatureMap,
+    ) -> Result<SpanGpuReadbackSession<'a>, String> {
+        self.with_validation_scope(|| {
+            let workspace = self.create_workspace(manifest, input, true)?;
+            let readback = self.create_readback_buffer(&workspace.output);
+            Ok(SpanGpuReadbackSession {
+                executor: self,
+                manifest,
+                model,
+                workspace,
+                readback,
+            })
+        })
+    }
+
     fn create_workspace(
         &self,
         manifest: &SrLabManifest,
@@ -291,6 +318,26 @@ impl SpanGpuExecutor {
         model: &SpanGpuModel,
         workspace: &SpanGpuWorkspace,
     ) -> Result<RunStats, String> {
+        let readback = self.create_readback_buffer(&workspace.output);
+        self.run_workspace_with_readback_buffer(manifest, model, workspace, &readback)
+    }
+
+    fn create_readback_buffer(&self, output: &GpuBuffer) -> wgpu::Buffer {
+        self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("suisuiview-sr-lab-span-readback"),
+            size: output.byte_len(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        })
+    }
+
+    fn run_workspace_with_readback_buffer(
+        &self,
+        manifest: &SrLabManifest,
+        model: &SpanGpuModel,
+        workspace: &SpanGpuWorkspace,
+        readback: &wgpu::Buffer,
+    ) -> Result<RunStats, String> {
         let started = Instant::now();
         let mut encoder = self
             .device
@@ -300,13 +347,7 @@ impl SpanGpuExecutor {
 
         self.encode_workspace(&mut encoder, manifest, model, workspace)?;
         let output = &workspace.output;
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("suisuiview-sr-lab-span-readback"),
-            size: output.byte_len(),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        encoder.copy_buffer_to_buffer(&output.buffer, 0, &readback, 0, output.byte_len());
+        encoder.copy_buffer_to_buffer(&output.buffer, 0, readback, 0, output.byte_len());
         self.queue.submit(Some(encoder.finish()));
 
         let slice = readback.slice(..);
@@ -767,6 +808,34 @@ impl SpanGpuSession<'_> {
 
     pub(super) fn output_height(&self) -> usize {
         self.workspace.output.height
+    }
+}
+
+impl SpanGpuReadbackSession<'_> {
+    pub(super) fn run(&self, input: &FeatureMap) -> Result<RunStats, String> {
+        if input.channels != self.workspace.input.channels
+            || input.height != self.workspace.input.height
+            || input.width != self.workspace.input.width
+        {
+            return Err(format!(
+                "SPAN GPU readback session input shape changed: session {}x{}x{}, input {}x{}x{}",
+                self.workspace.input.channels,
+                self.workspace.input.width,
+                self.workspace.input.height,
+                input.channels,
+                input.width,
+                input.height
+            ));
+        }
+        self.executor.with_validation_scope(|| {
+            self.executor.write_input(&self.workspace, input);
+            self.executor.run_workspace_with_readback_buffer(
+                self.manifest,
+                self.model,
+                &self.workspace,
+                &self.readback,
+            )
+        })
     }
 }
 

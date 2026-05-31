@@ -287,6 +287,10 @@ pub fn default_span_gpu_session_report_path() -> PathBuf {
     PathBuf::from("perf-fixtures").join("sr-lab-span-session-bench.json")
 }
 
+pub fn default_span_gpu_tiled_reference_report_path() -> PathBuf {
+    PathBuf::from("perf-fixtures").join("sr-lab-span-gpu-tiled-reference.json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{inspect_manifest, SrLabFamily, SrLabLayer, SrLabLayerKind, SrLabManifest};

@@ -29,6 +29,7 @@ Usage:
   suisuiview-cli --original-region-bench <path> --region <x,y,width,height> [--page-index <index>] [--region-iterations <count>] [--region-report <report.json>] [--region-report-default]
   suisuiview-cli --sr-lab-inspect <manifest.json> [--sr-lab-report <report.json>] [--sr-lab-report-default]
   suisuiview-cli --sr-lab-span-session-bench <manifest.json> <image> [--sr-lab-long-edge <px>] [--sr-lab-warmups <count>] [--sr-lab-iterations <count>] [--sr-lab-report <report.json>] [--sr-lab-report-default]
+  suisuiview-cli --sr-lab-span-gpu-tiled-reference <manifest.json> <image> [--sr-lab-long-edge <px>] [--sr-lab-tile-edge <px>] [--sr-lab-output <png>] [--sr-lab-report <report.json>] [--sr-lab-report-default] [--sr-lab-compare-cpu]
 
 Options:
   -h, --help    Show this help.
@@ -111,6 +112,15 @@ pub enum CliCommand {
         manifest_path: PathBuf,
         input_path: PathBuf,
         long_edge: Option<u32>,
+        output_path: Option<PathBuf>,
+        report_path: Option<PathBuf>,
+        compare_cpu: bool,
+    },
+    SrLabSpanGpuTiledReference {
+        manifest_path: PathBuf,
+        input_path: PathBuf,
+        long_edge: Option<u32>,
+        tile_edge: usize,
         output_path: Option<PathBuf>,
         report_path: Option<PathBuf>,
         compare_cpu: bool,
@@ -206,6 +216,9 @@ pub fn parse_args(args: Vec<OsString>) -> Result<CliAction, CliError> {
     if first == "--sr-lab-span-gpu-reference" {
         return sr_lab_args::parse_span_gpu_reference(args).map(CliAction::Command);
     }
+    if first == "--sr-lab-span-gpu-tiled-reference" {
+        return sr_lab_args::parse_span_gpu_tiled_reference(args).map(CliAction::Command);
+    }
     if first == "--sr-lab-span-session-bench" {
         return sr_lab_args::parse_span_session_bench(args).map(CliAction::Command);
     }
@@ -236,6 +249,7 @@ fn is_cli_command_arg(arg: &OsString) -> bool {
         || arg == "--sr-lab-inspect"
         || arg == "--sr-lab-span-cpu-reference"
         || arg == "--sr-lab-span-gpu-reference"
+        || arg == "--sr-lab-span-gpu-tiled-reference"
         || arg == "--sr-lab-span-session-bench"
 }
 
@@ -379,6 +393,24 @@ impl CliCommand {
                 compare_cpu,
             )
             .map_err(|error| format!("SR Lab SPAN GPU reference failed: {error}")),
+            Self::SrLabSpanGpuTiledReference {
+                manifest_path,
+                input_path,
+                long_edge,
+                tile_edge,
+                output_path,
+                report_path,
+                compare_cpu,
+            } => crate::core::sr_lab::gpu::tiled::run_span_gpu_tiled_reference(
+                &manifest_path,
+                &input_path,
+                long_edge,
+                tile_edge,
+                output_path.as_deref(),
+                report_path.as_deref(),
+                compare_cpu,
+            )
+            .map_err(|error| format!("SR Lab SPAN GPU tiled reference failed: {error}")),
             Self::SrLabSpanSessionBench {
                 manifest_path,
                 input_path,

@@ -53,6 +53,52 @@ pub(super) fn parse_span_gpu_reference(
     })
 }
 
+pub(super) fn parse_span_gpu_tiled_reference(
+    mut args: impl Iterator<Item = OsString>,
+) -> Result<CliCommand, CliError> {
+    let usage = "usage: suisuiview-cli --sr-lab-span-gpu-tiled-reference <manifest.json> <image>";
+    let manifest_path = required_path(&mut args, usage)?;
+    let input_path = required_path(&mut args, usage)?;
+    let mut long_edge = None;
+    let mut tile_edge = crate::core::sr_lab::gpu::tiled::DEFAULT_SPAN_TILE_EDGE;
+    let mut output_path = None;
+    let mut report_path = None;
+    let mut compare_cpu = false;
+
+    while let Some(arg) = args.next() {
+        if arg == "--sr-lab-long-edge" {
+            long_edge = Some(required_u32(&mut args, "--sr-lab-long-edge")?);
+        } else if arg == "--sr-lab-tile-edge" {
+            tile_edge = required_usize(&mut args, "--sr-lab-tile-edge")?;
+            if tile_edge == 0 {
+                return Err(CliError::new(
+                    "--sr-lab-tile-edge requires a positive integer",
+                ));
+            }
+        } else if arg == "--sr-lab-output" {
+            output_path = Some(required_path(&mut args, "--sr-lab-output requires a path")?);
+        } else if arg == "--sr-lab-report" {
+            report_path = Some(required_path(&mut args, "--sr-lab-report requires a path")?);
+        } else if arg == "--sr-lab-report-default" {
+            report_path = Some(crate::core::sr_lab::default_span_gpu_tiled_reference_report_path());
+        } else if arg == "--sr-lab-compare-cpu" {
+            compare_cpu = true;
+        } else {
+            return Err(unknown_arg(arg));
+        }
+    }
+
+    Ok(CliCommand::SrLabSpanGpuTiledReference {
+        manifest_path,
+        input_path,
+        long_edge,
+        tile_edge,
+        output_path,
+        report_path,
+        compare_cpu,
+    })
+}
+
 pub(super) fn parse_span_session_bench(
     mut args: impl Iterator<Item = OsString>,
 ) -> Result<CliCommand, CliError> {
@@ -271,6 +317,63 @@ mod tests {
         assert_eq!(output_path, Some(PathBuf::from("out.png")));
         assert_eq!(report_path, Some(PathBuf::from("report.json")));
         assert!(compare_cpu);
+    }
+
+    #[test]
+    fn sr_lab_span_gpu_tiled_reference_preserves_flags() {
+        let action = parse_args(vec![
+            OsString::from("--sr-lab-span-gpu-tiled-reference"),
+            OsString::from("manifest.json"),
+            OsString::from("input.png"),
+            OsString::from("--sr-lab-long-edge"),
+            OsString::from("32"),
+            OsString::from("--sr-lab-tile-edge"),
+            OsString::from("8"),
+            OsString::from("--sr-lab-output"),
+            OsString::from("out.png"),
+            OsString::from("--sr-lab-report"),
+            OsString::from("report.json"),
+            OsString::from("--sr-lab-compare-cpu"),
+        ])
+        .unwrap();
+
+        let CliAction::Command(CliCommand::SrLabSpanGpuTiledReference {
+            manifest_path,
+            input_path,
+            long_edge,
+            tile_edge,
+            output_path,
+            report_path,
+            compare_cpu,
+        }) = action
+        else {
+            panic!("expected SPAN GPU tiled reference command");
+        };
+
+        assert_eq!(manifest_path, PathBuf::from("manifest.json"));
+        assert_eq!(input_path, PathBuf::from("input.png"));
+        assert_eq!(long_edge, Some(32));
+        assert_eq!(tile_edge, 8);
+        assert_eq!(output_path, Some(PathBuf::from("out.png")));
+        assert_eq!(report_path, Some(PathBuf::from("report.json")));
+        assert!(compare_cpu);
+    }
+
+    #[test]
+    fn sr_lab_span_gpu_tiled_reference_rejects_zero_tile_edge() {
+        let error = parse_args(vec![
+            OsString::from("--sr-lab-span-gpu-tiled-reference"),
+            OsString::from("manifest.json"),
+            OsString::from("input.png"),
+            OsString::from("--sr-lab-tile-edge"),
+            OsString::from("0"),
+        ])
+        .unwrap_err();
+
+        assert_eq!(
+            error.message(),
+            "--sr-lab-tile-edge requires a positive integer"
+        );
     }
 
     #[test]

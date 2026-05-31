@@ -1,5 +1,6 @@
 mod buffers;
 mod executor;
+pub(crate) mod tiled;
 mod validation;
 
 use self::executor::SpanGpuExecutor;
