@@ -10,6 +10,8 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
+const RESTART_BYPASS_SINGLE_INSTANCE_ENV: &str = "SUISUIVIEW_RESTART_BYPASS_SINGLE_INSTANCE";
+
 pub(in crate::app) fn install_app_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     if let Some((name, bytes)) = load_first_existing_font(korean_font_candidates()) {
@@ -132,6 +134,17 @@ pub(in crate::app) fn reveal_in_file_manager(path: &Path) -> Result<(), String> 
             .map(|_| ())
             .map_err(|error| error.to_string())
     }
+}
+
+pub(in crate::app) fn restart_current_process() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    let args = std::env::args_os().skip(1);
+    Command::new(exe)
+        .args(args)
+        .env(RESTART_BYPASS_SINGLE_INSTANCE_ENV, "1")
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "windows")]

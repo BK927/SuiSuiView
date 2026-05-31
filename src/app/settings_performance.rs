@@ -231,7 +231,7 @@ pub(in crate::app) fn show_performance_settings(
                 });
             ui.add_space(4.0);
             ui.label(
-                RichText::new("WGPU로 바꾸면 다음 실행부터 GPU 표시 업스케일러를 사용할 수 있지만, 기본 메모리 사용량이 크게 늘 수 있습니다.")
+                RichText::new("WGPU로 바꾸면 GPU 표시 업스케일러를 사용할 수 있지만, 기본 메모리 사용량이 크게 늘 수 있습니다. 표시 백엔드를 바꾸면 설정 저장 후 앱이 자동으로 다시 시작됩니다.")
                     .size(12.0)
                     .color(theme::TEXT_MUTED),
             );

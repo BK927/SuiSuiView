@@ -15,6 +15,7 @@ const DEFAULT_WINDOW_SIZE: [f32; 2] = [1280.0, 820.0];
 const MIN_WINDOW_SIZE: [f32; 2] = [860.0, 560.0];
 const GUI_CLI_REDIRECT_MESSAGE: &str =
     "CLI 명령은 suisuiview-cli를 사용하세요.\n예: suisuiview-cli --perf-scan <path>";
+const RESTART_BYPASS_SINGLE_INSTANCE_ENV: &str = "SUISUIVIEW_RESTART_BYPASS_SINGLE_INSTANCE";
 
 fn main() -> eframe::Result<()> {
     if let Some(first_arg) = std::env::args_os().nth(1) {
@@ -26,7 +27,9 @@ fn main() -> eframe::Result<()> {
 
     let store = StateStore::load();
     let startup_open_path = startup_open_path();
-    let ipc_rx = if store.settings().single_instance {
+    let restart_bypasses_single_instance =
+        std::env::var_os(RESTART_BYPASS_SINGLE_INSTANCE_ENV).is_some();
+    let ipc_rx = if store.settings().single_instance && !restart_bypasses_single_instance {
         let pipe_name = single_instance::pipe_name_for_key(&store.path().display().to_string());
         if single_instance::send_open_request(&pipe_name, startup_open_path.as_deref()) {
             return Ok(());

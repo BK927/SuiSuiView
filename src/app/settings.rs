@@ -235,6 +235,7 @@ impl SuiSuiViewApp {
         let previous_ai = self.settings.ai_upscale.clone();
         let previous_gpu_effect_mode = self.settings.gpu_effect_mode;
         let previous_display_upscaler = self.settings.display_upscaler;
+        let previous_renderer_mode = self.settings.renderer_mode;
         let previous_max_remembered_books = self.settings.max_remembered_books;
         let mut textures_invalidated = false;
 
@@ -243,6 +244,19 @@ impl SuiSuiViewApp {
         self.refresh_single_instance_listener();
         self.pending_state_save_at = None;
         platform::apply_window_level(ctx, self.settings.always_on_top);
+
+        if previous_renderer_mode != self.settings.renderer_mode {
+            match platform::restart_current_process() {
+                Ok(()) => {
+                    self.set_status("Renderer changed. Restarting SuiSuiView.");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
+                Err(error) => {
+                    self.set_status(format!("Renderer changed. Restart failed: {error}"));
+                }
+            }
+        }
 
         let decode_changed = previous_decode != self.decode_options();
         let preview_changed = previous_preview != self.settings.progressive_preview_enabled;
