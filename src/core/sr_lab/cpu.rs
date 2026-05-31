@@ -25,15 +25,15 @@ pub struct SpanCpuReferenceReport {
 }
 
 #[derive(Clone)]
-struct FeatureMap {
-    channels: usize,
-    height: usize,
-    width: usize,
-    values: Vec<f32>,
+pub(crate) struct FeatureMap {
+    pub(crate) channels: usize,
+    pub(crate) height: usize,
+    pub(crate) width: usize,
+    pub(crate) values: Vec<f32>,
 }
 
 impl FeatureMap {
-    fn zeros(channels: usize, height: usize, width: usize) -> Self {
+    pub(crate) fn zeros(channels: usize, height: usize, width: usize) -> Self {
         Self {
             channels,
             height,
@@ -42,14 +42,14 @@ impl FeatureMap {
         }
     }
 
-    fn get(&self, channel: usize, y: isize, x: isize) -> f32 {
+    pub(crate) fn get(&self, channel: usize, y: isize, x: isize) -> f32 {
         if y < 0 || x < 0 || y >= self.height as isize || x >= self.width as isize {
             return 0.0;
         }
         self.values[self.offset(channel, y as usize, x as usize)]
     }
 
-    fn set(&mut self, channel: usize, y: usize, x: usize, value: f32) {
+    pub(crate) fn set(&mut self, channel: usize, y: usize, x: usize, value: f32) {
         let offset = self.offset(channel, y, x);
         self.values[offset] = value;
     }
@@ -76,8 +76,7 @@ pub fn run_span_cpu_reference(
         .unwrap_or_else(|| Path::new("."))
         .join(weights_file);
     let weights = super::blob::read_weights(&weights_path)?;
-    let requested_long_edge = long_edge.unwrap_or(DEFAULT_LONG_EDGE);
-    let effective_long_edge = requested_long_edge.clamp(1, MAX_LONG_EDGE);
+    let (requested_long_edge, effective_long_edge) = span_reference_long_edge(long_edge);
     let input = load_input_image(input_path, effective_long_edge)?;
 
     let started = Instant::now();
@@ -123,7 +122,15 @@ pub fn run_span_cpu_reference(
     Ok(())
 }
 
-fn load_input_image(path: &Path, long_edge: u32) -> Result<FeatureMap, String> {
+pub(crate) fn span_reference_long_edge(long_edge: Option<u32>) -> (u32, u32) {
+    let requested_long_edge = long_edge.unwrap_or(DEFAULT_LONG_EDGE);
+    (
+        requested_long_edge,
+        requested_long_edge.clamp(1, MAX_LONG_EDGE),
+    )
+}
+
+pub(crate) fn load_input_image(path: &Path, long_edge: u32) -> Result<FeatureMap, String> {
     let mut image = image::ImageReader::open(path)
         .map_err(|error| error.to_string())?
         .decode()
@@ -157,7 +164,7 @@ fn load_input_image(path: &Path, long_edge: u32) -> Result<FeatureMap, String> {
     Ok(input)
 }
 
-fn span_forward(
+pub(crate) fn span_forward(
     manifest: &SrLabManifest,
     weights: &SrLabWeights,
     input: &FeatureMap,
@@ -379,7 +386,7 @@ fn ensure_same_shape(left: &FeatureMap, right: &FeatureMap, label: &str) -> Resu
     Ok(())
 }
 
-fn write_output_image(path: &Path, output: &FeatureMap) -> Result<(), String> {
+pub(crate) fn write_output_image(path: &Path, output: &FeatureMap) -> Result<(), String> {
     let rgba = RgbaImage::from_raw(
         output.width as u32,
         output.height as u32,

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 pub mod blob;
 pub mod cpu;
+pub mod gpu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -276,6 +277,10 @@ pub fn default_sr_lab_report_path() -> PathBuf {
 
 pub fn default_span_cpu_reference_report_path() -> PathBuf {
     PathBuf::from("perf-fixtures").join("sr-lab-span-cpu-reference.json")
+}
+
+pub fn default_span_gpu_reference_report_path() -> PathBuf {
+    PathBuf::from("perf-fixtures").join("sr-lab-span-gpu-reference.json")
 }
 
 #[cfg(test)]
