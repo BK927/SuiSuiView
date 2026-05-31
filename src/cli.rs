@@ -28,6 +28,7 @@ Usage:
   suisuiview-cli --decoder-bench <path> [--decoder-iterations <count>] [--decoder-max-pages <count>] [--decoder-report <report.json>] [--decoder-report-default]
   suisuiview-cli --original-region-bench <path> --region <x,y,width,height> [--page-index <index>] [--region-iterations <count>] [--region-report <report.json>] [--region-report-default]
   suisuiview-cli --sr-lab-inspect <manifest.json> [--sr-lab-report <report.json>] [--sr-lab-report-default]
+  suisuiview-cli --sr-lab-span-session-bench <manifest.json> <image> [--sr-lab-long-edge <px>] [--sr-lab-warmups <count>] [--sr-lab-iterations <count>] [--sr-lab-report <report.json>] [--sr-lab-report-default]
 
 Options:
   -h, --help    Show this help.
@@ -114,6 +115,14 @@ pub enum CliCommand {
         report_path: Option<PathBuf>,
         compare_cpu: bool,
     },
+    SrLabSpanSessionBench {
+        manifest_path: PathBuf,
+        input_path: PathBuf,
+        long_edge: Option<u32>,
+        warmups: usize,
+        iterations: usize,
+        report_path: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,6 +206,9 @@ pub fn parse_args(args: Vec<OsString>) -> Result<CliAction, CliError> {
     if first == "--sr-lab-span-gpu-reference" {
         return sr_lab_args::parse_span_gpu_reference(args).map(CliAction::Command);
     }
+    if first == "--sr-lab-span-session-bench" {
+        return sr_lab_args::parse_span_session_bench(args).map(CliAction::Command);
+    }
 
     Err(CliError::new(format!(
         "unknown {CLI_NAME} command: {}",
@@ -224,6 +236,7 @@ fn is_cli_command_arg(arg: &OsString) -> bool {
         || arg == "--sr-lab-inspect"
         || arg == "--sr-lab-span-cpu-reference"
         || arg == "--sr-lab-span-gpu-reference"
+        || arg == "--sr-lab-span-session-bench"
 }
 
 impl CliCommand {
@@ -366,6 +379,22 @@ impl CliCommand {
                 compare_cpu,
             )
             .map_err(|error| format!("SR Lab SPAN GPU reference failed: {error}")),
+            Self::SrLabSpanSessionBench {
+                manifest_path,
+                input_path,
+                long_edge,
+                warmups,
+                iterations,
+                report_path,
+            } => crate::core::sr_lab::gpu::run_span_gpu_session_bench(
+                &manifest_path,
+                &input_path,
+                long_edge,
+                warmups,
+                iterations,
+                report_path.as_deref(),
+            )
+            .map_err(|error| format!("SR Lab SPAN GPU session benchmark failed: {error}")),
         }
     }
 }

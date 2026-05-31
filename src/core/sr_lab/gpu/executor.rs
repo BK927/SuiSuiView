@@ -1,12 +1,14 @@
-use crate::core::sr_lab::blob::SrLabWeights;
+use super::buffers::{
+    buffer_from_values, empty_buffer, storage_binding, storage_read_entry,
+    storage_read_write_entry, GpuBuffer, SpanGpuModel,
+};
+use super::validation::{validate_conv_shape, validate_span_manifest, validate_transient_size};
 use crate::core::sr_lab::cpu::FeatureMap;
-use crate::core::sr_lab::{SrLabFamily, SrLabManifest};
+use crate::core::sr_lab::{blob::SrLabWeights, SrLabManifest};
 use std::borrow::Cow;
 use std::sync::mpsc;
 use std::time::Instant;
 use wgpu::util::DeviceExt;
-
-const MAX_TRANSIENT_BYTES: u64 = 768 * 1024 * 1024;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -38,26 +40,38 @@ pub(super) struct SpanGpuExecutor {
     dummy: GpuBuffer,
 }
 
-pub(super) struct SpanGpuModel {
-    tensors: Vec<GpuTensor>,
-}
-
-struct GpuTensor {
-    name: String,
-    shape: Vec<u32>,
-    buffer: wgpu::Buffer,
-}
-
-struct GpuBuffer {
-    buffer: wgpu::Buffer,
-    channels: usize,
-    height: usize,
-    width: usize,
-}
-
 pub(super) struct RunStats {
     pub(super) output: FeatureMap,
     pub(super) elapsed_ms: f64,
+}
+
+pub(super) struct SessionRunStats {
+    pub(super) elapsed_ms: f64,
+}
+
+pub(super) struct SpanGpuSession<'a> {
+    executor: &'a SpanGpuExecutor,
+    manifest: &'a SrLabManifest,
+    model: &'a SpanGpuModel,
+    workspace: SpanGpuWorkspace,
+}
+
+struct SpanGpuWorkspace {
+    input: GpuBuffer,
+    shifted: GpuBuffer,
+    out_feature: GpuBuffer,
+    current_a: GpuBuffer,
+    current_b: GpuBuffer,
+    out1: GpuBuffer,
+    out2: GpuBuffer,
+    out3: GpuBuffer,
+    out_b1: GpuBuffer,
+    out_b5_2: GpuBuffer,
+    out_b6: GpuBuffer,
+    joined: GpuBuffer,
+    cat: GpuBuffer,
+    up: GpuBuffer,
+    output: GpuBuffer,
 }
 
 impl SpanGpuExecutor {
@@ -149,22 +163,7 @@ impl SpanGpuExecutor {
     }
 
     pub(super) fn upload_model(&self, weights: &SrLabWeights) -> SpanGpuModel {
-        let tensors = weights
-            .tensors
-            .iter()
-            .map(|tensor| GpuTensor {
-                name: tensor.name.clone(),
-                shape: tensor.shape.clone(),
-                buffer: self
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some(&format!("suisuiview-sr-lab-span-{}", tensor.name)),
-                        contents: bytemuck::cast_slice(&tensor.values),
-                        usage: wgpu::BufferUsages::STORAGE,
-                    }),
-            })
-            .collect();
-        SpanGpuModel { tensors }
+        SpanGpuModel::from_weights(&self.device, weights)
     }
 
     pub(super) fn run(
@@ -173,6 +172,37 @@ impl SpanGpuExecutor {
         model: &SpanGpuModel,
         input: &FeatureMap,
     ) -> Result<RunStats, String> {
+        self.with_validation_scope(|| {
+            let workspace = self.create_workspace(manifest, input, true)?;
+            self.write_input(&workspace, input);
+            self.run_workspace_with_readback(manifest, model, &workspace)
+        })
+    }
+
+    pub(super) fn create_session<'a>(
+        &'a self,
+        manifest: &'a SrLabManifest,
+        model: &'a SpanGpuModel,
+        input: &FeatureMap,
+    ) -> Result<SpanGpuSession<'a>, String> {
+        self.with_validation_scope(|| {
+            let workspace = self.create_workspace(manifest, input, false)?;
+            self.write_input(&workspace, input);
+            Ok(SpanGpuSession {
+                executor: self,
+                manifest,
+                model,
+                workspace,
+            })
+        })
+    }
+
+    fn create_workspace(
+        &self,
+        manifest: &SrLabManifest,
+        input: &FeatureMap,
+        include_readback_in_guard: bool,
+    ) -> Result<SpanGpuWorkspace, String> {
         validate_span_manifest(manifest, input)?;
         let span = manifest
             .span
@@ -185,16 +215,9 @@ impl SpanGpuExecutor {
             feature_channels,
             output_channels,
             manifest.scale as usize,
+            include_readback_in_guard,
         )?;
 
-        let input_buffer = buffer_from_values(
-            &self.device,
-            "suisuiview-sr-lab-span-input",
-            input.channels,
-            input.height,
-            input.width,
-            &input.values,
-        );
         let feature_buffer = |label| {
             empty_buffer(
                 &self.device,
@@ -204,51 +227,70 @@ impl SpanGpuExecutor {
                 input.width,
             )
         };
-        let shifted = empty_buffer(
-            &self.device,
-            "suisuiview-sr-lab-span-shifted",
-            input.channels,
-            input.height,
-            input.width,
-        );
-        let out_feature = feature_buffer("suisuiview-sr-lab-span-out-feature");
-        let current_a = feature_buffer("suisuiview-sr-lab-span-current-a");
-        let current_b = feature_buffer("suisuiview-sr-lab-span-current-b");
-        let out1 = feature_buffer("suisuiview-sr-lab-span-out1");
-        let out2 = feature_buffer("suisuiview-sr-lab-span-out2");
-        let out3 = feature_buffer("suisuiview-sr-lab-span-out3");
-        let out_b1 = feature_buffer("suisuiview-sr-lab-span-out-b1");
-        let out_b5_2 = feature_buffer("suisuiview-sr-lab-span-out-b5-2");
-        let out_b6 = feature_buffer("suisuiview-sr-lab-span-out-b6");
-        let joined = empty_buffer(
-            &self.device,
-            "suisuiview-sr-lab-span-joined",
-            feature_channels * 4,
-            input.height,
-            input.width,
-        );
-        let cat = empty_buffer(
-            &self.device,
-            "suisuiview-sr-lab-span-cat",
-            feature_channels,
-            input.height,
-            input.width,
-        );
-        let up = empty_buffer(
-            &self.device,
-            "suisuiview-sr-lab-span-up",
-            output_channels * manifest.scale as usize * manifest.scale as usize,
-            input.height,
-            input.width,
-        );
-        let output = empty_buffer(
-            &self.device,
-            "suisuiview-sr-lab-span-output",
-            output_channels,
-            input.height * manifest.scale as usize,
-            input.width * manifest.scale as usize,
-        );
 
+        Ok(SpanGpuWorkspace {
+            input: empty_buffer(
+                &self.device,
+                "suisuiview-sr-lab-span-input",
+                input.channels,
+                input.height,
+                input.width,
+            ),
+            shifted: empty_buffer(
+                &self.device,
+                "suisuiview-sr-lab-span-shifted",
+                input.channels,
+                input.height,
+                input.width,
+            ),
+            out_feature: feature_buffer("suisuiview-sr-lab-span-out-feature"),
+            current_a: feature_buffer("suisuiview-sr-lab-span-current-a"),
+            current_b: feature_buffer("suisuiview-sr-lab-span-current-b"),
+            out1: feature_buffer("suisuiview-sr-lab-span-out1"),
+            out2: feature_buffer("suisuiview-sr-lab-span-out2"),
+            out3: feature_buffer("suisuiview-sr-lab-span-out3"),
+            out_b1: feature_buffer("suisuiview-sr-lab-span-out-b1"),
+            out_b5_2: feature_buffer("suisuiview-sr-lab-span-out-b5-2"),
+            out_b6: feature_buffer("suisuiview-sr-lab-span-out-b6"),
+            joined: empty_buffer(
+                &self.device,
+                "suisuiview-sr-lab-span-joined",
+                feature_channels * 4,
+                input.height,
+                input.width,
+            ),
+            cat: feature_buffer("suisuiview-sr-lab-span-cat"),
+            up: empty_buffer(
+                &self.device,
+                "suisuiview-sr-lab-span-up",
+                output_channels * manifest.scale as usize * manifest.scale as usize,
+                input.height,
+                input.width,
+            ),
+            output: empty_buffer(
+                &self.device,
+                "suisuiview-sr-lab-span-output",
+                output_channels,
+                input.height * manifest.scale as usize,
+                input.width * manifest.scale as usize,
+            ),
+        })
+    }
+
+    fn write_input(&self, workspace: &SpanGpuWorkspace, input: &FeatureMap) {
+        self.queue.write_buffer(
+            &workspace.input.buffer,
+            0,
+            bytemuck::cast_slice(&input.values),
+        );
+    }
+
+    fn run_workspace_with_readback(
+        &self,
+        manifest: &SrLabManifest,
+        model: &SpanGpuModel,
+        workspace: &SpanGpuWorkspace,
+    ) -> Result<RunStats, String> {
         let started = Instant::now();
         let mut encoder = self
             .device
@@ -256,102 +298,8 @@ impl SpanGpuExecutor {
                 label: Some("suisuiview-sr-lab-span-encoder"),
             });
 
-        self.run_mean_shift(
-            &mut encoder,
-            &input_buffer,
-            &shifted,
-            span.rgb_mean,
-            span.img_range,
-        );
-        self.run_conv(
-            &mut encoder,
-            model,
-            &shifted,
-            &out_feature,
-            "conv_1",
-            3,
-            1,
-            false,
-        )?;
-        encoder.copy_buffer_to_buffer(
-            &out_feature.buffer,
-            0,
-            &current_a.buffer,
-            0,
-            current_a.byte_len(),
-        );
-
-        let mut current_is_a = true;
-        for block in 1..=span.block_count {
-            let current = if current_is_a { &current_a } else { &current_b };
-            let next = if current_is_a { &current_b } else { &current_a };
-            self.run_conv(
-                &mut encoder,
-                model,
-                current,
-                &out1,
-                &format!("block_{block}.c1_r"),
-                3,
-                1,
-                false,
-            )?;
-            self.run_conv(
-                &mut encoder,
-                model,
-                &out1,
-                &out2,
-                &format!("block_{block}.c2_r"),
-                3,
-                1,
-                true,
-            )?;
-            self.run_conv(
-                &mut encoder,
-                model,
-                &out2,
-                &out3,
-                &format!("block_{block}.c3_r"),
-                3,
-                1,
-                true,
-            )?;
-            self.run_gate(&mut encoder, &out3, current, next);
-            if block == 1 {
-                encoder.copy_buffer_to_buffer(
-                    &next.buffer,
-                    0,
-                    &out_b1.buffer,
-                    0,
-                    out_b1.byte_len(),
-                );
-            }
-            if block == span.block_count {
-                encoder.copy_buffer_to_buffer(
-                    &out1.buffer,
-                    0,
-                    &out_b5_2.buffer,
-                    0,
-                    out_b5_2.byte_len(),
-                );
-            }
-            current_is_a = !current_is_a;
-        }
-
-        let current = if current_is_a { &current_a } else { &current_b };
-        self.run_conv(&mut encoder, model, current, &out_b6, "conv_2", 3, 1, false)?;
-        self.run_concat4(
-            &mut encoder,
-            &out_feature,
-            &out_b6,
-            &out_b1,
-            &out_b5_2,
-            &joined,
-            feature_channels,
-        );
-        self.run_conv(&mut encoder, model, &joined, &cat, "conv_cat", 1, 0, false)?;
-        self.run_conv(&mut encoder, model, &cat, &up, "upsampler.0", 3, 1, false)?;
-        self.run_pixel_shuffle(&mut encoder, &up, &output, manifest.scale);
-
+        self.encode_workspace(&mut encoder, manifest, model, workspace)?;
+        let output = &workspace.output;
         let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("suisuiview-sr-lab-span-readback"),
             size: output.byte_len(),
@@ -388,6 +336,193 @@ impl SpanGpuExecutor {
             },
             elapsed_ms,
         })
+    }
+
+    fn run_workspace_no_readback(
+        &self,
+        manifest: &SrLabManifest,
+        model: &SpanGpuModel,
+        workspace: &SpanGpuWorkspace,
+    ) -> Result<SessionRunStats, String> {
+        let started = Instant::now();
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("suisuiview-sr-lab-span-session-encoder"),
+            });
+
+        self.encode_workspace(&mut encoder, manifest, model, workspace)?;
+        self.queue.submit(Some(encoder.finish()));
+        self.device
+            .poll(wgpu::PollType::Wait)
+            .map_err(|error| format!("wgpu poll failed: {error}"))?;
+
+        Ok(SessionRunStats {
+            elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+        })
+    }
+
+    fn encode_workspace(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        manifest: &SrLabManifest,
+        model: &SpanGpuModel,
+        workspace: &SpanGpuWorkspace,
+    ) -> Result<(), String> {
+        let span = manifest
+            .span
+            .as_ref()
+            .ok_or_else(|| "SPAN GPU reference requires span metadata".to_owned())?;
+        let feature_channels = span.feature_channels as usize;
+
+        self.run_mean_shift(
+            encoder,
+            &workspace.input,
+            &workspace.shifted,
+            span.rgb_mean,
+            span.img_range,
+        );
+        self.run_conv(
+            encoder,
+            model,
+            &workspace.shifted,
+            &workspace.out_feature,
+            "conv_1",
+            3,
+            1,
+            false,
+        )?;
+        encoder.copy_buffer_to_buffer(
+            &workspace.out_feature.buffer,
+            0,
+            &workspace.current_a.buffer,
+            0,
+            workspace.current_a.byte_len(),
+        );
+
+        let mut current_is_a = true;
+        for block in 1..=span.block_count {
+            let current = if current_is_a {
+                &workspace.current_a
+            } else {
+                &workspace.current_b
+            };
+            let next = if current_is_a {
+                &workspace.current_b
+            } else {
+                &workspace.current_a
+            };
+            self.run_conv(
+                encoder,
+                model,
+                current,
+                &workspace.out1,
+                &format!("block_{block}.c1_r"),
+                3,
+                1,
+                false,
+            )?;
+            self.run_conv(
+                encoder,
+                model,
+                &workspace.out1,
+                &workspace.out2,
+                &format!("block_{block}.c2_r"),
+                3,
+                1,
+                true,
+            )?;
+            self.run_conv(
+                encoder,
+                model,
+                &workspace.out2,
+                &workspace.out3,
+                &format!("block_{block}.c3_r"),
+                3,
+                1,
+                true,
+            )?;
+            self.run_gate(encoder, &workspace.out3, current, next);
+            if block == 1 {
+                encoder.copy_buffer_to_buffer(
+                    &next.buffer,
+                    0,
+                    &workspace.out_b1.buffer,
+                    0,
+                    workspace.out_b1.byte_len(),
+                );
+            }
+            if block == span.block_count {
+                encoder.copy_buffer_to_buffer(
+                    &workspace.out1.buffer,
+                    0,
+                    &workspace.out_b5_2.buffer,
+                    0,
+                    workspace.out_b5_2.byte_len(),
+                );
+            }
+            current_is_a = !current_is_a;
+        }
+
+        let current = if current_is_a {
+            &workspace.current_a
+        } else {
+            &workspace.current_b
+        };
+        self.run_conv(
+            encoder,
+            model,
+            current,
+            &workspace.out_b6,
+            "conv_2",
+            3,
+            1,
+            false,
+        )?;
+        self.run_concat4(
+            encoder,
+            &workspace.out_feature,
+            &workspace.out_b6,
+            &workspace.out_b1,
+            &workspace.out_b5_2,
+            &workspace.joined,
+            feature_channels,
+        );
+        self.run_conv(
+            encoder,
+            model,
+            &workspace.joined,
+            &workspace.cat,
+            "conv_cat",
+            1,
+            0,
+            false,
+        )?;
+        self.run_conv(
+            encoder,
+            model,
+            &workspace.cat,
+            &workspace.up,
+            "upsampler.0",
+            3,
+            1,
+            false,
+        )?;
+        self.run_pixel_shuffle(encoder, &workspace.up, &workspace.output, manifest.scale);
+
+        Ok(())
+    }
+
+    fn with_validation_scope<T>(
+        &self,
+        action: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let result = action();
+        if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
+            return Err(format!("SPAN GPU executor validation failed: {error}"));
+        }
+        result
     }
 
     fn run_mean_shift(
@@ -618,126 +753,21 @@ impl SpanGpuExecutor {
     }
 }
 
-impl SpanGpuModel {
-    fn tensor(&self, name: &str) -> Result<&GpuTensor, String> {
-        self.tensors
-            .iter()
-            .find(|tensor| tensor.name == name)
-            .ok_or_else(|| format!("missing SR Lab GPU tensor: {name}"))
+impl SpanGpuSession<'_> {
+    pub(super) fn run(&self) -> Result<SessionRunStats, String> {
+        self.executor.with_validation_scope(|| {
+            self.executor
+                .run_workspace_no_readback(self.manifest, self.model, &self.workspace)
+        })
     }
-}
 
-impl GpuBuffer {
-    fn byte_len(&self) -> u64 {
-        (self.channels * self.height * self.width * std::mem::size_of::<f32>()) as u64
+    pub(super) fn output_width(&self) -> usize {
+        self.workspace.output.width
     }
-}
 
-fn validate_span_manifest(manifest: &SrLabManifest, input: &FeatureMap) -> Result<(), String> {
-    if !matches!(manifest.family, SrLabFamily::Span | SrLabFamily::SpanS) {
-        return Err("SPAN GPU reference requires a SPAN-family manifest".to_owned());
+    pub(super) fn output_height(&self) -> usize {
+        self.workspace.output.height
     }
-    if manifest.scale != 2 {
-        return Err(format!(
-            "SPAN GPU reference currently supports x2 pixel shuffle only, got x{}",
-            manifest.scale
-        ));
-    }
-    if manifest.input_channels as usize != input.channels {
-        return Err(format!(
-            "input channel mismatch: manifest expects {}, image has {}",
-            manifest.input_channels, input.channels
-        ));
-    }
-    if manifest.output_channels != 3 {
-        return Err("SPAN GPU reference currently supports RGB output only".to_owned());
-    }
-    let span = manifest
-        .span
-        .as_ref()
-        .ok_or_else(|| "SPAN GPU reference requires span metadata".to_owned())?;
-    if span.block_count == 0 || span.feature_channels == 0 {
-        return Err("SPAN GPU reference requires positive span metadata".to_owned());
-    }
-    Ok(())
-}
-
-fn validate_transient_size(
-    input: &FeatureMap,
-    feature_channels: usize,
-    output_channels: usize,
-    scale: usize,
-) -> Result<(), String> {
-    let pixel_count = (input.width as u64)
-        .checked_mul(input.height as u64)
-        .ok_or_else(|| "SPAN GPU transient size overflowed".to_owned())?;
-    let input_values = pixel_count
-        .checked_mul(input.channels as u64)
-        .ok_or_else(|| "SPAN GPU input size overflowed".to_owned())?;
-    let feature_values = pixel_count
-        .checked_mul(feature_channels as u64)
-        .ok_or_else(|| "SPAN GPU feature size overflowed".to_owned())?;
-    let joined_values = feature_values
-        .checked_mul(4)
-        .ok_or_else(|| "SPAN GPU joined size overflowed".to_owned())?;
-    let up_values = pixel_count
-        .checked_mul(output_channels as u64)
-        .and_then(|values| values.checked_mul((scale * scale) as u64))
-        .ok_or_else(|| "SPAN GPU upsample size overflowed".to_owned())?;
-    let output_values = pixel_count
-        .checked_mul(output_channels as u64)
-        .and_then(|values| values.checked_mul((scale * scale) as u64))
-        .ok_or_else(|| "SPAN GPU output size overflowed".to_owned())?;
-    let readback_values = output_values;
-    let transient_values = input_values
-        .checked_mul(2)
-        .and_then(|values| values.checked_add(feature_values.checked_mul(10)?))
-        .and_then(|values| values.checked_add(joined_values))
-        .and_then(|values| values.checked_add(up_values))
-        .and_then(|values| values.checked_add(output_values))
-        .and_then(|values| values.checked_add(readback_values))
-        .ok_or_else(|| "SPAN GPU transient size overflowed".to_owned())?;
-    let transient_bytes = transient_values
-        .checked_mul(std::mem::size_of::<f32>() as u64)
-        .ok_or_else(|| "SPAN GPU transient byte size overflowed".to_owned())?;
-    if transient_bytes > MAX_TRANSIENT_BYTES {
-        return Err(format!(
-            "SPAN GPU reference would allocate about {} MiB of transient buffers, above the {} MiB safety limit",
-            bytes_to_mib(transient_bytes),
-            bytes_to_mib(MAX_TRANSIENT_BYTES)
-        ));
-    }
-    Ok(())
-}
-
-fn validate_conv_shape(
-    input: &GpuBuffer,
-    output: &GpuBuffer,
-    weight: &GpuTensor,
-    bias: &GpuTensor,
-    kernel: u32,
-    name: &str,
-) -> Result<(), String> {
-    let expected_weight = vec![
-        output.channels as u32,
-        input.channels as u32,
-        kernel,
-        kernel,
-    ];
-    if weight.shape != expected_weight {
-        return Err(format!(
-            "{name}.weight shape {:?} does not match expected {:?}",
-            weight.shape, expected_weight
-        ));
-    }
-    let expected_bias = vec![output.channels as u32];
-    if bias.shape != expected_bias {
-        return Err(format!(
-            "{name}.bias shape {:?} does not match expected {:?}",
-            bias.shape, expected_bias
-        ));
-    }
-    Ok(())
 }
 
 fn create_pipeline(
@@ -754,79 +784,4 @@ fn create_pipeline(
         compilation_options: Default::default(),
         cache: None,
     })
-}
-
-fn buffer_from_values(
-    device: &wgpu::Device,
-    label: &str,
-    channels: usize,
-    height: usize,
-    width: usize,
-    values: &[f32],
-) -> GpuBuffer {
-    debug_assert_eq!(values.len(), channels * height * width);
-    GpuBuffer {
-        buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(label),
-            contents: bytemuck::cast_slice(values),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        }),
-        channels,
-        height,
-        width,
-    }
-}
-
-fn empty_buffer(
-    device: &wgpu::Device,
-    label: &str,
-    channels: usize,
-    height: usize,
-    width: usize,
-) -> GpuBuffer {
-    GpuBuffer {
-        buffer: device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: (channels * height * width * std::mem::size_of::<f32>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }),
-        channels,
-        height,
-        width,
-    }
-}
-
-fn storage_read_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    storage_entry(binding, true)
-}
-
-fn storage_read_write_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    storage_entry(binding, false)
-}
-
-fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    }
-}
-
-fn storage_binding(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
-    wgpu::BindGroupEntry {
-        binding,
-        resource: buffer.as_entire_binding(),
-    }
-}
-
-fn bytes_to_mib(bytes: u64) -> u64 {
-    bytes.div_ceil(1024 * 1024)
 }
