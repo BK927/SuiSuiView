@@ -26,6 +26,11 @@ pub trait BookSource: Send + Sync {
     fn page_byte_size(&self, _index: usize) -> Option<u64> {
         None
     }
+    fn read_page_prefix(&self, index: usize, max_bytes: usize) -> Result<Vec<u8>, SourceError> {
+        let mut bytes = self.read_page(index)?;
+        bytes.truncate(max_bytes);
+        Ok(bytes)
+    }
     fn page_display_path(&self, index: usize) -> Option<String> {
         if let Some(path) = self.page_file_path(index) {
             return Some(path.display().to_string());
@@ -263,6 +268,19 @@ impl BookSource for FolderSource {
         }
         fs::read(&page.path).map_err(SourceError::Io)
     }
+
+    fn read_page_prefix(&self, index: usize, max_bytes: usize) -> Result<Vec<u8>, SourceError> {
+        let page = self.pages.get(index).ok_or(SourceError::InvalidPage {
+            index,
+            page_count: self.pages.len(),
+        })?;
+        let mut file = File::open(&page.path)?;
+        let mut bytes = Vec::with_capacity(max_bytes.min(page.byte_size as usize));
+        file.by_ref()
+            .take(max_bytes as u64)
+            .read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
 }
 
 pub struct ZipCbzSource {
@@ -386,6 +404,24 @@ impl BookSource for ZipCbzSource {
                 MAX_SOURCE_PAGE_BYTES as f32 / (1024.0 * 1024.0)
             )));
         }
+        Ok(bytes)
+    }
+
+    fn read_page_prefix(&self, index: usize, max_bytes: usize) -> Result<Vec<u8>, SourceError> {
+        let page = self.pages.get(index).ok_or(SourceError::InvalidPage {
+            index,
+            page_count: self.pages.len(),
+        })?;
+
+        let mut archive = self.archive.lock().map_err(|_| {
+            SourceError::Unsupported("ZIP archive reader is unavailable".to_owned())
+        })?;
+        let mut zip_file = archive.by_index(page.zip_index)?;
+        let mut bytes = Vec::with_capacity(max_bytes.min(page.uncompressed_size as usize));
+        zip_file
+            .by_ref()
+            .take(max_bytes as u64)
+            .read_to_end(&mut bytes)?;
         Ok(bytes)
     }
 }

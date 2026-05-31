@@ -1,7 +1,9 @@
-use super::{perf, PageCacheKey, PageMetrics, PendingBookmarkJump, SuiSuiViewApp};
+use super::{
+    adjacent_sibling_book_paths_ordered, image_header, perf, PageCacheKey, PageMetrics,
+    PendingBookmarkJump, SuiSuiViewApp,
+};
 use crate::core::effects::ViewEffects;
 use crate::core::formats::unsupported_message_for_extension;
-use crate::core::natural::cmp_natural;
 use crate::core::source::{
     classify_path, open_source_from_path, BookSource, SharedSource, SourceKind,
 };
@@ -21,6 +23,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const ADJACENT_SEED_LARGE_SOURCE_BYTES: u64 = 4 * 1024 * 1024;
+const ADJACENT_SEED_HEADER_BYTES: usize = 1024 * 1024;
+const ADJACENT_SEED_LARGE_BOOK_BYTES: u64 = 128 * 1024 * 1024;
 const ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE: u32 = 8192;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +48,7 @@ pub(in crate::app) struct LoaderEvent {
     pub(in crate::app) generation: u64,
     pub(in crate::app) path: PathBuf,
     pub(in crate::app) origin: OpenOrigin,
+    pub(in crate::app) initial_direction: NavigationDirection,
     pub(in crate::app) result: Result<(SharedSource, Option<usize>), String>,
 }
 
@@ -71,9 +76,17 @@ pub(in crate::app) struct AdjacentSeedCache {
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn open_path(&mut self, path: PathBuf) {
+        self.open_path_with_initial_direction(path, NavigationDirection::Forward);
+    }
+
+    pub(in crate::app) fn open_path_with_initial_direction(
+        &mut self,
+        path: PathBuf,
+        initial_direction: NavigationDirection,
+    ) {
         self.pending_bookmark_jump = None;
         self.clear_adjacent_seed_cache();
-        self.open_path_inner(path);
+        self.open_path_inner(path, initial_direction);
     }
 
     pub(in crate::app) fn open_path_for_bookmark(
@@ -88,10 +101,14 @@ impl SuiSuiViewApp {
             page,
         });
         self.clear_adjacent_seed_cache();
-        self.open_path_inner(path);
+        self.open_path_inner(path, NavigationDirection::Forward);
     }
 
-    pub(in crate::app) fn open_path_inner(&mut self, path: PathBuf) {
+    pub(in crate::app) fn open_path_inner(
+        &mut self,
+        path: PathBuf,
+        initial_direction: NavigationDirection,
+    ) {
         let source_kind = classify_path(&path);
         match source_kind {
             SourceKind::Folder | SourceKind::ZipCbz | SourceKind::SingleImage => {
@@ -124,6 +141,7 @@ impl SuiSuiViewApp {
                             generation,
                             path: load_path,
                             origin,
+                            initial_direction,
                             result,
                         });
                         ctx.request_repaint();
@@ -154,9 +172,14 @@ impl SuiSuiViewApp {
             }
 
             match event.result {
-                Ok((source, forced_page)) => {
-                    self.install_source(source, forced_page, event.origin, event.path, None)
-                }
+                Ok((source, forced_page)) => self.install_source(
+                    source,
+                    forced_page,
+                    event.origin,
+                    event.path,
+                    None,
+                    event.initial_direction,
+                ),
                 Err(message) => {
                     if self
                         .pending_bookmark_jump
@@ -185,6 +208,7 @@ impl SuiSuiViewApp {
         origin: OpenOrigin,
         opened_path: PathBuf,
         seeded_page: Option<SeededPreparedPage>,
+        initial_direction: NavigationDirection,
     ) {
         let book_id = source.book_id().to_owned();
         let page_count = source.page_count();
@@ -257,7 +281,7 @@ impl SuiSuiViewApp {
         self.edge_prompt = None;
         self.transition = None;
         self.clear_pending_page_turns();
-        self.last_nav_direction = NavigationDirection::Forward;
+        self.last_nav_direction = initial_direction;
         self.target_long_edge = seeded_page
             .as_ref()
             .map_or(PREVIEW_TARGET_LONG_EDGE, |seed| seed.key.target_long_edge);
@@ -388,12 +412,15 @@ impl SuiSuiViewApp {
         let resume_by_file_identity = self.settings.resume_by_file_identity;
         let large_source_guard = perf::adjacent_seed_memory_guard_enabled();
         let tx = self.adjacent_seed_tx.clone();
+        let seed_order = self.last_nav_direction;
         let ctx = self.egui_ctx.clone();
 
         let _ = thread::Builder::new()
             .name("suisuiview-adjacent-seed".to_owned())
             .spawn(move || {
-                for (path, direction, label) in adjacent_sibling_book_paths(&current) {
+                for (path, direction, label) in
+                    adjacent_sibling_book_paths_ordered(&current, seed_order)
+                {
                     if !adjacent_seed_generation_matches(&generation_token, generation) {
                         break;
                     }
@@ -472,89 +499,6 @@ impl SuiSuiViewApp {
             drop_adjacent_seed_caches_off_thread(vec![cache]);
             None
         }
-    }
-}
-
-pub(in crate::app) fn sibling_book_path(current: &Path, direction: isize) -> Option<PathBuf> {
-    let entries = sibling_book_entries(current)?;
-    if entries.len() <= 1 {
-        return None;
-    }
-    let current_index = sibling_book_current_index(&entries, current);
-    let next_index = if direction >= 0 {
-        (current_index + 1) % entries.len()
-    } else {
-        (current_index + entries.len() - 1) % entries.len()
-    };
-    Some(entries[next_index].clone())
-}
-
-pub(in crate::app) fn adjacent_sibling_book_paths(
-    current: &Path,
-) -> Vec<(PathBuf, isize, &'static str)> {
-    let Some(entries) = sibling_book_entries(current) else {
-        return Vec::new();
-    };
-    if entries.len() <= 1 {
-        return Vec::new();
-    }
-    let current_index = sibling_book_current_index(&entries, current);
-    let mut siblings = Vec::with_capacity(2);
-    for (direction, label) in [(1, "next"), (-1, "previous")] {
-        let index = if direction >= 0 {
-            (current_index + 1) % entries.len()
-        } else {
-            (current_index + entries.len() - 1) % entries.len()
-        };
-        let path = entries[index].clone();
-        if siblings
-            .iter()
-            .any(|(existing, _, _): &(PathBuf, isize, &'static str)| same_path(existing, &path))
-        {
-            continue;
-        }
-        siblings.push((path, direction, label));
-    }
-    siblings
-}
-
-pub(in crate::app) fn sibling_book_entries(current: &Path) -> Option<Vec<PathBuf>> {
-    let parent = current.parent()?;
-    let mut entries = fs::read_dir(parent)
-        .ok()?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| matches!(classify_path(path), SourceKind::Folder | SourceKind::ZipCbz))
-        .collect::<Vec<_>>();
-    entries.sort_by(|left, right| {
-        let left_name = left
-            .file_name()
-            .map(|name| name.to_string_lossy())
-            .unwrap_or_default();
-        let right_name = right
-            .file_name()
-            .map(|name| name.to_string_lossy())
-            .unwrap_or_default();
-        cmp_natural(&left_name, &right_name)
-    });
-    Some(entries)
-}
-
-pub(in crate::app) fn sibling_book_current_index(entries: &[PathBuf], current: &Path) -> usize {
-    entries
-        .iter()
-        .position(|path| same_path(path, current))
-        .unwrap_or_else(|| {
-            entries
-                .iter()
-                .position(|path| path == current)
-                .unwrap_or_default()
-        })
-}
-
-pub(in crate::app) fn same_path(left: &Path, right: &Path) -> bool {
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
     }
 }
 
@@ -660,6 +604,9 @@ pub(in crate::app) fn prepare_adjacent_seed_cache(
     if !adjacent_seed_generation_matches(generation_token, generation) {
         return None;
     }
+    if large_source_guard && should_skip_memory_aware_adjacent_seed_path(&path) {
+        return None;
+    }
     let (source, forced_page) = open_source_from_path(&path).ok()?;
     if !adjacent_seed_generation_matches(generation_token, generation) {
         return None;
@@ -732,17 +679,35 @@ fn should_skip_memory_aware_adjacent_seed(bytes: &[u8]) -> bool {
 }
 
 fn should_skip_memory_aware_adjacent_seed_source(source: &dyn BookSource, index: usize) -> bool {
-    source
-        .page_byte_size(index)
-        .is_some_and(|byte_size| byte_size >= ADJACENT_SEED_LARGE_SOURCE_BYTES)
+    let Some(byte_size) = source.page_byte_size(index) else {
+        return false;
+    };
+    if byte_size < ADJACENT_SEED_LARGE_SOURCE_BYTES {
+        return false;
+    }
+    let Ok(header) = source.read_page_prefix(index, ADJACENT_SEED_HEADER_BYTES) else {
+        return true;
+    };
+    image_header::dimensions_from_header(&header).map_or(true, |(width, height)| {
+        width.max(height) >= ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE
+    })
+}
+
+fn should_skip_memory_aware_adjacent_seed_path(path: &Path) -> bool {
+    path.is_file()
+        && fs::metadata(path)
+            .ok()
+            .is_some_and(|metadata| metadata.len() >= ADJACENT_SEED_LARGE_BOOK_BYTES)
 }
 
 fn source_dimensions_from_bytes(bytes: &[u8]) -> Option<(u32, u32)> {
-    ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .ok()?
-        .into_dimensions()
-        .ok()
+    image_header::dimensions_from_header(bytes).or_else(|| {
+        ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok()
+    })
 }
 
 #[cfg(test)]
@@ -778,17 +743,32 @@ mod tests {
     fn memory_aware_adjacent_seed_skips_large_known_source_bytes() {
         let source = TestSource {
             byte_size: Some(ADJACENT_SEED_LARGE_SOURCE_BYTES),
+            bytes: Vec::new(),
         };
 
         assert!(should_skip_memory_aware_adjacent_seed_source(&source, 0));
     }
 
     #[test]
+    fn memory_aware_adjacent_seed_keeps_large_bytes_with_smaller_dimensions() {
+        let source = TestSource {
+            byte_size: Some(ADJACENT_SEED_LARGE_SOURCE_BYTES),
+            bytes: png_bytes(ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE - 1, 1),
+        };
+
+        assert!(!should_skip_memory_aware_adjacent_seed_source(&source, 0));
+    }
+
+    #[test]
     fn memory_aware_adjacent_seed_keeps_small_or_unknown_source_bytes() {
         let small = TestSource {
             byte_size: Some(ADJACENT_SEED_LARGE_SOURCE_BYTES - 1),
+            bytes: Vec::new(),
         };
-        let unknown = TestSource { byte_size: None };
+        let unknown = TestSource {
+            byte_size: None,
+            bytes: Vec::new(),
+        };
 
         assert!(!should_skip_memory_aware_adjacent_seed_source(&small, 0));
         assert!(!should_skip_memory_aware_adjacent_seed_source(&unknown, 0));
@@ -805,6 +785,7 @@ mod tests {
 
     struct TestSource {
         byte_size: Option<u64>,
+        bytes: Vec<u8>,
     }
 
     impl BookSource for TestSource {
@@ -837,7 +818,15 @@ mod tests {
         }
 
         fn read_page(&self, _index: usize) -> Result<Vec<u8>, SourceError> {
-            Ok(Vec::new())
+            Ok(self.bytes.clone())
+        }
+
+        fn read_page_prefix(
+            &self,
+            _index: usize,
+            max_bytes: usize,
+        ) -> Result<Vec<u8>, SourceError> {
+            Ok(self.bytes[..self.bytes.len().min(max_bytes)].to_vec())
         }
     }
 }

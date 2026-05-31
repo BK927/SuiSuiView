@@ -638,6 +638,7 @@ impl SuiSuiViewApp {
                     cache.origin,
                     cache.path,
                     Some(cache.seeded_page),
+                    navigation_direction_for_sibling(direction),
                 );
                 return;
             }
@@ -647,7 +648,7 @@ impl SuiSuiViewApp {
             self.set_status("No sibling folder, ZIP, or CBZ found.");
             return;
         };
-        self.open_path(next);
+        self.open_path_with_initial_direction(next, navigation_direction_for_sibling(direction));
     }
 
     pub(in crate::app) fn current_book_reference_path(&self) -> Option<PathBuf> {
@@ -667,4 +668,12 @@ fn random_offset(max: usize) -> usize {
         .map(|duration| duration.as_nanos() as usize)
         .unwrap_or(1);
     nanos % max + 1
+}
+
+fn navigation_direction_for_sibling(direction: isize) -> NavigationDirection {
+    if direction < 0 {
+        NavigationDirection::Backward
+    } else {
+        NavigationDirection::Forward
+    }
 }

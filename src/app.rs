@@ -32,6 +32,7 @@ mod commands;
 mod context_menu;
 mod debug_compare;
 mod gpu_paint;
+mod image_header;
 mod image_info;
 mod navigation;
 mod opening;
@@ -41,6 +42,7 @@ mod settings;
 mod settings_bookmarks;
 mod settings_input;
 mod settings_performance;
+mod sibling_books;
 mod texture_prewarm;
 mod ui;
 mod viewer;
@@ -63,11 +65,10 @@ pub(in crate::app) use cache::{
     BYTES_PER_RGBA_PIXEL,
 };
 pub(in crate::app) use navigation::EdgePrompt;
+pub(in crate::app) use opening::{AdjacentSeedCache, AdjacentSeedEvent, LoaderEvent, OpenOrigin};
 #[cfg(test)]
-use opening::adjacent_sibling_book_paths;
-pub(in crate::app) use opening::{
-    sibling_book_path, AdjacentSeedCache, AdjacentSeedEvent, LoaderEvent, OpenOrigin,
-};
+use sibling_books::adjacent_sibling_book_paths;
+pub(in crate::app) use sibling_books::{adjacent_sibling_book_paths_ordered, sibling_book_path};
 #[cfg(test)]
 use viewer::{
     double_spread_indices, ordered_spread_indices, relative_difference,
@@ -1324,14 +1325,14 @@ fn delete_target_for(
 mod tests {
     use super::perf::PageCacheState;
     use super::{
-        adjacent_sibling_book_paths, ai_prefetch_pages_for, apply_effects_to_image,
-        best_page_key_at_or_below_in_cache, best_page_key_in_cache, command_for_shortcut,
-        delete_target_for, double_spread_indices, final_quality_page_key_in_cache,
-        gpu_visual_needs_wgsl, korean_font_candidates, load_first_existing_font,
-        lower_resolution_page_keys, ordered_spread_indices, page_cache_state_from_hit, platform,
-        preferred_page_key_in_cache, preview_prefetch_indices, relative_difference,
-        sanitize_font_name, should_allow_cpu_display_upscale, sibling_book_path,
-        smart_spread_indices_for_metrics, texture_cache_budget_bytes_for,
+        adjacent_sibling_book_paths, adjacent_sibling_book_paths_ordered, ai_prefetch_pages_for,
+        apply_effects_to_image, best_page_key_at_or_below_in_cache, best_page_key_in_cache,
+        command_for_shortcut, delete_target_for, double_spread_indices,
+        final_quality_page_key_in_cache, gpu_visual_needs_wgsl, korean_font_candidates,
+        load_first_existing_font, lower_resolution_page_keys, ordered_spread_indices,
+        page_cache_state_from_hit, platform, preferred_page_key_in_cache, preview_prefetch_indices,
+        relative_difference, sanitize_font_name, should_allow_cpu_display_upscale,
+        sibling_book_path, smart_spread_indices_for_metrics, texture_cache_budget_bytes_for,
         touch_normal_navigation_page_keys, transformed_page_size, transition_paint_params,
         transition_screen_sign, worker_center_page_for_mode, AppCommand, DeleteMode, ImageFilter,
         OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey, ViewEffects, ViewMode,
@@ -2238,6 +2239,23 @@ mod tests {
         assert_eq!(adjacent.len(), 2);
         assert_eq!(adjacent[0], (dir.join("book-2"), 1, "next"));
         assert_eq!(adjacent[1], (dir.join("book-10"), -1, "previous"));
+    }
+
+    #[test]
+    fn adjacent_sibling_books_can_prefer_previous_direction() {
+        let dir = temp_test_dir("adjacent-siblings-previous");
+        fs::create_dir_all(dir.join("book-2")).unwrap();
+        fs::create_dir_all(dir.join("book-10")).unwrap();
+        fs::write(dir.join("book-1.cbz"), b"placeholder").unwrap();
+
+        let adjacent = adjacent_sibling_book_paths_ordered(
+            &dir.join("book-1.cbz"),
+            NavigationDirection::Backward,
+        );
+
+        assert_eq!(adjacent.len(), 2);
+        assert_eq!(adjacent[0], (dir.join("book-10"), -1, "previous"));
+        assert_eq!(adjacent[1], (dir.join("book-2"), 1, "next"));
     }
 
     #[test]
