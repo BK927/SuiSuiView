@@ -3,10 +3,10 @@ use super::span_bridge::{
     SpanBridgeParams,
 };
 use super::span_display::{
-    estimated_dispatch_count, record_span_display_encode, record_span_display_prepare,
-    record_span_display_skip, record_span_display_skip_with_stats, record_span_display_tile_batch,
-    span_display_tile_edge, span_display_tiles_per_frame, span_display_workspace_cache_limit_bytes,
-    SpanDisplaySkipStats,
+    estimated_dispatch_count, record_span_display_cancel, record_span_display_encode,
+    record_span_display_prepare, record_span_display_skip, record_span_display_skip_with_stats,
+    record_span_display_tile_batch, span_display_tile_edge, span_display_tiles_per_frame,
+    span_display_workspace_cache_limit_bytes, SpanDisplaySkipStats,
 };
 use super::RealtimeSrOutput;
 use crate::core::sr_lab::{
@@ -144,7 +144,7 @@ impl SpanRenderer {
 
     pub(super) fn cancel_pending_render(&mut self) {
         if let SpanRendererState::Ready(renderer) = &mut self.state {
-            renderer.pending_render = None;
+            renderer.cancel_pending_render("inactive_upscaler");
         }
     }
 
@@ -226,12 +226,15 @@ impl LoadedSpanRenderer {
         source_view: &wgpu::TextureView,
         source_size: [usize; 2],
     ) -> Option<RealtimeSrOutput> {
-        if !self
-            .pending_render
-            .as_ref()
-            .is_some_and(|job| job.matches_request(request_key, source_size))
-        {
-            self.pending_render = None;
+        if let Some(job) = self.pending_render.as_ref() {
+            if !job.matches_request(request_key, source_size) {
+                let reason = if job.source_size == source_size {
+                    "request_changed"
+                } else {
+                    "source_changed"
+                };
+                self.cancel_pending_render(reason);
+            }
         }
         if self.pending_render.is_none() {
             self.start_render_job(request_key, device, source_size)?;
@@ -484,12 +487,30 @@ impl LoadedSpanRenderer {
         None
     }
 
+    fn cancel_pending_render(&mut self, reason: &'static str) {
+        let Some(job) = self.pending_render.take() else {
+            return;
+        };
+        record_span_display_cancel(
+            reason,
+            job.started_at.elapsed(),
+            job.source_size,
+            job.output_size,
+            job.tile_plans.len(),
+            job.next_tile,
+            span_display_tiles_per_frame(),
+            job.tile_edge,
+            job.workspace_shapes,
+            job.workspace_cache_limit_bytes,
+        );
+    }
+
     fn reset_workspace_cache_if_source_changed(&mut self, source_size: [usize; 2]) {
         if self.workspace_source_size == Some(source_size) {
             return;
         }
         self.workspace_source_size = Some(source_size);
-        self.pending_render = None;
+        self.cancel_pending_render("workspace_source_changed");
         self.workspaces.clear();
         self.workspace_bytes = 0;
     }

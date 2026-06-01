@@ -168,6 +168,42 @@ pub(super) fn record_span_display_tile_batch(
     );
 }
 
+pub(super) fn record_span_display_cancel(
+    reason: &'static str,
+    duration: Duration,
+    source_size: [usize; 2],
+    output_size: [usize; 2],
+    tile_count: usize,
+    next_tile: usize,
+    tiles_per_frame: usize,
+    tile_edge: usize,
+    workspace_shapes: usize,
+    workspace_cache_limit_bytes: u64,
+) {
+    perf_trace::record_duration(
+        "span_display_cancel",
+        duration,
+        &[
+            PerfField::Str("method", "srlab_span_x2"),
+            PerfField::Str("reason", reason),
+            PerfField::Usize("source_width", source_size[0]),
+            PerfField::Usize("source_height", source_size[1]),
+            PerfField::Usize("output_width", output_size[0]),
+            PerfField::Usize("output_height", output_size[1]),
+            PerfField::Usize("tile_count", tile_count),
+            PerfField::Usize("next_tile", next_tile),
+            PerfField::Usize("remaining_tiles", tile_count.saturating_sub(next_tile)),
+            PerfField::Usize("tiles_per_frame", tiles_per_frame),
+            PerfField::Usize("tile_edge", tile_edge),
+            PerfField::Usize("workspace_shapes", workspace_shapes),
+            PerfField::Usize(
+                "workspace_cache_limit_bytes",
+                usize_from_u64_saturating(workspace_cache_limit_bytes),
+            ),
+        ],
+    );
+}
+
 pub(super) fn record_span_display_skip(
     reason: &'static str,
     source_size: [usize; 2],
