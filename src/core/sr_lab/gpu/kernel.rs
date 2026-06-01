@@ -59,6 +59,37 @@ pub(crate) struct SpanGpuWorkspace {
     pub(super) output: GpuBuffer,
 }
 
+pub(crate) struct SpanGpuGraphPlan {
+    steps: Vec<SpanGpuGraphStep>,
+}
+
+enum SpanGpuGraphStep {
+    Dispatch(SpanGpuDispatchStep),
+    Copy(SpanGpuCopyStep),
+}
+
+struct SpanGpuDispatchStep {
+    pipeline: SpanPipeline,
+    bind_group: wgpu::BindGroup,
+    _params_buffer: wgpu::Buffer,
+    workgroups: [u32; 3],
+}
+
+struct SpanGpuCopyStep {
+    source: wgpu::Buffer,
+    destination: wgpu::Buffer,
+    byte_len: u64,
+}
+
+#[derive(Clone, Copy)]
+enum SpanPipeline {
+    MeanShift,
+    Conv2d,
+    Gate,
+    Concat4,
+    PixelShuffle,
+}
+
 impl SpanGpuKernel {
     pub(crate) fn new(device: wgpu::Device) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -224,21 +255,33 @@ impl SpanGpuKernel {
         model: &SpanGpuModel,
         workspace: &SpanGpuWorkspace,
     ) -> Result<(), String> {
+        let graph_plan = self.create_prevalidated_graph_plan(manifest, model, workspace)?;
+        self.encode_graph_plan(encoder, &graph_plan);
+        Ok(())
+    }
+
+    pub(crate) fn create_prevalidated_graph_plan(
+        &self,
+        manifest: &SrLabManifest,
+        model: &SpanGpuModel,
+        workspace: &SpanGpuWorkspace,
+    ) -> Result<SpanGpuGraphPlan, String> {
         let span = manifest
             .span
             .as_ref()
             .ok_or_else(|| "SPAN GPU reference requires span metadata".to_owned())?;
         let feature_channels = span.feature_channels as usize;
+        let mut steps = Vec::new();
 
-        self.run_mean_shift(
-            encoder,
+        self.push_mean_shift(
+            &mut steps,
             &workspace.input,
             &workspace.shifted,
             span.rgb_mean,
             span.img_range,
         );
-        self.run_conv(
-            encoder,
+        self.push_conv(
+            &mut steps,
             model,
             &workspace.shifted,
             &workspace.out_feature,
@@ -247,13 +290,7 @@ impl SpanGpuKernel {
             1,
             false,
         )?;
-        encoder.copy_buffer_to_buffer(
-            &workspace.out_feature.buffer,
-            0,
-            &workspace.current_a.buffer,
-            0,
-            workspace.current_a.byte_len(),
-        );
+        push_copy(&mut steps, &workspace.out_feature, &workspace.current_a);
 
         let mut current_is_a = true;
         for block in 1..=span.block_count {
@@ -267,8 +304,8 @@ impl SpanGpuKernel {
             } else {
                 &workspace.current_a
             };
-            self.run_conv(
-                encoder,
+            self.push_conv(
+                &mut steps,
                 model,
                 current,
                 &workspace.out1,
@@ -277,8 +314,8 @@ impl SpanGpuKernel {
                 1,
                 false,
             )?;
-            self.run_conv(
-                encoder,
+            self.push_conv(
+                &mut steps,
                 model,
                 &workspace.out1,
                 &workspace.out2,
@@ -287,8 +324,8 @@ impl SpanGpuKernel {
                 1,
                 true,
             )?;
-            self.run_conv(
-                encoder,
+            self.push_conv(
+                &mut steps,
                 model,
                 &workspace.out2,
                 &workspace.out3,
@@ -297,24 +334,12 @@ impl SpanGpuKernel {
                 1,
                 true,
             )?;
-            self.run_gate(encoder, &workspace.out3, current, next);
+            self.push_gate(&mut steps, &workspace.out3, current, next);
             if block == 1 {
-                encoder.copy_buffer_to_buffer(
-                    &next.buffer,
-                    0,
-                    &workspace.out_b1.buffer,
-                    0,
-                    workspace.out_b1.byte_len(),
-                );
+                push_copy(&mut steps, next, &workspace.out_b1);
             }
             if block == span.block_count {
-                encoder.copy_buffer_to_buffer(
-                    &workspace.out1.buffer,
-                    0,
-                    &workspace.out_b5_2.buffer,
-                    0,
-                    workspace.out_b5_2.byte_len(),
-                );
+                push_copy(&mut steps, &workspace.out1, &workspace.out_b5_2);
             }
             current_is_a = !current_is_a;
         }
@@ -324,8 +349,8 @@ impl SpanGpuKernel {
         } else {
             &workspace.current_b
         };
-        self.run_conv(
-            encoder,
+        self.push_conv(
+            &mut steps,
             model,
             current,
             &workspace.out_b6,
@@ -334,8 +359,8 @@ impl SpanGpuKernel {
             1,
             false,
         )?;
-        self.run_concat4(
-            encoder,
+        self.push_concat4(
+            &mut steps,
             &workspace.out_feature,
             &workspace.out_b6,
             &workspace.out_b1,
@@ -343,8 +368,8 @@ impl SpanGpuKernel {
             &workspace.joined,
             feature_channels,
         );
-        self.run_conv(
-            encoder,
+        self.push_conv(
+            &mut steps,
             model,
             &workspace.joined,
             &workspace.cat,
@@ -353,8 +378,8 @@ impl SpanGpuKernel {
             0,
             false,
         )?;
-        self.run_conv(
-            encoder,
+        self.push_conv(
+            &mut steps,
             model,
             &workspace.cat,
             &workspace.up,
@@ -363,9 +388,28 @@ impl SpanGpuKernel {
             1,
             false,
         )?;
-        self.run_pixel_shuffle(encoder, &workspace.up, &workspace.output, manifest.scale);
+        self.push_pixel_shuffle(&mut steps, &workspace.up, &workspace.output, manifest.scale);
 
-        Ok(())
+        Ok(SpanGpuGraphPlan { steps })
+    }
+
+    pub(crate) fn encode_graph_plan(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        graph_plan: &SpanGpuGraphPlan,
+    ) {
+        for step in &graph_plan.steps {
+            match step {
+                SpanGpuGraphStep::Dispatch(dispatch) => self.dispatch_prebuilt(encoder, dispatch),
+                SpanGpuGraphStep::Copy(copy) => encoder.copy_buffer_to_buffer(
+                    &copy.source,
+                    0,
+                    &copy.destination,
+                    0,
+                    copy.byte_len,
+                ),
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -389,9 +433,9 @@ impl SpanGpuKernel {
         )
     }
 
-    fn run_mean_shift(
+    fn push_mean_shift(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        steps: &mut Vec<SpanGpuGraphStep>,
         input: &GpuBuffer,
         output: &GpuBuffer,
         rgb_mean: [f32; 3],
@@ -402,9 +446,9 @@ impl SpanGpuKernel {
         let mut params = params_for(input, output);
         params.rgb_mean = mean;
         params.img_range = img_range;
-        self.dispatch(
-            encoder,
-            &self.mean_shift_pipeline,
+        self.push_dispatch(
+            steps,
+            SpanPipeline::MeanShift,
             params,
             [input, &self.dummy, &self.dummy, &self.dummy],
             &self.dummy.buffer,
@@ -414,9 +458,9 @@ impl SpanGpuKernel {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn run_conv(
+    fn push_conv(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        steps: &mut Vec<SpanGpuGraphStep>,
         model: &SpanGpuModel,
         input: &GpuBuffer,
         output: &GpuBuffer,
@@ -431,9 +475,9 @@ impl SpanGpuKernel {
         params.kernel = kernel;
         params.padding = padding;
         params.activation = u32::from(activate_input);
-        self.dispatch(
-            encoder,
-            &self.conv2d_pipeline,
+        self.push_dispatch(
+            steps,
+            SpanPipeline::Conv2d,
             params,
             [input, &self.dummy, &self.dummy, &self.dummy],
             &weight.buffer,
@@ -443,17 +487,17 @@ impl SpanGpuKernel {
         Ok(())
     }
 
-    fn run_gate(
+    fn push_gate(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        steps: &mut Vec<SpanGpuGraphStep>,
         out3: &GpuBuffer,
         current: &GpuBuffer,
         output: &GpuBuffer,
     ) {
         let params = params_for(out3, output);
-        self.dispatch(
-            encoder,
-            &self.gate_pipeline,
+        self.push_dispatch(
+            steps,
+            SpanPipeline::Gate,
             params,
             [out3, current, &self.dummy, &self.dummy],
             &self.dummy.buffer,
@@ -463,9 +507,9 @@ impl SpanGpuKernel {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn run_concat4(
+    fn push_concat4(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        steps: &mut Vec<SpanGpuGraphStep>,
         a: &GpuBuffer,
         b: &GpuBuffer,
         c: &GpuBuffer,
@@ -475,9 +519,9 @@ impl SpanGpuKernel {
     ) {
         let mut params = params_for(a, output);
         params.input_channels = feature_channels as u32;
-        self.dispatch(
-            encoder,
-            &self.concat_pipeline,
+        self.push_dispatch(
+            steps,
+            SpanPipeline::Concat4,
             params,
             [a, b, c, d],
             &self.dummy.buffer,
@@ -486,18 +530,18 @@ impl SpanGpuKernel {
         );
     }
 
-    fn run_pixel_shuffle(
+    fn push_pixel_shuffle(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        steps: &mut Vec<SpanGpuGraphStep>,
         input: &GpuBuffer,
         output: &GpuBuffer,
         scale: u32,
     ) {
         let mut params = params_for(input, output);
         params.scale = scale;
-        self.dispatch(
-            encoder,
-            &self.pixel_shuffle_pipeline,
+        self.push_dispatch(
+            steps,
+            SpanPipeline::PixelShuffle,
             params,
             [input, &self.dummy, &self.dummy, &self.dummy],
             &self.dummy.buffer,
@@ -507,10 +551,10 @@ impl SpanGpuKernel {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn dispatch(
+    fn push_dispatch(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
-        pipeline: &wgpu::ComputePipeline,
+        steps: &mut Vec<SpanGpuGraphStep>,
+        pipeline: SpanPipeline,
         params: SpanParams,
         inputs: [&GpuBuffer; 4],
         weights: &wgpu::Buffer,
@@ -541,18 +585,53 @@ impl SpanGpuKernel {
                 },
             ],
         });
+        steps.push(SpanGpuGraphStep::Dispatch(SpanGpuDispatchStep {
+            pipeline,
+            bind_group,
+            _params_buffer: params_buffer,
+            workgroups: [
+                (output.width as u32).div_ceil(8),
+                (output.height as u32).div_ceil(8),
+                output.channels as u32,
+            ],
+        }));
+    }
+
+    fn dispatch_prebuilt(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        dispatch: &SpanGpuDispatchStep,
+    ) {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("suisuiview-sr-lab-span-pass"),
             timestamp_writes: None,
         });
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_pipeline(self.pipeline(dispatch.pipeline));
+        pass.set_bind_group(0, &dispatch.bind_group, &[]);
         pass.dispatch_workgroups(
-            (output.width as u32).div_ceil(8),
-            (output.height as u32).div_ceil(8),
-            output.channels as u32,
+            dispatch.workgroups[0],
+            dispatch.workgroups[1],
+            dispatch.workgroups[2],
         );
     }
+
+    fn pipeline(&self, pipeline: SpanPipeline) -> &wgpu::ComputePipeline {
+        match pipeline {
+            SpanPipeline::MeanShift => &self.mean_shift_pipeline,
+            SpanPipeline::Conv2d => &self.conv2d_pipeline,
+            SpanPipeline::Gate => &self.gate_pipeline,
+            SpanPipeline::Concat4 => &self.concat_pipeline,
+            SpanPipeline::PixelShuffle => &self.pixel_shuffle_pipeline,
+        }
+    }
+}
+
+fn push_copy(steps: &mut Vec<SpanGpuGraphStep>, source: &GpuBuffer, destination: &GpuBuffer) {
+    steps.push(SpanGpuGraphStep::Copy(SpanGpuCopyStep {
+        source: source.buffer.clone(),
+        destination: destination.buffer.clone(),
+        byte_len: destination.byte_len(),
+    }));
 }
 
 #[allow(dead_code)]

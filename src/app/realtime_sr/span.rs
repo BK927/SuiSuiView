@@ -10,7 +10,7 @@ use crate::core::sr_lab::{
     cpu::FeatureMap,
     gpu::{
         buffers::SpanGpuModel,
-        kernel::{SpanGpuKernel, SpanGpuWorkspace},
+        kernel::{SpanGpuGraphPlan, SpanGpuKernel, SpanGpuWorkspace},
         model_validation::validate_span_model,
         tiled::{
             span_tile_halo, span_tile_specs, workspace_shape_count, SpanTileSpec,
@@ -65,6 +65,7 @@ struct LoadedSpanRenderer {
 struct SpanWorkspaceSlot {
     size: [usize; 2],
     workspace: SpanGpuWorkspace,
+    graph_plan: Option<SpanGpuGraphPlan>,
 }
 
 struct SpanTilePlan {
@@ -254,7 +255,8 @@ impl LoadedSpanRenderer {
         let output_texture = create_output_texture(device, output_size);
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
         for plan in tile_plans {
-            let workspace = &self.workspaces.get(plan.workspace_index)?.workspace;
+            let slot = self.workspaces.get(plan.workspace_index)?;
+            let workspace = &slot.workspace;
             let params = plan.params;
             let tile = self
                 .bridge
@@ -262,8 +264,7 @@ impl LoadedSpanRenderer {
             self.bridge.encode_input(encoder, &tile, params);
 
             self.kernel
-                .encode_prevalidated_workspace(encoder, &self.manifest, &self.model, workspace)
-                .ok()?;
+                .encode_graph_plan(encoder, slot.graph_plan.as_ref()?);
             self.bridge.encode_output(
                 device,
                 encoder,
@@ -334,13 +335,33 @@ impl LoadedSpanRenderer {
         }
 
         for size in &workspace_sizes {
-            let workspace = self.workspace_for_size(*size)?;
-            validate_span_model(
-                max_storage_buffer_binding_size,
-                &self.manifest,
-                &self.model,
-                workspace,
-            )?;
+            let workspace_index = self
+                .workspace_index_for_size(*size)
+                .ok_or_else(|| "SPAN display workspace cache lookup failed".to_owned())?;
+            let graph_plan = {
+                let slot = self
+                    .workspaces
+                    .get(workspace_index)
+                    .ok_or_else(|| "SPAN display workspace cache lookup failed".to_owned())?;
+                validate_span_model(
+                    max_storage_buffer_binding_size,
+                    &self.manifest,
+                    &self.model,
+                    &slot.workspace,
+                )?;
+                if slot.graph_plan.is_some() {
+                    None
+                } else {
+                    Some(self.kernel.create_prevalidated_graph_plan(
+                        &self.manifest,
+                        &self.model,
+                        &slot.workspace,
+                    )?)
+                }
+            };
+            if let Some(graph_plan) = graph_plan {
+                self.workspaces[workspace_index].graph_plan = Some(graph_plan);
+            }
         }
 
         specs
@@ -414,6 +435,7 @@ impl LoadedSpanRenderer {
         self.workspaces.push(SpanWorkspaceSlot {
             size: source_size,
             workspace,
+            graph_plan: None,
         });
         self.workspace_bytes = next_cache_bytes;
         Ok(self.workspaces.len() - 1)
@@ -423,13 +445,6 @@ impl LoadedSpanRenderer {
         self.workspaces
             .iter()
             .position(|slot| slot.size == source_size)
-    }
-
-    fn workspace_for_size(&self, source_size: [usize; 2]) -> Result<&SpanGpuWorkspace, String> {
-        self.workspace_index_for_size(source_size)
-            .and_then(|index| self.workspaces.get(index))
-            .map(|slot| &slot.workspace)
-            .ok_or_else(|| "SPAN display workspace cache lookup failed".to_owned())
     }
 }
 
