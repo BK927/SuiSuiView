@@ -1,5 +1,6 @@
 mod buffers;
 mod executor;
+mod kernel;
 pub(crate) mod tiled;
 mod validation;
 
