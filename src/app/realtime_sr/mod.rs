@@ -167,7 +167,7 @@ impl RealtimeSrResources {
             ),
             DisplayUpscaler::WgslArtcnnC4F16 => self
                 .artcnn
-                .get_or_insert_with(|| ArtcnnRenderer::new(device))
+                .get_or_insert_with(ArtcnnRenderer::new)
                 .render(device, encoder, source_view, source_size),
             DisplayUpscaler::WgslSrLabSpanX2 => self
                 .span
@@ -186,6 +186,9 @@ impl RealtimeSrResources {
 
     pub(super) fn has_pending_async_work(&self, method: DisplayUpscaler) -> bool {
         match method {
+            DisplayUpscaler::WgslArtcnnC4F16 => {
+                self.artcnn.as_ref().is_some_and(ArtcnnRenderer::is_loading)
+            }
             DisplayUpscaler::WgslSrLabSpanX2 => {
                 self.span.as_ref().is_some_and(SpanRenderer::is_loading)
             }

@@ -2,12 +2,29 @@ use super::RealtimeSrOutput;
 use crate::core::artcnn_c4f16::{
     exact_output_size, ArtcnnC4F16, ArtcnnC4F16RenderOptions, ArtcnnC4F16Workspace,
 };
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use crate::core::perf_trace::{self, PerfField};
+use crossbeam_channel::{bounded, Receiver, TryRecvError};
+use std::thread;
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use std::time::{Duration, Instant};
 
 const TRANSIENT_BYTES_LIMIT: u64 = 256 * 1024 * 1024;
 const WORKSPACE_CACHE_BYTES_LIMIT: u64 = 192 * 1024 * 1024;
 const WORKSPACE_CACHE_SLOTS_LIMIT: usize = 4;
 
 pub(super) struct ArtcnnRenderer {
+    state: ArtcnnRendererState,
+}
+
+enum ArtcnnRendererState {
+    Pending,
+    Loading(Receiver<LoadedArtcnnRenderer>),
+    Ready(Box<LoadedArtcnnRenderer>),
+    Disabled,
+}
+
+struct LoadedArtcnnRenderer {
     core: ArtcnnC4F16,
     workspaces: Vec<ArtcnnWorkspaceSlot>,
     workspace_bytes: u64,
@@ -18,15 +35,88 @@ struct ArtcnnWorkspaceSlot {
 }
 
 impl ArtcnnRenderer {
-    pub(super) fn new(device: &wgpu::Device) -> Self {
+    pub(super) fn new() -> Self {
         Self {
-            core: ArtcnnC4F16::new(device),
+            state: ArtcnnRendererState::Pending,
+        }
+    }
+
+    pub(super) fn render(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source_view: &wgpu::TextureView,
+        source_size: [usize; 2],
+    ) -> Option<RealtimeSrOutput> {
+        self.start_loading_if_needed(device);
+        self.finish_loading_if_ready();
+
+        let ArtcnnRendererState::Ready(renderer) = &mut self.state else {
+            return None;
+        };
+        renderer.render(device, encoder, source_view, source_size)
+    }
+
+    pub(super) fn is_loading(&self) -> bool {
+        matches!(self.state, ArtcnnRendererState::Loading(_))
+    }
+
+    fn start_loading_if_needed(&mut self, device: &wgpu::Device) {
+        if !matches!(self.state, ArtcnnRendererState::Pending) {
+            return;
+        }
+        self.state = LoadedArtcnnRenderer::spawn_loader(device.clone())
+            .map(ArtcnnRendererState::Loading)
+            .unwrap_or(ArtcnnRendererState::Disabled);
+    }
+
+    fn finish_loading_if_ready(&mut self) {
+        let ArtcnnRendererState::Loading(receiver) = &self.state else {
+            return;
+        };
+        let next_state = match receiver.try_recv() {
+            Ok(renderer) => ArtcnnRendererState::Ready(Box::new(renderer)),
+            Err(TryRecvError::Disconnected) => ArtcnnRendererState::Disabled,
+            Err(TryRecvError::Empty) => return,
+        };
+        self.state = next_state;
+    }
+}
+
+impl LoadedArtcnnRenderer {
+    fn spawn_loader(device: wgpu::Device) -> Option<Receiver<Self>> {
+        let (sender, receiver) = bounded(1);
+        let _loader = thread::Builder::new()
+            .name("suisuiview-artcnn-display-loader".to_owned())
+            .spawn(move || {
+                let _ = sender.send(Self::new(&device));
+            })
+            .ok()?;
+        Some(receiver)
+    }
+
+    fn new(device: &wgpu::Device) -> Self {
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let load_started = Instant::now();
+        let core = ArtcnnC4F16::new(device);
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        perf_trace::record_duration_if_at_least(
+            "artcnn_display_load",
+            load_started.elapsed(),
+            Duration::from_millis(16),
+            &[
+                PerfField::Str("method", "artcnn_c4f16"),
+                PerfField::Usize("pipelines", 8),
+            ],
+        );
+        Self {
+            core,
             workspaces: Vec::new(),
             workspace_bytes: 0,
         }
     }
 
-    pub(super) fn render(
+    fn render(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
