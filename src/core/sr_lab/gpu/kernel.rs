@@ -2,7 +2,11 @@ use super::buffers::{
     buffer_from_values, empty_buffer, storage_binding, storage_read_entry,
     storage_read_write_entry, GpuBuffer, SpanGpuModel,
 };
-use super::validation::{validate_conv_shape, validate_span_manifest, validate_transient_size};
+use super::model_validation::validate_span_model;
+use super::validation::{
+    span_transient_byte_size, validate_conv_shape, validate_span_manifest,
+    validate_storage_buffer_sizes, validate_transient_size,
+};
 use crate::core::sr_lab::cpu::FeatureMap;
 use crate::core::sr_lab::SrLabManifest;
 use std::borrow::Cow;
@@ -26,7 +30,7 @@ struct SpanParams {
     _pad2: f32,
 }
 
-pub(super) struct SpanGpuKernel {
+pub(crate) struct SpanGpuKernel {
     device: wgpu::Device,
     bind_group_layout: wgpu::BindGroupLayout,
     mean_shift_pipeline: wgpu::ComputePipeline,
@@ -37,7 +41,7 @@ pub(super) struct SpanGpuKernel {
     dummy: GpuBuffer,
 }
 
-pub(super) struct SpanGpuWorkspace {
+pub(crate) struct SpanGpuWorkspace {
     pub(super) input: GpuBuffer,
     pub(super) shifted: GpuBuffer,
     pub(super) out_feature: GpuBuffer,
@@ -56,7 +60,7 @@ pub(super) struct SpanGpuWorkspace {
 }
 
 impl SpanGpuKernel {
-    pub(super) fn new(device: wgpu::Device) -> Self {
+    pub(crate) fn new(device: wgpu::Device) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("suisuiview-sr-lab-span-bind-group-layout"),
             entries: &[
@@ -109,7 +113,7 @@ impl SpanGpuKernel {
         }
     }
 
-    pub(super) fn create_workspace(
+    pub(crate) fn create_workspace(
         &self,
         manifest: &SrLabManifest,
         input: &FeatureMap,
@@ -128,6 +132,13 @@ impl SpanGpuKernel {
             output_channels,
             manifest.scale as usize,
             include_readback_in_guard,
+        )?;
+        validate_storage_buffer_sizes(
+            input,
+            feature_channels,
+            output_channels,
+            manifest.scale as usize,
+            self.device.limits().max_storage_buffer_binding_size as u64,
         )?;
 
         let feature_buffer = |label| {
@@ -189,13 +200,19 @@ impl SpanGpuKernel {
         })
     }
 
-    pub(super) fn encode_workspace(
+    pub(crate) fn encode_workspace(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         manifest: &SrLabManifest,
         model: &SpanGpuModel,
         workspace: &SpanGpuWorkspace,
     ) -> Result<(), String> {
+        validate_span_model(
+            self.device.limits().max_storage_buffer_binding_size as u64,
+            manifest,
+            model,
+            workspace,
+        )?;
         let span = manifest
             .span
             .as_ref()
@@ -338,6 +355,27 @@ impl SpanGpuKernel {
         self.run_pixel_shuffle(encoder, &workspace.up, &workspace.output, manifest.scale);
 
         Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn workspace_byte_size(
+        &self,
+        manifest: &SrLabManifest,
+        input: &FeatureMap,
+        include_readback: bool,
+    ) -> Result<u64, String> {
+        validate_span_manifest(manifest, input)?;
+        let span = manifest
+            .span
+            .as_ref()
+            .ok_or_else(|| "SPAN GPU reference requires span metadata".to_owned())?;
+        span_transient_byte_size(
+            input,
+            span.feature_channels as usize,
+            manifest.output_channels as usize,
+            manifest.scale as usize,
+            include_readback,
+        )
     }
 
     fn run_mean_shift(
@@ -504,6 +542,21 @@ impl SpanGpuKernel {
             (output.height as u32).div_ceil(8),
             output.channels as u32,
         );
+    }
+}
+
+#[allow(dead_code)]
+impl SpanGpuWorkspace {
+    pub(crate) fn input_buffer(&self) -> &wgpu::Buffer {
+        &self.input.buffer
+    }
+
+    pub(crate) fn output_buffer(&self) -> &wgpu::Buffer {
+        &self.output.buffer
+    }
+
+    pub(crate) fn output_size(&self) -> [usize; 2] {
+        [self.output.width, self.output.height]
     }
 }
 

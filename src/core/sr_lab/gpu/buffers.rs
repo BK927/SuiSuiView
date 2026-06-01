@@ -1,7 +1,7 @@
 use crate::core::sr_lab::blob::SrLabWeights;
 use wgpu::util::DeviceExt;
 
-pub(super) struct SpanGpuModel {
+pub(crate) struct SpanGpuModel {
     tensors: Vec<GpuTensor>,
 }
 
@@ -19,7 +19,7 @@ pub(super) struct GpuBuffer {
 }
 
 impl SpanGpuModel {
-    pub(super) fn from_weights(device: &wgpu::Device, weights: &SrLabWeights) -> Self {
+    pub(crate) fn from_weights(device: &wgpu::Device, weights: &SrLabWeights) -> Self {
         let tensors = weights
             .tensors
             .iter()
@@ -42,11 +42,38 @@ impl SpanGpuModel {
             .find(|tensor| tensor.name == name)
             .ok_or_else(|| format!("missing SR Lab GPU tensor: {name}"))
     }
+
+    pub(super) fn validate_storage_buffer_limit(&self, max_bytes: u64) -> Result<(), String> {
+        for tensor in &self.tensors {
+            let byte_len = tensor.byte_len()?;
+            if byte_len > max_bytes {
+                return Err(format!(
+                    "SPAN GPU tensor {} would bind about {} MiB, above the device storage-buffer limit of {} MiB",
+                    tensor.name,
+                    byte_len.div_ceil(1024 * 1024),
+                    max_bytes.div_ceil(1024 * 1024)
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl GpuBuffer {
     pub(super) fn byte_len(&self) -> u64 {
         (self.channels * self.height * self.width * std::mem::size_of::<f32>()) as u64
+    }
+}
+
+impl GpuTensor {
+    fn byte_len(&self) -> Result<u64, String> {
+        self.shape
+            .iter()
+            .try_fold(1u64, |total, dimension| {
+                total.checked_mul(*dimension as u64)
+            })
+            .and_then(|values| values.checked_mul(std::mem::size_of::<f32>() as u64))
+            .ok_or_else(|| format!("SPAN GPU tensor {} byte size overflowed", self.name))
     }
 }
 

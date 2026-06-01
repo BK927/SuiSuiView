@@ -13,7 +13,7 @@ use lru::LruCache;
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::time::{Duration, Instant};
 use wgpu::util::DeviceExt;
@@ -23,6 +23,10 @@ pub(super) const GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES: usize = 256 * 1024 * 102
 const GPU_SOURCE_TEXTURE_CACHE_LIMIT: usize = 32;
 const GPU_DRAW_BIND_GROUP_CACHE_LIMIT: usize = 16;
 const GPU_INTERMEDIATE_TEXTURE_CACHE_LIMIT: usize = 16;
+const EXPERIMENT_DISPLAY_UPSCALER_ENV: &str = "SUISUIVIEW_EXPERIMENT_DISPLAY_UPSCALER";
+const EXPERIMENT_SPAN_DISPLAY_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_DISPLAY";
+const EXPERIMENT_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_SPAN_MANIFEST";
+const SR_LAB_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_MANIFEST";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct GpuPaintSourceKey {
@@ -57,6 +61,9 @@ impl SuiSuiViewApp {
             || !matches!(self.settings.renderer_mode, RendererMode::Wgpu)
         {
             return DisplayUpscaler::None;
+        }
+        if let Some(upscaler) = experimental_display_upscaler_override() {
+            return upscaler;
         }
         match self.settings.display_upscaler {
             DisplayUpscaler::None => DisplayUpscaler::None,
@@ -122,6 +129,40 @@ impl SuiSuiViewApp {
             GpuOriginalInspectionCleanupCallback,
         ));
     }
+}
+
+fn experimental_display_upscaler_override() -> Option<DisplayUpscaler> {
+    static OVERRIDE: OnceLock<Option<DisplayUpscaler>> = OnceLock::new();
+    *OVERRIDE.get_or_init(|| {
+        let generic_value = std::env::var(EXPERIMENT_DISPLAY_UPSCALER_ENV).ok();
+        let generic_span = generic_value.as_deref().is_some_and(|value| {
+            value
+                .trim()
+                .eq_ignore_ascii_case(DisplayUpscaler::WgslSrLabSpanX2.token())
+        });
+        let explicit_span = opt_in_env_enabled(EXPERIMENT_SPAN_DISPLAY_ENV);
+        if !(generic_span || explicit_span) || !span_manifest_env_present() {
+            return None;
+        }
+        Some(DisplayUpscaler::WgslSrLabSpanX2)
+    })
+}
+
+fn span_manifest_env_present() -> bool {
+    std::env::var(EXPERIMENT_SPAN_MANIFEST_ENV)
+        .or_else(|_| std::env::var(SR_LAB_SPAN_MANIFEST_ENV))
+        .is_ok_and(|value| !value.trim().is_empty())
+}
+
+fn opt_in_env_enabled(name: &str) -> bool {
+    matches!(
+        std::env::var(name).ok().as_deref().map(str::trim),
+        Some(value)
+            if value.eq_ignore_ascii_case("1")
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("on")
+                || value.eq_ignore_ascii_case("yes")
+    )
 }
 
 struct GpuOriginalInspectionCleanupCallback;

@@ -9,10 +9,12 @@ use wgpu::util::DeviceExt;
 mod acnet;
 mod anime4k;
 mod artcnn;
+mod span;
 
 use acnet::AcnetRenderer;
 use anime4k::{Anime4kMRenderer, Anime4kSRenderer};
 use artcnn::ArtcnnRenderer;
+use span::SpanRenderer;
 
 pub(super) const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const CUNNY_INPUT_SLOTS: usize = 8;
@@ -37,6 +39,7 @@ pub(super) struct RealtimeSrResources {
     anime4k_s: Option<Anime4kSRenderer>,
     anime4k_m: Option<Anime4kMRenderer>,
     artcnn: Option<ArtcnnRenderer>,
+    span: Option<SpanRenderer>,
     acnet: Option<AcnetRenderer>,
 }
 
@@ -54,6 +57,7 @@ impl RealtimeSrResources {
             anime4k_s: None,
             anime4k_m: None,
             artcnn: None,
+            span: None,
             acnet: None,
         }
     }
@@ -91,6 +95,7 @@ impl RealtimeSrResources {
                 | DisplayUpscaler::WgslAnime4kV32CnnX2S
                 | DisplayUpscaler::WgslAnime4kV32CnnX2M
                 | DisplayUpscaler::WgslArtcnnC4F16
+                | DisplayUpscaler::WgslSrLabSpanX2
                 | DisplayUpscaler::WgslAcnetF8B4Luma
                 | DisplayUpscaler::WgslAcnetF8B4BoxLuma
                 | DisplayUpscaler::WgslAcnetF8B4HdnLuma
@@ -162,6 +167,10 @@ impl RealtimeSrResources {
             DisplayUpscaler::WgslArtcnnC4F16 => self
                 .artcnn
                 .get_or_insert_with(|| ArtcnnRenderer::new(device))
+                .render(device, encoder, source_view, source_size),
+            DisplayUpscaler::WgslSrLabSpanX2 => self
+                .span
+                .get_or_insert_with(SpanRenderer::new)
                 .render(device, encoder, source_view, source_size),
             DisplayUpscaler::WgslAcnetF8B4Luma
             | DisplayUpscaler::WgslAcnetF8B4BoxLuma

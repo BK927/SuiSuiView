@@ -85,6 +85,11 @@ fn hidden_display_upscaler_settings_normalize_to_auto() {
     settings.normalize_product_choices();
 
     assert_eq!(settings.display_upscaler, DisplayUpscaler::Auto);
+
+    settings.display_upscaler = DisplayUpscaler::WgslSrLabSpanX2;
+    settings.normalize_product_choices();
+
+    assert_eq!(settings.display_upscaler, DisplayUpscaler::Auto);
 }
 
 #[test]
@@ -113,6 +118,14 @@ fn automatic_display_upscaler_only_uses_heavy_shader_for_actual_upscale() {
         DisplayUpscaler::WgslArtcnnC4F16.resolve_for_render([1600, 2400], [800, 1200]),
         None
     );
+    assert_eq!(
+        DisplayUpscaler::WgslSrLabSpanX2.resolve_for_render([800, 1200], [1600, 2400]),
+        Some(DisplayUpscaler::WgslSrLabSpanX2)
+    );
+    assert_eq!(
+        DisplayUpscaler::WgslSrLabSpanX2.resolve_for_render([1600, 2400], [800, 1200]),
+        None
+    );
 }
 
 #[test]
@@ -120,9 +133,14 @@ fn product_display_upscalers_hide_style_candidates() {
     assert!(!DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslFsr1Style));
     assert!(!DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslNisStyle));
     assert!(!DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslArtcnnC4F16));
+    assert!(!DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslSrLabSpanX2));
     assert!(!DisplayUpscaler::WgslFsr1Style.candidate().product_visible);
     assert!(!DisplayUpscaler::WgslNisStyle.candidate().product_visible);
     assert!(!DisplayUpscaler::WgslArtcnnC4F16.candidate().product_visible);
+    assert!(!DisplayUpscaler::WgslSrLabSpanX2.candidate().product_visible);
+    assert!(!DisplayUpscaler::WgslSrLabSpanX2.product_selectable());
+    assert!(!DisplayUpscaler::WgslSrLabSpanX2.is_benchmark_only());
+    assert!(!DisplayUpscaler::GPU_METHODS.contains(&DisplayUpscaler::WgslSrLabSpanX2));
     assert!(DisplayUpscaler::WgslArtcnnC4F16.is_benchmark_only());
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslFsr1EasuRcas));
     assert!(DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslAnime4kV32CnnX2S));

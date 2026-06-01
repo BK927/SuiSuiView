@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 pub mod blob;
 pub mod cpu;
 pub mod gpu;
+#[allow(dead_code)]
+pub(crate) mod sha256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

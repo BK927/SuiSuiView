@@ -57,6 +57,7 @@ pub enum DisplayUpscaler {
     WgslAnime4kV32CnnX2S,
     WgslAnime4kV32CnnX2M,
     WgslArtcnnC4F16,
+    WgslSrLabSpanX2,
     WgslAcnetF8B4Luma,
     WgslAcnetF8B4BoxLuma,
     WgslAcnetF8B4HdnLuma,
@@ -313,6 +314,16 @@ impl DisplayUpscaler {
                 "2x",
                 "8",
                 "wgpu compute",
+                false,
+            ),
+            Self::WgslSrLabSpanX2 => upscaler_candidate!(
+                "SR Lab",
+                "SR Lab SPAN x2",
+                "SPAN converted manifest",
+                "Apache-2.0 model family / local weights",
+                "2x",
+                "multi-pass",
+                "wgpu compute + local manifest",
                 false,
             ),
             Self::WgslAcnetF8B4Luma => upscaler_candidate!(
@@ -644,6 +655,7 @@ impl DisplayUpscaler {
             Self::WgslAnime4kV32CnnX2S => "anime4k_v32_cnn_x2_s",
             Self::WgslAnime4kV32CnnX2M => "anime4k_v32_cnn_x2_m",
             Self::WgslArtcnnC4F16 => "artcnn_c4f16",
+            Self::WgslSrLabSpanX2 => "srlab_span_x2",
             Self::WgslAcnetF8B4Luma => "acnet_f8b4_luma",
             Self::WgslAcnetF8B4BoxLuma => "acnet_f8b4_box_luma",
             Self::WgslAcnetF8B4HdnLuma => "acnet_f8b4_hdn_luma",
@@ -694,6 +706,8 @@ impl DisplayUpscaler {
             Self::Auto | Self::None | Self::NvidiaNis => None,
             Self::WgslArtcnnC4F16 if target_is_larger => Some(self),
             Self::WgslArtcnnC4F16 => None,
+            Self::WgslSrLabSpanX2 if target_is_larger => Some(self),
+            Self::WgslSrLabSpanX2 => None,
             Self::WgslAnime4kV32CnnX2S | Self::WgslAnime4kV32CnnX2M if target_is_larger => {
                 Some(self)
             }
@@ -783,6 +797,7 @@ impl DisplayUpscaler {
             | Self::WgslAnime4kV32CnnX2S
             | Self::WgslAnime4kV32CnnX2M
             | Self::WgslArtcnnC4F16
+            | Self::WgslSrLabSpanX2
             | Self::WgslAcnetF8B4Luma
             | Self::WgslAcnetF8B4BoxLuma
             | Self::WgslAcnetF8B4HdnLuma
