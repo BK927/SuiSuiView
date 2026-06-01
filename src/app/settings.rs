@@ -587,7 +587,7 @@ fn show_rendering_settings(
         |ui| {
             let mut gpu_enabled = matches!(draft.renderer_mode, RendererMode::Wgpu);
 
-            egui::Grid::new("settings_upscaler_grid")
+            egui::Grid::new("settings_default_upscaler_grid")
                 .num_columns(2)
                 .spacing([14.0, 8.0])
                 .show(ui, |ui| {
@@ -610,12 +610,21 @@ fn show_rendering_settings(
                             }
                         });
                     ui.end_row();
+                });
 
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(10.0);
+
+            egui::Grid::new("settings_gpu_upscaler_grid")
+                .num_columns(2)
+                .spacing([14.0, 8.0])
+                .show(ui, |ui| {
                     let gpu_help =
                         "GPU 업스케일러와 GPU 표시 효과를 사용합니다. 변경 시 앱을 다시 시작해야 합니다.";
                     grid_label_with_help(ui, "GPU 가속", gpu_help);
                     let gpu_changed = ui
-                        .checkbox(&mut gpu_enabled, "GPU 가속 활성화")
+                        .checkbox(&mut gpu_enabled, "")
                         .on_hover_text(gpu_help)
                         .changed();
                     if gpu_changed {
@@ -639,19 +648,27 @@ fn show_rendering_settings(
                     let mut selected_upscaler_changed = false;
                     let upscaler_response = ui.add_enabled_ui(gpu_enabled, |ui| {
                         egui::ComboBox::from_id_salt("display_upscaler")
-                            .selected_text(selected_upscaler.label())
+                            .selected_text(selected_upscaler.settings_label())
                             .show_ui(ui, |ui| {
-                                for upscaler in DisplayUpscaler::ALL {
+                                for upscaler in DisplayUpscaler::SETTINGS_CHOICES {
                                     if upscaler == DisplayUpscaler::None {
                                         continue;
                                     }
-                                    selected_upscaler_changed |= ui
-                                        .selectable_value(
-                                            &mut selected_upscaler,
-                                            upscaler,
-                                            upscaler.label(),
-                                        )
-                                        .changed();
+                                    let option_response = ui.selectable_value(
+                                        &mut selected_upscaler,
+                                        upscaler,
+                                        upscaler.settings_label(),
+                                    );
+                                    selected_upscaler_changed |= option_response.changed();
+                                    if upscaler.experimental_selectable() {
+                                        let hover_text =
+                                            if upscaler == DisplayUpscaler::WgslSrLabSpanX2 {
+                                                "실험 업스케일러입니다. 로컬 SPAN manifest가 있어야 실제로 적용됩니다."
+                                            } else {
+                                                "실험 업스케일러입니다. 품질과 속도는 GPU와 이미지에 따라 달라질 수 있습니다."
+                                            };
+                                        option_response.on_hover_text(hover_text);
+                                    }
                                 }
                             });
                     }).response;

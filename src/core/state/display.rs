@@ -96,6 +96,8 @@ pub enum DisplayUpscaler {
     Cunny8x32Ds,
 }
 
+mod upscaler_choices;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UpscalerCandidate {
     pub family: &'static str,
@@ -133,95 +135,23 @@ macro_rules! upscaler_candidate {
 }
 
 impl DisplayUpscaler {
-    pub const ALL: [Self; 37] = [
-        Self::Auto,
-        Self::None,
-        Self::WgslBilinear,
-        Self::WgslFsr1EasuRcas,
-        Self::WgslAnime4kV32CnnX2S,
-        Self::WgslAnime4kV32CnnX2M,
-        Self::WgslAcnetF8B4Luma,
-        Self::WgslAcnetF8B4BoxLuma,
-        Self::WgslAcnetF8B4HdnLuma,
-        Self::WgslAcnetF8B4BoxHdnLuma,
-        Self::CunnyVeryfastNvl,
-        Self::CunnyVeryfastSoft,
-        Self::CunnyFasterNvl,
-        Self::CunnyFasterSoft,
-        Self::CunnyFasterDs,
-        Self::CunnyFastNvl,
-        Self::CunnyFastSoft,
-        Self::CunnyFastDs,
-        Self::Cunny2x12Soft,
-        Self::Cunny2x12Ds,
-        Self::Cunny3x12Nvl,
-        Self::Cunny3x12Soft,
-        Self::Cunny3x12Ds,
-        Self::Cunny4x12Nvl,
-        Self::Cunny4x12Soft,
-        Self::Cunny4x12Ds,
-        Self::Cunny4x16Nvl,
-        Self::Cunny4x16Soft,
-        Self::Cunny4x16Ds,
-        Self::Cunny4x24Nvl,
-        Self::Cunny4x24Soft,
-        Self::Cunny4x24Ds,
-        Self::Cunny4x32Nvl,
-        Self::Cunny4x32Soft,
-        Self::Cunny4x32Ds,
-        Self::Cunny8x32Nvl,
-        Self::Cunny8x32Ds,
-    ];
-
-    pub const GPU_METHODS: [Self; 44] = [
-        Self::WgslBilinear,
-        Self::WgslFsr1Style,
-        Self::WgslFsr1EasuRcas,
-        Self::WgslNisStyle,
-        Self::NvidiaNis,
-        Self::WgslAnime4kV32CnnX2S,
-        Self::WgslAnime4kV32CnnX2M,
-        Self::WgslArtcnnC4F16,
-        Self::WgslArtcnnC4F16Dn,
-        Self::WgslArtcnnC4F16Ds,
-        Self::WgslArtcnnC4F32,
-        Self::WgslArtcnnC4F32Dn,
-        Self::WgslArtcnnC4F32Ds,
-        Self::WgslAcnetF8B4Luma,
-        Self::WgslAcnetF8B4BoxLuma,
-        Self::WgslAcnetF8B4HdnLuma,
-        Self::WgslAcnetF8B4BoxHdnLuma,
-        Self::CunnyVeryfastNvl,
-        Self::CunnyVeryfastSoft,
-        Self::CunnyFasterNvl,
-        Self::CunnyFasterSoft,
-        Self::CunnyFasterDs,
-        Self::CunnyFastNvl,
-        Self::CunnyFastSoft,
-        Self::CunnyFastDs,
-        Self::Cunny2x12Soft,
-        Self::Cunny2x12Ds,
-        Self::Cunny3x12Nvl,
-        Self::Cunny3x12Soft,
-        Self::Cunny3x12Ds,
-        Self::Cunny4x12Nvl,
-        Self::Cunny4x12Soft,
-        Self::Cunny4x12Ds,
-        Self::Cunny4x16Nvl,
-        Self::Cunny4x16Soft,
-        Self::Cunny4x16Ds,
-        Self::Cunny4x24Nvl,
-        Self::Cunny4x24Soft,
-        Self::Cunny4x24Ds,
-        Self::Cunny4x32Nvl,
-        Self::Cunny4x32Soft,
-        Self::Cunny4x32Ds,
-        Self::Cunny8x32Nvl,
-        Self::Cunny8x32Ds,
-    ];
-
     pub fn label(self) -> &'static str {
         self.candidate().exact_label
+    }
+
+    pub fn settings_label(self) -> &'static str {
+        match self {
+            Self::WgslFsr1Style => "WGSL FSR-style (실험)",
+            Self::WgslNisStyle => "WGSL NIS-style (실험)",
+            Self::WgslArtcnnC4F16 => "ArtCNN C4F16 (실험)",
+            Self::WgslArtcnnC4F16Dn => "ArtCNN C4F16 DN (실험)",
+            Self::WgslArtcnnC4F16Ds => "ArtCNN C4F16 DS (실험)",
+            Self::WgslArtcnnC4F32 => "ArtCNN C4F32 (실험)",
+            Self::WgslArtcnnC4F32Dn => "ArtCNN C4F32 DN (실험)",
+            Self::WgslArtcnnC4F32Ds => "ArtCNN C4F32 DS (실험)",
+            Self::WgslSrLabSpanX2 => "SR Lab SPAN x2 (실험)",
+            _ => self.label(),
+        }
     }
 
     pub fn candidate(self) -> UpscalerCandidate {
@@ -664,6 +594,14 @@ impl DisplayUpscaler {
 
     pub fn product_selectable(self) -> bool {
         Self::ALL.contains(&self) && self.candidate().product_visible
+    }
+
+    pub fn experimental_selectable(self) -> bool {
+        Self::EXPERIMENTAL.contains(&self)
+    }
+
+    pub fn user_selectable(self) -> bool {
+        self.product_selectable() || self.experimental_selectable()
     }
 
     pub fn token(self) -> &'static str {

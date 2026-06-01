@@ -71,9 +71,9 @@ fn settings_defaults_match_viewer_policy() {
 }
 
 #[test]
-fn hidden_display_upscaler_settings_normalize_to_auto() {
+fn display_upscaler_settings_normalize_only_unselectable_methods_to_auto() {
     let mut settings = AppSettings {
-        display_upscaler: DisplayUpscaler::WgslFsr1Style,
+        display_upscaler: DisplayUpscaler::NvidiaNis,
         ..AppSettings::default()
     };
 
@@ -81,20 +81,33 @@ fn hidden_display_upscaler_settings_normalize_to_auto() {
 
     assert_eq!(settings.display_upscaler, DisplayUpscaler::Auto);
 
+    settings.display_upscaler = DisplayUpscaler::WgslFsr1Style;
+    settings.normalize_product_choices();
+
+    assert_eq!(settings.display_upscaler, DisplayUpscaler::WgslFsr1Style);
+
+    settings.display_upscaler = DisplayUpscaler::WgslNisStyle;
+    settings.normalize_product_choices();
+
+    assert_eq!(settings.display_upscaler, DisplayUpscaler::WgslNisStyle);
+
     settings.display_upscaler = DisplayUpscaler::WgslArtcnnC4F16;
     settings.normalize_product_choices();
 
-    assert_eq!(settings.display_upscaler, DisplayUpscaler::Auto);
+    assert_eq!(settings.display_upscaler, DisplayUpscaler::WgslArtcnnC4F16);
 
     settings.display_upscaler = DisplayUpscaler::WgslArtcnnC4F32Ds;
     settings.normalize_product_choices();
 
-    assert_eq!(settings.display_upscaler, DisplayUpscaler::Auto);
+    assert_eq!(
+        settings.display_upscaler,
+        DisplayUpscaler::WgslArtcnnC4F32Ds
+    );
 
     settings.display_upscaler = DisplayUpscaler::WgslSrLabSpanX2;
     settings.normalize_product_choices();
 
-    assert_eq!(settings.display_upscaler, DisplayUpscaler::Auto);
+    assert_eq!(settings.display_upscaler, DisplayUpscaler::WgslSrLabSpanX2);
 }
 
 #[test]
@@ -142,12 +155,22 @@ fn automatic_display_upscaler_only_uses_heavy_shader_for_actual_upscale() {
 }
 
 #[test]
-fn product_display_upscalers_hide_style_candidates() {
+fn product_display_upscalers_keep_experiments_separate() {
     assert!(!DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslFsr1Style));
     assert!(!DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslNisStyle));
     assert!(!DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslArtcnnC4F16));
     assert!(!DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslArtcnnC4F32Ds));
     assert!(!DisplayUpscaler::ALL.contains(&DisplayUpscaler::WgslSrLabSpanX2));
+    assert!(DisplayUpscaler::SETTINGS_CHOICES.contains(&DisplayUpscaler::WgslFsr1Style));
+    assert!(DisplayUpscaler::SETTINGS_CHOICES.contains(&DisplayUpscaler::WgslNisStyle));
+    assert!(DisplayUpscaler::SETTINGS_CHOICES.contains(&DisplayUpscaler::WgslArtcnnC4F16));
+    assert!(DisplayUpscaler::SETTINGS_CHOICES.contains(&DisplayUpscaler::WgslArtcnnC4F16Dn));
+    assert!(DisplayUpscaler::SETTINGS_CHOICES.contains(&DisplayUpscaler::WgslArtcnnC4F16Ds));
+    assert!(DisplayUpscaler::SETTINGS_CHOICES.contains(&DisplayUpscaler::WgslArtcnnC4F32));
+    assert!(DisplayUpscaler::SETTINGS_CHOICES.contains(&DisplayUpscaler::WgslArtcnnC4F32Dn));
+    assert!(DisplayUpscaler::SETTINGS_CHOICES.contains(&DisplayUpscaler::WgslArtcnnC4F32Ds));
+    assert!(DisplayUpscaler::SETTINGS_CHOICES.contains(&DisplayUpscaler::WgslSrLabSpanX2));
+    assert!(!DisplayUpscaler::SETTINGS_CHOICES.contains(&DisplayUpscaler::NvidiaNis));
     assert!(!DisplayUpscaler::WgslFsr1Style.candidate().product_visible);
     assert!(!DisplayUpscaler::WgslNisStyle.candidate().product_visible);
     assert!(!DisplayUpscaler::WgslArtcnnC4F16.candidate().product_visible);
@@ -157,7 +180,33 @@ fn product_display_upscalers_hide_style_candidates() {
             .product_visible
     );
     assert!(!DisplayUpscaler::WgslSrLabSpanX2.candidate().product_visible);
+    assert!(!DisplayUpscaler::WgslFsr1Style.product_selectable());
+    assert!(!DisplayUpscaler::WgslNisStyle.product_selectable());
+    assert!(!DisplayUpscaler::WgslArtcnnC4F16.product_selectable());
     assert!(!DisplayUpscaler::WgslSrLabSpanX2.product_selectable());
+    assert!(DisplayUpscaler::WgslFsr1Style.experimental_selectable());
+    assert!(DisplayUpscaler::WgslNisStyle.experimental_selectable());
+    assert!(DisplayUpscaler::WgslArtcnnC4F16.experimental_selectable());
+    assert!(DisplayUpscaler::WgslArtcnnC4F32Ds.experimental_selectable());
+    assert!(DisplayUpscaler::WgslSrLabSpanX2.experimental_selectable());
+    assert!(DisplayUpscaler::WgslFsr1Style.user_selectable());
+    assert!(DisplayUpscaler::WgslNisStyle.user_selectable());
+    assert!(DisplayUpscaler::WgslArtcnnC4F16.user_selectable());
+    assert!(DisplayUpscaler::WgslArtcnnC4F32Ds.user_selectable());
+    assert!(DisplayUpscaler::WgslSrLabSpanX2.user_selectable());
+    assert!(!DisplayUpscaler::NvidiaNis.user_selectable());
+    assert_eq!(
+        DisplayUpscaler::WgslArtcnnC4F16.settings_label(),
+        "ArtCNN C4F16 (실험)"
+    );
+    assert_eq!(
+        DisplayUpscaler::WgslSrLabSpanX2.settings_label(),
+        "SR Lab SPAN x2 (실험)"
+    );
+    assert_eq!(
+        DisplayUpscaler::WgslFsr1EasuRcas.settings_label(),
+        "WGSL FSR1 EASU+RCAS"
+    );
     assert!(!DisplayUpscaler::WgslSrLabSpanX2.is_benchmark_only());
     assert!(!DisplayUpscaler::GPU_METHODS.contains(&DisplayUpscaler::WgslSrLabSpanX2));
     assert!(DisplayUpscaler::GPU_METHODS.contains(&DisplayUpscaler::WgslArtcnnC4F16));

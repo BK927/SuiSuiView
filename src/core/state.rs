@@ -349,7 +349,7 @@ pub struct AppSettings {
 
 impl AppSettings {
     pub fn normalize_product_choices(&mut self) {
-        if !self.display_upscaler.product_selectable() {
+        if !self.display_upscaler.user_selectable() {
             self.display_upscaler = DisplayUpscaler::Auto;
         }
     }

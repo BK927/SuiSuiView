@@ -136,6 +136,8 @@ state file.
 - Rendering: transition effect, default/fallback upscaler, GPU acceleration,
   GPU upscaler, EXIF orientation, embedded ICC conversion, prefetch, cache
   memory, and experimental Real-ESRGAN AI upscale settings.
+  GPU upscalers marked `(실험)` are selectable for local testing but are not
+  treated as stable defaults; SR Lab SPAN also requires a local manifest.
 - Decoders: decode mode and per-format decoder choices. `기본값` is shown as
   selected text, with the resolved backend summarized beside each format.
 - View, keyboard, and mouse: large-image starting position, visible viewer UI,

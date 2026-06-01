@@ -67,11 +67,11 @@ impl SuiSuiViewApp {
         if let Some(upscaler) = experimental_display_upscaler_override() {
             return upscaler;
         }
-        match self.settings.display_upscaler {
-            DisplayUpscaler::None => DisplayUpscaler::None,
-            upscaler if upscaler.product_selectable() => upscaler,
-            _ => DisplayUpscaler::Auto,
-        }
+        let span_manifest_present = matches!(
+            self.settings.display_upscaler,
+            DisplayUpscaler::WgslSrLabSpanX2
+        ) && span_manifest_env_present();
+        display_upscaler_from_settings(self.settings.display_upscaler, span_manifest_present)
     }
 
     pub(super) fn can_paint_wgsl_effects(&self) -> bool {
@@ -169,6 +169,18 @@ fn parse_experimental_display_upscaler(
         Some(DisplayUpscaler::WgslSrLabSpanX2)
     } else {
         None
+    }
+}
+
+fn display_upscaler_from_settings(
+    upscaler: DisplayUpscaler,
+    span_manifest_present: bool,
+) -> DisplayUpscaler {
+    match upscaler {
+        DisplayUpscaler::None => DisplayUpscaler::None,
+        DisplayUpscaler::WgslSrLabSpanX2 if !span_manifest_present => DisplayUpscaler::Auto,
+        upscaler if upscaler.user_selectable() => upscaler,
+        _ => DisplayUpscaler::Auto,
     }
 }
 
@@ -1152,6 +1164,26 @@ mod tests {
         assert_eq!(
             parse_experimental_display_upscaler(None, true, true),
             Some(DisplayUpscaler::WgslSrLabSpanX2)
+        );
+    }
+
+    #[test]
+    fn settings_span_upscaler_requires_manifest_for_render() {
+        assert_eq!(
+            display_upscaler_from_settings(DisplayUpscaler::WgslSrLabSpanX2, false),
+            DisplayUpscaler::Auto
+        );
+        assert_eq!(
+            display_upscaler_from_settings(DisplayUpscaler::WgslSrLabSpanX2, true),
+            DisplayUpscaler::WgslSrLabSpanX2
+        );
+        assert_eq!(
+            display_upscaler_from_settings(DisplayUpscaler::WgslArtcnnC4F16, false),
+            DisplayUpscaler::WgslArtcnnC4F16
+        );
+        assert_eq!(
+            display_upscaler_from_settings(DisplayUpscaler::NvidiaNis, true),
+            DisplayUpscaler::Auto
         );
     }
 
