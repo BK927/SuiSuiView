@@ -3,6 +3,7 @@ use super::span_bridge::{
     SpanBridgeParams,
 };
 use super::RealtimeSrOutput;
+use crate::core::perf_trace::{self, PerfField};
 use crate::core::sr_lab::{
     self,
     blob::{self, SrLabWeights},
@@ -24,6 +25,7 @@ use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::thread;
+use std::time::{Duration, Instant};
 
 const EXPERIMENT_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_SPAN_MANIFEST";
 const SR_LAB_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_MANIFEST";
@@ -163,6 +165,7 @@ impl LoadedSpanRenderer {
         source_view: &wgpu::TextureView,
         source_size: [usize; 2],
     ) -> Option<RealtimeSrOutput> {
+        let render_start = Instant::now();
         let output_size = checked_output_size(source_size, self.manifest.scale as usize)?;
         if !fits_texture_limit(device, output_size) {
             return None;
@@ -211,6 +214,16 @@ impl LoadedSpanRenderer {
                 params,
             );
         }
+        record_span_display_encode(
+            render_start.elapsed(),
+            source_size,
+            output_size,
+            tile_specs.len(),
+            workspace_shape_count(&tile_specs),
+            self.workspaces.len(),
+            self.workspace_bytes,
+            estimated_dispatch_count(&self.manifest, tile_specs.len()),
+        );
 
         Some(RealtimeSrOutput {
             texture: output_texture,
@@ -481,6 +494,47 @@ fn distinct_workspace_sizes(specs: &[SpanTileSpec]) -> Vec<[usize; 2]> {
     sizes
 }
 
+fn record_span_display_encode(
+    duration: Duration,
+    source_size: [usize; 2],
+    output_size: [usize; 2],
+    tile_count: usize,
+    workspace_shapes: usize,
+    workspace_slots: usize,
+    workspace_bytes: u64,
+    estimated_dispatches: usize,
+) {
+    perf_trace::record_duration(
+        "span_display_encode",
+        duration,
+        &[
+            PerfField::Str("method", "srlab_span_x2"),
+            PerfField::Usize("source_width", source_size[0]),
+            PerfField::Usize("source_height", source_size[1]),
+            PerfField::Usize("output_width", output_size[0]),
+            PerfField::Usize("output_height", output_size[1]),
+            PerfField::Usize("tile_count", tile_count),
+            PerfField::Usize("workspace_shapes", workspace_shapes),
+            PerfField::Usize("workspace_slots", workspace_slots),
+            PerfField::Usize("estimated_dispatches", estimated_dispatches),
+            PerfField::Usize(
+                "workspace_cache_bytes",
+                usize::try_from(workspace_bytes).unwrap_or(usize::MAX),
+            ),
+        ],
+    );
+}
+
+fn estimated_dispatch_count(manifest: &SrLabManifest, tile_count: usize) -> usize {
+    let span_graph_dispatches = manifest
+        .span
+        .as_ref()
+        .map(|span| 7usize.saturating_add(4usize.saturating_mul(span.block_count as usize)))
+        .unwrap_or_default();
+    let bridge_dispatches = 2usize;
+    tile_count.saturating_mul(span_graph_dispatches.saturating_add(bridge_dispatches))
+}
+
 fn fits_texture_limit(device: &wgpu::Device, size: [usize; 2]) -> bool {
     let max = device.limits().max_texture_dimension_2d as usize;
     size[0] <= max && size[1] <= max
@@ -488,8 +542,9 @@ fn fits_texture_limit(device: &wgpu::Device, size: [usize; 2]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{distinct_workspace_sizes, safe_relative_weights_path};
+    use super::{distinct_workspace_sizes, estimated_dispatch_count, safe_relative_weights_path};
     use crate::core::sr_lab::gpu::tiled::SpanTileSpec;
+    use crate::core::sr_lab::{SrLabFamily, SrLabManifest, SrLabSpanMetadata};
 
     #[test]
     fn distinct_workspace_sizes_preserve_first_seen_shapes() {
@@ -540,5 +595,38 @@ mod tests {
         assert!(safe_relative_weights_path("..\\weights.srlab").is_err());
         assert!(safe_relative_weights_path("nested\\..\\weights.srlab").is_err());
         assert!(safe_relative_weights_path("C:\\models\\weights.srlab").is_err());
+    }
+
+    #[test]
+    fn span_display_dispatch_estimate_includes_bridge_and_graph_passes() {
+        let manifest = SrLabManifest {
+            name: "SPAN-S x2".to_owned(),
+            family: SrLabFamily::SpanS,
+            variant: Some("SPAN-S".to_owned()),
+            scale: 2,
+            input_channels: 3,
+            output_channels: 3,
+            weights_format: "srlab01".to_owned(),
+            weights_file: Some("weights.srlab".to_owned()),
+            weights_sha256: "0".repeat(64),
+            source: "test".to_owned(),
+            source_commit: None,
+            source_checkpoint_url: None,
+            source_checkpoint_archive_sha256: None,
+            source_checkpoint_file: None,
+            source_checkpoint_sha256: None,
+            license: "Apache-2.0".to_owned(),
+            notes: Vec::new(),
+            span: Some(SrLabSpanMetadata {
+                feature_channels: 48,
+                block_count: 6,
+                reparameterized_conv3xc: true,
+                img_range: 255.0,
+                rgb_mean: [0.4488, 0.4371, 0.4040],
+            }),
+            layers: Vec::new(),
+        };
+
+        assert_eq!(estimated_dispatch_count(&manifest, 96), 3168);
     }
 }
