@@ -135,17 +135,35 @@ fn experimental_display_upscaler_override() -> Option<DisplayUpscaler> {
     static OVERRIDE: OnceLock<Option<DisplayUpscaler>> = OnceLock::new();
     *OVERRIDE.get_or_init(|| {
         let generic_value = std::env::var(EXPERIMENT_DISPLAY_UPSCALER_ENV).ok();
-        let generic_span = generic_value.as_deref().is_some_and(|value| {
-            value
-                .trim()
-                .eq_ignore_ascii_case(DisplayUpscaler::WgslSrLabSpanX2.token())
-        });
-        let explicit_span = opt_in_env_enabled(EXPERIMENT_SPAN_DISPLAY_ENV);
-        if !(generic_span || explicit_span) || !span_manifest_env_present() {
-            return None;
-        }
-        Some(DisplayUpscaler::WgslSrLabSpanX2)
+        parse_experimental_display_upscaler(
+            generic_value.as_deref(),
+            opt_in_env_enabled(EXPERIMENT_SPAN_DISPLAY_ENV),
+            span_manifest_env_present(),
+        )
     })
+}
+
+fn parse_experimental_display_upscaler(
+    generic_value: Option<&str>,
+    explicit_span: bool,
+    span_manifest_present: bool,
+) -> Option<DisplayUpscaler> {
+    match generic_value.map(str::trim) {
+        Some(value) if value.eq_ignore_ascii_case(DisplayUpscaler::WgslArtcnnC4F16.token()) => {
+            return Some(DisplayUpscaler::WgslArtcnnC4F16);
+        }
+        Some(value) if value.eq_ignore_ascii_case(DisplayUpscaler::WgslSrLabSpanX2.token()) => {
+            if span_manifest_present {
+                return Some(DisplayUpscaler::WgslSrLabSpanX2);
+            }
+        }
+        _ => {}
+    }
+    if explicit_span && span_manifest_present {
+        Some(DisplayUpscaler::WgslSrLabSpanX2)
+    } else {
+        None
+    }
 }
 
 fn span_manifest_env_present() -> bool {
@@ -950,6 +968,30 @@ mod tests {
                 right,
                 1.0,
             )
+        );
+    }
+
+    #[test]
+    fn experimental_display_upscaler_parses_hidden_artcnn() {
+        assert_eq!(
+            parse_experimental_display_upscaler(Some(" artcnn_c4f16 "), false, false),
+            Some(DisplayUpscaler::WgslArtcnnC4F16)
+        );
+    }
+
+    #[test]
+    fn experimental_display_upscaler_keeps_span_manifest_gated() {
+        assert_eq!(
+            parse_experimental_display_upscaler(Some("srlab_span_x2"), false, false),
+            None
+        );
+        assert_eq!(
+            parse_experimental_display_upscaler(Some("srlab_span_x2"), false, true),
+            Some(DisplayUpscaler::WgslSrLabSpanX2)
+        );
+        assert_eq!(
+            parse_experimental_display_upscaler(None, true, true),
+            Some(DisplayUpscaler::WgslSrLabSpanX2)
         );
     }
 }
