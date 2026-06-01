@@ -550,6 +550,14 @@ impl GpuPaintResources {
                 ctx.request_repaint_after(Duration::from_millis(16));
             }
             if let Some(intermediate) = self.intermediate_textures.peek(&sr_key).cloned() {
+                record_display_upscaler_render(
+                    effective_upscaler,
+                    source_size,
+                    output_size,
+                    target_size,
+                    intermediate.size,
+                    "realtime_sr",
+                );
                 let params = params_for_effects(
                     intermediate.size,
                     output_size_for_effects(intermediate.size, effects),
@@ -610,6 +618,14 @@ impl GpuPaintResources {
                 opacity,
             );
             let params_bind_group = self.params_bind_group_for(device, rcas_params);
+            record_display_upscaler_render(
+                effective_upscaler,
+                source_size,
+                output_size,
+                target_size,
+                [target_size[0] as usize, target_size[1] as usize],
+                "easu_rcas",
+            );
             return GpuDrawState::new(
                 intermediate_bind_group,
                 params_bind_group,
@@ -617,6 +633,16 @@ impl GpuPaintResources {
             );
         }
 
+        if effective_upscaler.shader_method_id() != 0 {
+            record_display_upscaler_render(
+                effective_upscaler,
+                source_size,
+                output_size,
+                target_size,
+                target_size.map(|dimension| dimension as usize),
+                "single_pass",
+            );
+        }
         let params = params_for_effects(
             source_size,
             output_size,
@@ -859,6 +885,44 @@ impl GpuPaintResources {
                 .saturating_sub(draw_state.intermediate_byte_size);
         }
     }
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+fn record_display_upscaler_render(
+    method: DisplayUpscaler,
+    source_size: [usize; 2],
+    output_size: [usize; 2],
+    target_size: [u32; 2],
+    rendered_size: [usize; 2],
+    path: &'static str,
+) {
+    perf_trace::record_duration(
+        "display_upscaler_render",
+        Duration::ZERO,
+        &[
+            PerfField::Str("method", method.token()),
+            PerfField::Str("path", path),
+            PerfField::Usize("source_width", source_size[0]),
+            PerfField::Usize("source_height", source_size[1]),
+            PerfField::Usize("output_width", output_size[0]),
+            PerfField::Usize("output_height", output_size[1]),
+            PerfField::U32("target_width", target_size[0]),
+            PerfField::U32("target_height", target_size[1]),
+            PerfField::Usize("rendered_width", rendered_size[0]),
+            PerfField::Usize("rendered_height", rendered_size[1]),
+        ],
+    );
+}
+
+#[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
+fn record_display_upscaler_render(
+    _method: DisplayUpscaler,
+    _source_size: [usize; 2],
+    _output_size: [usize; 2],
+    _target_size: [u32; 2],
+    _rendered_size: [usize; 2],
+    _path: &'static str,
+) {
 }
 
 fn draw_id(
