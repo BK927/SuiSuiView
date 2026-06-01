@@ -65,15 +65,11 @@ pub fn run_span_gpu_tiled_reference(
         return Err("--sr-lab-tile-edge requires a positive integer".to_owned());
     }
     let manifest = super::super::read_manifest(manifest_path).map_err(|error| error.to_string())?;
-    let weights_file = manifest
-        .weights_file
-        .as_deref()
-        .ok_or_else(|| "SPAN GPU tiled reference requires manifest weights_file".to_owned())?;
-    let weights_path = manifest_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(weights_file);
-    let weights = super::super::blob::read_weights(&weights_path)?;
+    let weights = super::super::blob::read_checked_weights(
+        manifest_path,
+        &manifest,
+        "SPAN GPU tiled reference",
+    )?;
     let (requested_long_edge, effective_long_edge) = cpu::span_reference_long_edge(long_edge);
     let input = cpu::load_input_image(input_path, effective_long_edge)?;
     validation::validate_span_manifest(&manifest, &input)?;

@@ -17,13 +17,11 @@ use crate::core::sr_lab::{
             DEFAULT_SPAN_TILE_EDGE,
         },
     },
-    sha256::sha256_hex,
     SrLabFamily, SrLabManifest,
 };
 use crossbeam_channel::{bounded, Receiver, TryRecvError};
 use std::env;
-use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -34,7 +32,6 @@ const EXPERIMENT_SPAN_WORKSPACE_CACHE_MB_ENV: &str =
     "SUISUIVIEW_EXPERIMENT_SPAN_WORKSPACE_CACHE_MB";
 const SR_LAB_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_MANIFEST";
 const MIB_BYTES: u64 = 1024 * 1024;
-const MAX_WEIGHT_BLOB_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_DISPLAY_TRANSIENT_BYTES: u64 = 96 * 1024 * 1024;
 const DEFAULT_DISPLAY_WORKSPACE_CACHE_MB: u64 = 192;
 const MIN_DISPLAY_WORKSPACE_CACHE_MB: u64 = 64;
@@ -211,7 +208,8 @@ impl LoadedSpanRenderer {
         let manifest = sr_lab::read_manifest(&manifest_path).map_err(|error| error.to_string())?;
         sr_lab::inspect_manifest(&manifest).map_err(|error| error.to_string())?;
         validate_display_manifest(&manifest)?;
-        let weights = read_checked_weights(&manifest_path, &manifest)?;
+        let weights =
+            blob::read_checked_weights(&manifest_path, &manifest, "SPAN display experiment")?;
         Self::from_weights(&device, manifest, &weights)
     }
 
@@ -563,80 +561,6 @@ fn validate_display_manifest(manifest: &SrLabManifest) -> Result<(), String> {
     Ok(())
 }
 
-fn read_checked_weights(
-    manifest_path: &Path,
-    manifest: &SrLabManifest,
-) -> Result<SrLabWeights, String> {
-    let weights_file = manifest
-        .weights_file
-        .as_deref()
-        .ok_or_else(|| "SPAN display experiment requires manifest weights_file".to_owned())?;
-    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    let weights_path = checked_weights_path(manifest_dir, weights_file)?;
-    let byte_len = fs::metadata(&weights_path)
-        .map_err(|error| error.to_string())?
-        .len();
-    if byte_len > MAX_WEIGHT_BLOB_BYTES {
-        return Err(format!(
-            "SPAN display weight blob is too large: {} bytes",
-            byte_len
-        ));
-    }
-    let bytes = fs::read(&weights_path).map_err(|error| error.to_string())?;
-    let actual_sha256 = sha256_hex(&bytes);
-    if !actual_sha256.eq_ignore_ascii_case(&manifest.weights_sha256) {
-        return Err(format!(
-            "SPAN display weight SHA-256 mismatch for {}",
-            weights_path.display()
-        ));
-    }
-    blob::parse_weights(&bytes)
-}
-
-fn checked_weights_path(manifest_dir: &Path, weights_file: &str) -> Result<PathBuf, String> {
-    let relative_path = safe_relative_weights_path(weights_file)?;
-    let weights_path = manifest_dir.join(relative_path);
-    let canonical_manifest_dir = fs::canonicalize(manifest_dir).map_err(|error| {
-        format!(
-            "SPAN display manifest directory cannot be resolved: {}",
-            error
-        )
-    })?;
-    let canonical_weights_path = fs::canonicalize(&weights_path)
-        .map_err(|error| format!("SPAN display weight path cannot be resolved: {}", error))?;
-    if !canonical_weights_path.starts_with(&canonical_manifest_dir) {
-        return Err("SPAN display weight path must stay under the manifest directory".to_owned());
-    }
-    Ok(canonical_weights_path)
-}
-
-fn safe_relative_weights_path(weights_file: &str) -> Result<PathBuf, String> {
-    let weights_file = weights_file.trim();
-    if weights_file.is_empty() {
-        return Err("SPAN display experiment requires a non-empty weights_file".to_owned());
-    }
-    let path = Path::new(weights_file);
-    if path.is_absolute() {
-        return Err("SPAN display weight path must be relative".to_owned());
-    }
-    let mut saw_normal_component = false;
-    for component in path.components() {
-        match component {
-            Component::Normal(_) => saw_normal_component = true,
-            Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(
-                    "SPAN display weight path must not leave the manifest directory".to_owned(),
-                );
-            }
-        }
-    }
-    if !saw_normal_component {
-        return Err("SPAN display weight path must name a file".to_owned());
-    }
-    Ok(path.to_path_buf())
-}
-
 fn input_shape(size: [usize; 2]) -> FeatureMap {
     FeatureMap {
         channels: 3,
@@ -852,7 +776,7 @@ fn fits_texture_limit(device: &wgpu::Device, size: [usize; 2]) -> bool {
 mod tests {
     use super::{
         distinct_workspace_sizes, estimated_dispatch_count, parse_span_display_tile_edge,
-        parse_span_display_workspace_cache_mb, safe_relative_weights_path, MIB_BYTES,
+        parse_span_display_workspace_cache_mb, MIB_BYTES,
     };
     use crate::core::sr_lab::gpu::tiled::SpanTileSpec;
     use crate::core::sr_lab::{SrLabFamily, SrLabManifest, SrLabSpanMetadata};
@@ -893,19 +817,6 @@ mod tests {
         ];
 
         assert_eq!(distinct_workspace_sizes(&specs), vec![[8, 6], [4, 6]]);
-    }
-
-    #[test]
-    fn span_display_weight_paths_must_stay_relative() {
-        assert_eq!(
-            safe_relative_weights_path("weights.srlab").unwrap(),
-            std::path::PathBuf::from("weights.srlab")
-        );
-        assert!(safe_relative_weights_path("").is_err());
-        assert!(safe_relative_weights_path(".").is_err());
-        assert!(safe_relative_weights_path("..\\weights.srlab").is_err());
-        assert!(safe_relative_weights_path("nested\\..\\weights.srlab").is_err());
-        assert!(safe_relative_weights_path("C:\\models\\weights.srlab").is_err());
     }
 
     #[test]

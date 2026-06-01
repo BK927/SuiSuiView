@@ -67,15 +67,8 @@ pub fn run_span_cpu_reference(
     report_path: Option<&Path>,
 ) -> Result<(), String> {
     let manifest = super::read_manifest(manifest_path).map_err(|error| error.to_string())?;
-    let weights_file = manifest
-        .weights_file
-        .as_deref()
-        .ok_or_else(|| "SPAN CPU reference requires manifest weights_file".to_owned())?;
-    let weights_path = manifest_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(weights_file);
-    let weights = super::blob::read_weights(&weights_path)?;
+    let weights =
+        super::blob::read_checked_weights(manifest_path, &manifest, "SPAN CPU reference")?;
     let (requested_long_edge, effective_long_edge) = span_reference_long_edge(long_edge);
     let input = load_input_image(input_path, effective_long_edge)?;
 
