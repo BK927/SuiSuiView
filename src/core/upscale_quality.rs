@@ -95,17 +95,26 @@ pub fn run_upscale_quality_scan(
     visual_dir: Option<&Path>,
     source_long_edge: u32,
     target_long_edge: u32,
+    method_filter: Option<DisplayUpscaler>,
+    max_pages: Option<usize>,
 ) -> Result<(), String> {
     let report = scan_upscale_quality(
         path,
         clamp_target_long_edge(source_long_edge),
         clamp_target_long_edge(target_long_edge),
         visual_dir,
+        method_filter,
+        max_pages,
     )?;
     print_report(&report);
     if let Some(report_path) = report_path {
         write_report(report_path, &report)?;
         println!("Report: {}", report_path.display());
+    }
+    if let Some(method) = method_filter {
+        if let Some(error) = selected_method_failure(&report, method) {
+            return Err(error);
+        }
     }
     Ok(())
 }
@@ -115,9 +124,11 @@ pub fn scan_upscale_quality(
     source_long_edge: u32,
     target_long_edge: u32,
     visual_dir: Option<&Path>,
+    method_filter: Option<DisplayUpscaler>,
+    max_pages: Option<usize>,
 ) -> Result<UpscaleQualityReport, String> {
     let (source, _forced_page) = open_source_from_path(path).map_err(|error| error.to_string())?;
-    let gpu = match GpuUpscaleBench::new() {
+    let gpu = match GpuUpscaleBench::new_for_method(method_filter) {
         Ok(gpu) => Some(gpu),
         Err(error) => {
             eprintln!("WGSL upscale quality scan disabled: {error}");
@@ -129,10 +140,15 @@ pub fn scan_upscale_quality(
         .then(|| "WGSL upscale backend unavailable".to_owned());
 
     let mut failures = 0usize;
-    let mut pages = Vec::with_capacity(source.page_count());
+    let scanned_pages = scanned_page_count(source.page_count(), max_pages);
+    let single_method = method_filter.map(|method| [method]);
+    let gpu_methods: &[DisplayUpscaler] = single_method
+        .as_ref()
+        .map_or(&DisplayUpscaler::GPU_METHODS, |methods| &methods[..]);
+    let mut pages = Vec::with_capacity(scanned_pages);
     let mut summaries = BTreeMap::<String, SummaryAccumulator>::new();
 
-    for index in 0..source.page_count() {
+    for index in 0..scanned_pages {
         let mut page = PageUpscaleQuality {
             index,
             name: source.page_name(index).unwrap_or("").to_owned(),
@@ -205,13 +221,13 @@ pub fn scan_upscale_quality(
                 }
 
                 if let Some(gpu) = &gpu {
-                    for method in DisplayUpscaler::GPU_METHODS {
+                    for method in gpu_methods {
                         let image = run_gpu_case(
                             gpu,
                             &input_image,
                             &baseline_image,
                             output_size,
-                            method,
+                            *method,
                             &mut page,
                             &mut summaries,
                         );
@@ -605,8 +621,9 @@ fn print_report(report: &UpscaleQualityReport) {
     println!("Path: {}", report.path);
     println!("Book: {}", report.title);
     println!(
-        "Pages: {} ok / {} failed",
-        report.page_count.saturating_sub(report.failures),
+        "Pages: {} scanned / {} total, {} failed",
+        report.pages.len(),
+        report.page_count,
         report.failures
     );
     println!("Source long edge: {}", report.source_long_edge);
@@ -631,6 +648,63 @@ fn print_report(report: &UpscaleQualityReport) {
             summary.max_abs_diff,
         );
     }
+}
+
+fn selected_method_failure(
+    report: &UpscaleQualityReport,
+    method: DisplayUpscaler,
+) -> Option<String> {
+    let label = method.label();
+    if !report.gpu_available {
+        return Some(format!(
+            "{label} was requested but WGSL upscale quality scan is unavailable: {}",
+            report.gpu_error.as_deref().unwrap_or("unknown error")
+        ));
+    }
+
+    if report.failures > 0 {
+        let first_error = report
+            .pages
+            .iter()
+            .filter_map(|page| page.error.as_deref())
+            .next()
+            .unwrap_or("unknown page-level error");
+        return Some(format!(
+            "{label} quality scan had {} page-level failure(s); first error: {first_error}",
+            report.failures
+        ));
+    }
+
+    let mut first_error = None;
+    let mut error_count = 0usize;
+    for run in report
+        .pages
+        .iter()
+        .flat_map(|page| page.runs.iter())
+        .filter(|run| run.method == label)
+    {
+        if let Some(error) = &run.error {
+            first_error.get_or_insert(error.as_str());
+            error_count += 1;
+        }
+    }
+    if error_count > 0 {
+        return Some(format!(
+            "{label} failed on {error_count} page(s); first error: {}",
+            first_error.unwrap_or("unknown error")
+        ));
+    }
+
+    let successful_pages = report
+        .methods
+        .iter()
+        .find(|summary| summary.method == label)
+        .map_or(0, |summary| summary.pages);
+    if successful_pages == 0 {
+        return Some(format!("{label} produced no successful quality runs"));
+    }
+
+    None
 }
 
 fn write_report(path: &Path, report: &UpscaleQualityReport) -> Result<(), String> {
@@ -694,14 +768,23 @@ fn average(total: f64, count: usize) -> f64 {
     }
 }
 
+fn scanned_page_count(page_count: usize, max_pages: Option<usize>) -> usize {
+    max_pages
+        .filter(|pages| *pages > 0)
+        .map_or(page_count, |limit| page_count.min(limit))
+}
+
 pub fn default_upscale_quality_report_path() -> PathBuf {
     PathBuf::from("perf-fixtures").join("upscale-quality-report.json")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{compare_images, resize_color_image};
-    use crate::core::state::ResizeFilter;
+    use super::{
+        compare_images, resize_color_image, scanned_page_count, selected_method_failure,
+        PageUpscaleQuality, UpscaleQualityReport,
+    };
+    use crate::core::state::{DisplayUpscaler, ResizeFilter};
     use eframe::egui::{Color32, ColorImage};
 
     #[test]
@@ -719,5 +802,65 @@ mod tests {
         let image = ColorImage::new([2, 2], vec![Color32::WHITE; 4]);
         let resized = resize_color_image(&image, [4, 4], ResizeFilter::Bicubic);
         assert_eq!(resized.size, [4, 4]);
+    }
+
+    #[test]
+    fn selected_quality_method_requires_success() {
+        let report = UpscaleQualityReport {
+            path: "book.cbz".to_owned(),
+            title: "book".to_owned(),
+            page_count: 1,
+            source_long_edge: 1024,
+            target_long_edge: 2048,
+            gpu_available: true,
+            gpu_error: None,
+            failures: 0,
+            methods: Vec::new(),
+            pages: Vec::new(),
+        };
+
+        let error = selected_method_failure(&report, DisplayUpscaler::WgslArtcnnC4F16).unwrap();
+
+        assert!(error.contains("ArtCNN C4F16 produced no successful quality runs"));
+    }
+
+    #[test]
+    fn selected_quality_method_fails_partial_page_errors() {
+        let report = UpscaleQualityReport {
+            path: "book.cbz".to_owned(),
+            title: "book".to_owned(),
+            page_count: 2,
+            source_long_edge: 1024,
+            target_long_edge: 2048,
+            gpu_available: true,
+            gpu_error: None,
+            failures: 1,
+            methods: Vec::new(),
+            pages: vec![PageUpscaleQuality {
+                index: 0,
+                name: "page-0000.png".to_owned(),
+                source_width: None,
+                source_height: None,
+                output_width: None,
+                output_height: None,
+                contact_sheet: None,
+                visuals: Vec::new(),
+                runs: Vec::new(),
+                error: Some("decode failed".to_owned()),
+            }],
+        };
+
+        let error = selected_method_failure(&report, DisplayUpscaler::WgslArtcnnC4F16).unwrap();
+
+        assert!(error.contains("page-level failure"));
+        assert!(error.contains("decode failed"));
+    }
+
+    #[test]
+    fn zero_quality_max_pages_means_unlimited() {
+        assert_eq!(scanned_page_count(4, None), 4);
+        assert_eq!(scanned_page_count(4, Some(0)), 4);
+        assert_eq!(scanned_page_count(4, Some(2)), 2);
+        assert_eq!(scanned_page_count(4, Some(8)), 4);
     }
 }

@@ -48,10 +48,6 @@ pub(crate) struct GpuUpscaleOutput {
 }
 
 impl GpuUpscaleBench {
-    pub(crate) fn new() -> Result<Self, String> {
-        pollster::block_on(Self::new_async(None))
-    }
-
     pub(crate) fn new_for_method(method: Option<DisplayUpscaler>) -> Result<Self, String> {
         pollster::block_on(Self::new_async(method))
     }

@@ -23,7 +23,7 @@ Usage:
   suisuiview-cli --quality-scan <path> [--target-long-edge <px>] [--quality-report <report.json>]
   suisuiview-cli --effect-bench <path> [--target-long-edge <px>] [--effect-report <report.json>] [--effect-report-default]
   suisuiview-cli --upscale-bench <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-method <token>] [--upscale-max-pages <count>] [--upscale-report <report.json>] [--upscale-report-default]
-  suisuiview-cli --upscale-quality-scan <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-quality-report <report.json>] [--upscale-quality-report-default] [--upscale-quality-visuals <dir>]
+  suisuiview-cli --upscale-quality-scan <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-quality-method <token>] [--upscale-quality-max-pages <count>] [--upscale-quality-report <report.json>] [--upscale-quality-report-default] [--upscale-quality-visuals <dir>]
   suisuiview-cli --gpu-copy-bench <path> [--target-long-edge <px>] [--gpu-copy-iterations <count>] [--gpu-copy-max-pages <count>] [--gpu-copy-report <report.json>] [--gpu-copy-report-default]
   suisuiview-cli --decoder-bench <path> [--decoder-iterations <count>] [--decoder-max-pages <count>] [--decoder-report <report.json>] [--decoder-report-default]
   suisuiview-cli --original-region-bench <path> --region <x,y,width,height> [--page-index <index>] [--region-iterations <count>] [--region-report <report.json>] [--region-report-default]
@@ -74,6 +74,8 @@ pub enum CliCommand {
         path: PathBuf,
         source_long_edge: u32,
         target_long_edge: u32,
+        method_filter: Option<crate::core::state::DisplayUpscaler>,
+        max_pages: Option<usize>,
         report_path: Option<PathBuf>,
         visual_dir: Option<PathBuf>,
     },
@@ -308,6 +310,8 @@ impl CliCommand {
                 path,
                 source_long_edge,
                 target_long_edge,
+                method_filter,
+                max_pages,
                 report_path,
                 visual_dir,
             } => crate::core::upscale_quality::run_upscale_quality_scan(
@@ -316,6 +320,8 @@ impl CliCommand {
                 visual_dir.as_deref(),
                 source_long_edge,
                 target_long_edge,
+                method_filter,
+                max_pages,
             )
             .map_err(|error| format!("upscale quality scan failed: {error}")),
             Self::GpuCopyBench {
@@ -527,7 +533,7 @@ fn parse_upscale_bench(mut args: impl Iterator<Item = OsString>) -> Result<CliCo
         } else if arg == "--source-long-edge" {
             source_long_edge = Some(required_u32(&mut args, "--source-long-edge")?);
         } else if arg == "--upscale-method" {
-            method_filter = Some(required_upscale_method(&mut args)?);
+            method_filter = Some(required_upscale_method(&mut args, "--upscale-method")?);
         } else if arg == "--upscale-max-pages" {
             max_pages = Some(required_usize(&mut args, "--upscale-max-pages")?);
         } else if arg == "--upscale-report" {
@@ -562,6 +568,8 @@ fn parse_upscale_quality_scan(
     )?;
     let mut target_long_edge = DEFAULT_TARGET_LONG_EDGE;
     let mut source_long_edge = None;
+    let mut method_filter = None;
+    let mut max_pages = None;
     let mut report_path = None;
     let mut visual_dir = None;
 
@@ -570,6 +578,13 @@ fn parse_upscale_quality_scan(
             target_long_edge = required_u32(&mut args, "--target-long-edge")?;
         } else if arg == "--source-long-edge" {
             source_long_edge = Some(required_u32(&mut args, "--source-long-edge")?);
+        } else if arg == "--upscale-quality-method" {
+            method_filter = Some(required_upscale_method(
+                &mut args,
+                "--upscale-quality-method",
+            )?);
+        } else if arg == "--upscale-quality-max-pages" {
+            max_pages = Some(required_usize(&mut args, "--upscale-quality-max-pages")?);
         } else if arg == "--upscale-quality-report" {
             report_path = Some(required_path(
                 &mut args,
@@ -592,6 +607,8 @@ fn parse_upscale_quality_scan(
         source_long_edge: source_long_edge
             .unwrap_or_else(|| (target_long_edge / 2).max(MIN_TARGET_LONG_EDGE)),
         target_long_edge,
+        method_filter,
+        max_pages,
         report_path,
         visual_dir,
     })
@@ -626,10 +643,11 @@ fn required_usize(
 
 fn required_upscale_method(
     args: &mut impl Iterator<Item = OsString>,
+    flag: &'static str,
 ) -> Result<crate::core::state::DisplayUpscaler, CliError> {
     let token = args
         .next()
-        .ok_or_else(|| CliError::new("--upscale-method requires a token"))?;
+        .ok_or_else(|| CliError::new(format!("{flag} requires a token")))?;
     let token = token.to_string_lossy();
     crate::core::state::DisplayUpscaler::GPU_METHODS
         .iter()
@@ -729,6 +747,47 @@ mod tests {
             Some(crate::core::state::DisplayUpscaler::WgslArtcnnC4F16)
         );
         assert_eq!(max_pages, Some(1));
+    }
+
+    #[test]
+    fn upscale_quality_accepts_method_and_max_pages() {
+        let action = parse_args(vec![
+            OsString::from("--upscale-quality-scan"),
+            OsString::from("book.cbz"),
+            OsString::from("--upscale-quality-method"),
+            OsString::from("artcnn_c4f16"),
+            OsString::from("--upscale-quality-max-pages"),
+            OsString::from("2"),
+        ])
+        .unwrap();
+
+        let CliAction::Command(CliCommand::UpscaleQualityScan {
+            method_filter,
+            max_pages,
+            ..
+        }) = action
+        else {
+            panic!("expected upscale quality scan command");
+        };
+        assert_eq!(
+            method_filter,
+            Some(crate::core::state::DisplayUpscaler::WgslArtcnnC4F16)
+        );
+        assert_eq!(max_pages, Some(2));
+    }
+
+    #[test]
+    fn upscale_quality_method_reports_its_flag_name_when_missing_token() {
+        let error = parse_args(vec![
+            OsString::from("--upscale-quality-scan"),
+            OsString::from("book.cbz"),
+            OsString::from("--upscale-quality-method"),
+        ])
+        .unwrap_err();
+
+        assert!(error
+            .message()
+            .contains("--upscale-quality-method requires a token"));
     }
 
     #[test]
