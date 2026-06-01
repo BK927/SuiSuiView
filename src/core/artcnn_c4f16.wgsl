@@ -47,7 +47,7 @@ fn load_input1_packed(coord: vec2<i32>, dx: i32, dy: i32, subpixel: vec2<i32>) -
 }
 
 fn sample_source_rgb_for_output(out_coord: vec2<i32>) -> vec3<f32> {
-    let source_scale = vec2<f32>(f32(params.source_width) / f32(params.output_width), f32(params.source_height) / f32(params.output_height));
+    let source_scale = vec2<f32>(0.5, 0.5);
     let source_pos = (vec2<f32>(out_coord) + vec2<f32>(0.5)) * source_scale - vec2<f32>(0.5);
     let p0f = floor(source_pos);
     let t = source_pos - p0f;

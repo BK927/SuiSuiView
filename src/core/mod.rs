@@ -1,3 +1,4 @@
+pub mod artcnn_c4f16;
 pub mod decoder_backend;
 pub mod decoder_bench;
 pub mod effect_bench;
