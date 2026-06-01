@@ -128,6 +128,8 @@ impl LoadedArtcnnRenderer {
         source_view: &wgpu::TextureView,
         source_size: [usize; 2],
     ) -> Option<RealtimeSrOutput> {
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let render_started = Instant::now();
         let output_size = exact_output_size(source_size).ok()?;
         let options = ArtcnnC4F16RenderOptions {
             output_size,
@@ -135,9 +137,17 @@ impl LoadedArtcnnRenderer {
             transient_limit: TRANSIENT_BYTES_LIMIT,
             readback_padded_bytes_per_row: None,
         };
-        let slot = self
-            .take_workspace(source_size)
-            .or_else(|| self.create_workspace_slot(device, source_size, &options))?;
+        #[cfg_attr(
+            not(any(feature = "perf-dev", feature = "perf-diagnostics")),
+            allow(unused_variables)
+        )]
+        let (slot, reused_workspace) = match self.take_workspace(source_size) {
+            Some(slot) => (slot, true),
+            None => (
+                self.create_workspace_slot(device, source_size, &options)?,
+                false,
+            ),
+        };
         let should_cache_workspace = slot.workspace.byte_size <= WORKSPACE_CACHE_BYTES_LIMIT;
         let output = self
             .core
@@ -153,6 +163,16 @@ impl LoadedArtcnnRenderer {
             self.store_workspace(slot);
         }
         let output = output?;
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        record_artcnn_display_encode(
+            render_started.elapsed(),
+            source_size,
+            output_size,
+            reused_workspace,
+            should_cache_workspace,
+            self.workspaces.len(),
+            self.workspace_bytes,
+        );
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -207,4 +227,34 @@ impl LoadedArtcnnRenderer {
         self.workspace_bytes = self.workspace_bytes.saturating_add(byte_size);
         self.workspaces.push(slot);
     }
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+fn record_artcnn_display_encode(
+    duration: Duration,
+    source_size: [usize; 2],
+    output_size: [usize; 2],
+    reused_workspace: bool,
+    cached_workspace: bool,
+    workspace_slots: usize,
+    workspace_bytes: u64,
+) {
+    perf_trace::record_duration(
+        "artcnn_display_encode",
+        duration,
+        &[
+            PerfField::Str("method", "artcnn_c4f16"),
+            PerfField::Usize("source_width", source_size[0]),
+            PerfField::Usize("source_height", source_size[1]),
+            PerfField::Usize("output_width", output_size[0]),
+            PerfField::Usize("output_height", output_size[1]),
+            PerfField::Bool("reused_workspace", reused_workspace),
+            PerfField::Bool("cached_workspace", cached_workspace),
+            PerfField::Usize("workspace_slots", workspace_slots),
+            PerfField::Usize(
+                "workspace_cache_bytes",
+                usize::try_from(workspace_bytes).unwrap_or(usize::MAX),
+            ),
+        ],
+    );
 }
