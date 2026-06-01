@@ -1,3 +1,4 @@
+use crate::core::artcnn_c4f16::exact_output_size as artcnn_exact_output_size;
 use crate::core::gpu_effect::{color_image_to_rgba, image_diff};
 use crate::core::source::open_source_from_path;
 use crate::core::state::{DisplayUpscaler, ResizeFilter};
@@ -117,6 +118,24 @@ pub fn scan_upscalers(
         gpu.as_ref(),
         gpu_error,
     )
+}
+
+pub fn run_artcnn_c4f16_render(input_path: &Path, output_path: &Path) -> Result<(), String> {
+    let input = load_color_image(input_path)?;
+    let output_size = artcnn_exact_output_size(input.size)?;
+    let gpu = GpuUpscaleBench::new_for_method(Some(DisplayUpscaler::WgslArtcnnC4F16))?;
+    let output = gpu.apply(&input, output_size, DisplayUpscaler::WgslArtcnnC4F16)?;
+    write_color_image(output_path, &output.image)?;
+    println!(
+        "ArtCNN C4F16: {}x{} -> {}x{} in {:.2} ms",
+        input.size[0],
+        input.size[1],
+        output_size[0],
+        output_size[1],
+        millis(output.elapsed)
+    );
+    println!("Output: {}", output_path.display());
+    Ok(())
 }
 
 fn scan_upscalers_with_gpu(
@@ -274,6 +293,29 @@ fn prepare_page_pair(
         },
     )?;
     Ok((source, baseline))
+}
+
+fn load_color_image(path: &Path) -> Result<ColorImage, String> {
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    let rgba = image::load_from_memory(&bytes)
+        .map_err(|error| error.to_string())?
+        .to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let size = [
+        usize::try_from(width).map_err(|_| "image width exceeds usize".to_owned())?,
+        usize::try_from(height).map_err(|_| "image height exceeds usize".to_owned())?,
+    ];
+    Ok(ColorImage::from_rgba_unmultiplied(size, &rgba.into_raw()))
+}
+
+fn write_color_image(path: &Path, image: &ColorImage) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let bytes = color_image_to_rgba(image);
+    let rgba = RgbaImage::from_raw(image.size[0] as u32, image.size[1] as u32, bytes)
+        .ok_or_else(|| "ColorImage RGBA bytes did not match its dimensions".to_owned())?;
+    rgba.save(path).map_err(|error| error.to_string())
 }
 
 fn run_cpu_case(

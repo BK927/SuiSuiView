@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod artcnn_args;
 mod decoder_bench_args;
 mod gpu_copy_args;
 mod original_region_args;
@@ -27,6 +28,7 @@ Usage:
   suisuiview-cli --gpu-copy-bench <path> [--target-long-edge <px>] [--gpu-copy-iterations <count>] [--gpu-copy-max-pages <count>] [--gpu-copy-report <report.json>] [--gpu-copy-report-default]
   suisuiview-cli --decoder-bench <path> [--decoder-iterations <count>] [--decoder-max-pages <count>] [--decoder-report <report.json>] [--decoder-report-default]
   suisuiview-cli --original-region-bench <path> --region <x,y,width,height> [--page-index <index>] [--region-iterations <count>] [--region-report <report.json>] [--region-report-default]
+  suisuiview-cli --artcnn-c4f16-render <image> --artcnn-output <png>
   suisuiview-cli --sr-lab-inspect <manifest.json> [--sr-lab-report <report.json>] [--sr-lab-report-default]
   suisuiview-cli --sr-lab-span-session-bench <manifest.json> <image> [--sr-lab-long-edge <px>] [--sr-lab-warmups <count>] [--sr-lab-iterations <count>] [--sr-lab-report <report.json>] [--sr-lab-report-default]
   suisuiview-cli --sr-lab-span-gpu-tiled-reference <manifest.json> <image> [--sr-lab-long-edge <px>] [--sr-lab-tile-edge <px>] [--sr-lab-output <png>] [--sr-lab-report <report.json>] [--sr-lab-report-default] [--sr-lab-compare-cpu]
@@ -98,6 +100,10 @@ pub enum CliCommand {
         region: OriginalRegion,
         iterations: usize,
         report_path: Option<PathBuf>,
+    },
+    ArtcnnC4F16Render {
+        input_path: PathBuf,
+        output_path: PathBuf,
     },
     SrLabInspect {
         manifest_path: PathBuf,
@@ -209,6 +215,9 @@ pub fn parse_args(args: Vec<OsString>) -> Result<CliAction, CliError> {
     if first == "--original-region-bench" {
         return original_region_args::parse(args).map(CliAction::Command);
     }
+    if first == "--artcnn-c4f16-render" {
+        return artcnn_args::parse(args).map(CliAction::Command);
+    }
     if first == "--sr-lab-inspect" {
         return sr_lab_args::parse_inspect(args).map(CliAction::Command);
     }
@@ -248,6 +257,7 @@ fn is_cli_command_arg(arg: &OsString) -> bool {
         || arg == "--gpu-copy-bench"
         || arg == "--decoder-bench"
         || arg == "--original-region-bench"
+        || arg == "--artcnn-c4f16-render"
         || arg == "--sr-lab-inspect"
         || arg == "--sr-lab-span-cpu-reference"
         || arg == "--sr-lab-span-gpu-reference"
@@ -364,6 +374,11 @@ impl CliCommand {
                 iterations,
             )
             .map_err(|error| format!("original region bench failed: {error}")),
+            Self::ArtcnnC4F16Render {
+                input_path,
+                output_path,
+            } => crate::core::upscale_bench::run_artcnn_c4f16_render(&input_path, &output_path)
+                .map_err(|error| format!("ArtCNN C4F16 render failed: {error}")),
             Self::SrLabInspect {
                 manifest_path,
                 report_path,
