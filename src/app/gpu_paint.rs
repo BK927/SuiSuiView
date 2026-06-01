@@ -541,6 +541,8 @@ impl GpuPaintResources {
         let effective_upscaler = display_upscaler
             .resolve_for_render(output_size, target_size)
             .unwrap_or(DisplayUpscaler::None);
+        self.realtime_sr
+            .cancel_inactive_pending_work(effective_upscaler);
         if RealtimeSrResources::is_supported(effective_upscaler) {
             let sr_key = realtime_sr_texture_key(source_key, source_size, effective_upscaler);
             if self.should_defer_realtime_sr_first_frame(sr_key, effective_upscaler) {
@@ -745,7 +747,7 @@ impl GpuPaintResources {
         };
         let Some(output) =
             self.realtime_sr
-                .render(method, device, encoder, &source.view, source_size)
+                .render(method, key, device, encoder, &source.view, source_size)
         else {
             return;
         };

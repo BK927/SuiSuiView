@@ -11,6 +11,7 @@ mod anime4k;
 mod artcnn;
 mod span;
 mod span_bridge;
+mod span_display;
 
 use acnet::AcnetRenderer;
 use anime4k::{Anime4kMRenderer, Anime4kSRenderer};
@@ -118,6 +119,7 @@ impl RealtimeSrResources {
     pub(super) fn render(
         &mut self,
         method: DisplayUpscaler,
+        request_key: u64,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
@@ -172,7 +174,7 @@ impl RealtimeSrResources {
             DisplayUpscaler::WgslSrLabSpanX2 => self
                 .span
                 .get_or_insert_with(SpanRenderer::new)
-                .render(device, encoder, source_view, source_size),
+                .render(request_key, device, encoder, source_view, source_size),
             DisplayUpscaler::WgslAcnetF8B4Luma
             | DisplayUpscaler::WgslAcnetF8B4BoxLuma
             | DisplayUpscaler::WgslAcnetF8B4HdnLuma
@@ -189,10 +191,19 @@ impl RealtimeSrResources {
             DisplayUpscaler::WgslArtcnnC4F16 => {
                 self.artcnn.as_ref().is_some_and(ArtcnnRenderer::is_loading)
             }
-            DisplayUpscaler::WgslSrLabSpanX2 => {
-                self.span.as_ref().is_some_and(SpanRenderer::is_loading)
-            }
+            DisplayUpscaler::WgslSrLabSpanX2 => self
+                .span
+                .as_ref()
+                .is_some_and(SpanRenderer::has_pending_work),
             _ => false,
+        }
+    }
+
+    pub(super) fn cancel_inactive_pending_work(&mut self, active_method: DisplayUpscaler) {
+        if !matches!(active_method, DisplayUpscaler::WgslSrLabSpanX2) {
+            if let Some(span) = &mut self.span {
+                span.cancel_pending_render();
+            }
         }
     }
 

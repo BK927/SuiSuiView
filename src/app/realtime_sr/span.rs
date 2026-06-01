@@ -2,8 +2,13 @@ use super::span_bridge::{
     bridge_params_for_tile, checked_output_size, create_output_texture, SpanBridge,
     SpanBridgeParams,
 };
+use super::span_display::{
+    estimated_dispatch_count, record_span_display_encode, record_span_display_prepare,
+    record_span_display_skip, record_span_display_skip_with_stats, record_span_display_tile_batch,
+    span_display_tile_edge, span_display_tiles_per_frame, span_display_workspace_cache_limit_bytes,
+    SpanDisplaySkipStats,
+};
 use super::RealtimeSrOutput;
-use crate::core::perf_trace::{self, PerfField};
 use crate::core::sr_lab::{
     self,
     blob::{self, SrLabWeights},
@@ -12,35 +17,22 @@ use crate::core::sr_lab::{
         buffers::SpanGpuModel,
         kernel::{SpanGpuGraphPlan, SpanGpuKernel, SpanGpuWorkspace},
         model_validation::validate_span_model,
-        tiled::{
-            span_tile_halo, span_tile_specs, workspace_shape_count, SpanTileSpec,
-            DEFAULT_SPAN_TILE_EDGE,
-        },
+        tiled::{span_tile_halo, span_tile_specs, workspace_shape_count, SpanTileSpec},
     },
     SrLabFamily, SrLabManifest,
 };
 use crossbeam_channel::{bounded, Receiver, TryRecvError};
 use std::env;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 const EXPERIMENT_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_SPAN_MANIFEST";
-const EXPERIMENT_SPAN_TILE_EDGE_ENV: &str = "SUISUIVIEW_EXPERIMENT_SPAN_TILE_EDGE";
-const EXPERIMENT_SPAN_WORKSPACE_CACHE_MB_ENV: &str =
-    "SUISUIVIEW_EXPERIMENT_SPAN_WORKSPACE_CACHE_MB";
 const SR_LAB_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_MANIFEST";
-const MIB_BYTES: u64 = 1024 * 1024;
 const MAX_DISPLAY_TRANSIENT_BYTES: u64 = 96 * 1024 * 1024;
-const DEFAULT_DISPLAY_WORKSPACE_CACHE_MB: u64 = 192;
-const MIN_DISPLAY_WORKSPACE_CACHE_MB: u64 = 64;
-const MAX_DISPLAY_WORKSPACE_CACHE_MB: u64 = 512;
 const MAX_DISPLAY_WORKSPACE_SHAPES: usize = 32;
 const MAX_DISPLAY_TILE_COUNT: usize = 256;
 const MAX_DISPLAY_SOURCE_PIXELS: usize = 1_048_576;
-const MIN_DISPLAY_TILE_EDGE: usize = 32;
-const MAX_DISPLAY_TILE_EDGE: usize = 256;
 const OUTPUT_BYTES_PER_PIXEL: usize = 4;
 
 pub(super) struct SpanRenderer {
@@ -62,6 +54,7 @@ struct LoadedSpanRenderer {
     workspace_source_size: Option<[usize; 2]>,
     workspaces: Vec<SpanWorkspaceSlot>,
     workspace_bytes: u64,
+    pending_render: Option<PendingSpanRender>,
 }
 
 struct SpanWorkspaceSlot {
@@ -73,6 +66,26 @@ struct SpanWorkspaceSlot {
 struct SpanTilePlan {
     workspace_index: usize,
     params: SpanBridgeParams,
+}
+
+struct PendingSpanRender {
+    request_key: u64,
+    source_size: [usize; 2],
+    output_size: [usize; 2],
+    output_texture: wgpu::Texture,
+    output_view: wgpu::TextureView,
+    tile_plans: Vec<SpanTilePlan>,
+    next_tile: usize,
+    tile_edge: usize,
+    workspace_shapes: usize,
+    workspace_cache_limit_bytes: u64,
+    started_at: Instant,
+}
+
+impl PendingSpanRender {
+    fn matches_request(&self, request_key: u64, source_size: [usize; 2]) -> bool {
+        self.request_key == request_key && self.source_size == source_size
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -97,46 +110,6 @@ impl SpanDisplayPrepareError {
     }
 }
 
-#[derive(Clone, Copy)]
-enum SpanDisplaySkipStats {
-    None,
-    FrameWorkspaceLimit {
-        required_bytes: u64,
-        limit_bytes: u64,
-    },
-    WorkspaceCacheLimit {
-        required_bytes: u64,
-        limit_bytes: u64,
-    },
-    TileWorkspaceLimit {
-        required_bytes: u64,
-        limit_bytes: u64,
-    },
-}
-
-impl SpanDisplaySkipStats {
-    fn frame_workspace_limit(required_bytes: u64, limit_bytes: u64) -> Self {
-        Self::FrameWorkspaceLimit {
-            required_bytes,
-            limit_bytes,
-        }
-    }
-
-    fn workspace_cache_limit(required_bytes: u64, limit_bytes: u64) -> Self {
-        Self::WorkspaceCacheLimit {
-            required_bytes,
-            limit_bytes,
-        }
-    }
-
-    fn tile_workspace_limit(required_bytes: u64, limit_bytes: u64) -> Self {
-        Self::TileWorkspaceLimit {
-            required_bytes,
-            limit_bytes,
-        }
-    }
-}
-
 impl SpanRenderer {
     pub(super) fn new() -> Self {
         Self {
@@ -146,6 +119,7 @@ impl SpanRenderer {
 
     pub(super) fn render(
         &mut self,
+        request_key: u64,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
@@ -157,11 +131,21 @@ impl SpanRenderer {
         let SpanRendererState::Ready(renderer) = &mut self.state else {
             return None;
         };
-        renderer.render(device, encoder, source_view, source_size)
+        renderer.render(request_key, device, encoder, source_view, source_size)
     }
 
-    pub(super) fn is_loading(&self) -> bool {
-        matches!(self.state, SpanRendererState::Loading(_))
+    pub(super) fn has_pending_work(&self) -> bool {
+        match &self.state {
+            SpanRendererState::Loading(_) => true,
+            SpanRendererState::Ready(renderer) => renderer.pending_render.is_some(),
+            _ => false,
+        }
+    }
+
+    pub(super) fn cancel_pending_render(&mut self) {
+        if let SpanRendererState::Ready(renderer) = &mut self.state {
+            renderer.pending_render = None;
+        }
     }
 
     pub(super) fn warm_up(&mut self, device: &wgpu::Device) {
@@ -230,17 +214,38 @@ impl LoadedSpanRenderer {
             workspace_source_size: None,
             workspaces: Vec::new(),
             workspace_bytes: 0,
+            pending_render: None,
         })
     }
 
     fn render(
         &mut self,
+        request_key: u64,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
         source_size: [usize; 2],
     ) -> Option<RealtimeSrOutput> {
-        let render_start = Instant::now();
+        if !self
+            .pending_render
+            .as_ref()
+            .is_some_and(|job| job.matches_request(request_key, source_size))
+        {
+            self.pending_render = None;
+        }
+        if self.pending_render.is_none() {
+            self.start_render_job(request_key, device, source_size)?;
+        }
+        self.encode_pending_render(device, encoder, source_view)
+    }
+
+    fn start_render_job(
+        &mut self,
+        request_key: u64,
+        device: &wgpu::Device,
+        source_size: [usize; 2],
+    ) -> Option<()> {
+        let prepare_started = Instant::now();
         let Some(output_size) = checked_output_size(source_size, self.manifest.scale as usize)
         else {
             record_span_display_skip("output_size_overflow", source_size, [0, 0], 0, 0, 0);
@@ -320,27 +325,8 @@ impl LoadedSpanRenderer {
             }
         };
 
-        let output_texture = create_output_texture(device, output_size);
-        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        for plan in tile_plans {
-            let slot = self.workspaces.get(plan.workspace_index)?;
-            let workspace = &slot.workspace;
-            let params = plan.params;
-            let tile = self
-                .bridge
-                .bind_tile(device, source_view, workspace.input_buffer(), params);
-            let output =
-                self.bridge
-                    .bind_output(device, &tile, workspace.output_buffer(), &output_view);
-            self.kernel.encode_graph_plan_with_hooks(
-                encoder,
-                slot.graph_plan.as_ref()?,
-                |pass| self.bridge.dispatch_input(pass, &tile, params),
-                |pass| self.bridge.dispatch_output(pass, &tile, &output, params),
-            );
-        }
-        record_span_display_encode(
-            render_start.elapsed(),
+        record_span_display_prepare(
+            prepare_started.elapsed(),
             source_size,
             output_size,
             tile_count,
@@ -352,9 +338,132 @@ impl LoadedSpanRenderer {
             estimated_dispatch_count(&self.manifest, tile_count),
         );
 
+        let output_texture = create_output_texture(device, output_size);
+        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.pending_render = Some(PendingSpanRender {
+            request_key,
+            source_size,
+            output_size,
+            output_texture,
+            output_view,
+            tile_plans,
+            next_tile: 0,
+            tile_edge,
+            workspace_shapes,
+            workspace_cache_limit_bytes,
+            started_at: Instant::now(),
+        });
+        Some(())
+    }
+
+    fn encode_pending_render(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source_view: &wgpu::TextureView,
+    ) -> Option<RealtimeSrOutput> {
+        let batch_started = Instant::now();
+        let tiles_per_frame = span_display_tiles_per_frame();
+        let (
+            source_size,
+            output_size,
+            tile_count,
+            workspace_shapes,
+            workspace_cache_limit_bytes,
+            tile_edge,
+            encoded_tiles,
+            next_tile,
+            completed,
+        ) = match {
+            let job = self.pending_render.as_mut()?;
+            let start_tile = job.next_tile;
+            let end_tile = job
+                .next_tile
+                .saturating_add(tiles_per_frame)
+                .min(job.tile_plans.len());
+            let mut abort_reason = None;
+            for plan in &job.tile_plans[start_tile..end_tile] {
+                let Some(slot) = self.workspaces.get(plan.workspace_index) else {
+                    abort_reason = Some("missing_workspace");
+                    break;
+                };
+                let Some(graph_plan) = slot.graph_plan.as_ref() else {
+                    abort_reason = Some("missing_graph_plan");
+                    break;
+                };
+                let workspace = &slot.workspace;
+                let params = plan.params;
+                let tile =
+                    self.bridge
+                        .bind_tile(device, source_view, workspace.input_buffer(), params);
+                let output = self.bridge.bind_output(
+                    device,
+                    &tile,
+                    workspace.output_buffer(),
+                    &job.output_view,
+                );
+                self.kernel.encode_graph_plan_with_hooks(
+                    encoder,
+                    graph_plan,
+                    |pass| self.bridge.dispatch_input(pass, &tile, params),
+                    |pass| self.bridge.dispatch_output(pass, &tile, &output, params),
+                );
+            }
+            if let Some(reason) = abort_reason {
+                Err(reason)
+            } else {
+                job.next_tile = end_tile;
+                Ok((
+                    job.source_size,
+                    job.output_size,
+                    job.tile_plans.len(),
+                    job.workspace_shapes,
+                    job.workspace_cache_limit_bytes,
+                    job.tile_edge,
+                    end_tile.saturating_sub(start_tile),
+                    job.next_tile,
+                    job.next_tile >= job.tile_plans.len(),
+                ))
+            }
+        } {
+            Ok(batch) => batch,
+            Err(reason) => return self.abort_pending_render(reason),
+        };
+
+        record_span_display_tile_batch(
+            batch_started.elapsed(),
+            source_size,
+            output_size,
+            tile_count,
+            encoded_tiles,
+            next_tile,
+            tiles_per_frame,
+            completed,
+            tile_edge,
+            estimated_dispatch_count(&self.manifest, encoded_tiles),
+        );
+        if !completed {
+            return None;
+        }
+
+        let job = self.pending_render.take()?;
+        record_span_display_encode(
+            job.started_at.elapsed(),
+            source_size,
+            output_size,
+            tile_count,
+            workspace_shapes,
+            self.workspaces.len(),
+            self.workspace_bytes,
+            workspace_cache_limit_bytes,
+            tile_edge,
+            estimated_dispatch_count(&self.manifest, tile_count),
+            tiles_per_frame,
+        );
+
         Some(RealtimeSrOutput {
-            texture: output_texture,
-            view: output_view,
+            texture: job.output_texture,
+            view: job.output_view,
             size: output_size,
             byte_size: output_size[0]
                 .saturating_mul(output_size[1])
@@ -362,11 +471,25 @@ impl LoadedSpanRenderer {
         })
     }
 
+    fn abort_pending_render(&mut self, reason: &'static str) -> Option<RealtimeSrOutput> {
+        let job = self.pending_render.take()?;
+        record_span_display_skip(
+            reason,
+            job.source_size,
+            job.output_size,
+            job.tile_edge,
+            job.tile_plans.len(),
+            job.workspace_shapes,
+        );
+        None
+    }
+
     fn reset_workspace_cache_if_source_changed(&mut self, source_size: [usize; 2]) {
         if self.workspace_source_size == Some(source_size) {
             return;
         }
         self.workspace_source_size = Some(source_size);
+        self.pending_render = None;
         self.workspaces.clear();
         self.workspace_bytes = 0;
     }
@@ -585,188 +708,6 @@ fn distinct_workspace_sizes(specs: &[SpanTileSpec]) -> Vec<[usize; 2]> {
     sizes
 }
 
-fn record_span_display_encode(
-    duration: Duration,
-    source_size: [usize; 2],
-    output_size: [usize; 2],
-    tile_count: usize,
-    workspace_shapes: usize,
-    workspace_slots: usize,
-    workspace_bytes: u64,
-    workspace_cache_limit_bytes: u64,
-    tile_edge: usize,
-    estimated_dispatches: usize,
-) {
-    perf_trace::record_duration(
-        "span_display_encode",
-        duration,
-        &[
-            PerfField::Str("method", "srlab_span_x2"),
-            PerfField::Usize("source_width", source_size[0]),
-            PerfField::Usize("source_height", source_size[1]),
-            PerfField::Usize("output_width", output_size[0]),
-            PerfField::Usize("output_height", output_size[1]),
-            PerfField::Usize("tile_count", tile_count),
-            PerfField::Usize("workspace_shapes", workspace_shapes),
-            PerfField::Usize("workspace_slots", workspace_slots),
-            PerfField::Usize("tile_edge", tile_edge),
-            PerfField::Usize("estimated_dispatches", estimated_dispatches),
-            PerfField::Usize(
-                "workspace_cache_bytes",
-                usize_from_u64_saturating(workspace_bytes),
-            ),
-            PerfField::Usize(
-                "workspace_cache_limit_bytes",
-                usize_from_u64_saturating(workspace_cache_limit_bytes),
-            ),
-        ],
-    );
-}
-
-fn record_span_display_skip(
-    reason: &'static str,
-    source_size: [usize; 2],
-    output_size: [usize; 2],
-    tile_edge: usize,
-    tile_count: usize,
-    workspace_shapes: usize,
-) {
-    record_span_display_skip_with_stats(
-        reason,
-        source_size,
-        output_size,
-        tile_edge,
-        tile_count,
-        workspace_shapes,
-        SpanDisplaySkipStats::None,
-    );
-}
-
-fn record_span_display_skip_with_stats(
-    reason: &'static str,
-    source_size: [usize; 2],
-    output_size: [usize; 2],
-    tile_edge: usize,
-    tile_count: usize,
-    workspace_shapes: usize,
-    stats: SpanDisplaySkipStats,
-) {
-    macro_rules! record_skip {
-        ($($extra:expr),* $(,)?) => {{
-            perf_trace::record_duration(
-                "span_display_skip",
-                Duration::ZERO,
-                &[
-                    PerfField::Str("method", "srlab_span_x2"),
-                    PerfField::Str("reason", reason),
-                    PerfField::Usize("source_width", source_size[0]),
-                    PerfField::Usize("source_height", source_size[1]),
-                    PerfField::Usize("output_width", output_size[0]),
-                    PerfField::Usize("output_height", output_size[1]),
-                    PerfField::Usize("tile_edge", tile_edge),
-                    PerfField::Usize("tile_count", tile_count),
-                    PerfField::Usize("workspace_shapes", workspace_shapes),
-                    $($extra,)*
-                ],
-            );
-        }};
-    }
-
-    match stats {
-        SpanDisplaySkipStats::None => record_skip!(),
-        SpanDisplaySkipStats::FrameWorkspaceLimit {
-            required_bytes,
-            limit_bytes,
-        } => record_skip!(
-            PerfField::Str("workspace_limit_stage", "frame_distinct_workspaces"),
-            PerfField::Usize(
-                "required_workspace_cache_bytes",
-                usize_from_u64_saturating(required_bytes),
-            ),
-            PerfField::Usize(
-                "workspace_cache_limit_bytes",
-                usize_from_u64_saturating(limit_bytes),
-            ),
-        ),
-        SpanDisplaySkipStats::WorkspaceCacheLimit {
-            required_bytes,
-            limit_bytes,
-        } => record_skip!(
-            PerfField::Str("workspace_limit_stage", "workspace_cache_insert"),
-            PerfField::Usize(
-                "required_workspace_cache_bytes",
-                usize_from_u64_saturating(required_bytes),
-            ),
-            PerfField::Usize(
-                "workspace_cache_limit_bytes",
-                usize_from_u64_saturating(limit_bytes),
-            ),
-        ),
-        SpanDisplaySkipStats::TileWorkspaceLimit {
-            required_bytes,
-            limit_bytes,
-        } => record_skip!(
-            PerfField::Str("workspace_limit_stage", "tile_transient"),
-            PerfField::Usize(
-                "tile_workspace_bytes",
-                usize_from_u64_saturating(required_bytes),
-            ),
-            PerfField::Usize(
-                "tile_workspace_limit_bytes",
-                usize_from_u64_saturating(limit_bytes),
-            ),
-        ),
-    }
-}
-
-fn usize_from_u64_saturating(value: u64) -> usize {
-    usize::try_from(value).unwrap_or(usize::MAX)
-}
-
-fn estimated_dispatch_count(manifest: &SrLabManifest, tile_count: usize) -> usize {
-    let span_graph_dispatches = manifest
-        .span
-        .as_ref()
-        .map(|span| 7usize.saturating_add(4usize.saturating_mul(span.block_count as usize)))
-        .unwrap_or_default();
-    let bridge_dispatches = 2usize;
-    tile_count.saturating_mul(span_graph_dispatches.saturating_add(bridge_dispatches))
-}
-
-fn span_display_tile_edge() -> usize {
-    static TILE_EDGE: OnceLock<usize> = OnceLock::new();
-    *TILE_EDGE.get_or_init(|| {
-        parse_span_display_tile_edge(env::var(EXPERIMENT_SPAN_TILE_EDGE_ENV).ok().as_deref())
-            .unwrap_or(DEFAULT_SPAN_TILE_EDGE)
-    })
-}
-
-fn parse_span_display_tile_edge(value: Option<&str>) -> Option<usize> {
-    let edge = value?.trim().parse::<usize>().ok()?;
-    (MIN_DISPLAY_TILE_EDGE..=MAX_DISPLAY_TILE_EDGE)
-        .contains(&edge)
-        .then_some(edge)
-}
-
-fn span_display_workspace_cache_limit_bytes() -> u64 {
-    static CACHE_LIMIT_BYTES: OnceLock<u64> = OnceLock::new();
-    *CACHE_LIMIT_BYTES.get_or_init(|| {
-        parse_span_display_workspace_cache_mb(
-            env::var(EXPERIMENT_SPAN_WORKSPACE_CACHE_MB_ENV)
-                .ok()
-                .as_deref(),
-        )
-        .unwrap_or(DEFAULT_DISPLAY_WORKSPACE_CACHE_MB * MIB_BYTES)
-    })
-}
-
-fn parse_span_display_workspace_cache_mb(value: Option<&str>) -> Option<u64> {
-    let mb = value?.trim().parse::<u64>().ok()?;
-    (MIN_DISPLAY_WORKSPACE_CACHE_MB..=MAX_DISPLAY_WORKSPACE_CACHE_MB)
-        .contains(&mb)
-        .then_some(mb.saturating_mul(MIB_BYTES))
-}
-
 fn fits_texture_limit(device: &wgpu::Device, size: [usize; 2]) -> bool {
     let max = device.limits().max_texture_dimension_2d as usize;
     size[0] <= max && size[1] <= max
@@ -774,12 +715,8 @@ fn fits_texture_limit(device: &wgpu::Device, size: [usize; 2]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        distinct_workspace_sizes, estimated_dispatch_count, parse_span_display_tile_edge,
-        parse_span_display_workspace_cache_mb, MIB_BYTES,
-    };
+    use super::distinct_workspace_sizes;
     use crate::core::sr_lab::gpu::tiled::SpanTileSpec;
-    use crate::core::sr_lab::{SrLabFamily, SrLabManifest, SrLabSpanMetadata};
 
     #[test]
     fn distinct_workspace_sizes_preserve_first_seen_shapes() {
@@ -817,64 +754,5 @@ mod tests {
         ];
 
         assert_eq!(distinct_workspace_sizes(&specs), vec![[8, 6], [4, 6]]);
-    }
-
-    #[test]
-    fn span_display_dispatch_estimate_includes_bridge_and_graph_passes() {
-        let manifest = SrLabManifest {
-            name: "SPAN-S x2".to_owned(),
-            family: SrLabFamily::SpanS,
-            variant: Some("SPAN-S".to_owned()),
-            scale: 2,
-            input_channels: 3,
-            output_channels: 3,
-            weights_format: "srlab01".to_owned(),
-            weights_file: Some("weights.srlab".to_owned()),
-            weights_sha256: "0".repeat(64),
-            source: "test".to_owned(),
-            source_commit: None,
-            source_checkpoint_url: None,
-            source_checkpoint_archive_sha256: None,
-            source_checkpoint_file: None,
-            source_checkpoint_sha256: None,
-            license: "Apache-2.0".to_owned(),
-            notes: Vec::new(),
-            span: Some(SrLabSpanMetadata {
-                feature_channels: 48,
-                block_count: 6,
-                reparameterized_conv3xc: true,
-                img_range: 255.0,
-                rgb_mean: [0.4488, 0.4371, 0.4040],
-            }),
-            layers: Vec::new(),
-        };
-
-        assert_eq!(estimated_dispatch_count(&manifest, 96), 3168);
-    }
-
-    #[test]
-    fn span_display_tile_edge_override_accepts_bounded_values() {
-        assert_eq!(parse_span_display_tile_edge(Some("128")), Some(128));
-        assert_eq!(parse_span_display_tile_edge(Some(" 72 ")), Some(72));
-        assert_eq!(parse_span_display_tile_edge(Some("31")), None);
-        assert_eq!(parse_span_display_tile_edge(Some("257")), None);
-        assert_eq!(parse_span_display_tile_edge(Some("wide")), None);
-        assert_eq!(parse_span_display_tile_edge(None), None);
-    }
-
-    #[test]
-    fn span_display_workspace_cache_override_accepts_bounded_mib() {
-        assert_eq!(
-            parse_span_display_workspace_cache_mb(Some("256")),
-            Some(256 * MIB_BYTES)
-        );
-        assert_eq!(
-            parse_span_display_workspace_cache_mb(Some(" 512 ")),
-            Some(512 * MIB_BYTES)
-        );
-        assert_eq!(parse_span_display_workspace_cache_mb(Some("63")), None);
-        assert_eq!(parse_span_display_workspace_cache_mb(Some("513")), None);
-        assert_eq!(parse_span_display_workspace_cache_mb(Some("large")), None);
-        assert_eq!(parse_span_display_workspace_cache_mb(None), None);
     }
 }
