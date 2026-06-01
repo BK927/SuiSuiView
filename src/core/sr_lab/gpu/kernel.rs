@@ -4,8 +4,8 @@ use super::buffers::{
 };
 use super::model_validation::validate_span_model;
 use super::validation::{
-    span_transient_byte_size, validate_conv_shape, validate_span_manifest,
-    validate_storage_buffer_sizes, validate_transient_size,
+    span_transient_byte_size, validate_span_manifest, validate_storage_buffer_sizes,
+    validate_transient_size,
 };
 use crate::core::sr_lab::cpu::FeatureMap;
 use crate::core::sr_lab::SrLabManifest;
@@ -213,6 +213,17 @@ impl SpanGpuKernel {
             model,
             workspace,
         )?;
+        self.encode_prevalidated_workspace(encoder, manifest, model, workspace)
+    }
+
+    /// Encodes a workspace whose manifest, model, and buffer shapes were already validated.
+    pub(crate) fn encode_prevalidated_workspace(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        manifest: &SrLabManifest,
+        model: &SpanGpuModel,
+        workspace: &SpanGpuWorkspace,
+    ) -> Result<(), String> {
         let span = manifest
             .span
             .as_ref()
@@ -416,7 +427,6 @@ impl SpanGpuKernel {
     ) -> Result<(), String> {
         let weight = model.tensor(&format!("{name}.weight"))?;
         let bias = model.tensor(&format!("{name}.bias"))?;
-        validate_conv_shape(input, output, weight, bias, kernel, name)?;
         let mut params = params_for(input, output);
         params.kernel = kernel;
         params.padding = padding;

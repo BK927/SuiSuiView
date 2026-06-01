@@ -262,7 +262,7 @@ impl LoadedSpanRenderer {
             self.bridge.encode_input(encoder, &tile, params);
 
             self.kernel
-                .encode_workspace(encoder, &self.manifest, &self.model, workspace)
+                .encode_prevalidated_workspace(encoder, &self.manifest, &self.model, workspace)
                 .ok()?;
             self.bridge.encode_output(
                 device,
