@@ -183,6 +183,15 @@ impl RealtimeSrResources {
             _ => None,
         }
     }
+
+    pub(super) fn has_pending_async_work(&self, method: DisplayUpscaler) -> bool {
+        match method {
+            DisplayUpscaler::WgslSrLabSpanX2 => {
+                self.span.as_ref().is_some_and(SpanRenderer::is_loading)
+            }
+            _ => false,
+        }
+    }
 }
 
 struct CunnyRenderer {

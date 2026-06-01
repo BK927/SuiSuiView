@@ -14,8 +14,9 @@ use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use wgpu::util::DeviceExt;
 
 pub(super) const GPU_SOURCE_TEXTURE_BUDGET_BYTES: usize = 192 * 1024 * 1024;
@@ -107,6 +108,7 @@ impl SuiSuiViewApp {
                 request.rect,
                 request.opacity,
             ),
+            ctx: painter.ctx().clone(),
         };
         painter.add(egui_wgpu::Callback::new_paint_callback(
             request.rect,
@@ -219,6 +221,7 @@ struct GpuEffectCallback {
     rect: Rect,
     target_format: wgpu::TextureFormat,
     draw_id: u64,
+    ctx: egui::Context,
 }
 
 impl CallbackTrait for GpuEffectCallback {
@@ -266,6 +269,7 @@ impl CallbackTrait for GpuEffectCallback {
                 origin,
                 target_size,
                 self.opacity,
+                &self.ctx,
             );
             resources.insert_draw_state(self.draw_id, draw_state);
         }
@@ -527,6 +531,7 @@ impl GpuPaintResources {
         origin: [u32; 2],
         target_size: [u32; 2],
         opacity: f32,
+        ctx: &egui::Context,
     ) -> GpuDrawState {
         let effective_upscaler = display_upscaler
             .resolve_for_render(output_size, target_size)
@@ -541,6 +546,9 @@ impl GpuPaintResources {
                 source_size,
                 effective_upscaler,
             );
+            if self.realtime_sr.has_pending_async_work(effective_upscaler) {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
             if let Some(intermediate) = self.intermediate_textures.peek(&sr_key).cloned() {
                 let params = params_for_effects(
                     intermediate.size,

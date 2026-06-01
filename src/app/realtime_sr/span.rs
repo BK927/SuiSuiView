@@ -19,9 +19,11 @@ use crate::core::sr_lab::{
     sha256::sha256_hex,
     SrLabFamily, SrLabManifest,
 };
+use crossbeam_channel::{bounded, Receiver, TryRecvError};
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::thread;
 
 const EXPERIMENT_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_SPAN_MANIFEST";
 const SR_LAB_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_MANIFEST";
@@ -39,6 +41,7 @@ pub(super) struct SpanRenderer {
 
 enum SpanRendererState {
     Pending,
+    Loading(Receiver<Result<LoadedSpanRenderer, String>>),
     Ready(Box<LoadedSpanRenderer>),
     Disabled,
 }
@@ -77,31 +80,69 @@ impl SpanRenderer {
         source_view: &wgpu::TextureView,
         source_size: [usize; 2],
     ) -> Option<RealtimeSrOutput> {
-        if matches!(self.state, SpanRendererState::Pending) {
-            self.state = match LoadedSpanRenderer::new(device) {
-                Ok(renderer) => SpanRendererState::Ready(Box::new(renderer)),
-                Err(_error) => SpanRendererState::Disabled,
-            };
-        }
+        self.start_loading_if_needed(device);
+        self.finish_loading_if_ready();
 
         let SpanRendererState::Ready(renderer) = &mut self.state else {
             return None;
         };
         renderer.render(device, encoder, source_view, source_size)
     }
+
+    pub(super) fn is_loading(&self) -> bool {
+        matches!(self.state, SpanRendererState::Loading(_))
+    }
+
+    fn start_loading_if_needed(&mut self, device: &wgpu::Device) {
+        if !matches!(self.state, SpanRendererState::Pending) {
+            return;
+        }
+        self.state = LoadedSpanRenderer::spawn_loader(device.clone())
+            .map(SpanRendererState::Loading)
+            .unwrap_or(SpanRendererState::Disabled);
+    }
+
+    fn finish_loading_if_ready(&mut self) {
+        let SpanRendererState::Loading(receiver) = &self.state else {
+            return;
+        };
+        let next_state = match receiver.try_recv() {
+            Ok(Ok(renderer)) => SpanRendererState::Ready(Box::new(renderer)),
+            Ok(Err(_)) | Err(TryRecvError::Disconnected) => SpanRendererState::Disabled,
+            Err(TryRecvError::Empty) => return,
+        };
+        self.state = next_state;
+    }
 }
 
 impl LoadedSpanRenderer {
-    fn new(device: &wgpu::Device) -> Result<Self, String> {
-        let manifest_path = span_manifest_path()
-            .ok_or_else(|| "SPAN display experiment requires a manifest env var".to_owned())?;
+    fn spawn_loader(device: wgpu::Device) -> Option<Receiver<Result<Self, String>>> {
+        let manifest_path = span_manifest_path()?;
+        let (sender, receiver) = bounded(1);
+        let _loader = thread::Builder::new()
+            .name("suisuiview-span-display-loader".to_owned())
+            .spawn(move || {
+                let _ = sender.send(Self::load(device, manifest_path));
+            })
+            .ok()?;
+        Some(receiver)
+    }
+
+    fn load(device: wgpu::Device, manifest_path: PathBuf) -> Result<Self, String> {
         let manifest = sr_lab::read_manifest(&manifest_path).map_err(|error| error.to_string())?;
         sr_lab::inspect_manifest(&manifest).map_err(|error| error.to_string())?;
         validate_display_manifest(&manifest)?;
         let weights = read_checked_weights(&manifest_path, &manifest)?;
+        Self::from_weights(&device, manifest, &weights)
+    }
 
+    fn from_weights(
+        device: &wgpu::Device,
+        manifest: SrLabManifest,
+        weights: &SrLabWeights,
+    ) -> Result<Self, String> {
         let kernel = SpanGpuKernel::new(device.clone());
-        let model = SpanGpuModel::from_weights(device, &weights);
+        let model = SpanGpuModel::from_weights(device, weights);
         let bridge = SpanBridge::new(device);
 
         Ok(Self {
@@ -350,10 +391,8 @@ fn read_checked_weights(
         .weights_file
         .as_deref()
         .ok_or_else(|| "SPAN display experiment requires manifest weights_file".to_owned())?;
-    let weights_path = manifest_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(weights_file);
+    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let weights_path = checked_weights_path(manifest_dir, weights_file)?;
     let byte_len = fs::metadata(&weights_path)
         .map_err(|error| error.to_string())?
         .len();
@@ -372,6 +411,50 @@ fn read_checked_weights(
         ));
     }
     blob::parse_weights(&bytes)
+}
+
+fn checked_weights_path(manifest_dir: &Path, weights_file: &str) -> Result<PathBuf, String> {
+    let relative_path = safe_relative_weights_path(weights_file)?;
+    let weights_path = manifest_dir.join(relative_path);
+    let canonical_manifest_dir = fs::canonicalize(manifest_dir).map_err(|error| {
+        format!(
+            "SPAN display manifest directory cannot be resolved: {}",
+            error
+        )
+    })?;
+    let canonical_weights_path = fs::canonicalize(&weights_path)
+        .map_err(|error| format!("SPAN display weight path cannot be resolved: {}", error))?;
+    if !canonical_weights_path.starts_with(&canonical_manifest_dir) {
+        return Err("SPAN display weight path must stay under the manifest directory".to_owned());
+    }
+    Ok(canonical_weights_path)
+}
+
+fn safe_relative_weights_path(weights_file: &str) -> Result<PathBuf, String> {
+    let weights_file = weights_file.trim();
+    if weights_file.is_empty() {
+        return Err("SPAN display experiment requires a non-empty weights_file".to_owned());
+    }
+    let path = Path::new(weights_file);
+    if path.is_absolute() {
+        return Err("SPAN display weight path must be relative".to_owned());
+    }
+    let mut saw_normal_component = false;
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => saw_normal_component = true,
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(
+                    "SPAN display weight path must not leave the manifest directory".to_owned(),
+                );
+            }
+        }
+    }
+    if !saw_normal_component {
+        return Err("SPAN display weight path must name a file".to_owned());
+    }
+    Ok(path.to_path_buf())
 }
 
 fn input_shape(size: [usize; 2]) -> FeatureMap {
@@ -405,7 +488,7 @@ fn fits_texture_limit(device: &wgpu::Device, size: [usize; 2]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::distinct_workspace_sizes;
+    use super::{distinct_workspace_sizes, safe_relative_weights_path};
     use crate::core::sr_lab::gpu::tiled::SpanTileSpec;
 
     #[test]
@@ -444,5 +527,18 @@ mod tests {
         ];
 
         assert_eq!(distinct_workspace_sizes(&specs), vec![[8, 6], [4, 6]]);
+    }
+
+    #[test]
+    fn span_display_weight_paths_must_stay_relative() {
+        assert_eq!(
+            safe_relative_weights_path("weights.srlab").unwrap(),
+            std::path::PathBuf::from("weights.srlab")
+        );
+        assert!(safe_relative_weights_path("").is_err());
+        assert!(safe_relative_weights_path(".").is_err());
+        assert!(safe_relative_weights_path("..\\weights.srlab").is_err());
+        assert!(safe_relative_weights_path("nested\\..\\weights.srlab").is_err());
+        assert!(safe_relative_weights_path("C:\\models\\weights.srlab").is_err());
     }
 }
