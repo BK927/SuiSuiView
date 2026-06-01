@@ -752,24 +752,37 @@ impl GpuPaintResources {
         let output_size = output.size;
         let output_byte_size = output.byte_size;
         let bind_group = Arc::new(self.texture_bind_group_for(device, &output.view));
-        if let Some((_old_key, old_texture)) = self.intermediate_textures.push(
-            key,
-            Arc::new(GpuIntermediateTexture {
-                _texture: output.texture,
-                _view: output.view,
-                bind_group,
-                size: output_size,
-                byte_size: output_byte_size,
-            }),
-        ) {
+        let evicted_on_insert = if let Some((_old_key, old_texture)) =
+            self.intermediate_textures.push(
+                key,
+                Arc::new(GpuIntermediateTexture {
+                    _texture: output.texture,
+                    _view: output.view,
+                    bind_group,
+                    size: output_size,
+                    byte_size: output_byte_size,
+                }),
+            ) {
             self.intermediate_texture_bytes = self
                 .intermediate_texture_bytes
                 .saturating_sub(old_texture.byte_size);
-        }
+            true
+        } else {
+            false
+        };
         self.intermediate_texture_bytes = self
             .intermediate_texture_bytes
             .saturating_add(output_byte_size);
         self.prune_intermediate_textures();
+        record_realtime_sr_texture_ready(
+            method,
+            source_size,
+            output_size,
+            output_byte_size,
+            self.intermediate_textures.len(),
+            self.intermediate_texture_bytes,
+            evicted_on_insert,
+        );
     }
 
     fn insert_draw_state(&mut self, key: u64, draw_state: GpuDrawState) {
@@ -935,6 +948,45 @@ fn record_display_upscaler_render(
             PerfField::Usize("rendered_height", rendered_size[1]),
         ],
     );
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+fn record_realtime_sr_texture_ready(
+    method: DisplayUpscaler,
+    source_size: [usize; 2],
+    output_size: [usize; 2],
+    output_byte_size: usize,
+    cache_entries: usize,
+    cache_bytes: usize,
+    evicted_on_insert: bool,
+) {
+    perf_trace::record_duration(
+        "realtime_sr_texture_ready",
+        Duration::ZERO,
+        &[
+            PerfField::Str("method", method.token()),
+            PerfField::Usize("source_width", source_size[0]),
+            PerfField::Usize("source_height", source_size[1]),
+            PerfField::Usize("output_width", output_size[0]),
+            PerfField::Usize("output_height", output_size[1]),
+            PerfField::Usize("output_bytes", output_byte_size),
+            PerfField::Usize("cache_entries", cache_entries),
+            PerfField::Usize("cache_bytes", cache_bytes),
+            PerfField::Bool("evicted_on_insert", evicted_on_insert),
+        ],
+    );
+}
+
+#[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
+fn record_realtime_sr_texture_ready(
+    _method: DisplayUpscaler,
+    _source_size: [usize; 2],
+    _output_size: [usize; 2],
+    _output_byte_size: usize,
+    _cache_entries: usize,
+    _cache_bytes: usize,
+    _evicted_on_insert: bool,
+) {
 }
 
 #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
