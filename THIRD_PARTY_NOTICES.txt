@@ -1308,9 +1308,10 @@ License: MIT
 Copyright: Copyright (c) 2024 Joao Chrisostomo, Kacper Michajłow
 Source: https://github.com/Artoriuz/ArtCNN
   Note: The `--upscale-bench` experiment includes a generated WGSL port
-  derived from `GLSL/ArtCNN_C4F16.glsl`. The port predicts luma and merges
-  source chroma in the final pass. It is not exposed as a user-facing display
-  mode yet.
+  derived from `GLSL/ArtCNN_C4F16.glsl` with source SHA-256
+  `03d0b3d31cb82c898a94a46663021a3e8f02c5a21d69c5cfdf0208de4bfd453e`.
+  The port predicts luma and merges source chroma in the final pass. It is not
+  exposed as a user-facing display mode yet.
 
 ACNetGLSL
 License: MIT
