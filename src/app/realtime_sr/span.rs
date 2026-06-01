@@ -343,15 +343,15 @@ impl LoadedSpanRenderer {
                     .workspaces
                     .get(workspace_index)
                     .ok_or_else(|| "SPAN display workspace cache lookup failed".to_owned())?;
-                validate_span_model(
-                    max_storage_buffer_binding_size,
-                    &self.manifest,
-                    &self.model,
-                    &slot.workspace,
-                )?;
                 if slot.graph_plan.is_some() {
                     None
                 } else {
+                    validate_span_model(
+                        max_storage_buffer_binding_size,
+                        &self.manifest,
+                        &self.model,
+                        &slot.workspace,
+                    )?;
                     Some(self.kernel.create_prevalidated_graph_plan(
                         &self.manifest,
                         &self.model,
