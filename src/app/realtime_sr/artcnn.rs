@@ -1,42 +1,63 @@
 use super::RealtimeSrOutput;
-use crate::core::artcnn_c4f16::{exact_output_size, ArtcnnC4F16, ArtcnnC4F16RenderOptions};
+use crate::core::artcnn_c4f16::{
+    exact_output_size, ArtcnnC4F16, ArtcnnC4F16RenderOptions, ArtcnnC4F16Workspace,
+};
 
 const TRANSIENT_BYTES_LIMIT: u64 = 256 * 1024 * 1024;
+const WORKSPACE_CACHE_BYTES_LIMIT: u64 = 192 * 1024 * 1024;
+const WORKSPACE_CACHE_SLOTS_LIMIT: usize = 4;
 
 pub(super) struct ArtcnnRenderer {
     core: ArtcnnC4F16,
+    workspaces: Vec<ArtcnnWorkspaceSlot>,
+    workspace_bytes: u64,
+}
+
+struct ArtcnnWorkspaceSlot {
+    workspace: ArtcnnC4F16Workspace,
 }
 
 impl ArtcnnRenderer {
     pub(super) fn new(device: &wgpu::Device) -> Self {
         Self {
             core: ArtcnnC4F16::new(device),
+            workspaces: Vec::new(),
+            workspace_bytes: 0,
         }
     }
 
     pub(super) fn render(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
         source_size: [usize; 2],
     ) -> Option<RealtimeSrOutput> {
         let output_size = exact_output_size(source_size).ok()?;
+        let options = ArtcnnC4F16RenderOptions {
+            output_size,
+            output_usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            transient_limit: TRANSIENT_BYTES_LIMIT,
+            readback_padded_bytes_per_row: None,
+        };
+        let slot = self
+            .take_workspace(source_size)
+            .or_else(|| self.create_workspace_slot(device, source_size, &options))?;
+        let should_cache_workspace = slot.workspace.byte_size <= WORKSPACE_CACHE_BYTES_LIMIT;
         let output = self
             .core
-            .render_to_texture(
+            .render_to_texture_with_workspace(
                 device,
                 encoder,
                 source_view,
-                source_size,
-                ArtcnnC4F16RenderOptions {
-                    output_size,
-                    output_usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                    transient_limit: TRANSIENT_BYTES_LIMIT,
-                    readback_padded_bytes_per_row: None,
-                },
+                &slot.workspace,
+                options,
             )
-            .ok()?;
+            .ok();
+        if should_cache_workspace {
+            self.store_workspace(slot);
+        }
+        let output = output?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -49,5 +70,46 @@ impl ArtcnnRenderer {
                 .saturating_mul(output.size[1])
                 .saturating_mul(4),
         })
+    }
+
+    fn create_workspace_slot(
+        &self,
+        device: &wgpu::Device,
+        source_size: [usize; 2],
+        options: &ArtcnnC4F16RenderOptions,
+    ) -> Option<ArtcnnWorkspaceSlot> {
+        self.core
+            .create_workspace(device, source_size, options)
+            .ok()
+            .map(|workspace| ArtcnnWorkspaceSlot { workspace })
+    }
+
+    fn take_workspace(&mut self, source_size: [usize; 2]) -> Option<ArtcnnWorkspaceSlot> {
+        let index = self
+            .workspaces
+            .iter()
+            .position(|slot| slot.workspace.source_size == source_size)?;
+        let slot = self.workspaces.remove(index);
+        self.workspace_bytes = self
+            .workspace_bytes
+            .saturating_sub(slot.workspace.byte_size);
+        Some(slot)
+    }
+
+    fn store_workspace(&mut self, slot: ArtcnnWorkspaceSlot) {
+        let byte_size = slot.workspace.byte_size;
+        while self.workspaces.len() >= WORKSPACE_CACHE_SLOTS_LIMIT
+            || self
+                .workspace_bytes
+                .checked_add(byte_size)
+                .is_none_or(|bytes| bytes > WORKSPACE_CACHE_BYTES_LIMIT)
+        {
+            let evicted = self.workspaces.remove(0);
+            self.workspace_bytes = self
+                .workspace_bytes
+                .saturating_sub(evicted.workspace.byte_size);
+        }
+        self.workspace_bytes = self.workspace_bytes.saturating_add(byte_size);
+        self.workspaces.push(slot);
     }
 }

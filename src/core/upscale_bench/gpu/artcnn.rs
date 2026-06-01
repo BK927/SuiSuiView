@@ -1,4 +1,4 @@
-use super::{align_to, GpuUpscaleOutput, TEXTURE_FORMAT};
+use super::{GpuUpscaleOutput, TEXTURE_FORMAT};
 use crate::core::artcnn_c4f16::{
     extent_for_size, validate_render_options, ArtcnnC4F16, ArtcnnC4F16RenderOptions,
 };
@@ -56,8 +56,11 @@ impl ArtcnnBench {
     ) -> Result<GpuUpscaleOutput, String> {
         let source_size = image.size;
         let unpadded_bytes_per_row = rgba8_bytes_per_row(output_size[0], "ArtCNN C4F16 output")?;
-        let padded_bytes_per_row =
-            align_to(unpadded_bytes_per_row, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let padded_bytes_per_row = align_to_checked(
+            unpadded_bytes_per_row,
+            wgpu::COPY_BYTES_PER_ROW_ALIGNMENT,
+            "ArtCNN C4F16 output row",
+        )?;
         let readback_size = readback_byte_size(padded_bytes_per_row, output_size[1])?;
         let output_rows = u32::try_from(output_size[1])
             .map_err(|_| "ArtCNN C4F16 output row count exceeds u32".to_owned())?;
@@ -183,6 +186,17 @@ fn rgba8_bytes_per_row(width: usize, label: &str) -> Result<u32, String> {
         .checked_mul(4)
         .ok_or_else(|| format!("{label} row byte size overflowed"))?;
     u32::try_from(bytes).map_err(|_| format!("{label} row byte size exceeds u32"))
+}
+
+fn align_to_checked(value: u32, alignment: u32, label: &str) -> Result<u32, String> {
+    if alignment == 0 {
+        return Err(format!("{label} alignment must be non-zero"));
+    }
+    let aligned = (value as u64)
+        .div_ceil(alignment as u64)
+        .checked_mul(alignment as u64)
+        .ok_or_else(|| format!("{label} alignment overflowed"))?;
+    u32::try_from(aligned).map_err(|_| format!("{label} alignment exceeds u32"))
 }
 
 fn readback_byte_size(padded_bytes_per_row: u32, output_height: usize) -> Result<u64, String> {
