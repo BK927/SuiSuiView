@@ -1,8 +1,10 @@
 use crate::core::sr_lab::blob::SrLabWeights;
+use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
 pub(crate) struct SpanGpuModel {
     tensors: Vec<GpuTensor>,
+    tensor_indices: HashMap<String, usize>,
 }
 
 pub(super) struct GpuTensor {
@@ -20,7 +22,7 @@ pub(super) struct GpuBuffer {
 
 impl SpanGpuModel {
     pub(crate) fn from_weights(device: &wgpu::Device, weights: &SrLabWeights) -> Self {
-        let tensors = weights
+        let tensors: Vec<_> = weights
             .tensors
             .iter()
             .map(|tensor| GpuTensor {
@@ -33,13 +35,20 @@ impl SpanGpuModel {
                 }),
             })
             .collect();
-        Self { tensors }
+        let mut tensor_indices = HashMap::with_capacity(tensors.len());
+        for (index, tensor) in tensors.iter().enumerate() {
+            tensor_indices.entry(tensor.name.clone()).or_insert(index);
+        }
+        Self {
+            tensors,
+            tensor_indices,
+        }
     }
 
     pub(super) fn tensor(&self, name: &str) -> Result<&GpuTensor, String> {
-        self.tensors
-            .iter()
-            .find(|tensor| tensor.name == name)
+        self.tensor_indices
+            .get(name)
+            .and_then(|index| self.tensors.get(*index))
             .ok_or_else(|| format!("missing SR Lab GPU tensor: {name}"))
     }
 
