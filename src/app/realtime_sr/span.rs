@@ -261,17 +261,14 @@ impl LoadedSpanRenderer {
             let tile = self
                 .bridge
                 .bind_tile(device, source_view, workspace.input_buffer(), params);
-            self.bridge.encode_input(encoder, &tile, params);
-
-            self.kernel
-                .encode_graph_plan(encoder, slot.graph_plan.as_ref()?);
-            self.bridge.encode_output(
-                device,
+            let output =
+                self.bridge
+                    .bind_output(device, &tile, workspace.output_buffer(), &output_view);
+            self.kernel.encode_graph_plan_with_hooks(
                 encoder,
-                &tile,
-                workspace.output_buffer(),
-                &output_view,
-                params,
+                slot.graph_plan.as_ref()?,
+                |pass| self.bridge.dispatch_input(pass, &tile, params),
+                |pass| self.bridge.dispatch_output(pass, &tile, &output, params),
             );
         }
         record_span_display_encode(

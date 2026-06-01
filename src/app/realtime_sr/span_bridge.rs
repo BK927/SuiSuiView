@@ -36,6 +36,10 @@ pub(super) struct SpanBridgeTile {
     input_bind_group: wgpu::BindGroup,
 }
 
+pub(super) struct SpanBridgeOutput {
+    bind_group: wgpu::BindGroup,
+}
+
 impl SpanBridge {
     pub(super) fn new(device: &wgpu::Device) -> Self {
         let input_bind_group_layout =
@@ -111,34 +115,13 @@ impl SpanBridge {
         }
     }
 
-    pub(super) fn encode_input(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        tile: &SpanBridgeTile,
-        params: SpanBridgeParams,
-    ) {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("suisuiview-realtime-span-rgba-to-chw"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&self.input_pipeline);
-        pass.set_bind_group(0, &tile.input_bind_group, &[]);
-        pass.dispatch_workgroups(
-            params.input_width.div_ceil(8),
-            params.input_height.div_ceil(8),
-            1,
-        );
-    }
-
-    pub(super) fn encode_output(
+    pub(super) fn bind_output(
         &self,
         device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
         tile: &SpanBridgeTile,
         output_buffer: &wgpu::Buffer,
         output_view: &wgpu::TextureView,
-        params: SpanBridgeParams,
-    ) {
+    ) -> SpanBridgeOutput {
         let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("suisuiview-realtime-span-output-bind-group"),
             layout: &self.output_bind_group_layout,
@@ -151,13 +134,36 @@ impl SpanBridge {
                 },
             ],
         });
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("suisuiview-realtime-span-chw-to-rgba"),
-            timestamp_writes: None,
-        });
+        SpanBridgeOutput {
+            bind_group: output_bind_group,
+        }
+    }
+
+    pub(super) fn dispatch_input(
+        &self,
+        pass: &mut wgpu::ComputePass<'_>,
+        tile: &SpanBridgeTile,
+        params: SpanBridgeParams,
+    ) {
+        pass.set_pipeline(&self.input_pipeline);
+        pass.set_bind_group(0, &tile.input_bind_group, &[]);
+        pass.dispatch_workgroups(
+            params.input_width.div_ceil(8),
+            params.input_height.div_ceil(8),
+            1,
+        );
+    }
+
+    pub(super) fn dispatch_output(
+        &self,
+        pass: &mut wgpu::ComputePass<'_>,
+        tile: &SpanBridgeTile,
+        output: &SpanBridgeOutput,
+        params: SpanBridgeParams,
+    ) {
         pass.set_pipeline(&self.output_pipeline);
         pass.set_bind_group(0, &tile.input_bind_group, &[]);
-        pass.set_bind_group(1, &output_bind_group, &[]);
+        pass.set_bind_group(1, &output.bind_group, &[]);
         pass.dispatch_workgroups(
             params.copy_width.div_ceil(8),
             params.copy_height.div_ceil(8),

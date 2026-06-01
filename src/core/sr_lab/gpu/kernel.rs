@@ -398,7 +398,19 @@ impl SpanGpuKernel {
         encoder: &mut wgpu::CommandEncoder,
         graph_plan: &SpanGpuGraphPlan,
     ) {
+        self.encode_graph_plan_with_hooks(encoder, graph_plan, |_| {}, |_| {});
+    }
+
+    pub(crate) fn encode_graph_plan_with_hooks(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        graph_plan: &SpanGpuGraphPlan,
+        mut before_first_dispatch_run: impl FnMut(&mut wgpu::ComputePass<'_>),
+        mut after_last_dispatch_run: impl FnMut(&mut wgpu::ComputePass<'_>),
+    ) {
         let steps = graph_plan.steps.as_slice();
+        let dispatch_runs = dispatch_run_count(steps);
+        let mut dispatch_run_index = 0;
         let mut step_index = 0;
         while step_index < steps.len() {
             match &steps[step_index] {
@@ -407,7 +419,20 @@ impl SpanGpuKernel {
                     while matches!(steps.get(step_index), Some(SpanGpuGraphStep::Dispatch(_))) {
                         step_index += 1;
                     }
-                    self.dispatch_prebuilt_run(encoder, &steps[run_start..step_index]);
+                    let is_first_run = dispatch_run_index == 0;
+                    dispatch_run_index += 1;
+                    let is_last_run = dispatch_run_index == dispatch_runs;
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("suisuiview-sr-lab-span-pass"),
+                        timestamp_writes: None,
+                    });
+                    if is_first_run {
+                        before_first_dispatch_run(&mut pass);
+                    }
+                    self.dispatch_prebuilt_run(&mut pass, &steps[run_start..step_index]);
+                    if is_last_run {
+                        after_last_dispatch_run(&mut pass);
+                    }
                 }
                 SpanGpuGraphStep::Copy(copy) => {
                     encoder.copy_buffer_to_buffer(
@@ -608,15 +633,7 @@ impl SpanGpuKernel {
         }));
     }
 
-    fn dispatch_prebuilt_run(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        steps: &[SpanGpuGraphStep],
-    ) {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("suisuiview-sr-lab-span-pass"),
-            timestamp_writes: None,
-        });
+    fn dispatch_prebuilt_run(&self, pass: &mut wgpu::ComputePass<'_>, steps: &[SpanGpuGraphStep]) {
         let mut active_pipeline = None;
         for step in steps {
             let SpanGpuGraphStep::Dispatch(dispatch) = step else {
@@ -653,6 +670,19 @@ fn push_copy(steps: &mut Vec<SpanGpuGraphStep>, source: &GpuBuffer, destination:
         destination: destination.buffer.clone(),
         byte_len: destination.byte_len(),
     }));
+}
+
+fn dispatch_run_count(steps: &[SpanGpuGraphStep]) -> usize {
+    let mut count = 0;
+    let mut previous_was_dispatch = false;
+    for step in steps {
+        let is_dispatch = matches!(step, SpanGpuGraphStep::Dispatch(_));
+        if is_dispatch && !previous_was_dispatch {
+            count += 1;
+        }
+        previous_was_dispatch = is_dispatch;
+    }
+    count
 }
 
 #[allow(dead_code)]
