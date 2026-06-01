@@ -10,6 +10,7 @@ mod acnet;
 mod anime4k;
 mod artcnn;
 mod span;
+mod span_bridge;
 
 use acnet::AcnetRenderer;
 use anime4k::{Anime4kMRenderer, Anime4kSRenderer};

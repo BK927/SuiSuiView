@@ -185,18 +185,18 @@ pub fn run_span_gpu_tiled_reference(
 }
 
 #[derive(Clone, Copy)]
-struct SpanTileSpec {
-    x: usize,
-    y: usize,
-    width: usize,
-    height: usize,
-    crop_x: usize,
-    crop_y: usize,
-    crop_width: usize,
-    crop_height: usize,
+pub(crate) struct SpanTileSpec {
+    pub(crate) x: usize,
+    pub(crate) y: usize,
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) crop_x: usize,
+    pub(crate) crop_y: usize,
+    pub(crate) crop_width: usize,
+    pub(crate) crop_height: usize,
 }
 
-fn span_tile_halo(manifest: &SrLabManifest) -> Result<usize, String> {
+pub(crate) fn span_tile_halo(manifest: &SrLabManifest) -> Result<usize, String> {
     let block_count = manifest
         .span
         .as_ref()
@@ -208,7 +208,14 @@ fn span_tile_halo(manifest: &SrLabManifest) -> Result<usize, String> {
         .ok_or_else(|| "SPAN tiled halo radius overflowed".to_owned())
 }
 
-fn span_tile_specs(input: &FeatureMap, tile_edge: usize, halo: usize) -> Vec<SpanTileSpec> {
+pub(crate) fn span_tile_specs(
+    input: &FeatureMap,
+    tile_edge: usize,
+    halo: usize,
+) -> Vec<SpanTileSpec> {
+    if tile_edge == 0 {
+        return Vec::new();
+    }
     let mut specs = Vec::new();
     let mut y = 0;
     while y < input.height {
@@ -237,7 +244,7 @@ fn span_tile_specs(input: &FeatureMap, tile_edge: usize, halo: usize) -> Vec<Spa
     specs
 }
 
-fn workspace_shape_count(tile_specs: &[SpanTileSpec]) -> usize {
+pub(crate) fn workspace_shape_count(tile_specs: &[SpanTileSpec]) -> usize {
     let mut shapes = Vec::new();
     for spec in tile_specs {
         let shape = (spec.crop_width, spec.crop_height);
@@ -381,5 +388,11 @@ mod tests {
         let specs = span_tile_specs(&input, 4, 21);
 
         assert_eq!(workspace_shape_count(&specs), 1);
+    }
+
+    #[test]
+    fn tiled_specs_reject_zero_tile_edge() {
+        let input = FeatureMap::zeros(3, 6, 8);
+        assert!(span_tile_specs(&input, 0, 21).is_empty());
     }
 }

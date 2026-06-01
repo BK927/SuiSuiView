@@ -3,7 +3,7 @@ use super::kernel::SpanGpuWorkspace;
 use super::validation::validate_conv_shape;
 use crate::core::sr_lab::SrLabManifest;
 
-pub(super) fn validate_span_model(
+pub(crate) fn validate_span_model(
     max_storage_buffer_binding_size: u64,
     manifest: &SrLabManifest,
     model: &SpanGpuModel,

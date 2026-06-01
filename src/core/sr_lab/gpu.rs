@@ -1,7 +1,7 @@
 pub(crate) mod buffers;
 mod executor;
 pub(crate) mod kernel;
-mod model_validation;
+pub(crate) mod model_validation;
 pub(crate) mod tiled;
 mod validation;
 
