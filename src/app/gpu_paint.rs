@@ -544,6 +544,7 @@ impl GpuPaintResources {
         if RealtimeSrResources::is_supported(effective_upscaler) {
             let sr_key = realtime_sr_texture_key(source_key, source_size, effective_upscaler);
             if self.should_defer_realtime_sr_first_frame(sr_key, effective_upscaler) {
+                self.realtime_sr.warm_up_async(effective_upscaler, device);
                 ctx.request_repaint_after(Duration::from_millis(16));
             } else {
                 self.ensure_realtime_sr_texture(

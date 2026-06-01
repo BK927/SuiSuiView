@@ -99,6 +99,11 @@ impl SpanRenderer {
         matches!(self.state, SpanRendererState::Loading(_))
     }
 
+    pub(super) fn warm_up(&mut self, device: &wgpu::Device) {
+        self.start_loading_if_needed(device);
+        self.finish_loading_if_ready();
+    }
+
     fn start_loading_if_needed(&mut self, device: &wgpu::Device) {
         if !matches!(self.state, SpanRendererState::Pending) {
             return;

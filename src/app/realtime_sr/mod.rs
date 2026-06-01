@@ -195,6 +195,20 @@ impl RealtimeSrResources {
             _ => false,
         }
     }
+
+    pub(super) fn warm_up_async(&mut self, method: DisplayUpscaler, device: &wgpu::Device) {
+        match method {
+            DisplayUpscaler::WgslArtcnnC4F16 => self
+                .artcnn
+                .get_or_insert_with(ArtcnnRenderer::new)
+                .warm_up(device),
+            DisplayUpscaler::WgslSrLabSpanX2 => self
+                .span
+                .get_or_insert_with(SpanRenderer::new)
+                .warm_up(device),
+            _ => {}
+        }
+    }
 }
 
 struct CunnyRenderer {
