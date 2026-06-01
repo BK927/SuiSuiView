@@ -59,9 +59,9 @@ pub(in crate::app) use adjacent_seed::{AdjacentSeedCache, AdjacentSeedEvent, See
 #[cfg(test)]
 use cache::{
     automatic_cache_budget_bytes_for_total, best_page_key_at_or_below_in_cache,
-    best_page_key_in_cache, cache_budget_bytes, final_quality_page_key_in_cache,
-    lower_resolution_page_keys, page_cache_state_from_hit, preferred_page_key_in_cache,
-    texture_cache_budget_bytes_for, touch_normal_navigation_page_keys,
+    best_page_key_excluding_preview_fallback_in_cache, best_page_key_in_cache, cache_budget_bytes,
+    final_quality_page_key_in_cache, lower_resolution_page_keys, page_cache_state_from_hit,
+    preferred_page_key_in_cache, texture_cache_budget_bytes_for, touch_normal_navigation_page_keys,
 };
 pub(in crate::app) use cache::{
     cache_budget_summary, gpu_visual_needs_wgsl, rect_target_size,
@@ -1292,7 +1292,8 @@ mod tests {
     use super::perf::PageCacheState;
     use super::{
         adjacent_sibling_book_paths, adjacent_sibling_book_paths_ordered, ai_prefetch_pages_for,
-        apply_effects_to_image, best_page_key_at_or_below_in_cache, best_page_key_in_cache,
+        apply_effects_to_image, best_page_key_at_or_below_in_cache,
+        best_page_key_excluding_preview_fallback_in_cache, best_page_key_in_cache,
         command_for_shortcut, delete_target_for, double_spread_indices,
         final_quality_page_key_in_cache, gpu_visual_needs_wgsl, korean_font_candidates,
         load_first_existing_font, lower_resolution_page_keys, ordered_spread_indices,
@@ -1477,6 +1478,90 @@ mod tests {
 
         assert_eq!(best_page_key_in_cache(&cache, requested), None);
         assert_eq!(best_page_key_in_cache(&cache, original), Some(original));
+    }
+
+    #[test]
+    fn best_page_key_without_preview_uses_smaller_navigation_target_for_resize_recovery() {
+        let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let cached = PageCacheKey {
+            index: 7,
+            target_long_edge: 1536,
+            decode: DecodeOptions::default(),
+        };
+        let requested = PageCacheKey {
+            target_long_edge: 2304,
+            ..cached
+        };
+
+        cache.put(cached, dummy_page(cached.target_long_edge));
+
+        assert_eq!(
+            best_page_key_excluding_preview_fallback_in_cache(&cache, requested),
+            Some(cached)
+        );
+    }
+
+    #[test]
+    fn best_page_key_without_preview_uses_larger_navigation_target_for_dpi_downshift() {
+        let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let requested = PageCacheKey {
+            index: 7,
+            target_long_edge: 1536,
+            decode: DecodeOptions::default(),
+        };
+        let cached = PageCacheKey {
+            target_long_edge: 2304,
+            ..requested
+        };
+
+        cache.put(cached, dummy_page(cached.target_long_edge));
+
+        assert_eq!(
+            best_page_key_excluding_preview_fallback_in_cache(&cache, requested),
+            Some(cached)
+        );
+    }
+
+    #[test]
+    fn best_page_key_without_preview_does_not_promote_preview_target() {
+        let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let preview = PageCacheKey {
+            index: 7,
+            target_long_edge: PREVIEW_TARGET_LONG_EDGE,
+            decode: DecodeOptions::default(),
+        };
+        let requested = PageCacheKey {
+            target_long_edge: 2048,
+            ..preview
+        };
+
+        cache.put(preview, dummy_page(preview.target_long_edge));
+
+        assert_eq!(
+            best_page_key_excluding_preview_fallback_in_cache(&cache, requested),
+            None
+        );
+    }
+
+    #[test]
+    fn best_page_key_without_preview_keeps_original_targets_out_of_navigation_fallback() {
+        let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let requested = PageCacheKey {
+            index: 7,
+            target_long_edge: MAX_TARGET_LONG_EDGE,
+            decode: DecodeOptions::default(),
+        };
+        let original = PageCacheKey {
+            target_long_edge: MAX_TARGET_LONG_EDGE + 1,
+            ..requested
+        };
+
+        cache.put(original, dummy_page(original.target_long_edge));
+
+        assert_eq!(
+            best_page_key_excluding_preview_fallback_in_cache(&cache, requested),
+            None
+        );
     }
 
     #[test]

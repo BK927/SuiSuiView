@@ -461,12 +461,11 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn best_page_key(&self, requested: PageCacheKey) -> Option<PageCacheKey> {
-        if !self.settings.progressive_preview_enabled
-            && requested.target_long_edge != PREVIEW_TARGET_LONG_EDGE
-        {
-            return self.decoded_pages.peek(&requested).map(|_| requested);
+        if self.settings.progressive_preview_enabled {
+            best_page_key_in_cache(&self.decoded_pages, requested)
+        } else {
+            best_page_key_excluding_preview_fallback_in_cache(&self.decoded_pages, requested)
         }
-        best_page_key_in_cache(&self.decoded_pages, requested)
     }
 
     pub(in crate::app) fn final_quality_page_key(
@@ -739,6 +738,32 @@ pub(in crate::app) fn best_page_key_in_cache(
     }
 
     best_smaller.or(smallest_any)
+}
+
+pub(in crate::app) fn best_page_key_excluding_preview_fallback_in_cache(
+    cache: &LruCache<PageCacheKey, Arc<crate::core::worker::PreparedPage>>,
+    requested: PageCacheKey,
+) -> Option<PageCacheKey> {
+    if cache.peek(&requested).is_some() {
+        return Some(requested);
+    }
+    if requested.target_long_edge == PREVIEW_TARGET_LONG_EDGE {
+        return best_page_key_in_cache(cache, requested);
+    }
+    if let Some(final_key) = final_quality_page_key_in_cache(cache, requested) {
+        return Some(final_key);
+    }
+
+    cache
+        .iter()
+        .filter_map(|(key, _page)| {
+            (key.index == requested.index
+                && key.decode == requested.decode
+                && key.target_long_edge > PREVIEW_TARGET_LONG_EDGE
+                && key.target_long_edge <= requested.target_long_edge)
+                .then_some(*key)
+        })
+        .max_by_key(|key| key.target_long_edge)
 }
 
 pub(in crate::app) fn final_quality_page_key_in_cache(
