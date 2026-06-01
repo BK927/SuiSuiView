@@ -1,3 +1,4 @@
+use crate::core::artcnn::ArtcnnVariant;
 use crate::core::gpu_effect::color_image_to_rgba;
 use crate::core::state::DisplayUpscaler;
 use eframe::egui::ColorImage;
@@ -37,7 +38,7 @@ pub(crate) struct GpuUpscaleBench {
     nvidia_nis: Option<NvidiaNisBench>,
     anime4k: Option<Anime4kBench>,
     anime4k_m: Option<Anime4kMBench>,
-    artcnn: Option<ArtcnnBench>,
+    artcnn: Vec<ArtcnnBench>,
     acnet: Option<AcnetBench>,
     cunny: Option<CunnyBench>,
 }
@@ -149,11 +150,14 @@ impl GpuUpscaleBench {
         } else {
             None
         };
-        let artcnn = if wants_method(method, DisplayUpscaler::WgslArtcnnC4F16) {
-            ArtcnnBench::try_new(&device).await
-        } else {
-            None
-        };
+        let mut artcnn = Vec::new();
+        for variant in ArtcnnVariant::ALL {
+            if wants_artcnn_variant(method, variant) {
+                if let Some(bench) = ArtcnnBench::try_new(&device, variant).await {
+                    artcnn.push(bench);
+                }
+            }
+        }
         let acnet = if wants_group(method, is_acnet_method) {
             AcnetBench::try_new(&device).await
         } else {
@@ -204,11 +208,12 @@ impl GpuUpscaleBench {
                 .ok_or_else(|| "Anime4K v3.2 CNN x2 M GPU pipelines unavailable".to_owned())?
                 .apply(&self.device, &self.queue, image, output_size);
         }
-        if method == DisplayUpscaler::WgslArtcnnC4F16 {
+        if let Some(variant) = ArtcnnBench::variant_for_method(method) {
             return self
                 .artcnn
-                .as_ref()
-                .ok_or_else(|| "ArtCNN C4F16 GPU pipelines unavailable".to_owned())?
+                .iter()
+                .find(|bench| bench.variant() == variant)
+                .ok_or_else(|| format!("{} GPU pipelines unavailable", variant.label()))?
                 .apply(&self.device, &self.queue, image, output_size);
         }
         if method == DisplayUpscaler::NvidiaNis {
@@ -489,6 +494,10 @@ impl GpuUpscaleBench {
 
 fn wants_method(filter: Option<DisplayUpscaler>, method: DisplayUpscaler) -> bool {
     filter.map_or(true, |selected| selected == method)
+}
+
+fn wants_artcnn_variant(filter: Option<DisplayUpscaler>, variant: ArtcnnVariant) -> bool {
+    filter.is_some_and(|method| ArtcnnBench::variant_for_method(method) == Some(variant))
 }
 
 fn wants_group(

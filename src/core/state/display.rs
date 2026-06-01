@@ -57,6 +57,11 @@ pub enum DisplayUpscaler {
     WgslAnime4kV32CnnX2S,
     WgslAnime4kV32CnnX2M,
     WgslArtcnnC4F16,
+    WgslArtcnnC4F16Dn,
+    WgslArtcnnC4F16Ds,
+    WgslArtcnnC4F32,
+    WgslArtcnnC4F32Dn,
+    WgslArtcnnC4F32Ds,
     WgslSrLabSpanX2,
     WgslAcnetF8B4Luma,
     WgslAcnetF8B4BoxLuma,
@@ -168,7 +173,7 @@ impl DisplayUpscaler {
         Self::Cunny8x32Ds,
     ];
 
-    pub const GPU_METHODS: [Self; 39] = [
+    pub const GPU_METHODS: [Self; 44] = [
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
@@ -177,6 +182,11 @@ impl DisplayUpscaler {
         Self::WgslAnime4kV32CnnX2S,
         Self::WgslAnime4kV32CnnX2M,
         Self::WgslArtcnnC4F16,
+        Self::WgslArtcnnC4F16Dn,
+        Self::WgslArtcnnC4F16Ds,
+        Self::WgslArtcnnC4F32,
+        Self::WgslArtcnnC4F32Dn,
+        Self::WgslArtcnnC4F32Ds,
         Self::WgslAcnetF8B4Luma,
         Self::WgslAcnetF8B4BoxLuma,
         Self::WgslAcnetF8B4HdnLuma,
@@ -306,10 +316,23 @@ impl DisplayUpscaler {
                 "wgpu compute",
                 true,
             ),
-            Self::WgslArtcnnC4F16 => upscaler_candidate!(
+            method @ (Self::WgslArtcnnC4F16
+            | Self::WgslArtcnnC4F16Dn
+            | Self::WgslArtcnnC4F16Ds
+            | Self::WgslArtcnnC4F32
+            | Self::WgslArtcnnC4F32Dn
+            | Self::WgslArtcnnC4F32Ds) => upscaler_candidate!(
                 "ArtCNN",
-                "ArtCNN C4F16",
-                "ArtCNN v1.6.2",
+                match method {
+                    Self::WgslArtcnnC4F16 => "ArtCNN C4F16",
+                    Self::WgslArtcnnC4F16Dn => "ArtCNN C4F16 DN",
+                    Self::WgslArtcnnC4F16Ds => "ArtCNN C4F16 DS",
+                    Self::WgslArtcnnC4F32 => "ArtCNN C4F32",
+                    Self::WgslArtcnnC4F32Dn => "ArtCNN C4F32 DN",
+                    Self::WgslArtcnnC4F32Ds => "ArtCNN C4F32 DS",
+                    _ => unreachable!(),
+                },
+                "ArtCNN 0263e9c",
                 "MIT",
                 "2x",
                 "8",
@@ -655,6 +678,11 @@ impl DisplayUpscaler {
             Self::WgslAnime4kV32CnnX2S => "anime4k_v32_cnn_x2_s",
             Self::WgslAnime4kV32CnnX2M => "anime4k_v32_cnn_x2_m",
             Self::WgslArtcnnC4F16 => "artcnn_c4f16",
+            Self::WgslArtcnnC4F16Dn => "artcnn_c4f16_dn",
+            Self::WgslArtcnnC4F16Ds => "artcnn_c4f16_ds",
+            Self::WgslArtcnnC4F32 => "artcnn_c4f32",
+            Self::WgslArtcnnC4F32Dn => "artcnn_c4f32_dn",
+            Self::WgslArtcnnC4F32Ds => "artcnn_c4f32_ds",
             Self::WgslSrLabSpanX2 => "srlab_span_x2",
             Self::WgslAcnetF8B4Luma => "acnet_f8b4_luma",
             Self::WgslAcnetF8B4BoxLuma => "acnet_f8b4_box_luma",
@@ -691,7 +719,19 @@ impl DisplayUpscaler {
     }
 
     pub fn is_benchmark_only(self) -> bool {
-        matches!(self, Self::NvidiaNis | Self::WgslArtcnnC4F16)
+        matches!(self, Self::NvidiaNis) || self.is_artcnn()
+    }
+
+    pub fn is_artcnn(self) -> bool {
+        matches!(
+            self,
+            Self::WgslArtcnnC4F16
+                | Self::WgslArtcnnC4F16Dn
+                | Self::WgslArtcnnC4F16Ds
+                | Self::WgslArtcnnC4F32
+                | Self::WgslArtcnnC4F32Dn
+                | Self::WgslArtcnnC4F32Ds
+        )
     }
 
     pub fn resolve_for_render(
@@ -704,8 +744,8 @@ impl DisplayUpscaler {
         match self {
             Self::Auto if target_is_larger => Some(Self::WgslFsr1EasuRcas),
             Self::Auto | Self::None | Self::NvidiaNis => None,
-            Self::WgslArtcnnC4F16 if target_is_larger => Some(self),
-            Self::WgslArtcnnC4F16 => None,
+            method if method.is_artcnn() && target_is_larger => Some(self),
+            method if method.is_artcnn() => None,
             Self::WgslSrLabSpanX2 if target_is_larger => Some(self),
             Self::WgslSrLabSpanX2 => None,
             Self::WgslAnime4kV32CnnX2S | Self::WgslAnime4kV32CnnX2M if target_is_larger => {
@@ -797,6 +837,11 @@ impl DisplayUpscaler {
             | Self::WgslAnime4kV32CnnX2S
             | Self::WgslAnime4kV32CnnX2M
             | Self::WgslArtcnnC4F16
+            | Self::WgslArtcnnC4F16Dn
+            | Self::WgslArtcnnC4F16Ds
+            | Self::WgslArtcnnC4F32
+            | Self::WgslArtcnnC4F32Dn
+            | Self::WgslArtcnnC4F32Ds
             | Self::WgslSrLabSpanX2
             | Self::WgslAcnetF8B4Luma
             | Self::WgslAcnetF8B4BoxLuma

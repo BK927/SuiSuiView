@@ -97,6 +97,11 @@ impl RealtimeSrResources {
                 | DisplayUpscaler::WgslAnime4kV32CnnX2S
                 | DisplayUpscaler::WgslAnime4kV32CnnX2M
                 | DisplayUpscaler::WgslArtcnnC4F16
+                | DisplayUpscaler::WgslArtcnnC4F16Dn
+                | DisplayUpscaler::WgslArtcnnC4F16Ds
+                | DisplayUpscaler::WgslArtcnnC4F32
+                | DisplayUpscaler::WgslArtcnnC4F32Dn
+                | DisplayUpscaler::WgslArtcnnC4F32Ds
                 | DisplayUpscaler::WgslSrLabSpanX2
                 | DisplayUpscaler::WgslAcnetF8B4Luma
                 | DisplayUpscaler::WgslAcnetF8B4BoxLuma
@@ -167,10 +172,10 @@ impl RealtimeSrResources {
                     .get_or_insert_with(|| Anime4kMRenderer::new(device))
                     .render(device, encoder, source_view, source_size),
             ),
-            DisplayUpscaler::WgslArtcnnC4F16 => self
+            method if method.is_artcnn() => self
                 .artcnn
                 .get_or_insert_with(ArtcnnRenderer::new)
-                .render(device, encoder, source_view, source_size),
+                .render(method, device, encoder, source_view, source_size),
             DisplayUpscaler::WgslSrLabSpanX2 => self
                 .span
                 .get_or_insert_with(SpanRenderer::new)
@@ -188,7 +193,7 @@ impl RealtimeSrResources {
 
     pub(super) fn has_pending_async_work(&self, method: DisplayUpscaler) -> bool {
         match method {
-            DisplayUpscaler::WgslArtcnnC4F16 => {
+            method if method.is_artcnn() => {
                 self.artcnn.as_ref().is_some_and(ArtcnnRenderer::is_loading)
             }
             DisplayUpscaler::WgslSrLabSpanX2 => self
@@ -209,10 +214,10 @@ impl RealtimeSrResources {
 
     pub(super) fn warm_up_async(&mut self, method: DisplayUpscaler, device: &wgpu::Device) {
         match method {
-            DisplayUpscaler::WgslArtcnnC4F16 => self
+            method if method.is_artcnn() => self
                 .artcnn
                 .get_or_insert_with(ArtcnnRenderer::new)
-                .warm_up(device),
+                .warm_up(method, device),
             DisplayUpscaler::WgslSrLabSpanX2 => self
                 .span
                 .get_or_insert_with(SpanRenderer::new)

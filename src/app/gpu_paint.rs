@@ -151,16 +151,19 @@ fn parse_experimental_display_upscaler(
     explicit_span: bool,
     span_manifest_present: bool,
 ) -> Option<DisplayUpscaler> {
-    match generic_value.map(str::trim) {
-        Some(value) if value.eq_ignore_ascii_case(DisplayUpscaler::WgslArtcnnC4F16.token()) => {
-            return Some(DisplayUpscaler::WgslArtcnnC4F16);
+    if let Some(value) = generic_value.map(str::trim) {
+        if let Some(method) = DisplayUpscaler::GPU_METHODS
+            .iter()
+            .copied()
+            .find(|method| method.is_artcnn() && value.eq_ignore_ascii_case(method.token()))
+        {
+            return Some(method);
         }
-        Some(value) if value.eq_ignore_ascii_case(DisplayUpscaler::WgslSrLabSpanX2.token()) => {
+        if value.eq_ignore_ascii_case(DisplayUpscaler::WgslSrLabSpanX2.token()) {
             if span_manifest_present {
                 return Some(DisplayUpscaler::WgslSrLabSpanX2);
             }
         }
-        _ => {}
     }
     if explicit_span && span_manifest_present {
         Some(DisplayUpscaler::WgslSrLabSpanX2)
@@ -1070,10 +1073,7 @@ fn intermediate_texture_key(
 }
 
 fn defer_initial_realtime_sr_frame(method: DisplayUpscaler) -> bool {
-    matches!(
-        method,
-        DisplayUpscaler::WgslArtcnnC4F16 | DisplayUpscaler::WgslSrLabSpanX2
-    )
+    method.is_artcnn() || matches!(method, DisplayUpscaler::WgslSrLabSpanX2)
 }
 
 fn realtime_sr_texture_key(
@@ -1133,6 +1133,10 @@ mod tests {
             parse_experimental_display_upscaler(Some(" artcnn_c4f16 "), false, false),
             Some(DisplayUpscaler::WgslArtcnnC4F16)
         );
+        assert_eq!(
+            parse_experimental_display_upscaler(Some("artcnn_c4f32_ds"), false, false),
+            Some(DisplayUpscaler::WgslArtcnnC4F32Ds)
+        );
     }
 
     #[test]
@@ -1155,6 +1159,9 @@ mod tests {
     fn hidden_realtime_sr_methods_defer_the_first_frame() {
         assert!(defer_initial_realtime_sr_frame(
             DisplayUpscaler::WgslArtcnnC4F16
+        ));
+        assert!(defer_initial_realtime_sr_frame(
+            DisplayUpscaler::WgslArtcnnC4F32Ds
         ));
         assert!(defer_initial_realtime_sr_frame(
             DisplayUpscaler::WgslSrLabSpanX2

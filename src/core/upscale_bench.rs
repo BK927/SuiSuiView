@@ -1,4 +1,4 @@
-use crate::core::artcnn_c4f16::exact_output_size as artcnn_exact_output_size;
+use crate::core::artcnn::{exact_output_size as artcnn_exact_output_size, ArtcnnVariant};
 use crate::core::gpu_effect::{color_image_to_rgba, image_diff};
 use crate::core::source::open_source_from_path;
 use crate::core::state::{DisplayUpscaler, ResizeFilter};
@@ -120,14 +120,20 @@ pub fn scan_upscalers(
     )
 }
 
-pub fn run_artcnn_c4f16_render(input_path: &Path, output_path: &Path) -> Result<(), String> {
+pub fn run_artcnn_render(
+    variant: ArtcnnVariant,
+    method: DisplayUpscaler,
+    input_path: &Path,
+    output_path: &Path,
+) -> Result<(), String> {
     let input = load_color_image(input_path)?;
-    let output_size = artcnn_exact_output_size(input.size)?;
-    let gpu = GpuUpscaleBench::new_for_method(Some(DisplayUpscaler::WgslArtcnnC4F16))?;
-    let output = gpu.apply(&input, output_size, DisplayUpscaler::WgslArtcnnC4F16)?;
+    let output_size = artcnn_exact_output_size(variant, input.size)?;
+    let gpu = GpuUpscaleBench::new_for_method(Some(method))?;
+    let output = gpu.apply(&input, output_size, method)?;
     write_color_image(output_path, &output.image)?;
     println!(
-        "ArtCNN C4F16: {}x{} -> {}x{} in {:.2} ms",
+        "{}: {}x{} -> {}x{} in {:.2} ms",
+        variant.label(),
         input.size[0],
         input.size[1],
         output_size[0],
@@ -136,6 +142,19 @@ pub fn run_artcnn_c4f16_render(input_path: &Path, output_path: &Path) -> Result<
     );
     println!("Output: {}", output_path.display());
     Ok(())
+}
+
+pub(crate) fn gpu_methods_for_filter(
+    method_filter: Option<DisplayUpscaler>,
+) -> Vec<DisplayUpscaler> {
+    match method_filter {
+        Some(method) => vec![method],
+        None => DisplayUpscaler::GPU_METHODS
+            .iter()
+            .copied()
+            .filter(|method| !method.is_artcnn())
+            .collect(),
+    }
 }
 
 fn scan_upscalers_with_gpu(
@@ -155,10 +174,7 @@ fn scan_upscalers_with_gpu(
         .map_or(page_count, |pages| page_count.min(pages));
     let mut pages = Vec::with_capacity(scanned_page_count);
     let mut summaries = BTreeMap::<String, SummaryAccumulator>::new();
-    let single_method = method_filter.map(|method| [method]);
-    let gpu_methods: &[DisplayUpscaler] = single_method
-        .as_ref()
-        .map_or(&DisplayUpscaler::GPU_METHODS, |methods| &methods[..]);
+    let gpu_methods = gpu_methods_for_filter(method_filter);
 
     for index in 0..scanned_page_count {
         let mut page = PageUpscaleBench {
@@ -216,7 +232,7 @@ fn scan_upscalers_with_gpu(
                 );
 
                 if let Some(gpu) = &gpu {
-                    for method in gpu_methods {
+                    for method in &gpu_methods {
                         run_gpu_case(
                             gpu,
                             &input_image,
@@ -552,8 +568,8 @@ pub fn default_upscale_report_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        resize_color_image, scan_upscalers_with_gpu, selected_method_failure, PageUpscaleBench,
-        UpscaleBenchReport, UpscaleBenchRun,
+        gpu_methods_for_filter, resize_color_image, scan_upscalers_with_gpu,
+        selected_method_failure, PageUpscaleBench, UpscaleBenchReport, UpscaleBenchRun,
     };
     use crate::core::state::{DisplayUpscaler, ResizeFilter};
     use eframe::egui::{Color32, ColorImage};
@@ -608,6 +624,18 @@ mod tests {
             .iter()
             .any(|method| method.method == "cpu_lanczos3"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_gpu_bench_methods_skip_hidden_artcnn_matrix() {
+        let default_methods = gpu_methods_for_filter(None);
+
+        assert!(!default_methods.contains(&DisplayUpscaler::WgslArtcnnC4F16));
+        assert!(!default_methods.contains(&DisplayUpscaler::WgslArtcnnC4F32Ds));
+        assert_eq!(
+            gpu_methods_for_filter(Some(DisplayUpscaler::WgslArtcnnC4F16)),
+            vec![DisplayUpscaler::WgslArtcnnC4F16]
+        );
     }
 
     #[test]

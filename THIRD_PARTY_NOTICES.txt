@@ -1307,9 +1307,20 @@ ArtCNN
 License: MIT
 Copyright: Copyright (c) 2024 Joao Chrisostomo, Kacper Michajłow
 Source: https://github.com/Artoriuz/ArtCNN
-  Note: The `--upscale-bench` experiment includes a generated WGSL port
-  derived from `GLSL/ArtCNN_C4F16.glsl` with source SHA-256
-  `03d0b3d31cb82c898a94a46663021a3e8f02c5a21d69c5cfdf0208de4bfd453e`.
+  Note: The `--upscale-bench`, hidden display, and `--artcnn-render`
+  experiments include generated WGSL ports derived from these GLSL shaders:
+  `GLSL/ArtCNN_C4F16.glsl`
+  (`33d06265dcc83f0e521aa7343571022b3d76c9c4b05f98b61f75a5efd67bd921`),
+  `GLSL/ArtCNN_C4F16_DN.glsl`
+  (`7f6c52dc8da0b01b219824b6e11f7d61ac70674b7f2fd9ebfbce1eee260dc1b2`),
+  `GLSL/ArtCNN_C4F16_DS.glsl`
+  (`b708e618b48e1b8f99b3ddc83a9cd2be264bac2e5249d7f68c54b47c09540869`),
+  `GLSL/ArtCNN_C4F32.glsl`
+  (`45352b79e53b06378a47d82201f65609ae66f698000d3f1710d42ea5bef90288`),
+  `GLSL/ArtCNN_C4F32_DN.glsl`
+  (`9eb5fe4d4448bfeaa3752c733b6a17f815dce612809a55df5ee64aa670871d83`),
+  and `GLSL/ArtCNN_C4F32_DS.glsl`
+  (`e7e7adbec118c8f5547dbadac25b0ab96e7944c57f7022324985ca415dc84bd0`).
   The port predicts luma and merges source chroma in the final pass. It is not
   exposed as a user-facing display mode yet.
 

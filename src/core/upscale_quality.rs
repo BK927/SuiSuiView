@@ -1,6 +1,6 @@
 use crate::core::source::open_source_from_path;
 use crate::core::state::{DisplayUpscaler, ResizeFilter};
-use crate::core::upscale_bench::gpu::GpuUpscaleBench;
+use crate::core::upscale_bench::{gpu::GpuUpscaleBench, gpu_methods_for_filter};
 use crate::core::worker::{
     clamp_target_long_edge, display_dimensions_with_upscale, prepare_image_with_options,
     DecodeOptions, DecodeStrategy,
@@ -141,10 +141,7 @@ pub fn scan_upscale_quality(
 
     let mut failures = 0usize;
     let scanned_pages = scanned_page_count(source.page_count(), max_pages);
-    let single_method = method_filter.map(|method| [method]);
-    let gpu_methods: &[DisplayUpscaler] = single_method
-        .as_ref()
-        .map_or(&DisplayUpscaler::GPU_METHODS, |methods| &methods[..]);
+    let gpu_methods = gpu_methods_for_filter(method_filter);
     let mut pages = Vec::with_capacity(scanned_pages);
     let mut summaries = BTreeMap::<String, SummaryAccumulator>::new();
 
@@ -221,7 +218,7 @@ pub fn scan_upscale_quality(
                 }
 
                 if let Some(gpu) = &gpu {
-                    for method in gpu_methods {
+                    for method in &gpu_methods {
                         let image = run_gpu_case(
                             gpu,
                             &input_image,

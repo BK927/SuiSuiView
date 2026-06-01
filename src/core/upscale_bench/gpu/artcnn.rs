@@ -1,8 +1,9 @@
 use super::{GpuUpscaleOutput, TEXTURE_FORMAT};
-use crate::core::artcnn_c4f16::{
-    extent_for_size, validate_render_options, ArtcnnC4F16, ArtcnnC4F16RenderOptions,
+use crate::core::artcnn::{
+    extent_for_size, validate_render_options, Artcnn, ArtcnnRenderOptions, ArtcnnVariant,
 };
 use crate::core::gpu_effect::color_image_to_rgba;
+use crate::core::state::DisplayUpscaler;
 use eframe::egui::ColorImage;
 use std::sync::mpsc;
 use std::time::Instant;
@@ -10,26 +11,44 @@ use std::time::Instant;
 const TRANSIENT_BYTES_LIMIT: u64 = 768 * 1024 * 1024;
 
 pub(super) struct ArtcnnBench {
-    core: ArtcnnC4F16,
+    variant: ArtcnnVariant,
+    core: Artcnn,
 }
 
 impl ArtcnnBench {
-    pub(super) async fn try_new(device: &wgpu::Device) -> Option<Self> {
+    pub(super) async fn try_new(device: &wgpu::Device, variant: ArtcnnVariant) -> Option<Self> {
         device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let bench = Self::new(device);
+        let bench = Self::new(device, variant);
         match device.pop_error_scope().await {
             Some(error) => {
-                eprintln!("ArtCNN C4F16 bench candidate disabled: {error}");
+                eprintln!("{} bench candidate disabled: {error}", variant.label());
                 None
             }
             None => Some(bench),
         }
     }
 
-    fn new(device: &wgpu::Device) -> Self {
+    fn new(device: &wgpu::Device, variant: ArtcnnVariant) -> Self {
         Self {
-            core: ArtcnnC4F16::new(device),
+            variant,
+            core: Artcnn::new(device, variant),
         }
+    }
+
+    pub(super) fn variant_for_method(method: DisplayUpscaler) -> Option<ArtcnnVariant> {
+        match method {
+            DisplayUpscaler::WgslArtcnnC4F16 => Some(ArtcnnVariant::C4F16),
+            DisplayUpscaler::WgslArtcnnC4F16Dn => Some(ArtcnnVariant::C4F16Dn),
+            DisplayUpscaler::WgslArtcnnC4F16Ds => Some(ArtcnnVariant::C4F16Ds),
+            DisplayUpscaler::WgslArtcnnC4F32 => Some(ArtcnnVariant::C4F32),
+            DisplayUpscaler::WgslArtcnnC4F32Dn => Some(ArtcnnVariant::C4F32Dn),
+            DisplayUpscaler::WgslArtcnnC4F32Ds => Some(ArtcnnVariant::C4F32Ds),
+            _ => None,
+        }
+    }
+
+    pub(super) fn variant(&self) -> ArtcnnVariant {
+        self.variant
     }
 
     pub(super) fn apply(
@@ -42,7 +61,10 @@ impl ArtcnnBench {
         device.push_error_scope(wgpu::ErrorFilter::Validation);
         let output = self.apply_scoped(device, queue, image, output_size);
         if let Some(error) = pollster::block_on(device.pop_error_scope()) {
-            return Err(format!("ArtCNN C4F16 wgpu validation failed: {error}"));
+            return Err(format!(
+                "{} wgpu validation failed: {error}",
+                self.variant.label()
+            ));
         }
         output
     }
@@ -55,22 +77,23 @@ impl ArtcnnBench {
         output_size: [usize; 2],
     ) -> Result<GpuUpscaleOutput, String> {
         let source_size = image.size;
-        let unpadded_bytes_per_row = rgba8_bytes_per_row(output_size[0], "ArtCNN C4F16 output")?;
+        let unpadded_bytes_per_row =
+            rgba8_bytes_per_row(output_size[0], &format!("{} output", self.variant.label()))?;
         let padded_bytes_per_row = align_to_checked(
             unpadded_bytes_per_row,
             wgpu::COPY_BYTES_PER_ROW_ALIGNMENT,
-            "ArtCNN C4F16 output row",
+            &format!("{} output row", self.variant.label()),
         )?;
         let readback_size = readback_byte_size(padded_bytes_per_row, output_size[1])?;
         let output_rows = u32::try_from(output_size[1])
-            .map_err(|_| "ArtCNN C4F16 output row count exceeds u32".to_owned())?;
-        let options = ArtcnnC4F16RenderOptions {
+            .map_err(|_| format!("{} output row count exceeds u32", self.variant.label()))?;
+        let options = ArtcnnRenderOptions {
             output_size,
             output_usage: wgpu::TextureUsages::COPY_SRC,
             transient_limit: TRANSIENT_BYTES_LIMIT,
             readback_padded_bytes_per_row: Some(padded_bytes_per_row),
         };
-        let exact_output = validate_render_options(device, source_size, &options)?;
+        let exact_output = validate_render_options(device, self.variant, source_size, &options)?;
 
         let started = Instant::now();
         let source_texture = create_source_texture(device, queue, image)?;
@@ -150,9 +173,9 @@ fn create_source_texture(
     image: &ColorImage,
 ) -> Result<wgpu::Texture, String> {
     let source_bytes = color_image_to_rgba(image);
-    let bytes_per_row = rgba8_bytes_per_row(image.size[0], "ArtCNN C4F16 source")?;
+    let bytes_per_row = rgba8_bytes_per_row(image.size[0], "ArtCNN source")?;
     let rows_per_image = u32::try_from(image.size[1])
-        .map_err(|_| "ArtCNN C4F16 source row count exceeds u32".to_owned())?;
+        .map_err(|_| "ArtCNN source row count exceeds u32".to_owned())?;
     let source_texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("suisuiview-artcnn-source"),
         size: extent_for_size(image.size),
@@ -201,8 +224,8 @@ fn align_to_checked(value: u32, alignment: u32, label: &str) -> Result<u32, Stri
 
 fn readback_byte_size(padded_bytes_per_row: u32, output_height: usize) -> Result<u64, String> {
     let output_height = u64::try_from(output_height)
-        .map_err(|_| "ArtCNN C4F16 readback row count exceeds u64".to_owned())?;
+        .map_err(|_| "ArtCNN readback row count exceeds u64".to_owned())?;
     (padded_bytes_per_row as u64)
         .checked_mul(output_height)
-        .ok_or_else(|| "ArtCNN C4F16 readback buffer size overflowed".to_owned())
+        .ok_or_else(|| "ArtCNN readback buffer size overflowed".to_owned())
 }

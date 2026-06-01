@@ -2,23 +2,16 @@ use std::borrow::Cow;
 use wgpu::util::DeviceExt;
 
 mod validation;
+mod variants;
+
 use validation::workspace_texture_bytes;
 pub(crate) use validation::{extent_for_size, validate_render_options};
+pub use variants::ArtcnnVariant;
 
 pub(crate) const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 const FEATURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const FEATURE_BYTES_PER_PIXEL: u64 = 8;
-const ENTRY_POINTS: [&str; 8] = [
-    "artcnn_c4f16_conv2d",
-    "artcnn_c4f16_conv2d_1_relu",
-    "artcnn_c4f16_conv2d_2_relu",
-    "artcnn_c4f16_conv2d_3_relu",
-    "artcnn_c4f16_conv2d_4_relu",
-    "artcnn_c4f16_conv2d_5",
-    "artcnn_c4f16_conv2d_6",
-    "artcnn_c4f16_depth_to_space",
-];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -27,25 +20,28 @@ struct ArtcnnParams {
     source_height: u32,
     output_width: u32,
     output_height: u32,
-    _pad0: u32,
-    _pad1: u32,
+    feature_width: u32,
+    feature_height: u32,
     _pad2: u32,
     _pad3: u32,
 }
 
-pub(crate) struct ArtcnnC4F16 {
+pub(crate) struct Artcnn {
+    variant: ArtcnnVariant,
     bind_group_layout: wgpu::BindGroupLayout,
     pipelines: Vec<wgpu::ComputePipeline>,
 }
 
-pub(crate) struct ArtcnnC4F16Output {
+pub(crate) struct ArtcnnOutput {
     pub(crate) texture: wgpu::Texture,
     pub(crate) size: [usize; 2],
 }
 
-pub(crate) struct ArtcnnC4F16Workspace {
+pub(crate) struct ArtcnnWorkspace {
+    pub(crate) variant: ArtcnnVariant,
     pub(crate) source_size: [usize; 2],
     exact_output_size: [usize; 2],
+    feature_size: [usize; 2],
     _skip: wgpu::Texture,
     _tmp_a: wgpu::Texture,
     _tmp_b: wgpu::Texture,
@@ -59,31 +55,37 @@ pub(crate) struct ArtcnnC4F16Workspace {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct ArtcnnC4F16RenderOptions {
+pub(crate) struct ArtcnnRenderOptions {
     pub(crate) output_size: [usize; 2],
     pub(crate) output_usage: wgpu::TextureUsages,
     pub(crate) transient_limit: u64,
     pub(crate) readback_padded_bytes_per_row: Option<u32>,
 }
 
-pub(crate) fn exact_output_size(source_size: [usize; 2]) -> Result<[usize; 2], String> {
+pub(crate) fn exact_output_size(
+    variant: ArtcnnVariant,
+    source_size: [usize; 2],
+) -> Result<[usize; 2], String> {
     if source_size[0] == 0 || source_size[1] == 0 {
-        return Err("ArtCNN C4F16 requires a non-empty source image".to_owned());
+        return Err(format!(
+            "{} requires a non-empty source image",
+            variant.label()
+        ));
     }
     Ok([
         source_size[0]
             .checked_mul(2)
-            .ok_or_else(|| "ArtCNN C4F16 output width overflowed".to_owned())?,
+            .ok_or_else(|| format!("{} output width overflowed", variant.label()))?,
         source_size[1]
             .checked_mul(2)
-            .ok_or_else(|| "ArtCNN C4F16 output height overflowed".to_owned())?,
+            .ok_or_else(|| format!("{} output height overflowed", variant.label()))?,
     ])
 }
 
-impl ArtcnnC4F16 {
-    pub(crate) fn new(device: &wgpu::Device) -> Self {
+impl Artcnn {
+    pub(crate) fn new(device: &wgpu::Device, variant: ArtcnnVariant) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("suisuiview-artcnn-c4f16-bind-group-layout"),
+            label: Some("suisuiview-artcnn-bind-group-layout"),
             entries: &[
                 texture_entry(0),
                 texture_entry(1),
@@ -103,15 +105,16 @@ impl ArtcnnC4F16 {
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("suisuiview-artcnn-c4f16-pipeline-layout"),
+            label: Some("suisuiview-artcnn-pipeline-layout"),
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("suisuiview-artcnn-c4f16-shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("artcnn_c4f16.wgsl"))),
+            label: Some(variant.token()),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(variant.shader_source())),
         });
-        let pipelines = ENTRY_POINTS
+        let pipelines = variant
+            .entry_points()
             .iter()
             .map(|entry_point| {
                 device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -125,6 +128,7 @@ impl ArtcnnC4F16 {
             })
             .collect();
         Self {
+            variant,
             bind_group_layout,
             pipelines,
         }
@@ -136,8 +140,8 @@ impl ArtcnnC4F16 {
         encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
         source_size: [usize; 2],
-        options: ArtcnnC4F16RenderOptions,
-    ) -> Result<ArtcnnC4F16Output, String> {
+        options: ArtcnnRenderOptions,
+    ) -> Result<ArtcnnOutput, String> {
         let workspace = self.create_workspace(device, source_size, &options)?;
         self.render_to_texture_with_workspace(device, encoder, source_view, &workspace, options)
     }
@@ -146,25 +150,29 @@ impl ArtcnnC4F16 {
         &self,
         device: &wgpu::Device,
         source_size: [usize; 2],
-        options: &ArtcnnC4F16RenderOptions,
-    ) -> Result<ArtcnnC4F16Workspace, String> {
-        let exact_output_size = validate_render_options(device, source_size, options)?;
+        options: &ArtcnnRenderOptions,
+    ) -> Result<ArtcnnWorkspace, String> {
+        let exact_output_size =
+            validate_render_options(device, self.variant, source_size, options)?;
+        let feature_size = self.variant.feature_size(source_size)?;
 
         let source_extent = extent_for_size(source_size);
-        let feature_extent = extent_for_size(exact_output_size);
-        let skip = create_feature_texture(device, feature_extent, "suisuiview-artcnn-c4f16-skip");
-        let tmp_a = create_feature_texture(device, feature_extent, "suisuiview-artcnn-c4f16-tmp-a");
-        let tmp_b = create_feature_texture(device, feature_extent, "suisuiview-artcnn-c4f16-tmp-b");
-        let conv6 = create_feature_texture(device, source_extent, "suisuiview-artcnn-c4f16-conv6");
+        let feature_extent = extent_for_size(feature_size);
+        let skip = create_feature_texture(device, feature_extent, "suisuiview-artcnn-skip");
+        let tmp_a = create_feature_texture(device, feature_extent, "suisuiview-artcnn-tmp-a");
+        let tmp_b = create_feature_texture(device, feature_extent, "suisuiview-artcnn-tmp-b");
+        let conv6 = create_feature_texture(device, source_extent, "suisuiview-artcnn-conv6");
         let skip_view = skip.create_view(&wgpu::TextureViewDescriptor::default());
         let tmp_a_view = tmp_a.create_view(&wgpu::TextureViewDescriptor::default());
         let tmp_b_view = tmp_b.create_view(&wgpu::TextureViewDescriptor::default());
         let conv6_view = conv6.create_view(&wgpu::TextureViewDescriptor::default());
-        let byte_size = workspace_texture_bytes(source_size, exact_output_size)?;
+        let byte_size = workspace_texture_bytes(self.variant, source_size, feature_size)?;
 
-        Ok(ArtcnnC4F16Workspace {
+        Ok(ArtcnnWorkspace {
+            variant: self.variant,
             source_size,
             exact_output_size,
+            feature_size,
             _skip: skip,
             _tmp_a: tmp_a,
             _tmp_b: tmp_b,
@@ -182,18 +190,34 @@ impl ArtcnnC4F16 {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
-        workspace: &ArtcnnC4F16Workspace,
-        options: ArtcnnC4F16RenderOptions,
-    ) -> Result<ArtcnnC4F16Output, String> {
-        let exact_output_size = validate_render_options(device, workspace.source_size, &options)?;
+        workspace: &ArtcnnWorkspace,
+        options: ArtcnnRenderOptions,
+    ) -> Result<ArtcnnOutput, String> {
+        if workspace.variant != self.variant {
+            return Err(format!(
+                "{} workspace variant mismatch",
+                self.variant.label()
+            ));
+        }
+        let exact_output_size =
+            validate_render_options(device, self.variant, workspace.source_size, &options)?;
         if exact_output_size != workspace.exact_output_size {
-            return Err("ArtCNN C4F16 workspace output shape mismatch".to_owned());
+            return Err(format!(
+                "{} workspace output shape mismatch",
+                self.variant.label()
+            ));
+        }
+        if self.variant.feature_size(workspace.source_size)? != workspace.feature_size {
+            return Err(format!(
+                "{} workspace feature shape mismatch",
+                self.variant.label()
+            ));
         }
 
         let source_size = workspace.source_size;
         let output_extent = extent_for_size(options.output_size);
         let output_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("suisuiview-artcnn-c4f16-output"),
+            label: Some("suisuiview-artcnn-output"),
             size: output_extent,
             mip_level_count: 1,
             sample_count: 1,
@@ -204,22 +228,22 @@ impl ArtcnnC4F16 {
         });
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("suisuiview-artcnn-c4f16-params"),
+            label: Some("suisuiview-artcnn-params"),
             contents: bytemuck::bytes_of(&ArtcnnParams {
                 source_width: source_size[0] as u32,
                 source_height: source_size[1] as u32,
                 output_width: options.output_size[0] as u32,
                 output_height: options.output_size[1] as u32,
-                _pad0: 0,
-                _pad1: 0,
+                feature_width: workspace.feature_size[0] as u32,
+                feature_height: workspace.feature_size[1] as u32,
                 _pad2: 0,
                 _pad3: 0,
             }),
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
-        let source_groups = WorkSizes::from_size(source_size)?;
-        let output_groups = WorkSizes::from_size(options.output_size)?;
+        let source_groups = WorkSizes::from_size(self.variant, source_size)?;
+        let output_groups = WorkSizes::from_size(self.variant, options.output_size)?;
         let mut pass_resources = PassResources {
             device,
             encoder,
@@ -323,7 +347,7 @@ impl ArtcnnC4F16 {
             output_groups,
         );
 
-        Ok(ArtcnnC4F16Output {
+        Ok(ArtcnnOutput {
             texture: output_texture,
             size: options.output_size,
         })
@@ -336,10 +360,11 @@ impl ArtcnnC4F16 {
         views: Views<'_>,
         groups: WorkSizes,
     ) {
+        let entry_point = self.variant.entry_points()[pipeline_index];
         let bind_group = pass_resources
             .device
             .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(ENTRY_POINTS[pipeline_index]),
+                label: Some(entry_point),
                 layout: &self.bind_group_layout,
                 entries: &[
                     texture_binding(0, views.source),
@@ -356,7 +381,7 @@ impl ArtcnnC4F16 {
         let mut pass = pass_resources
             .encoder
             .begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some(ENTRY_POINTS[pipeline_index]),
+                label: Some(entry_point),
                 timestamp_writes: None,
             });
         pass.set_pipeline(&self.pipelines[pipeline_index]);
@@ -386,12 +411,12 @@ struct WorkSizes {
 }
 
 impl WorkSizes {
-    fn from_size(size: [usize; 2]) -> Result<Self, String> {
+    fn from_size(variant: ArtcnnVariant, size: [usize; 2]) -> Result<Self, String> {
         Ok(Self {
             x: u32::try_from(size[0])
-                .map_err(|_| "ArtCNN C4F16 dispatch width exceeds u32".to_owned())?,
+                .map_err(|_| format!("{} dispatch width exceeds u32", variant.label()))?,
             y: u32::try_from(size[1])
-                .map_err(|_| "ArtCNN C4F16 dispatch height exceeds u32".to_owned())?,
+                .map_err(|_| format!("{} dispatch height exceeds u32", variant.label()))?,
         })
     }
 }
@@ -452,7 +477,7 @@ fn storage_binding(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEnt
 
 #[cfg(test)]
 mod tests {
-    use super::ArtcnnC4F16;
+    use super::{Artcnn, ArtcnnVariant};
 
     #[test]
     fn shader_pipelines_compile_when_wgpu_is_available() {
@@ -481,7 +506,9 @@ mod tests {
                 return;
             };
 
-            let _core = ArtcnnC4F16::new(&device);
+            for variant in ArtcnnVariant::ALL {
+                let _core = Artcnn::new(&device, variant);
+            }
         });
     }
 }

@@ -119,3 +119,15 @@ path = "src/app/realtime_sr/mod.rs"
 rule = "large_new_file"
 reason = "Temporary CuNNy runtime renderer and exact pass metadata stay together until generated metadata is split after NVL variant expansion."
 expires = "2026-06-30"
+
+[[waivers]]
+path = "src/app/gpu_paint.rs"
+rule = "large_new_file"
+reason = "Temporary waiver while display upscaler routing remains in the paint bridge; split cache/experimental override helpers after SR experiments settle."
+expires = "2026-06-15"
+
+[[waivers]]
+path = "src/app/settings.rs"
+rule = "large_new_file"
+reason = "Temporary waiver for the existing settings panel while unrelated local settings edits are present; split panels in a focused settings refactor."
+expires = "2026-06-15"

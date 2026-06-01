@@ -1,16 +1,17 @@
 use super::RealtimeSrOutput;
-use crate::core::artcnn_c4f16::{
-    exact_output_size, ArtcnnC4F16, ArtcnnC4F16RenderOptions, ArtcnnC4F16Workspace,
+use crate::core::artcnn::{
+    exact_output_size, Artcnn, ArtcnnRenderOptions, ArtcnnVariant, ArtcnnWorkspace,
 };
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
+use crate::core::state::DisplayUpscaler;
 use crossbeam_channel::{bounded, Receiver, TryRecvError};
 use std::thread;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::time::{Duration, Instant};
 
 const TRANSIENT_BYTES_LIMIT: u64 = 256 * 1024 * 1024;
-const WORKSPACE_CACHE_BYTES_LIMIT: u64 = 192 * 1024 * 1024;
+const WORKSPACE_CACHE_BYTES_LIMIT: u64 = TRANSIENT_BYTES_LIMIT;
 const WORKSPACE_CACHE_SLOTS_LIMIT: usize = 4;
 
 pub(super) struct ArtcnnRenderer {
@@ -19,19 +20,23 @@ pub(super) struct ArtcnnRenderer {
 
 enum ArtcnnRendererState {
     Pending,
-    Loading(Receiver<LoadedArtcnnRenderer>),
+    Loading {
+        variant: ArtcnnVariant,
+        receiver: Receiver<LoadedArtcnnRenderer>,
+    },
     Ready(Box<LoadedArtcnnRenderer>),
     Disabled,
 }
 
 struct LoadedArtcnnRenderer {
-    core: ArtcnnC4F16,
+    variant: ArtcnnVariant,
+    core: Artcnn,
     workspaces: Vec<ArtcnnWorkspaceSlot>,
     workspace_bytes: u64,
 }
 
 struct ArtcnnWorkspaceSlot {
-    workspace: ArtcnnC4F16Workspace,
+    workspace: ArtcnnWorkspace,
 }
 
 impl ArtcnnRenderer {
@@ -43,12 +48,14 @@ impl ArtcnnRenderer {
 
     pub(super) fn render(
         &mut self,
+        method: DisplayUpscaler,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
         source_size: [usize; 2],
     ) -> Option<RealtimeSrOutput> {
-        self.start_loading_if_needed(device);
+        let variant = artcnn_variant_for_method(method)?;
+        self.start_loading_if_needed(device, variant);
         self.finish_loading_if_ready();
 
         let ArtcnnRendererState::Ready(renderer) = &mut self.state else {
@@ -58,25 +65,39 @@ impl ArtcnnRenderer {
     }
 
     pub(super) fn is_loading(&self) -> bool {
-        matches!(self.state, ArtcnnRendererState::Loading(_))
+        matches!(self.state, ArtcnnRendererState::Loading { .. })
     }
 
-    pub(super) fn warm_up(&mut self, device: &wgpu::Device) {
-        self.start_loading_if_needed(device);
+    pub(super) fn warm_up(&mut self, method: DisplayUpscaler, device: &wgpu::Device) {
+        let Some(variant) = artcnn_variant_for_method(method) else {
+            return;
+        };
+        self.start_loading_if_needed(device, variant);
         self.finish_loading_if_ready();
     }
 
-    fn start_loading_if_needed(&mut self, device: &wgpu::Device) {
+    fn start_loading_if_needed(&mut self, device: &wgpu::Device, variant: ArtcnnVariant) {
+        if self.loaded_variant() != Some(variant) {
+            self.state = ArtcnnRendererState::Pending;
+        }
         if !matches!(self.state, ArtcnnRendererState::Pending) {
             return;
         }
-        self.state = LoadedArtcnnRenderer::spawn_loader(device.clone())
-            .map(ArtcnnRendererState::Loading)
+        self.state = LoadedArtcnnRenderer::spawn_loader(device.clone(), variant)
+            .map(|receiver| ArtcnnRendererState::Loading { variant, receiver })
             .unwrap_or(ArtcnnRendererState::Disabled);
     }
 
+    fn loaded_variant(&self) -> Option<ArtcnnVariant> {
+        match &self.state {
+            ArtcnnRendererState::Loading { variant, .. } => Some(*variant),
+            ArtcnnRendererState::Ready(renderer) => Some(renderer.variant),
+            _ => None,
+        }
+    }
+
     fn finish_loading_if_ready(&mut self) {
-        let ArtcnnRendererState::Loading(receiver) = &self.state else {
+        let ArtcnnRendererState::Loading { receiver, .. } = &self.state else {
             return;
         };
         let next_state = match receiver.try_recv() {
@@ -89,32 +110,33 @@ impl ArtcnnRenderer {
 }
 
 impl LoadedArtcnnRenderer {
-    fn spawn_loader(device: wgpu::Device) -> Option<Receiver<Self>> {
+    fn spawn_loader(device: wgpu::Device, variant: ArtcnnVariant) -> Option<Receiver<Self>> {
         let (sender, receiver) = bounded(1);
         let _loader = thread::Builder::new()
             .name("suisuiview-artcnn-display-loader".to_owned())
             .spawn(move || {
-                let _ = sender.send(Self::new(&device));
+                let _ = sender.send(Self::new(&device, variant));
             })
             .ok()?;
         Some(receiver)
     }
 
-    fn new(device: &wgpu::Device) -> Self {
+    fn new(device: &wgpu::Device, variant: ArtcnnVariant) -> Self {
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let load_started = Instant::now();
-        let core = ArtcnnC4F16::new(device);
+        let core = Artcnn::new(device, variant);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf_trace::record_duration_if_at_least(
             "artcnn_display_load",
             load_started.elapsed(),
             Duration::from_millis(16),
             &[
-                PerfField::Str("method", "artcnn_c4f16"),
+                PerfField::Str("method", variant.token()),
                 PerfField::Usize("pipelines", 8),
             ],
         );
         Self {
+            variant,
             core,
             workspaces: Vec::new(),
             workspace_bytes: 0,
@@ -130,10 +152,11 @@ impl LoadedArtcnnRenderer {
     ) -> Option<RealtimeSrOutput> {
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let render_started = Instant::now();
-        let output_size = match exact_output_size(source_size) {
+        let output_size = match exact_output_size(self.variant, source_size) {
             Ok(output_size) => output_size,
             Err(error) => {
                 record_artcnn_display_skip(
+                    self.variant.token(),
                     artcnn_skip_reason(&error),
                     source_size,
                     [0, 0],
@@ -144,7 +167,7 @@ impl LoadedArtcnnRenderer {
                 return None;
             }
         };
-        let options = ArtcnnC4F16RenderOptions {
+        let options = ArtcnnRenderOptions {
             output_size,
             output_usage: wgpu::TextureUsages::TEXTURE_BINDING,
             transient_limit: TRANSIENT_BYTES_LIMIT,
@@ -160,6 +183,7 @@ impl LoadedArtcnnRenderer {
                 Ok(slot) => (slot, false),
                 Err(error) => {
                     record_artcnn_display_skip(
+                        self.variant.token(),
                         artcnn_skip_reason(&error),
                         source_size,
                         output_size,
@@ -171,7 +195,8 @@ impl LoadedArtcnnRenderer {
                 }
             },
         };
-        let should_cache_workspace = slot.workspace.byte_size <= WORKSPACE_CACHE_BYTES_LIMIT;
+        let workspace_byte_size = slot.workspace.byte_size;
+        let should_cache_workspace = workspace_byte_size <= WORKSPACE_CACHE_BYTES_LIMIT;
         let output = self.core.render_to_texture_with_workspace(
             device,
             encoder,
@@ -186,6 +211,7 @@ impl LoadedArtcnnRenderer {
             Ok(output) => output,
             Err(error) => {
                 record_artcnn_display_skip(
+                    self.variant.token(),
                     artcnn_skip_reason(&error),
                     source_size,
                     output_size,
@@ -198,9 +224,11 @@ impl LoadedArtcnnRenderer {
         };
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_artcnn_display_encode(
+            self.variant.token(),
             render_started.elapsed(),
             source_size,
             output_size,
+            workspace_byte_size,
             reused_workspace,
             should_cache_workspace,
             self.workspaces.len(),
@@ -224,7 +252,7 @@ impl LoadedArtcnnRenderer {
         &self,
         device: &wgpu::Device,
         source_size: [usize; 2],
-        options: &ArtcnnC4F16RenderOptions,
+        options: &ArtcnnRenderOptions,
     ) -> Result<ArtcnnWorkspaceSlot, String> {
         self.core
             .create_workspace(device, source_size, options)
@@ -282,11 +310,25 @@ fn artcnn_skip_reason(error: &str) -> &'static str {
     }
 }
 
+pub(super) fn artcnn_variant_for_method(method: DisplayUpscaler) -> Option<ArtcnnVariant> {
+    match method {
+        DisplayUpscaler::WgslArtcnnC4F16 => Some(ArtcnnVariant::C4F16),
+        DisplayUpscaler::WgslArtcnnC4F16Dn => Some(ArtcnnVariant::C4F16Dn),
+        DisplayUpscaler::WgslArtcnnC4F16Ds => Some(ArtcnnVariant::C4F16Ds),
+        DisplayUpscaler::WgslArtcnnC4F32 => Some(ArtcnnVariant::C4F32),
+        DisplayUpscaler::WgslArtcnnC4F32Dn => Some(ArtcnnVariant::C4F32Dn),
+        DisplayUpscaler::WgslArtcnnC4F32Ds => Some(ArtcnnVariant::C4F32Ds),
+        _ => None,
+    }
+}
+
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 fn record_artcnn_display_encode(
+    method_token: &'static str,
     duration: Duration,
     source_size: [usize; 2],
     output_size: [usize; 2],
+    workspace_byte_size: u64,
     reused_workspace: bool,
     cached_workspace: bool,
     workspace_slots: usize,
@@ -296,11 +338,15 @@ fn record_artcnn_display_encode(
         "artcnn_display_encode",
         duration,
         &[
-            PerfField::Str("method", "artcnn_c4f16"),
+            PerfField::Str("method", method_token),
             PerfField::Usize("source_width", source_size[0]),
             PerfField::Usize("source_height", source_size[1]),
             PerfField::Usize("output_width", output_size[0]),
             PerfField::Usize("output_height", output_size[1]),
+            PerfField::Usize(
+                "workspace_bytes",
+                usize::try_from(workspace_byte_size).unwrap_or(usize::MAX),
+            ),
             PerfField::Bool("reused_workspace", reused_workspace),
             PerfField::Bool("cached_workspace", cached_workspace),
             PerfField::Usize("workspace_slots", workspace_slots),
@@ -314,6 +360,7 @@ fn record_artcnn_display_encode(
 
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 fn record_artcnn_display_skip(
+    method_token: &'static str,
     reason: &'static str,
     source_size: [usize; 2],
     output_size: [usize; 2],
@@ -325,7 +372,7 @@ fn record_artcnn_display_skip(
         "artcnn_display_skip",
         Duration::ZERO,
         &[
-            PerfField::Str("method", "artcnn_c4f16"),
+            PerfField::Str("method", method_token),
             PerfField::Str("reason", reason),
             PerfField::Usize("source_width", source_size[0]),
             PerfField::Usize("source_height", source_size[1]),
@@ -343,6 +390,7 @@ fn record_artcnn_display_skip(
 
 #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
 fn record_artcnn_display_skip(
+    _method_token: &'static str,
     _reason: &'static str,
     _source_size: [usize; 2],
     _output_size: [usize; 2],
