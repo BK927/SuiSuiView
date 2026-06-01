@@ -24,10 +24,12 @@ use crossbeam_channel::{bounded, Receiver, TryRecvError};
 use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
 const EXPERIMENT_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_SPAN_MANIFEST";
+const EXPERIMENT_SPAN_TILE_EDGE_ENV: &str = "SUISUIVIEW_EXPERIMENT_SPAN_TILE_EDGE";
 const SR_LAB_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_MANIFEST";
 const MAX_WEIGHT_BLOB_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_DISPLAY_TRANSIENT_BYTES: u64 = 96 * 1024 * 1024;
@@ -35,6 +37,8 @@ const MAX_DISPLAY_WORKSPACE_CACHE_BYTES: u64 = 192 * 1024 * 1024;
 const MAX_DISPLAY_WORKSPACE_SHAPES: usize = 32;
 const MAX_DISPLAY_TILE_COUNT: usize = 256;
 const MAX_DISPLAY_SOURCE_PIXELS: usize = 1_048_576;
+const MIN_DISPLAY_TILE_EDGE: usize = 32;
+const MAX_DISPLAY_TILE_EDGE: usize = 256;
 const OUTPUT_BYTES_PER_PIXEL: usize = 4;
 
 pub(super) struct SpanRenderer {
@@ -166,31 +170,81 @@ impl LoadedSpanRenderer {
         source_size: [usize; 2],
     ) -> Option<RealtimeSrOutput> {
         let render_start = Instant::now();
-        let output_size = checked_output_size(source_size, self.manifest.scale as usize)?;
+        let Some(output_size) = checked_output_size(source_size, self.manifest.scale as usize)
+        else {
+            record_span_display_skip("output_size_overflow", source_size, [0, 0], 0, 0, 0);
+            return None;
+        };
         if !fits_texture_limit(device, output_size) {
+            record_span_display_skip("texture_limit", source_size, output_size, 0, 0, 0);
             return None;
         }
-        if source_pixel_count(source_size)? > MAX_DISPLAY_SOURCE_PIXELS {
+        let Some(source_pixels) = source_pixel_count(source_size) else {
+            record_span_display_skip("source_size_overflow", source_size, output_size, 0, 0, 0);
+            return None;
+        };
+        if source_pixels > MAX_DISPLAY_SOURCE_PIXELS {
+            record_span_display_skip("source_area_limit", source_size, output_size, 0, 0, 0);
             return None;
         }
         let input_shape = input_shape(source_size);
-        let halo = span_tile_halo(&self.manifest).ok()?;
-        let tile_specs = span_tile_specs(&input_shape, DEFAULT_SPAN_TILE_EDGE, halo);
-        if tile_specs.is_empty()
-            || tile_specs.len() > MAX_DISPLAY_TILE_COUNT
-            || workspace_shape_count(&tile_specs) > MAX_DISPLAY_WORKSPACE_SHAPES
-        {
+        let halo = match span_tile_halo(&self.manifest) {
+            Ok(halo) => halo,
+            Err(_) => {
+                record_span_display_skip("tile_halo", source_size, output_size, 0, 0, 0);
+                return None;
+            }
+        };
+        let tile_edge = span_display_tile_edge();
+        let tile_specs = span_tile_specs(&input_shape, tile_edge, halo);
+        let tile_count = tile_specs.len();
+        let workspace_shapes = workspace_shape_count(&tile_specs);
+        if tile_specs.is_empty() {
+            record_span_display_skip("empty_tiles", source_size, output_size, tile_edge, 0, 0);
+            return None;
+        }
+        if tile_count > MAX_DISPLAY_TILE_COUNT {
+            record_span_display_skip(
+                "tile_count_limit",
+                source_size,
+                output_size,
+                tile_edge,
+                tile_count,
+                workspace_shapes,
+            );
+            return None;
+        }
+        if workspace_shapes > MAX_DISPLAY_WORKSPACE_SHAPES {
+            record_span_display_skip(
+                "workspace_shape_limit",
+                source_size,
+                output_size,
+                tile_edge,
+                tile_count,
+                workspace_shapes,
+            );
             return None;
         }
         self.reset_workspace_cache_if_source_changed(source_size);
-        let tile_plans = self
-            .prepare_tile_plans(
-                device.limits().max_storage_buffer_binding_size as u64,
-                &tile_specs,
-                source_size,
-                output_size,
-            )
-            .ok()?;
+        let tile_plans = match self.prepare_tile_plans(
+            device.limits().max_storage_buffer_binding_size as u64,
+            &tile_specs,
+            source_size,
+            output_size,
+        ) {
+            Ok(tile_plans) => tile_plans,
+            Err(_) => {
+                record_span_display_skip(
+                    "workspace_limit",
+                    source_size,
+                    output_size,
+                    tile_edge,
+                    tile_count,
+                    workspace_shapes,
+                );
+                return None;
+            }
+        };
 
         let output_texture = create_output_texture(device, output_size);
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -218,11 +272,12 @@ impl LoadedSpanRenderer {
             render_start.elapsed(),
             source_size,
             output_size,
-            tile_specs.len(),
-            workspace_shape_count(&tile_specs),
+            tile_count,
+            workspace_shapes,
             self.workspaces.len(),
             self.workspace_bytes,
-            estimated_dispatch_count(&self.manifest, tile_specs.len()),
+            tile_edge,
+            estimated_dispatch_count(&self.manifest, tile_count),
         );
 
         Some(RealtimeSrOutput {
@@ -502,6 +557,7 @@ fn record_span_display_encode(
     workspace_shapes: usize,
     workspace_slots: usize,
     workspace_bytes: u64,
+    tile_edge: usize,
     estimated_dispatches: usize,
 ) {
     perf_trace::record_duration(
@@ -516,11 +572,37 @@ fn record_span_display_encode(
             PerfField::Usize("tile_count", tile_count),
             PerfField::Usize("workspace_shapes", workspace_shapes),
             PerfField::Usize("workspace_slots", workspace_slots),
+            PerfField::Usize("tile_edge", tile_edge),
             PerfField::Usize("estimated_dispatches", estimated_dispatches),
             PerfField::Usize(
                 "workspace_cache_bytes",
                 usize::try_from(workspace_bytes).unwrap_or(usize::MAX),
             ),
+        ],
+    );
+}
+
+fn record_span_display_skip(
+    reason: &'static str,
+    source_size: [usize; 2],
+    output_size: [usize; 2],
+    tile_edge: usize,
+    tile_count: usize,
+    workspace_shapes: usize,
+) {
+    perf_trace::record_duration(
+        "span_display_skip",
+        Duration::ZERO,
+        &[
+            PerfField::Str("method", "srlab_span_x2"),
+            PerfField::Str("reason", reason),
+            PerfField::Usize("source_width", source_size[0]),
+            PerfField::Usize("source_height", source_size[1]),
+            PerfField::Usize("output_width", output_size[0]),
+            PerfField::Usize("output_height", output_size[1]),
+            PerfField::Usize("tile_edge", tile_edge),
+            PerfField::Usize("tile_count", tile_count),
+            PerfField::Usize("workspace_shapes", workspace_shapes),
         ],
     );
 }
@@ -535,6 +617,21 @@ fn estimated_dispatch_count(manifest: &SrLabManifest, tile_count: usize) -> usiz
     tile_count.saturating_mul(span_graph_dispatches.saturating_add(bridge_dispatches))
 }
 
+fn span_display_tile_edge() -> usize {
+    static TILE_EDGE: OnceLock<usize> = OnceLock::new();
+    *TILE_EDGE.get_or_init(|| {
+        parse_span_display_tile_edge(env::var(EXPERIMENT_SPAN_TILE_EDGE_ENV).ok().as_deref())
+            .unwrap_or(DEFAULT_SPAN_TILE_EDGE)
+    })
+}
+
+fn parse_span_display_tile_edge(value: Option<&str>) -> Option<usize> {
+    let edge = value?.trim().parse::<usize>().ok()?;
+    (MIN_DISPLAY_TILE_EDGE..=MAX_DISPLAY_TILE_EDGE)
+        .contains(&edge)
+        .then_some(edge)
+}
+
 fn fits_texture_limit(device: &wgpu::Device, size: [usize; 2]) -> bool {
     let max = device.limits().max_texture_dimension_2d as usize;
     size[0] <= max && size[1] <= max
@@ -542,7 +639,10 @@ fn fits_texture_limit(device: &wgpu::Device, size: [usize; 2]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{distinct_workspace_sizes, estimated_dispatch_count, safe_relative_weights_path};
+    use super::{
+        distinct_workspace_sizes, estimated_dispatch_count, parse_span_display_tile_edge,
+        safe_relative_weights_path,
+    };
     use crate::core::sr_lab::gpu::tiled::SpanTileSpec;
     use crate::core::sr_lab::{SrLabFamily, SrLabManifest, SrLabSpanMetadata};
 
@@ -628,5 +728,15 @@ mod tests {
         };
 
         assert_eq!(estimated_dispatch_count(&manifest, 96), 3168);
+    }
+
+    #[test]
+    fn span_display_tile_edge_override_accepts_bounded_values() {
+        assert_eq!(parse_span_display_tile_edge(Some("128")), Some(128));
+        assert_eq!(parse_span_display_tile_edge(Some(" 72 ")), Some(72));
+        assert_eq!(parse_span_display_tile_edge(Some("31")), None);
+        assert_eq!(parse_span_display_tile_edge(Some("257")), None);
+        assert_eq!(parse_span_display_tile_edge(Some("wide")), None);
+        assert_eq!(parse_span_display_tile_edge(None), None);
     }
 }
