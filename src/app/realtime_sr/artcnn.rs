@@ -130,7 +130,20 @@ impl LoadedArtcnnRenderer {
     ) -> Option<RealtimeSrOutput> {
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let render_started = Instant::now();
-        let output_size = exact_output_size(source_size).ok()?;
+        let output_size = match exact_output_size(source_size) {
+            Ok(output_size) => output_size,
+            Err(error) => {
+                record_artcnn_display_skip(
+                    artcnn_skip_reason(&error),
+                    source_size,
+                    [0, 0],
+                    false,
+                    self.workspaces.len(),
+                    self.workspace_bytes,
+                );
+                return None;
+            }
+        };
         let options = ArtcnnC4F16RenderOptions {
             output_size,
             output_usage: wgpu::TextureUsages::TEXTURE_BINDING,
@@ -143,26 +156,46 @@ impl LoadedArtcnnRenderer {
         )]
         let (slot, reused_workspace) = match self.take_workspace(source_size) {
             Some(slot) => (slot, true),
-            None => (
-                self.create_workspace_slot(device, source_size, &options)?,
-                false,
-            ),
+            None => match self.create_workspace_slot(device, source_size, &options) {
+                Ok(slot) => (slot, false),
+                Err(error) => {
+                    record_artcnn_display_skip(
+                        artcnn_skip_reason(&error),
+                        source_size,
+                        output_size,
+                        false,
+                        self.workspaces.len(),
+                        self.workspace_bytes,
+                    );
+                    return None;
+                }
+            },
         };
         let should_cache_workspace = slot.workspace.byte_size <= WORKSPACE_CACHE_BYTES_LIMIT;
-        let output = self
-            .core
-            .render_to_texture_with_workspace(
-                device,
-                encoder,
-                source_view,
-                &slot.workspace,
-                options,
-            )
-            .ok();
+        let output = self.core.render_to_texture_with_workspace(
+            device,
+            encoder,
+            source_view,
+            &slot.workspace,
+            options,
+        );
         if should_cache_workspace {
             self.store_workspace(slot);
         }
-        let output = output?;
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                record_artcnn_display_skip(
+                    artcnn_skip_reason(&error),
+                    source_size,
+                    output_size,
+                    reused_workspace,
+                    self.workspaces.len(),
+                    self.workspace_bytes,
+                );
+                return None;
+            }
+        };
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_artcnn_display_encode(
             render_started.elapsed(),
@@ -192,10 +225,9 @@ impl LoadedArtcnnRenderer {
         device: &wgpu::Device,
         source_size: [usize; 2],
         options: &ArtcnnC4F16RenderOptions,
-    ) -> Option<ArtcnnWorkspaceSlot> {
+    ) -> Result<ArtcnnWorkspaceSlot, String> {
         self.core
             .create_workspace(device, source_size, options)
-            .ok()
             .map(|workspace| ArtcnnWorkspaceSlot { workspace })
     }
 
@@ -229,6 +261,27 @@ impl LoadedArtcnnRenderer {
     }
 }
 
+fn artcnn_skip_reason(error: &str) -> &'static str {
+    if error.contains("non-empty source") {
+        "empty_source"
+    } else if error.contains("output width overflowed")
+        || error.contains("output height overflowed")
+        || error.contains("pixel count overflowed")
+        || error.contains("byte size overflowed")
+        || error.contains("size overflowed")
+    {
+        "size_overflow"
+    } else if error.contains("exceeds adapter 2D texture limit") {
+        "texture_limit"
+    } else if error.contains("transient resources") {
+        "transient_limit"
+    } else if error.contains("workspace output shape mismatch") {
+        "workspace_mismatch"
+    } else {
+        "render_error"
+    }
+}
+
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 fn record_artcnn_display_encode(
     duration: Duration,
@@ -257,4 +310,79 @@ fn record_artcnn_display_encode(
             ),
         ],
     );
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+fn record_artcnn_display_skip(
+    reason: &'static str,
+    source_size: [usize; 2],
+    output_size: [usize; 2],
+    reused_workspace: bool,
+    workspace_slots: usize,
+    workspace_bytes: u64,
+) {
+    perf_trace::record_duration(
+        "artcnn_display_skip",
+        Duration::ZERO,
+        &[
+            PerfField::Str("method", "artcnn_c4f16"),
+            PerfField::Str("reason", reason),
+            PerfField::Usize("source_width", source_size[0]),
+            PerfField::Usize("source_height", source_size[1]),
+            PerfField::Usize("output_width", output_size[0]),
+            PerfField::Usize("output_height", output_size[1]),
+            PerfField::Bool("reused_workspace", reused_workspace),
+            PerfField::Usize("workspace_slots", workspace_slots),
+            PerfField::Usize(
+                "workspace_cache_bytes",
+                usize::try_from(workspace_bytes).unwrap_or(usize::MAX),
+            ),
+        ],
+    );
+}
+
+#[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
+fn record_artcnn_display_skip(
+    _reason: &'static str,
+    _source_size: [usize; 2],
+    _output_size: [usize; 2],
+    _reused_workspace: bool,
+    _workspace_slots: usize,
+    _workspace_bytes: u64,
+) {
+}
+
+#[cfg(test)]
+mod tests {
+    use super::artcnn_skip_reason;
+
+    #[test]
+    fn artcnn_skip_reason_keeps_perf_labels_stable() {
+        assert_eq!(
+            artcnn_skip_reason("ArtCNN C4F16 requires a non-empty source image"),
+            "empty_source"
+        );
+        assert_eq!(
+            artcnn_skip_reason("ArtCNN C4F16 output width overflowed"),
+            "size_overflow"
+        );
+        assert_eq!(
+            artcnn_skip_reason(
+                "ArtCNN C4F16 feature texture 99999x1 exceeds adapter 2D texture limit 8192"
+            ),
+            "texture_limit"
+        );
+        assert_eq!(
+            artcnn_skip_reason("ArtCNN C4F16 transient resources would use about 300 MiB"),
+            "transient_limit"
+        );
+        assert_eq!(
+            artcnn_skip_reason("ArtCNN C4F16 workspace output shape mismatch"),
+            "workspace_mismatch"
+        );
+        assert_eq!(
+            artcnn_skip_reason("other validation failure"),
+            "render_error"
+        );
+    }
 }
