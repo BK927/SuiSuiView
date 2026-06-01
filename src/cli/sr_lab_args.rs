@@ -1,4 +1,5 @@
 use super::{required_path, required_u32, required_usize, unknown_arg, CliCommand, CliError};
+use crate::core::sr_lab::cpu::HARD_SPAN_REFERENCE_MAX_LONG_EDGE;
 use std::ffi::OsString;
 
 pub(super) fn parse_inspect(
@@ -34,6 +35,7 @@ pub(super) fn parse_span_cpu_reference(
         manifest_path: args.manifest_path,
         input_path: args.input_path,
         long_edge: args.long_edge,
+        max_long_edge: args.max_long_edge,
         output_path: args.output_path,
         report_path: args.report_path,
     })
@@ -47,6 +49,7 @@ pub(super) fn parse_span_gpu_reference(
         manifest_path: args.manifest_path,
         input_path: args.input_path,
         long_edge: args.long_edge,
+        max_long_edge: args.max_long_edge,
         output_path: args.output_path,
         report_path: args.report_path,
         compare_cpu: args.compare_cpu,
@@ -60,6 +63,7 @@ pub(super) fn parse_span_gpu_tiled_reference(
     let manifest_path = required_path(&mut args, usage)?;
     let input_path = required_path(&mut args, usage)?;
     let mut long_edge = None;
+    let mut max_long_edge = None;
     let mut tile_edge = crate::core::sr_lab::gpu::tiled::DEFAULT_SPAN_TILE_EDGE;
     let mut output_path = None;
     let mut report_path = None;
@@ -68,6 +72,8 @@ pub(super) fn parse_span_gpu_tiled_reference(
     while let Some(arg) = args.next() {
         if arg == "--sr-lab-long-edge" {
             long_edge = Some(required_u32(&mut args, "--sr-lab-long-edge")?);
+        } else if arg == "--sr-lab-max-long-edge" {
+            max_long_edge = Some(required_positive_u32(&mut args, "--sr-lab-max-long-edge")?);
         } else if arg == "--sr-lab-tile-edge" {
             tile_edge = required_usize(&mut args, "--sr-lab-tile-edge")?;
             if tile_edge == 0 {
@@ -92,6 +98,7 @@ pub(super) fn parse_span_gpu_tiled_reference(
         manifest_path,
         input_path,
         long_edge,
+        max_long_edge,
         tile_edge,
         output_path,
         report_path,
@@ -106,6 +113,7 @@ pub(super) fn parse_span_session_bench(
     let manifest_path = required_path(&mut args, usage)?;
     let input_path = required_path(&mut args, usage)?;
     let mut long_edge = None;
+    let mut max_long_edge = None;
     let mut warmups = crate::core::sr_lab::gpu::DEFAULT_SPAN_SESSION_WARMUPS;
     let mut iterations = crate::core::sr_lab::gpu::DEFAULT_SPAN_SESSION_ITERATIONS;
     let mut report_path = None;
@@ -113,6 +121,8 @@ pub(super) fn parse_span_session_bench(
     while let Some(arg) = args.next() {
         if arg == "--sr-lab-long-edge" {
             long_edge = Some(required_u32(&mut args, "--sr-lab-long-edge")?);
+        } else if arg == "--sr-lab-max-long-edge" {
+            max_long_edge = Some(required_positive_u32(&mut args, "--sr-lab-max-long-edge")?);
         } else if arg == "--sr-lab-warmups" {
             warmups = required_usize(&mut args, "--sr-lab-warmups")?;
         } else if arg == "--sr-lab-iterations" {
@@ -135,6 +145,7 @@ pub(super) fn parse_span_session_bench(
         manifest_path,
         input_path,
         long_edge,
+        max_long_edge,
         warmups,
         iterations,
         report_path,
@@ -145,6 +156,7 @@ struct SpanReferenceArgs {
     manifest_path: std::path::PathBuf,
     input_path: std::path::PathBuf,
     long_edge: Option<u32>,
+    max_long_edge: Option<u32>,
     output_path: Option<std::path::PathBuf>,
     report_path: Option<std::path::PathBuf>,
     compare_cpu: bool,
@@ -180,6 +192,7 @@ fn parse_span_reference_args(
     let manifest_path = required_path(&mut args, usage)?;
     let input_path = required_path(&mut args, usage)?;
     let mut long_edge = None;
+    let mut max_long_edge = None;
     let mut output_path = None;
     let mut report_path = None;
     let mut compare_cpu = false;
@@ -187,6 +200,8 @@ fn parse_span_reference_args(
     while let Some(arg) = args.next() {
         if arg == "--sr-lab-long-edge" {
             long_edge = Some(required_u32(&mut args, "--sr-lab-long-edge")?);
+        } else if arg == "--sr-lab-max-long-edge" {
+            max_long_edge = Some(required_positive_u32(&mut args, "--sr-lab-max-long-edge")?);
         } else if arg == "--sr-lab-output" {
             output_path = Some(required_path(&mut args, "--sr-lab-output requires a path")?);
         } else if arg == "--sr-lab-report" {
@@ -209,10 +224,27 @@ fn parse_span_reference_args(
         manifest_path,
         input_path,
         long_edge,
+        max_long_edge,
         output_path,
         report_path,
         compare_cpu,
     })
+}
+
+fn required_positive_u32(
+    args: &mut impl Iterator<Item = OsString>,
+    flag: &'static str,
+) -> Result<u32, CliError> {
+    let value = required_u32(args, flag)?;
+    if value == 0 {
+        return Err(CliError::new(format!("{flag} requires a positive integer")));
+    }
+    if value > HARD_SPAN_REFERENCE_MAX_LONG_EDGE {
+        return Err(CliError::new(format!(
+            "{flag} must be <= {HARD_SPAN_REFERENCE_MAX_LONG_EDGE}"
+        )));
+    }
+    Ok(value)
 }
 
 fn default_span_reference_report_path(kind: SpanReferenceKind) -> std::path::PathBuf {
@@ -258,6 +290,8 @@ mod tests {
             OsString::from("input.png"),
             OsString::from("--sr-lab-long-edge"),
             OsString::from("32"),
+            OsString::from("--sr-lab-max-long-edge"),
+            OsString::from("256"),
             OsString::from("--sr-lab-output"),
             OsString::from("out.png"),
             OsString::from("--sr-lab-report"),
@@ -269,6 +303,7 @@ mod tests {
             manifest_path,
             input_path,
             long_edge,
+            max_long_edge,
             output_path,
             report_path,
         }) = action
@@ -279,6 +314,7 @@ mod tests {
         assert_eq!(manifest_path, PathBuf::from("manifest.json"));
         assert_eq!(input_path, PathBuf::from("input.png"));
         assert_eq!(long_edge, Some(32));
+        assert_eq!(max_long_edge, Some(256));
         assert_eq!(output_path, Some(PathBuf::from("out.png")));
         assert_eq!(report_path, Some(PathBuf::from("report.json")));
     }
@@ -303,6 +339,7 @@ mod tests {
             manifest_path,
             input_path,
             long_edge,
+            max_long_edge,
             output_path,
             report_path,
             compare_cpu,
@@ -314,6 +351,7 @@ mod tests {
         assert_eq!(manifest_path, PathBuf::from("manifest.json"));
         assert_eq!(input_path, PathBuf::from("input.png"));
         assert_eq!(long_edge, Some(32));
+        assert_eq!(max_long_edge, None);
         assert_eq!(output_path, Some(PathBuf::from("out.png")));
         assert_eq!(report_path, Some(PathBuf::from("report.json")));
         assert!(compare_cpu);
@@ -341,6 +379,7 @@ mod tests {
             manifest_path,
             input_path,
             long_edge,
+            max_long_edge,
             tile_edge,
             output_path,
             report_path,
@@ -353,6 +392,7 @@ mod tests {
         assert_eq!(manifest_path, PathBuf::from("manifest.json"));
         assert_eq!(input_path, PathBuf::from("input.png"));
         assert_eq!(long_edge, Some(32));
+        assert_eq!(max_long_edge, None);
         assert_eq!(tile_edge, 8);
         assert_eq!(output_path, Some(PathBuf::from("out.png")));
         assert_eq!(report_path, Some(PathBuf::from("report.json")));
@@ -397,6 +437,7 @@ mod tests {
             manifest_path,
             input_path,
             long_edge,
+            max_long_edge,
             warmups,
             iterations,
             report_path,
@@ -408,6 +449,7 @@ mod tests {
         assert_eq!(manifest_path, PathBuf::from("manifest.json"));
         assert_eq!(input_path, PathBuf::from("input.png"));
         assert_eq!(long_edge, Some(64));
+        assert_eq!(max_long_edge, None);
         assert_eq!(warmups, 2);
         assert_eq!(iterations, 7);
         assert_eq!(report_path, Some(PathBuf::from("report.json")));
@@ -428,5 +470,36 @@ mod tests {
             error.message(),
             "--sr-lab-iterations requires a positive integer"
         );
+    }
+
+    #[test]
+    fn sr_lab_span_reference_rejects_zero_max_long_edge() {
+        let error = parse_args(vec![
+            OsString::from("--sr-lab-span-gpu-reference"),
+            OsString::from("manifest.json"),
+            OsString::from("input.png"),
+            OsString::from("--sr-lab-max-long-edge"),
+            OsString::from("0"),
+        ])
+        .unwrap_err();
+
+        assert_eq!(
+            error.message(),
+            "--sr-lab-max-long-edge requires a positive integer"
+        );
+    }
+
+    #[test]
+    fn sr_lab_span_reference_rejects_oversize_max_long_edge() {
+        let error = parse_args(vec![
+            OsString::from("--sr-lab-span-gpu-reference"),
+            OsString::from("manifest.json"),
+            OsString::from("input.png"),
+            OsString::from("--sr-lab-max-long-edge"),
+            OsString::from("1024"),
+        ])
+        .unwrap_err();
+
+        assert_eq!(error.message(), "--sr-lab-max-long-edge must be <= 512");
     }
 }

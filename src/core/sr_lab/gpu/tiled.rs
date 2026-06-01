@@ -56,6 +56,7 @@ pub fn run_span_gpu_tiled_reference(
     manifest_path: &Path,
     input_path: &Path,
     long_edge: Option<u32>,
+    max_long_edge: Option<u32>,
     tile_edge: usize,
     output_path: Option<&Path>,
     report_path: Option<&Path>,
@@ -70,7 +71,8 @@ pub fn run_span_gpu_tiled_reference(
         &manifest,
         "SPAN GPU tiled reference",
     )?;
-    let (requested_long_edge, effective_long_edge) = cpu::span_reference_long_edge(long_edge);
+    let (requested_long_edge, effective_long_edge) =
+        cpu::span_reference_long_edge(long_edge, max_long_edge);
     let input = cpu::load_input_image(input_path, effective_long_edge)?;
     validation::validate_span_manifest(&manifest, &input)?;
     let halo = span_tile_halo(&manifest)?;

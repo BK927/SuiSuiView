@@ -79,14 +79,17 @@ pub fn run_span_gpu_reference(
     manifest_path: &Path,
     input_path: &Path,
     long_edge: Option<u32>,
+    max_long_edge: Option<u32>,
     output_path: Option<&Path>,
     report_path: Option<&Path>,
     compare_cpu: bool,
 ) -> Result<(), String> {
     let manifest = super::read_manifest(manifest_path).map_err(|error| error.to_string())?;
+    super::validate_span_graph_contract(&manifest)?;
     let weights =
         super::blob::read_checked_weights(manifest_path, &manifest, "SPAN GPU reference")?;
-    let (requested_long_edge, effective_long_edge) = cpu::span_reference_long_edge(long_edge);
+    let (requested_long_edge, effective_long_edge) =
+        cpu::span_reference_long_edge(long_edge, max_long_edge);
     let input = cpu::load_input_image(input_path, effective_long_edge)?;
 
     let executor = SpanGpuExecutor::new()?;
@@ -142,6 +145,7 @@ pub fn run_span_gpu_session_bench(
     manifest_path: &Path,
     input_path: &Path,
     long_edge: Option<u32>,
+    max_long_edge: Option<u32>,
     warmups: usize,
     iterations: usize,
     report_path: Option<&Path>,
@@ -150,9 +154,11 @@ pub fn run_span_gpu_session_bench(
         return Err("--sr-lab-iterations requires a positive integer".to_owned());
     }
     let manifest = super::read_manifest(manifest_path).map_err(|error| error.to_string())?;
+    super::validate_span_graph_contract(&manifest)?;
     let weights =
         super::blob::read_checked_weights(manifest_path, &manifest, "SPAN GPU session benchmark")?;
-    let (requested_long_edge, effective_long_edge) = cpu::span_reference_long_edge(long_edge);
+    let (requested_long_edge, effective_long_edge) =
+        cpu::span_reference_long_edge(long_edge, max_long_edge);
     let input = cpu::load_input_image(input_path, effective_long_edge)?;
 
     let executor = SpanGpuExecutor::new()?;

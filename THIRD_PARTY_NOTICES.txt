@@ -1324,6 +1324,16 @@ Source: https://github.com/Artoriuz/ArtCNN
   The port predicts luma and merges source chroma in the final pass. It is not
   exposed as a user-facing display mode yet.
 
+SPAN
+License: Apache-2.0
+Copyright: Copyright 2018-2022 BasicSR Authors
+Source: https://github.com/hongyuanyu/SPAN
+  Note: The SR Lab hidden SPAN/SPAN-S experiments include a Rust CPU graph,
+  WGSL compute graph, and manifest/blob loader for converted local validation
+  weights derived from the upstream SPAN project at reviewed commit
+  `c77a5917759f09e66fbc7124220c5afc5ee221e5`. Converted `.srlab` blobs and
+  manifests are not exposed as default user-facing display modes.
+
 ACNetGLSL
 License: MIT
 Copyright: Copyright (c) 2020 TianZer

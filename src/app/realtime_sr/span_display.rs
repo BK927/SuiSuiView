@@ -204,6 +204,20 @@ pub(super) fn record_span_display_cancel(
     );
 }
 
+pub(super) fn record_span_display_loader_failure(reason: &'static str, error: &str) {
+    if perf_trace::is_active() {
+        eprintln!("SPAN display experiment disabled ({reason}): {error}");
+    }
+    perf_trace::record_duration(
+        "span_display_loader_failure",
+        Duration::ZERO,
+        &[
+            PerfField::Str("method", "srlab_span_x2"),
+            PerfField::Str("reason", reason),
+        ],
+    );
+}
+
 pub(super) fn record_span_display_skip(
     reason: &'static str,
     source_size: [usize; 2],

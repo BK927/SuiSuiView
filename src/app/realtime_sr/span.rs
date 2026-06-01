@@ -4,9 +4,9 @@ use super::span_bridge::{
 };
 use super::span_display::{
     estimated_dispatch_count, record_span_display_cancel, record_span_display_encode,
-    record_span_display_prepare, record_span_display_skip, record_span_display_skip_with_stats,
-    record_span_display_tile_batch, span_display_tile_edge, span_display_tiles_per_frame,
-    span_display_workspace_cache_limit_bytes, SpanDisplaySkipStats,
+    record_span_display_loader_failure, record_span_display_prepare, record_span_display_skip,
+    record_span_display_skip_with_stats, record_span_display_tile_batch, span_display_tile_edge,
+    span_display_tiles_per_frame, span_display_workspace_cache_limit_bytes, SpanDisplaySkipStats,
 };
 use super::RealtimeSrOutput;
 use crate::core::sr_lab::{
@@ -168,7 +168,17 @@ impl SpanRenderer {
         };
         let next_state = match receiver.try_recv() {
             Ok(Ok(renderer)) => SpanRendererState::Ready(Box::new(renderer)),
-            Ok(Err(_)) | Err(TryRecvError::Disconnected) => SpanRendererState::Disabled,
+            Ok(Err(error)) => {
+                record_span_display_loader_failure("load_failed", &error);
+                SpanRendererState::Disabled
+            }
+            Err(TryRecvError::Disconnected) => {
+                record_span_display_loader_failure(
+                    "loader_disconnected",
+                    "background loader channel disconnected",
+                );
+                SpanRendererState::Disabled
+            }
             Err(TryRecvError::Empty) => return,
         };
         self.state = next_state;

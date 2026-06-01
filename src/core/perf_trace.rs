@@ -16,6 +16,10 @@ pub fn record_duration(event: &'static str, duration: Duration, fields: &[PerfFi
     imp::record_duration(event, duration, fields);
 }
 
+pub fn is_active() -> bool {
+    imp::is_active()
+}
+
 pub fn record_duration_if_at_least(
     event: &'static str,
     duration: Duration,
@@ -75,6 +79,10 @@ mod imp {
             fields: fields.to_vec(),
         };
         let _ = logger.tx.send(PerfMessage::Event(event));
+    }
+
+    pub(super) fn is_active() -> bool {
+        logger().is_some()
     }
 
     pub(super) fn flush_timeout(timeout: Duration) -> bool {
@@ -171,6 +179,10 @@ mod imp {
         _duration: Duration,
         _fields: &[PerfField],
     ) {
+    }
+
+    pub(super) fn is_active() -> bool {
+        false
     }
 
     pub(super) fn flush_timeout(_timeout: Duration) -> bool {

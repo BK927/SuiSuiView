@@ -32,8 +32,10 @@ Usage:
   suisuiview-cli --artcnn-render <variant> <image> --artcnn-output <png>
   suisuiview-cli --artcnn-c4f16-render <image> --artcnn-output <png>
   suisuiview-cli --sr-lab-inspect <manifest.json> [--sr-lab-report <report.json>] [--sr-lab-report-default]
-  suisuiview-cli --sr-lab-span-session-bench <manifest.json> <image> [--sr-lab-long-edge <px>] [--sr-lab-warmups <count>] [--sr-lab-iterations <count>] [--sr-lab-report <report.json>] [--sr-lab-report-default]
-  suisuiview-cli --sr-lab-span-gpu-tiled-reference <manifest.json> <image> [--sr-lab-long-edge <px>] [--sr-lab-tile-edge <px>] [--sr-lab-output <png>] [--sr-lab-report <report.json>] [--sr-lab-report-default] [--sr-lab-compare-cpu]
+  suisuiview-cli --sr-lab-span-cpu-reference <manifest.json> <image> [--sr-lab-long-edge <px>] [--sr-lab-max-long-edge <px>] [--sr-lab-output <png>] [--sr-lab-report <report.json>] [--sr-lab-report-default]
+  suisuiview-cli --sr-lab-span-gpu-reference <manifest.json> <image> [--sr-lab-long-edge <px>] [--sr-lab-max-long-edge <px>] [--sr-lab-output <png>] [--sr-lab-report <report.json>] [--sr-lab-report-default] [--sr-lab-compare-cpu]
+  suisuiview-cli --sr-lab-span-session-bench <manifest.json> <image> [--sr-lab-long-edge <px>] [--sr-lab-max-long-edge <px>] [--sr-lab-warmups <count>] [--sr-lab-iterations <count>] [--sr-lab-report <report.json>] [--sr-lab-report-default]
+  suisuiview-cli --sr-lab-span-gpu-tiled-reference <manifest.json> <image> [--sr-lab-long-edge <px>] [--sr-lab-max-long-edge <px>] [--sr-lab-tile-edge <px>] [--sr-lab-output <png>] [--sr-lab-report <report.json>] [--sr-lab-report-default] [--sr-lab-compare-cpu]
 
 Options:
   -h, --help    Show this help.
@@ -117,6 +119,7 @@ pub enum CliCommand {
         manifest_path: PathBuf,
         input_path: PathBuf,
         long_edge: Option<u32>,
+        max_long_edge: Option<u32>,
         output_path: Option<PathBuf>,
         report_path: Option<PathBuf>,
     },
@@ -124,6 +127,7 @@ pub enum CliCommand {
         manifest_path: PathBuf,
         input_path: PathBuf,
         long_edge: Option<u32>,
+        max_long_edge: Option<u32>,
         output_path: Option<PathBuf>,
         report_path: Option<PathBuf>,
         compare_cpu: bool,
@@ -132,6 +136,7 @@ pub enum CliCommand {
         manifest_path: PathBuf,
         input_path: PathBuf,
         long_edge: Option<u32>,
+        max_long_edge: Option<u32>,
         tile_edge: usize,
         output_path: Option<PathBuf>,
         report_path: Option<PathBuf>,
@@ -141,6 +146,7 @@ pub enum CliCommand {
         manifest_path: PathBuf,
         input_path: PathBuf,
         long_edge: Option<u32>,
+        max_long_edge: Option<u32>,
         warmups: usize,
         iterations: usize,
         report_path: Option<PathBuf>,
@@ -403,12 +409,14 @@ impl CliCommand {
                 manifest_path,
                 input_path,
                 long_edge,
+                max_long_edge,
                 output_path,
                 report_path,
             } => crate::core::sr_lab::cpu::run_span_cpu_reference(
                 &manifest_path,
                 &input_path,
                 long_edge,
+                max_long_edge,
                 output_path.as_deref(),
                 report_path.as_deref(),
             )
@@ -417,6 +425,7 @@ impl CliCommand {
                 manifest_path,
                 input_path,
                 long_edge,
+                max_long_edge,
                 output_path,
                 report_path,
                 compare_cpu,
@@ -424,6 +433,7 @@ impl CliCommand {
                 &manifest_path,
                 &input_path,
                 long_edge,
+                max_long_edge,
                 output_path.as_deref(),
                 report_path.as_deref(),
                 compare_cpu,
@@ -433,6 +443,7 @@ impl CliCommand {
                 manifest_path,
                 input_path,
                 long_edge,
+                max_long_edge,
                 tile_edge,
                 output_path,
                 report_path,
@@ -441,6 +452,7 @@ impl CliCommand {
                 &manifest_path,
                 &input_path,
                 long_edge,
+                max_long_edge,
                 tile_edge,
                 output_path.as_deref(),
                 report_path.as_deref(),
@@ -451,6 +463,7 @@ impl CliCommand {
                 manifest_path,
                 input_path,
                 long_edge,
+                max_long_edge,
                 warmups,
                 iterations,
                 report_path,
@@ -458,6 +471,7 @@ impl CliCommand {
                 &manifest_path,
                 &input_path,
                 long_edge,
+                max_long_edge,
                 warmups,
                 iterations,
                 report_path.as_deref(),

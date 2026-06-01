@@ -266,6 +266,215 @@ fn validate_manifest(manifest: &SrLabManifest) -> Result<(), Box<dyn std::error:
         }
     }
 
+    if matches!(manifest.family, SrLabFamily::Span | SrLabFamily::SpanS) {
+        if let Err(error) = validate_span_graph_contract(manifest) {
+            return Err(error.into());
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_span_graph_contract(manifest: &SrLabManifest) -> Result<(), String> {
+    if !matches!(manifest.family, SrLabFamily::Span | SrLabFamily::SpanS) {
+        return Err("SPAN graph contract requires a SPAN-family manifest".to_owned());
+    }
+    if manifest.scale != 2 {
+        return Err(format!(
+            "SPAN graph executor currently supports x2 pixel shuffle only, got x{}",
+            manifest.scale
+        ));
+    }
+    if manifest.input_channels != 3 || manifest.output_channels != 3 {
+        return Err(format!(
+            "SPAN graph executor requires RGB input/output channels, got {}/{}",
+            manifest.input_channels, manifest.output_channels
+        ));
+    }
+    let span = manifest
+        .span
+        .as_ref()
+        .ok_or_else(|| "SPAN graph executor requires span metadata".to_owned())?;
+    if !span.reparameterized_conv3xc {
+        return Err("SPAN graph executor requires reparameterized Conv3XC manifests".to_owned());
+    }
+    let expected_len = expected_span_layer_count(span.block_count)?;
+    if manifest.layers.len() != expected_len {
+        return Err(format!(
+            "SPAN graph executor expected {} layers for {} SPAB blocks, got {}",
+            expected_len,
+            span.block_count,
+            manifest.layers.len()
+        ));
+    }
+    let feature_channels = span.feature_channels;
+    let output_channels = manifest.output_channels;
+    let joined_channels = feature_channels
+        .checked_mul(4)
+        .ok_or_else(|| "SPAN graph feature channel count overflowed".to_owned())?;
+    let upsample_channels = output_channels
+        .checked_mul(4)
+        .ok_or_else(|| "SPAN graph output channel count overflowed".to_owned())?;
+
+    let mut index = 0usize;
+    validate_span_layer_contract(
+        &mut index,
+        manifest,
+        "mean_shift",
+        SrLabLayerKind::MeanShift,
+        Some(3),
+        Some(3),
+    )?;
+    validate_span_layer_contract(
+        &mut index,
+        manifest,
+        "conv_1",
+        SrLabLayerKind::Conv2d3x3,
+        Some(3),
+        Some(feature_channels),
+    )?;
+    for block in 1..=span.block_count {
+        validate_span_layer_contract(
+            &mut index,
+            manifest,
+            &format!("block_{block}.c1_r"),
+            SrLabLayerKind::Conv2d3x3,
+            Some(feature_channels),
+            Some(feature_channels),
+        )?;
+        validate_span_layer_contract(
+            &mut index,
+            manifest,
+            &format!("block_{block}.act1"),
+            SrLabLayerKind::Silu,
+            None,
+            None,
+        )?;
+        validate_span_layer_contract(
+            &mut index,
+            manifest,
+            &format!("block_{block}.c2_r"),
+            SrLabLayerKind::Conv2d3x3,
+            Some(feature_channels),
+            Some(feature_channels),
+        )?;
+        validate_span_layer_contract(
+            &mut index,
+            manifest,
+            &format!("block_{block}.act2"),
+            SrLabLayerKind::Silu,
+            None,
+            None,
+        )?;
+        validate_span_layer_contract(
+            &mut index,
+            manifest,
+            &format!("block_{block}.c3_r"),
+            SrLabLayerKind::Conv2d3x3,
+            Some(feature_channels),
+            Some(feature_channels),
+        )?;
+        validate_span_layer_contract(
+            &mut index,
+            manifest,
+            &format!("block_{block}.gate"),
+            SrLabLayerKind::SpanGate,
+            Some(feature_channels),
+            Some(feature_channels),
+        )?;
+    }
+    validate_span_layer_contract(
+        &mut index,
+        manifest,
+        "conv_2",
+        SrLabLayerKind::Conv2d3x3,
+        Some(feature_channels),
+        Some(feature_channels),
+    )?;
+    validate_span_layer_contract(
+        &mut index,
+        manifest,
+        "concat_feature_b6_b1_b5_2",
+        SrLabLayerKind::Concat4,
+        Some(feature_channels),
+        Some(joined_channels),
+    )?;
+    validate_span_layer_contract(
+        &mut index,
+        manifest,
+        "conv_cat",
+        SrLabLayerKind::Conv2d1x1,
+        Some(joined_channels),
+        Some(feature_channels),
+    )?;
+    validate_span_layer_contract(
+        &mut index,
+        manifest,
+        "upsampler.0",
+        SrLabLayerKind::Conv2d3x3,
+        Some(feature_channels),
+        Some(upsample_channels),
+    )?;
+    validate_span_layer_contract(
+        &mut index,
+        manifest,
+        "pixel_shuffle2x",
+        SrLabLayerKind::PixelShuffle2x,
+        Some(upsample_channels),
+        Some(output_channels),
+    )?;
+    Ok(())
+}
+
+fn expected_span_layer_count(block_count: u32) -> Result<usize, String> {
+    (block_count as usize)
+        .checked_mul(6)
+        .and_then(|count| count.checked_add(7))
+        .ok_or_else(|| "SPAN graph layer count overflowed".to_owned())
+}
+
+fn validate_span_layer_contract(
+    index: &mut usize,
+    manifest: &SrLabManifest,
+    expected_name: &str,
+    expected_kind: SrLabLayerKind,
+    expected_input_channels: Option<u32>,
+    expected_output_channels: Option<u32>,
+) -> Result<(), String> {
+    let position = *index + 1;
+    let layer = manifest
+        .layers
+        .get(*index)
+        .ok_or_else(|| format!("SPAN graph layer {position} is missing"))?;
+    if layer.name != expected_name {
+        return Err(format!(
+            "SPAN graph layer {position} expected '{}', got '{}'",
+            expected_name, layer.name
+        ));
+    }
+    if layer.kind != expected_kind {
+        return Err(format!(
+            "SPAN graph layer {position} ('{}') expected kind {:?}, got {:?}",
+            layer.name, expected_kind, layer.kind
+        ));
+    }
+    if let Some(input_channels) = expected_input_channels {
+        if layer.input_channels != Some(input_channels) {
+            return Err(format!(
+                "SPAN graph layer {position} ('{}') expected input_channels {}, got {:?}",
+                layer.name, input_channels, layer.input_channels
+            ));
+        }
+    }
+    if let Some(output_channels) = expected_output_channels {
+        if layer.output_channels != Some(output_channels) {
+            return Err(format!(
+                "SPAN graph layer {position} ('{}') expected output_channels {}, got {:?}",
+                layer.name, output_channels, layer.output_channels
+            ));
+        }
+    }
+    *index += 1;
     Ok(())
 }
 
@@ -295,7 +504,10 @@ pub fn default_span_gpu_tiled_reference_report_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{inspect_manifest, SrLabFamily, SrLabLayer, SrLabLayerKind, SrLabManifest};
+    use super::{
+        inspect_manifest, validate_span_graph_contract, SrLabFamily, SrLabLayer, SrLabLayerKind,
+        SrLabManifest, SrLabSpanMetadata,
+    };
 
     fn base_manifest(layers: Vec<SrLabLayer>) -> SrLabManifest {
         SrLabManifest {
@@ -319,6 +531,140 @@ mod tests {
             span: None,
             layers,
         }
+    }
+
+    fn span_layers(feature_channels: u32, block_count: u32) -> Vec<SrLabLayer> {
+        let joined_channels = feature_channels * 4;
+        let upsample_channels = 12;
+        let mut layers = Vec::with_capacity(super::expected_span_layer_count(block_count).unwrap());
+        push_span_layer(
+            &mut layers,
+            "mean_shift",
+            SrLabLayerKind::MeanShift,
+            Some(3),
+            Some(3),
+        );
+        push_span_layer(
+            &mut layers,
+            "conv_1",
+            SrLabLayerKind::Conv2d3x3,
+            Some(3),
+            Some(feature_channels),
+        );
+        for block in 1..=block_count {
+            push_span_layer(
+                &mut layers,
+                &format!("block_{block}.c1_r"),
+                SrLabLayerKind::Conv2d3x3,
+                Some(feature_channels),
+                Some(feature_channels),
+            );
+            push_span_layer(
+                &mut layers,
+                &format!("block_{block}.act1"),
+                SrLabLayerKind::Silu,
+                None,
+                None,
+            );
+            push_span_layer(
+                &mut layers,
+                &format!("block_{block}.c2_r"),
+                SrLabLayerKind::Conv2d3x3,
+                Some(feature_channels),
+                Some(feature_channels),
+            );
+            push_span_layer(
+                &mut layers,
+                &format!("block_{block}.act2"),
+                SrLabLayerKind::Silu,
+                None,
+                None,
+            );
+            push_span_layer(
+                &mut layers,
+                &format!("block_{block}.c3_r"),
+                SrLabLayerKind::Conv2d3x3,
+                Some(feature_channels),
+                Some(feature_channels),
+            );
+            push_span_layer(
+                &mut layers,
+                &format!("block_{block}.gate"),
+                SrLabLayerKind::SpanGate,
+                Some(feature_channels),
+                Some(feature_channels),
+            );
+        }
+        push_span_layer(
+            &mut layers,
+            "conv_2",
+            SrLabLayerKind::Conv2d3x3,
+            Some(feature_channels),
+            Some(feature_channels),
+        );
+        push_span_layer(
+            &mut layers,
+            "concat_feature_b6_b1_b5_2",
+            SrLabLayerKind::Concat4,
+            Some(feature_channels),
+            Some(joined_channels),
+        );
+        push_span_layer(
+            &mut layers,
+            "conv_cat",
+            SrLabLayerKind::Conv2d1x1,
+            Some(joined_channels),
+            Some(feature_channels),
+        );
+        push_span_layer(
+            &mut layers,
+            "upsampler.0",
+            SrLabLayerKind::Conv2d3x3,
+            Some(feature_channels),
+            Some(upsample_channels),
+        );
+        push_span_layer(
+            &mut layers,
+            "pixel_shuffle2x",
+            SrLabLayerKind::PixelShuffle2x,
+            Some(upsample_channels),
+            Some(3),
+        );
+        layers
+    }
+
+    fn push_span_layer(
+        layers: &mut Vec<SrLabLayer>,
+        name: &str,
+        kind: SrLabLayerKind,
+        input_channels: Option<u32>,
+        output_channels: Option<u32>,
+    ) {
+        layers.push(SrLabLayer {
+            name: name.to_owned(),
+            kind,
+            input_channels,
+            output_channels,
+        });
+    }
+
+    fn span_manifest(feature_channels: u32, block_count: u32) -> SrLabManifest {
+        let mut manifest = base_manifest(span_layers(feature_channels, block_count));
+        manifest.name = "SPAN-S x2".to_owned();
+        manifest.family = SrLabFamily::SpanS;
+        manifest.variant = Some("SPAN-S".to_owned());
+        manifest.license = "Apache-2.0".to_owned();
+        manifest.weights_file = Some("weights.srlab".to_owned());
+        manifest.source = "https://github.com/hongyuanyu/SPAN".to_owned();
+        manifest.source_commit = Some("c77a5917759f09e66fbc7124220c5afc5ee221e5".to_owned());
+        manifest.span = Some(SrLabSpanMetadata {
+            feature_channels,
+            block_count,
+            reparameterized_conv3xc: true,
+            img_range: 255.0,
+            rgb_mean: [0.4488, 0.4371, 0.4040],
+        });
+        manifest
     }
 
     #[test]
@@ -351,61 +697,20 @@ mod tests {
 
     #[test]
     fn span_gate_blocks_tiny_wgsl_support() {
-        let mut manifest = base_manifest(vec![SrLabLayer {
-            name: "attention0".to_owned(),
-            kind: SrLabLayerKind::SpanGate,
-            input_channels: Some(16),
-            output_channels: Some(16),
-        }]);
-        manifest.family = SrLabFamily::Span;
-        manifest.span = Some(super::SrLabSpanMetadata {
-            feature_channels: 16,
-            block_count: 1,
-            reparameterized_conv3xc: true,
-            img_range: 255.0,
-            rgb_mean: [0.4488, 0.4371, 0.4040],
-        });
+        let manifest = span_manifest(16, 1);
 
         let report = inspect_manifest(&manifest).unwrap();
 
         assert!(!report.tiny_wgsl_supported);
-        assert_eq!(report.unsupported_ops.len(), 1);
+        assert!(report
+            .unsupported_ops
+            .iter()
+            .any(|op| op.contains("SpanGate")));
     }
 
     #[test]
     fn converted_span_s_manifest_shape_is_accepted() {
-        let manifest: SrLabManifest = serde_json::from_str(
-            r#"{
-                "name": "SPAN-S x2",
-                "family": "span-s",
-                "variant": "SPAN-S",
-                "scale": 2,
-                "input_channels": 3,
-                "output_channels": 3,
-                "weights_format": "suisui-srlab-v1",
-                "weights_file": "weights.srlab",
-                "weights_sha256": "506ca7af17f69988dfddb951cf934ba060057d39860c8960779c7bc2790267b9",
-                "source": "https://github.com/hongyuanyu/SPAN",
-                "source_commit": "c77a5917759f09e66fbc7124220c5afc5ee221e5",
-                "license": "Apache-2.0",
-                "span": {
-                    "feature_channels": 48,
-                    "block_count": 6,
-                    "reparameterized_conv3xc": true,
-                    "img_range": 255.0,
-                    "rgb_mean": [0.4488, 0.4371, 0.4040]
-                },
-                "layers": [
-                    {"name": "mean_shift", "kind": "mean_shift", "input_channels": 3, "output_channels": 3},
-                    {"name": "conv_1", "kind": "conv2d3x3", "input_channels": 3, "output_channels": 48},
-                    {"name": "block_1.act1", "kind": "silu"},
-                    {"name": "block_1.gate", "kind": "span_gate", "input_channels": 48, "output_channels": 48},
-                    {"name": "concat_feature_b6_b1_b5_2", "kind": "concat4", "input_channels": 48, "output_channels": 192},
-                    {"name": "pixel_shuffle2x", "kind": "pixel_shuffle2x", "input_channels": 12, "output_channels": 3}
-                ]
-            }"#,
-        )
-        .unwrap();
+        let manifest = span_manifest(48, 6);
 
         let report = inspect_manifest(&manifest).unwrap();
 
@@ -419,6 +724,37 @@ mod tests {
             .unsupported_ops
             .iter()
             .any(|op| op.contains("MeanShift")));
+    }
+
+    #[test]
+    fn span_manifest_rejects_missing_executor_layers() {
+        let mut manifest = span_manifest(48, 6);
+        manifest.layers.pop();
+
+        let error = validate_span_graph_contract(&manifest).unwrap_err();
+
+        assert!(error.contains("expected 43 layers"));
+    }
+
+    #[test]
+    fn span_manifest_rejects_wrong_executor_layer_kind() {
+        let mut manifest = span_manifest(48, 6);
+        manifest.layers[2].kind = SrLabLayerKind::Conv2d1x1;
+
+        let error = validate_span_graph_contract(&manifest).unwrap_err();
+
+        assert!(error.contains("block_1.c1_r"));
+        assert!(error.contains("expected kind Conv2d3x3"));
+    }
+
+    #[test]
+    fn span_manifest_rejects_non_x2_contract() {
+        let mut manifest = span_manifest(48, 6);
+        manifest.scale = 4;
+
+        let error = validate_span_graph_contract(&manifest).unwrap_err();
+
+        assert!(error.contains("x2 pixel shuffle"));
     }
 
     #[test]

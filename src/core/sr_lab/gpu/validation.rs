@@ -1,6 +1,6 @@
 use super::buffers::{GpuBuffer, GpuTensor};
 use crate::core::sr_lab::cpu::FeatureMap;
-use crate::core::sr_lab::{SrLabFamily, SrLabManifest};
+use crate::core::sr_lab::{validate_span_graph_contract, SrLabFamily, SrLabManifest};
 
 const MAX_TRANSIENT_BYTES: u64 = 768 * 1024 * 1024;
 
@@ -11,6 +11,7 @@ pub(super) fn validate_span_manifest(
     if !matches!(manifest.family, SrLabFamily::Span | SrLabFamily::SpanS) {
         return Err("SPAN GPU reference requires a SPAN-family manifest".to_owned());
     }
+    validate_span_graph_contract(manifest)?;
     if manifest.scale != 2 {
         return Err(format!(
             "SPAN GPU reference currently supports x2 pixel shuffle only, got x{}",

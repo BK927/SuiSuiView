@@ -7,7 +7,8 @@ use std::path::Path;
 use std::time::Instant;
 
 const DEFAULT_LONG_EDGE: u32 = 64;
-const MAX_LONG_EDGE: u32 = 128;
+pub(crate) const DEFAULT_SPAN_REFERENCE_MAX_LONG_EDGE: u32 = 128;
+pub(crate) const HARD_SPAN_REFERENCE_MAX_LONG_EDGE: u32 = 512;
 
 #[derive(Debug, Serialize)]
 pub struct SpanCpuReferenceReport {
@@ -63,13 +64,16 @@ pub fn run_span_cpu_reference(
     manifest_path: &Path,
     input_path: &Path,
     long_edge: Option<u32>,
+    max_long_edge: Option<u32>,
     output_path: Option<&Path>,
     report_path: Option<&Path>,
 ) -> Result<(), String> {
     let manifest = super::read_manifest(manifest_path).map_err(|error| error.to_string())?;
+    super::validate_span_graph_contract(&manifest)?;
     let weights =
         super::blob::read_checked_weights(manifest_path, &manifest, "SPAN CPU reference")?;
-    let (requested_long_edge, effective_long_edge) = span_reference_long_edge(long_edge);
+    let (requested_long_edge, effective_long_edge) =
+        span_reference_long_edge(long_edge, max_long_edge);
     let input = load_input_image(input_path, effective_long_edge)?;
 
     let started = Instant::now();
@@ -115,11 +119,17 @@ pub fn run_span_cpu_reference(
     Ok(())
 }
 
-pub(crate) fn span_reference_long_edge(long_edge: Option<u32>) -> (u32, u32) {
+pub(crate) fn span_reference_long_edge(
+    long_edge: Option<u32>,
+    max_long_edge: Option<u32>,
+) -> (u32, u32) {
     let requested_long_edge = long_edge.unwrap_or(DEFAULT_LONG_EDGE);
+    let max_long_edge = max_long_edge
+        .unwrap_or(DEFAULT_SPAN_REFERENCE_MAX_LONG_EDGE)
+        .min(HARD_SPAN_REFERENCE_MAX_LONG_EDGE);
     (
         requested_long_edge,
-        requested_long_edge.clamp(1, MAX_LONG_EDGE),
+        requested_long_edge.clamp(1, max_long_edge),
     )
 }
 
@@ -165,6 +175,7 @@ pub(crate) fn span_forward(
     if !matches!(manifest.family, SrLabFamily::Span | SrLabFamily::SpanS) {
         return Err("SPAN CPU reference requires a SPAN-family manifest".to_owned());
     }
+    super::validate_span_graph_contract(manifest)?;
     let span = manifest
         .span
         .as_ref()
@@ -416,7 +427,9 @@ fn output_to_rgba_bytes(output: &FeatureMap) -> Result<Vec<u8>, String> {
 mod tests {
     use super::{span_forward, FeatureMap};
     use crate::core::sr_lab::blob::{SrLabTensor, SrLabWeights};
-    use crate::core::sr_lab::{SrLabFamily, SrLabManifest, SrLabSpanMetadata};
+    use crate::core::sr_lab::{
+        SrLabFamily, SrLabLayer, SrLabLayerKind, SrLabManifest, SrLabSpanMetadata,
+    };
 
     fn zero_tensor(name: &str, shape: Vec<u32>) -> SrLabTensor {
         let value_count = shape.iter().product::<u32>() as usize;
@@ -474,7 +487,49 @@ mod tests {
                 img_range: 255.0,
                 rgb_mean: [0.4488, 0.4371, 0.4040],
             }),
-            layers: Vec::new(),
+            layers: tiny_span_layers(),
+        }
+    }
+
+    fn tiny_span_layers() -> Vec<SrLabLayer> {
+        vec![
+            span_layer("mean_shift", SrLabLayerKind::MeanShift, Some(3), Some(3)),
+            span_layer("conv_1", SrLabLayerKind::Conv2d3x3, Some(3), Some(1)),
+            span_layer("block_1.c1_r", SrLabLayerKind::Conv2d3x3, Some(1), Some(1)),
+            span_layer("block_1.act1", SrLabLayerKind::Silu, None, None),
+            span_layer("block_1.c2_r", SrLabLayerKind::Conv2d3x3, Some(1), Some(1)),
+            span_layer("block_1.act2", SrLabLayerKind::Silu, None, None),
+            span_layer("block_1.c3_r", SrLabLayerKind::Conv2d3x3, Some(1), Some(1)),
+            span_layer("block_1.gate", SrLabLayerKind::SpanGate, Some(1), Some(1)),
+            span_layer("conv_2", SrLabLayerKind::Conv2d3x3, Some(1), Some(1)),
+            span_layer(
+                "concat_feature_b6_b1_b5_2",
+                SrLabLayerKind::Concat4,
+                Some(1),
+                Some(4),
+            ),
+            span_layer("conv_cat", SrLabLayerKind::Conv2d1x1, Some(4), Some(1)),
+            span_layer("upsampler.0", SrLabLayerKind::Conv2d3x3, Some(1), Some(12)),
+            span_layer(
+                "pixel_shuffle2x",
+                SrLabLayerKind::PixelShuffle2x,
+                Some(12),
+                Some(3),
+            ),
+        ]
+    }
+
+    fn span_layer(
+        name: &str,
+        kind: SrLabLayerKind,
+        input_channels: Option<u32>,
+        output_channels: Option<u32>,
+    ) -> SrLabLayer {
+        SrLabLayer {
+            name: name.to_owned(),
+            kind,
+            input_channels,
+            output_channels,
         }
     }
 
