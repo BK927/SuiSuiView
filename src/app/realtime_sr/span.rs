@@ -30,10 +30,15 @@ use std::time::{Duration, Instant};
 
 const EXPERIMENT_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_SPAN_MANIFEST";
 const EXPERIMENT_SPAN_TILE_EDGE_ENV: &str = "SUISUIVIEW_EXPERIMENT_SPAN_TILE_EDGE";
+const EXPERIMENT_SPAN_WORKSPACE_CACHE_MB_ENV: &str =
+    "SUISUIVIEW_EXPERIMENT_SPAN_WORKSPACE_CACHE_MB";
 const SR_LAB_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_MANIFEST";
+const MIB_BYTES: u64 = 1024 * 1024;
 const MAX_WEIGHT_BLOB_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_DISPLAY_TRANSIENT_BYTES: u64 = 96 * 1024 * 1024;
-const MAX_DISPLAY_WORKSPACE_CACHE_BYTES: u64 = 192 * 1024 * 1024;
+const DEFAULT_DISPLAY_WORKSPACE_CACHE_MB: u64 = 192;
+const MIN_DISPLAY_WORKSPACE_CACHE_MB: u64 = 64;
+const MAX_DISPLAY_WORKSPACE_CACHE_MB: u64 = 512;
 const MAX_DISPLAY_WORKSPACE_SHAPES: usize = 32;
 const MAX_DISPLAY_TILE_COUNT: usize = 256;
 const MAX_DISPLAY_SOURCE_PIXELS: usize = 1_048_576;
@@ -293,12 +298,14 @@ impl LoadedSpanRenderer {
             );
             return None;
         }
+        let workspace_cache_limit_bytes = span_display_workspace_cache_limit_bytes();
         self.reset_workspace_cache_if_source_changed(source_size);
         let tile_plans = match self.prepare_tile_plans(
             device.limits().max_storage_buffer_binding_size as u64,
             &tile_specs,
             source_size,
             output_size,
+            workspace_cache_limit_bytes,
         ) {
             Ok(tile_plans) => tile_plans,
             Err(error) => {
@@ -342,6 +349,7 @@ impl LoadedSpanRenderer {
             workspace_shapes,
             self.workspaces.len(),
             self.workspace_bytes,
+            workspace_cache_limit_bytes,
             tile_edge,
             estimated_dispatch_count(&self.manifest, tile_count),
         );
@@ -371,6 +379,7 @@ impl LoadedSpanRenderer {
         specs: &[SpanTileSpec],
         source_size: [usize; 2],
         output_size: [usize; 2],
+        workspace_cache_limit_bytes: u64,
     ) -> Result<Vec<SpanTilePlan>, SpanDisplayPrepareError> {
         let workspace_sizes = distinct_workspace_sizes(specs);
         let workspace_bytes = self.workspace_byte_sizes(&workspace_sizes)?;
@@ -382,77 +391,86 @@ impl LoadedSpanRenderer {
                         .checked_add(*byte_size)
                         .ok_or(SpanDisplayPrepareError::PrepareFailed)
                 })?;
-        if frame_workspace_bytes > MAX_DISPLAY_WORKSPACE_CACHE_BYTES {
+        if frame_workspace_bytes > workspace_cache_limit_bytes {
             return Err(SpanDisplayPrepareError::WorkspaceLimit(
                 SpanDisplaySkipStats::frame_workspace_limit(
                     frame_workspace_bytes,
-                    MAX_DISPLAY_WORKSPACE_CACHE_BYTES,
+                    workspace_cache_limit_bytes,
                 ),
             ));
         }
 
-        for (size, byte_size) in &workspace_bytes {
-            self.ensure_workspace(*size, *byte_size)?;
-        }
-
-        for size in &workspace_sizes {
-            let workspace_index = self
-                .workspace_index_for_size(*size)
-                .ok_or(SpanDisplayPrepareError::PrepareFailed)?;
-            let graph_plan = {
-                let slot = self
-                    .workspaces
-                    .get(workspace_index)
-                    .ok_or(SpanDisplayPrepareError::PrepareFailed)?;
-                if slot.graph_plan.is_some() {
-                    None
-                } else {
-                    validate_span_model(
-                        max_storage_buffer_binding_size,
-                        &self.manifest,
-                        &self.model,
-                        &slot.workspace,
-                    )
-                    .map_err(|_| SpanDisplayPrepareError::PrepareFailed)?;
-                    Some(
-                        self.kernel
-                            .create_prevalidated_graph_plan(
-                                &self.manifest,
-                                &self.model,
-                                &slot.workspace,
-                            )
-                            .map_err(|_| SpanDisplayPrepareError::PrepareFailed)?,
-                    )
-                }
-            };
-            if let Some(graph_plan) = graph_plan {
-                self.workspaces[workspace_index].graph_plan = Some(graph_plan);
+        let previous_workspace_count = self.workspaces.len();
+        let previous_workspace_bytes = self.workspace_bytes;
+        let result = (|| {
+            for (size, byte_size) in &workspace_bytes {
+                self.ensure_workspace(*size, *byte_size, workspace_cache_limit_bytes)?;
             }
-        }
 
-        specs
-            .iter()
-            .copied()
-            .map(|spec| {
+            for size in &workspace_sizes {
                 let workspace_index = self
-                    .workspace_index_for_size([spec.crop_width, spec.crop_height])
+                    .workspace_index_for_size(*size)
                     .ok_or(SpanDisplayPrepareError::PrepareFailed)?;
-                let workspace_output_size =
-                    self.workspaces[workspace_index].workspace.output_size();
-                let params = bridge_params_for_tile(
-                    source_size,
-                    output_size,
-                    spec,
-                    self.manifest.scale as usize,
-                    workspace_output_size,
-                )
-                .ok_or(SpanDisplayPrepareError::PrepareFailed)?;
-                Ok(SpanTilePlan {
-                    workspace_index,
-                    params,
+                let graph_plan = {
+                    let slot = self
+                        .workspaces
+                        .get(workspace_index)
+                        .ok_or(SpanDisplayPrepareError::PrepareFailed)?;
+                    if slot.graph_plan.is_some() {
+                        None
+                    } else {
+                        validate_span_model(
+                            max_storage_buffer_binding_size,
+                            &self.manifest,
+                            &self.model,
+                            &slot.workspace,
+                        )
+                        .map_err(|_| SpanDisplayPrepareError::PrepareFailed)?;
+                        Some(
+                            self.kernel
+                                .create_prevalidated_graph_plan(
+                                    &self.manifest,
+                                    &self.model,
+                                    &slot.workspace,
+                                )
+                                .map_err(|_| SpanDisplayPrepareError::PrepareFailed)?,
+                        )
+                    }
+                };
+                if let Some(graph_plan) = graph_plan {
+                    self.workspaces[workspace_index].graph_plan = Some(graph_plan);
+                }
+            }
+
+            specs
+                .iter()
+                .copied()
+                .map(|spec| {
+                    let workspace_index = self
+                        .workspace_index_for_size([spec.crop_width, spec.crop_height])
+                        .ok_or(SpanDisplayPrepareError::PrepareFailed)?;
+                    let workspace_output_size =
+                        self.workspaces[workspace_index].workspace.output_size();
+                    let params = bridge_params_for_tile(
+                        source_size,
+                        output_size,
+                        spec,
+                        self.manifest.scale as usize,
+                        workspace_output_size,
+                    )
+                    .ok_or(SpanDisplayPrepareError::PrepareFailed)?;
+                    Ok(SpanTilePlan {
+                        workspace_index,
+                        params,
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>, SpanDisplayPrepareError>>()
+                .collect::<Result<Vec<_>, SpanDisplayPrepareError>>()
+        })();
+        if result.is_err() {
+            self.workspaces.truncate(previous_workspace_count);
+            self.workspace_bytes = previous_workspace_bytes;
+        }
+        result
     }
 
     fn workspace_byte_sizes(
@@ -484,6 +502,7 @@ impl LoadedSpanRenderer {
         &mut self,
         source_size: [usize; 2],
         byte_size: u64,
+        workspace_cache_limit_bytes: u64,
     ) -> Result<usize, SpanDisplayPrepareError> {
         if let Some(index) = self.workspace_index_for_size(source_size) {
             return Ok(index);
@@ -492,11 +511,11 @@ impl LoadedSpanRenderer {
             .workspace_bytes
             .checked_add(byte_size)
             .ok_or(SpanDisplayPrepareError::PrepareFailed)?;
-        if next_cache_bytes > MAX_DISPLAY_WORKSPACE_CACHE_BYTES {
+        if next_cache_bytes > workspace_cache_limit_bytes {
             return Err(SpanDisplayPrepareError::WorkspaceLimit(
                 SpanDisplaySkipStats::workspace_cache_limit(
                     next_cache_bytes,
-                    MAX_DISPLAY_WORKSPACE_CACHE_BYTES,
+                    workspace_cache_limit_bytes,
                 ),
             ));
         }
@@ -650,6 +669,7 @@ fn record_span_display_encode(
     workspace_shapes: usize,
     workspace_slots: usize,
     workspace_bytes: u64,
+    workspace_cache_limit_bytes: u64,
     tile_edge: usize,
     estimated_dispatches: usize,
 ) {
@@ -670,6 +690,10 @@ fn record_span_display_encode(
             PerfField::Usize(
                 "workspace_cache_bytes",
                 usize_from_u64_saturating(workspace_bytes),
+            ),
+            PerfField::Usize(
+                "workspace_cache_limit_bytes",
+                usize_from_u64_saturating(workspace_cache_limit_bytes),
             ),
         ],
     );
@@ -800,6 +824,25 @@ fn parse_span_display_tile_edge(value: Option<&str>) -> Option<usize> {
         .then_some(edge)
 }
 
+fn span_display_workspace_cache_limit_bytes() -> u64 {
+    static CACHE_LIMIT_BYTES: OnceLock<u64> = OnceLock::new();
+    *CACHE_LIMIT_BYTES.get_or_init(|| {
+        parse_span_display_workspace_cache_mb(
+            env::var(EXPERIMENT_SPAN_WORKSPACE_CACHE_MB_ENV)
+                .ok()
+                .as_deref(),
+        )
+        .unwrap_or(DEFAULT_DISPLAY_WORKSPACE_CACHE_MB * MIB_BYTES)
+    })
+}
+
+fn parse_span_display_workspace_cache_mb(value: Option<&str>) -> Option<u64> {
+    let mb = value?.trim().parse::<u64>().ok()?;
+    (MIN_DISPLAY_WORKSPACE_CACHE_MB..=MAX_DISPLAY_WORKSPACE_CACHE_MB)
+        .contains(&mb)
+        .then_some(mb.saturating_mul(MIB_BYTES))
+}
+
 fn fits_texture_limit(device: &wgpu::Device, size: [usize; 2]) -> bool {
     let max = device.limits().max_texture_dimension_2d as usize;
     size[0] <= max && size[1] <= max
@@ -809,7 +852,7 @@ fn fits_texture_limit(device: &wgpu::Device, size: [usize; 2]) -> bool {
 mod tests {
     use super::{
         distinct_workspace_sizes, estimated_dispatch_count, parse_span_display_tile_edge,
-        safe_relative_weights_path,
+        parse_span_display_workspace_cache_mb, safe_relative_weights_path, MIB_BYTES,
     };
     use crate::core::sr_lab::gpu::tiled::SpanTileSpec;
     use crate::core::sr_lab::{SrLabFamily, SrLabManifest, SrLabSpanMetadata};
@@ -906,5 +949,21 @@ mod tests {
         assert_eq!(parse_span_display_tile_edge(Some("257")), None);
         assert_eq!(parse_span_display_tile_edge(Some("wide")), None);
         assert_eq!(parse_span_display_tile_edge(None), None);
+    }
+
+    #[test]
+    fn span_display_workspace_cache_override_accepts_bounded_mib() {
+        assert_eq!(
+            parse_span_display_workspace_cache_mb(Some("256")),
+            Some(256 * MIB_BYTES)
+        );
+        assert_eq!(
+            parse_span_display_workspace_cache_mb(Some(" 512 ")),
+            Some(512 * MIB_BYTES)
+        );
+        assert_eq!(parse_span_display_workspace_cache_mb(Some("63")), None);
+        assert_eq!(parse_span_display_workspace_cache_mb(Some("513")), None);
+        assert_eq!(parse_span_display_workspace_cache_mb(Some("large")), None);
+        assert_eq!(parse_span_display_workspace_cache_mb(None), None);
     }
 }
