@@ -81,7 +81,7 @@ struct SpanGpuCopyStep {
     byte_len: u64,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum SpanPipeline {
     MeanShift,
     Conv2d,
@@ -398,16 +398,27 @@ impl SpanGpuKernel {
         encoder: &mut wgpu::CommandEncoder,
         graph_plan: &SpanGpuGraphPlan,
     ) {
-        for step in &graph_plan.steps {
-            match step {
-                SpanGpuGraphStep::Dispatch(dispatch) => self.dispatch_prebuilt(encoder, dispatch),
-                SpanGpuGraphStep::Copy(copy) => encoder.copy_buffer_to_buffer(
-                    &copy.source,
-                    0,
-                    &copy.destination,
-                    0,
-                    copy.byte_len,
-                ),
+        let steps = graph_plan.steps.as_slice();
+        let mut step_index = 0;
+        while step_index < steps.len() {
+            match &steps[step_index] {
+                SpanGpuGraphStep::Dispatch(_) => {
+                    let run_start = step_index;
+                    while matches!(steps.get(step_index), Some(SpanGpuGraphStep::Dispatch(_))) {
+                        step_index += 1;
+                    }
+                    self.dispatch_prebuilt_run(encoder, &steps[run_start..step_index]);
+                }
+                SpanGpuGraphStep::Copy(copy) => {
+                    encoder.copy_buffer_to_buffer(
+                        &copy.source,
+                        0,
+                        &copy.destination,
+                        0,
+                        copy.byte_len,
+                    );
+                    step_index += 1;
+                }
             }
         }
     }
@@ -597,22 +608,32 @@ impl SpanGpuKernel {
         }));
     }
 
-    fn dispatch_prebuilt(
+    fn dispatch_prebuilt_run(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        dispatch: &SpanGpuDispatchStep,
+        steps: &[SpanGpuGraphStep],
     ) {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("suisuiview-sr-lab-span-pass"),
             timestamp_writes: None,
         });
-        pass.set_pipeline(self.pipeline(dispatch.pipeline));
-        pass.set_bind_group(0, &dispatch.bind_group, &[]);
-        pass.dispatch_workgroups(
-            dispatch.workgroups[0],
-            dispatch.workgroups[1],
-            dispatch.workgroups[2],
-        );
+        let mut active_pipeline = None;
+        for step in steps {
+            let SpanGpuGraphStep::Dispatch(dispatch) = step else {
+                debug_assert!(false, "dispatch run contained a non-dispatch step");
+                continue;
+            };
+            if active_pipeline != Some(dispatch.pipeline) {
+                pass.set_pipeline(self.pipeline(dispatch.pipeline));
+                active_pipeline = Some(dispatch.pipeline);
+            }
+            pass.set_bind_group(0, &dispatch.bind_group, &[]);
+            pass.dispatch_workgroups(
+                dispatch.workgroups[0],
+                dispatch.workgroups[1],
+                dispatch.workgroups[2],
+            );
+        }
     }
 
     fn pipeline(&self, pipeline: SpanPipeline) -> &wgpu::ComputePipeline {
