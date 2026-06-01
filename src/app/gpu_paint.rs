@@ -24,6 +24,7 @@ pub(super) const GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES: usize = 256 * 1024 * 102
 const GPU_SOURCE_TEXTURE_CACHE_LIMIT: usize = 32;
 const GPU_DRAW_BIND_GROUP_CACHE_LIMIT: usize = 16;
 const GPU_INTERMEDIATE_TEXTURE_CACHE_LIMIT: usize = 16;
+const GPU_REALTIME_SR_DEFER_CACHE_LIMIT: usize = 64;
 const EXPERIMENT_DISPLAY_UPSCALER_ENV: &str = "SUISUIVIEW_EXPERIMENT_DISPLAY_UPSCALER";
 const EXPERIMENT_SPAN_DISPLAY_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_DISPLAY";
 const EXPERIMENT_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_SPAN_MANIFEST";
@@ -306,6 +307,7 @@ struct GpuPaintResources {
     draw_state_intermediate_bytes: usize,
     intermediate_textures: LruCache<u64, Arc<GpuIntermediateTexture>>,
     intermediate_texture_bytes: usize,
+    deferred_realtime_sr_first_frames: LruCache<u64, ()>,
     realtime_sr: RealtimeSrResources,
 }
 
@@ -432,6 +434,9 @@ impl GpuPaintResources {
                 NonZeroUsize::new(GPU_INTERMEDIATE_TEXTURE_CACHE_LIMIT).unwrap(),
             ),
             intermediate_texture_bytes: 0,
+            deferred_realtime_sr_first_frames: LruCache::new(
+                NonZeroUsize::new(GPU_REALTIME_SR_DEFER_CACHE_LIMIT).unwrap(),
+            ),
             realtime_sr: RealtimeSrResources::new(),
         }
     }
@@ -538,14 +543,18 @@ impl GpuPaintResources {
             .unwrap_or(DisplayUpscaler::None);
         if RealtimeSrResources::is_supported(effective_upscaler) {
             let sr_key = realtime_sr_texture_key(source_key, source_size, effective_upscaler);
-            self.ensure_realtime_sr_texture(
-                device,
-                encoder,
-                sr_key,
-                source_key,
-                source_size,
-                effective_upscaler,
-            );
+            if self.should_defer_realtime_sr_first_frame(sr_key, effective_upscaler) {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            } else {
+                self.ensure_realtime_sr_texture(
+                    device,
+                    encoder,
+                    sr_key,
+                    source_key,
+                    source_size,
+                    effective_upscaler,
+                );
+            }
             if self.realtime_sr.has_pending_async_work(effective_upscaler) {
                 ctx.request_repaint_after(Duration::from_millis(16));
             }
@@ -703,6 +712,19 @@ impl GpuPaintResources {
         }
         self.intermediate_texture_bytes = self.intermediate_texture_bytes.saturating_add(byte_size);
         self.prune_intermediate_textures();
+    }
+
+    fn should_defer_realtime_sr_first_frame(&mut self, key: u64, method: DisplayUpscaler) -> bool {
+        if !defer_initial_realtime_sr_frame(method)
+            || self.intermediate_textures.peek(&key).is_some()
+        {
+            return false;
+        }
+        if self.deferred_realtime_sr_first_frames.get(&key).is_some() {
+            return false;
+        }
+        self.deferred_realtime_sr_first_frames.push(key, ());
+        true
     }
 
     fn ensure_realtime_sr_texture(
@@ -992,6 +1014,13 @@ fn intermediate_texture_key(
     hasher.finish()
 }
 
+fn defer_initial_realtime_sr_frame(method: DisplayUpscaler) -> bool {
+    matches!(
+        method,
+        DisplayUpscaler::WgslArtcnnC4F16 | DisplayUpscaler::WgslSrLabSpanX2
+    )
+}
+
 fn realtime_sr_texture_key(
     source_key: GpuPaintSourceKey,
     source_size: [usize; 2],
@@ -1065,5 +1094,18 @@ mod tests {
             parse_experimental_display_upscaler(None, true, true),
             Some(DisplayUpscaler::WgslSrLabSpanX2)
         );
+    }
+
+    #[test]
+    fn hidden_realtime_sr_methods_defer_the_first_frame() {
+        assert!(defer_initial_realtime_sr_frame(
+            DisplayUpscaler::WgslArtcnnC4F16
+        ));
+        assert!(defer_initial_realtime_sr_frame(
+            DisplayUpscaler::WgslSrLabSpanX2
+        ));
+        assert!(!defer_initial_realtime_sr_frame(
+            DisplayUpscaler::WgslAnime4kV32CnnX2S
+        ));
     }
 }
