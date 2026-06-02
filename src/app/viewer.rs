@@ -254,6 +254,7 @@ impl SuiSuiViewApp {
             ImageData::Color(image),
             texture_options_for_target(best_key.target_long_edge),
         );
+        ctx.request_repaint_after(super::TEXTURE_PRESENT_REPAINT_DELAY);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::record_texture_load(texture_started, index, best_key.target_long_edge, upscaled);
         self.textures.put(

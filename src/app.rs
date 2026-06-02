@@ -92,6 +92,7 @@ use commands::command_for_shortcut;
 #[cfg(test)]
 use platform::{korean_font_candidates, load_first_existing_font, sanitize_font_name};
 const STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
+pub(in crate::app) const TEXTURE_PRESENT_REPAINT_DELAY: Duration = Duration::from_millis(16);
 
 #[derive(Debug, Clone)]
 struct PendingBookmarkJump {
@@ -483,6 +484,10 @@ impl SuiSuiViewApp {
                         self.prune_decoded_cache();
                     }
                     self.commit_pending_page_turn_if_ready();
+                    if self.spread_indices().contains(&index) {
+                        self.egui_ctx
+                            .request_repaint_after(TEXTURE_PRESENT_REPAINT_DELAY);
+                    }
                     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
                     self.record_cache_snapshot("page_ready");
                 }

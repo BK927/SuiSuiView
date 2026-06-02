@@ -98,6 +98,7 @@ impl SuiSuiViewApp {
             ImageData::Color(image),
             texture_options_for_target(source_key.page.target_long_edge),
         );
+        ctx.request_repaint_after(super::super::TEXTURE_PRESENT_REPAINT_DELAY);
         self.textures.put(
             texture_key,
             TextureEntry {
