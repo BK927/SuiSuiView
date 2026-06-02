@@ -1,3 +1,4 @@
+use crate::core::i18n::I18n;
 use crate::core::perf_trace::{self, PerfField};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,7 @@ mod input;
 mod rendering;
 #[cfg(test)]
 mod tests;
+pub use crate::core::i18n::Language;
 use bookmarks::path_key;
 pub use bookmarks::{Bookmark, BookmarkInput, PageBookmark, PageBookmarkEntry, ReadingPosition};
 pub use decoders::{DecodeMode, DecoderPreference, DecoderPreferences};
@@ -35,6 +37,13 @@ impl ReadingDirection {
         match self {
             Self::LeftToRight => "L -> R",
             Self::RightToLeft => "R -> L",
+        }
+    }
+
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        match self {
+            Self::LeftToRight => i18n.text("label.reading.ltr"),
+            Self::RightToLeft => i18n.text("label.reading.rtl"),
         }
     }
 }
@@ -67,6 +76,16 @@ impl FitMode {
             Self::Manual => "Zoom",
         }
     }
+
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        match self {
+            Self::FitPage => i18n.text("label.fit.page"),
+            Self::FitWidth => i18n.text("label.fit.width"),
+            Self::FitHeight => i18n.text("label.fit.height"),
+            Self::Original => i18n.text("label.fit.original"),
+            Self::Manual => i18n.text("label.fit.manual"),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +108,15 @@ impl EdgePageAction {
             Self::NextBook => "다음/이전 폴더/파일로 넘어가기",
         }
     }
+
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        match self {
+            Self::Stop => i18n.text("label.edge.stop"),
+            Self::Ask => i18n.text("label.edge.ask"),
+            Self::Wrap => i18n.text("label.edge.wrap"),
+            Self::NextBook => i18n.text("label.edge.next_book"),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +124,15 @@ pub enum CacheMemoryMode {
     #[default]
     Auto,
     Manual,
+}
+
+impl CacheMemoryMode {
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        match self {
+            Self::Auto => i18n.text("state.auto"),
+            Self::Manual => i18n.text("state.manual"),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +153,14 @@ impl LargeImageAnchor {
             Self::TopLeft => "Top left",
         }
     }
+
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        match self {
+            Self::Center => i18n.text("label.anchor.center"),
+            Self::Top => i18n.text("label.anchor.top"),
+            Self::TopLeft => i18n.text("label.anchor.top_left"),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +177,13 @@ impl WheelMode {
         match self {
             Self::PageTurn => "Page turn",
             Self::ScrollWhenZoomed => "Scroll when zoomed",
+        }
+    }
+
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        match self {
+            Self::PageTurn => i18n.text("label.wheel.page_turn"),
+            Self::ScrollWhenZoomed => i18n.text("label.wheel.scroll_when_zoomed"),
         }
     }
 }
@@ -152,6 +204,13 @@ impl AiUpscaleBackend {
             Self::RealEsrganNcnn => "Real-ESRGAN ncnn-vulkan",
         }
     }
+
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        match self {
+            Self::Off => i18n.text("state.off"),
+            Self::RealEsrganNcnn => self.label().to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,6 +229,14 @@ impl AiUpscalePrefetchMode {
             Self::Off => "사용 안 함",
             Self::CurrentOnly => "현재 페이지만",
             Self::CurrentAndNext => "현재+다음 1장",
+        }
+    }
+
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        match self {
+            Self::Off => i18n.text("state.off"),
+            Self::CurrentOnly => i18n.text("state.current_only"),
+            Self::CurrentAndNext => i18n.text("state.current_and_next"),
         }
     }
 }
@@ -203,6 +270,17 @@ impl PageTransitionStyle {
             Self::Push => "밀기",
             Self::ZoomFade => "줌 페이드",
             Self::BookFlip2d => "책장 넘김",
+        }
+    }
+
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        match self {
+            Self::None => i18n.text("label.transition.none"),
+            Self::SlideFade => i18n.text("label.transition.slide_fade"),
+            Self::Fade => i18n.text("label.transition.fade"),
+            Self::Push => i18n.text("label.transition.push"),
+            Self::ZoomFade => i18n.text("label.transition.zoom_fade"),
+            Self::BookFlip2d => i18n.text("label.transition.book_flip"),
         }
     }
 }
@@ -258,6 +336,8 @@ impl Default for AiUpscaleSettings {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppSettings {
+    #[serde(default)]
+    pub language: Language,
     #[serde(default = "default_true")]
     pub confirm_delete: bool,
     #[serde(default = "default_true")]
@@ -383,6 +463,7 @@ pub struct WindowPlacement {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            language: Language::Auto,
             confirm_delete: true,
             esc_to_quit: true,
             always_on_top: false,

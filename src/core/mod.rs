@@ -6,6 +6,7 @@ pub mod effects;
 pub mod formats;
 pub mod gpu_copy_bench;
 pub mod gpu_effect;
+pub mod i18n;
 pub mod image_info;
 pub mod natural;
 pub mod original_region_bench;

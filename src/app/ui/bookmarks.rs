@@ -3,6 +3,7 @@ use super::bookmark_rows::{BookmarkFilter, BookmarkRow};
 use super::bookmark_text::{allocate_bookmark_title, paint_bookmark_title};
 use super::bookmark_thumbnails::{thumbnail_tint_for_state, BookmarkThumbnailState};
 use super::{dialog, icons, theme};
+use crate::core::i18n::I18n;
 use crate::core::state::PageBookmarkEntry;
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Rect, RichText, Sense, Stroke,
@@ -124,12 +125,13 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn toggle_current_page_bookmark(&mut self) {
         self.bookmark_delete_dialog = None;
+        let i18n = self.i18n();
         let Some(book_id) = self.book_id.clone() else {
-            self.notify("북마크할 책이 열려 있지 않습니다.");
+            self.notify(i18n.text("bookmark.no_book"));
             return;
         };
         let Some(source_path) = self.current_bookmark_source_path() else {
-            self.notify("북마크할 경로를 찾을 수 없습니다.");
+            self.notify(i18n.text("bookmark.no_path"));
             return;
         };
         if self.settings.share_state_between_instances {
@@ -140,7 +142,7 @@ impl SuiSuiViewApp {
             self.store
                 .remove_page_bookmark(&book_id, &source_path, page);
             self.bookmark_rows.clear();
-            self.notify(format!("p.{} 북마크를 삭제했습니다.", page + 1));
+            self.notify(i18n.with_vars("bookmark.removed", &[("page", (page + 1).to_string())]));
             return;
         }
 
@@ -154,7 +156,7 @@ impl SuiSuiViewApp {
         self.store
             .upsert_page_bookmark(&book_id, &source_path, page, title, page_name);
         self.bookmark_rows.clear();
-        self.notify(format!("p.{} 북마크를 추가했습니다.", page + 1));
+        self.notify(i18n.with_vars("bookmark.added", &[("page", (page + 1).to_string())]));
     }
 
     fn current_bookmark_source_path(&self) -> Option<std::path::PathBuf> {
@@ -163,8 +165,9 @@ impl SuiSuiViewApp {
     }
 
     fn show_bookmark_popover_contents(&mut self, ui: &mut egui::Ui) {
+        let i18n = self.i18n();
         ui.horizontal(|ui| {
-            ui.heading(RichText::new("북마크").color(theme::TEXT_PRIMARY));
+            ui.heading(RichText::new(i18n.text("bookmark.title")).color(theme::TEXT_PRIMARY));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(small_icon_button(
@@ -172,7 +175,7 @@ impl SuiSuiViewApp {
                         icons::IconStyle::Regular,
                         theme::TEXT_PRIMARY,
                     ))
-                    .on_hover_text("닫기")
+                    .on_hover_text(i18n.text("common.close"))
                     .clicked()
                 {
                     self.close_bookmark_popover();
@@ -184,7 +187,7 @@ impl SuiSuiViewApp {
         ui.horizontal(|ui| {
             let bookmark_count = self.bookmark_delete_scope_count();
             let search_width = (ui.available_width() - 122.0).max(168.0);
-            bookmark_search_box(ui, &mut self.bookmark_search, search_width);
+            bookmark_search_box(ui, &mut self.bookmark_search, search_width, i18n);
             self.show_bookmark_clear_button(ui, bookmark_count);
         });
 
@@ -201,22 +204,22 @@ impl SuiSuiViewApp {
             self.bookmark_delete_dialog = None;
         }
         let label = if self.bookmark_filter == BookmarkFilter::ThisBook {
-            "이 책 삭제"
+            self.i18n().text("bookmark.clear_this_book")
         } else {
-            "전체 삭제"
+            self.i18n().text("bookmark.clear_all")
         };
         if ui
             .add_enabled(
                 bookmark_count > 0,
-                egui::Button::new(icons::icon_text(icons::DELETE, label))
+                egui::Button::new(icons::icon_text(icons::DELETE, &label))
                     .min_size(egui::vec2(108.0, 40.0))
                     .fill(Color32::from_rgb(38, 41, 47))
                     .stroke(Stroke::new(1.0, Color32::from_rgb(58, 64, 73))),
             )
             .on_hover_text(if self.bookmark_filter == BookmarkFilter::ThisBook {
-                "이 책의 모든 북마크 삭제"
+                self.i18n().text("bookmark.clear_this_book.help")
             } else {
-                "모든 북마크 삭제"
+                self.i18n().text("bookmark.clear_all.help")
             })
             .clicked()
         {
@@ -239,15 +242,19 @@ impl SuiSuiViewApp {
         dialog.count = count;
         self.bookmark_delete_dialog = Some(dialog);
 
+        let i18n = self.i18n();
         let scope_label = match dialog.scope {
-            BookmarkFilter::All => "전체 북마크",
-            BookmarkFilter::ThisBook => "이 책의 북마크",
+            BookmarkFilter::All => i18n.text("bookmark.scope_all"),
+            BookmarkFilter::ThisBook => i18n.text("bookmark.scope_this_book"),
         };
-        let message = format!("{scope_label} {count}개를 삭제할까요?");
+        let message = i18n.with_vars(
+            "bookmark.delete_message",
+            &[("scope", scope_label), ("count", count.to_string())],
+        );
         let note = if self.bookmark_search.trim().is_empty() {
-            "이 작업은 되돌릴 수 없습니다."
+            i18n.text("bookmark.delete_irreversible")
         } else {
-            "검색 결과가 아니라 현재 탭 전체가 삭제됩니다."
+            i18n.text("bookmark.delete_search_note")
         };
         let dialog_size = egui::vec2(320.0, 164.0);
         let mut cancel_clicked = false;
@@ -274,7 +281,7 @@ impl SuiSuiViewApp {
                         .show(ui, |ui| {
                             ui.set_min_size(dialog_size - egui::vec2(32.0, 28.0));
                             ui.label(
-                                RichText::new("북마크 삭제")
+                                RichText::new(i18n.text("bookmark.delete_title"))
                                     .size(18.0)
                                     .strong()
                                     .color(theme::TEXT_PRIMARY),
@@ -293,7 +300,7 @@ impl SuiSuiViewApp {
                                     if ui
                                         .add_sized(
                                             [82.0, 34.0],
-                                            egui::Button::new("삭제")
+                                            egui::Button::new(i18n.text("common.delete"))
                                                 .fill(theme::ACCENT)
                                                 .stroke(Stroke::new(1.0, theme::ACCENT_HOVER)),
                                         )
@@ -304,7 +311,7 @@ impl SuiSuiViewApp {
                                     if ui
                                         .add_sized(
                                             [82.0, 34.0],
-                                            egui::Button::new("취소")
+                                            egui::Button::new(i18n.text("common.cancel"))
                                                 .fill(Color32::from_rgb(38, 41, 47))
                                                 .stroke(Stroke::new(
                                                     1.0,
@@ -329,6 +336,7 @@ impl SuiSuiViewApp {
     }
 
     fn show_bookmark_filter_tabs(&mut self, ui: &mut egui::Ui) {
+        let i18n = self.i18n();
         let width = ui.available_width();
         let tab_height = 44.0;
         let (rect, _) = ui.allocate_exact_size(egui::vec2(width, tab_height), Sense::hover());
@@ -369,7 +377,7 @@ impl SuiSuiViewApp {
                     Color32::from_rgb(31, 35, 40),
                 );
             }
-            draw_filter_tab_label(&painter, tab_rect, filter, accent, text_color);
+            draw_filter_tab_label(&painter, tab_rect, filter, accent, text_color, i18n);
             if selected {
                 let underline = Rect::from_min_max(
                     egui::pos2(tab_rect.left() + 18.0, rect.bottom() - 3.0),
@@ -387,13 +395,17 @@ impl SuiSuiViewApp {
     fn show_bookmark_rows(&mut self, ui: &mut egui::Ui) {
         let rows_height = ui.available_height().clamp(96.0, BOOKMARK_ROWS_MAX_HEIGHT);
         if self.bookmark_filter == BookmarkFilter::ThisBook && self.book_id.is_none() {
-            empty_bookmark_message(ui, "책을 열면 이 책 북마크가 표시됩니다.", rows_height);
+            empty_bookmark_message(
+                ui,
+                &self.i18n().text("bookmark.empty_this_book"),
+                rows_height,
+            );
             return;
         }
 
         self.refresh_bookmark_rows_if_needed();
         if self.bookmark_rows.len() == 0 {
-            empty_bookmark_message(ui, "저장된 북마크가 없습니다.", rows_height);
+            empty_bookmark_message(ui, &self.i18n().text("bookmark.empty_all"), rows_height);
             return;
         }
 
@@ -458,7 +470,7 @@ impl SuiSuiViewApp {
                             icons::IconStyle::Filled,
                             theme::ACCENT,
                         ))
-                        .on_hover_text("북마크 삭제")
+                        .on_hover_text(self.i18n().text("bookmark.delete_one.help"))
                         .clicked()
                     {
                         remove_bookmark = true;
@@ -516,12 +528,12 @@ impl SuiSuiViewApp {
             BookmarkFilter::ThisBook => {
                 let Some(book_id) = self.book_id.clone() else {
                     self.bookmark_delete_dialog = None;
-                    self.notify("삭제할 북마크가 없습니다.");
+                    self.notify(self.i18n().text("bookmark.no_delete_target"));
                     return;
                 };
                 let Some(source_path) = self.current_bookmark_source_path() else {
                     self.bookmark_delete_dialog = None;
-                    self.notify("삭제할 북마크가 없습니다.");
+                    self.notify(self.i18n().text("bookmark.no_delete_target"));
                     return;
                 };
                 self.store.clear_page_bookmarks(&book_id, &source_path)
@@ -529,15 +541,18 @@ impl SuiSuiViewApp {
         };
         self.bookmark_delete_dialog = None;
         if removed == 0 {
-            self.notify("삭제할 북마크가 없습니다.");
+            self.notify(self.i18n().text("bookmark.no_delete_target"));
         } else {
             self.bookmark_thumbnails.clear();
-            let scope = if scope == BookmarkFilter::ThisBook {
-                "이 책의"
+            let key = if scope == BookmarkFilter::ThisBook {
+                "bookmark.clear_done_this_book"
             } else {
-                "전체"
+                "bookmark.clear_done_all"
             };
-            self.notify(format!("{scope} 북마크 {removed}개를 삭제했습니다."));
+            self.notify(
+                self.i18n()
+                    .with_vars(key, &[("count", removed.to_string())]),
+            );
             self.bookmark_rows.clear();
         }
     }
@@ -636,7 +651,7 @@ impl SuiSuiViewApp {
                 row.bookmark.page,
             );
         } else {
-            self.notify("북마크 경로를 찾을 수 없습니다.");
+            self.notify(self.i18n().text("bookmark.no_path"));
         }
         self.close_bookmark_popover();
     }
@@ -655,7 +670,7 @@ impl SuiSuiViewApp {
     }
 }
 
-fn bookmark_search_box(ui: &mut egui::Ui, search: &mut String, width: f32) {
+fn bookmark_search_box(ui: &mut egui::Ui, search: &mut String, width: f32, i18n: I18n) {
     Frame::new()
         .fill(theme::INPUT_FILL)
         .stroke(Stroke::new(1.0, Color32::from_rgb(58, 64, 73)))
@@ -672,7 +687,7 @@ fn bookmark_search_box(ui: &mut egui::Ui, search: &mut String, width: f32) {
                 ));
                 ui.add(
                     egui::TextEdit::singleline(search)
-                        .hint_text("검색")
+                        .hint_text(i18n.text("common.search"))
                         .desired_width(width - 36.0)
                         .frame(false),
                 );
@@ -686,6 +701,7 @@ fn draw_filter_tab_label(
     filter: BookmarkFilter,
     icon_color: Color32,
     text_color: Color32,
+    i18n: I18n,
 ) {
     let center = rect.center();
     let icon_pos = egui::pos2(center.x, center.y - 8.0);
@@ -713,7 +729,7 @@ fn draw_filter_tab_label(
     painter.text(
         text_pos,
         Align2::CENTER_CENTER,
-        filter.label(),
+        filter.label_i18n(i18n),
         FontId::proportional(14.0),
         text_color,
     );

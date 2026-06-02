@@ -1,3 +1,4 @@
+use crate::core::i18n::I18n;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -139,18 +140,26 @@ impl DisplayUpscaler {
         self.candidate().exact_label
     }
 
-    pub fn settings_label(self) -> &'static str {
+    pub fn label_i18n(self, i18n: I18n) -> String {
         match self {
-            Self::WgslFsr1Style => "WGSL FSR-style (실험)",
-            Self::WgslNisStyle => "WGSL NIS-style (실험)",
-            Self::WgslArtcnnC4F16 => "ArtCNN C4F16 (실험)",
-            Self::WgslArtcnnC4F16Dn => "ArtCNN C4F16 DN (실험)",
-            Self::WgslArtcnnC4F16Ds => "ArtCNN C4F16 DS (실험)",
-            Self::WgslArtcnnC4F32 => "ArtCNN C4F32 (실험)",
-            Self::WgslArtcnnC4F32Dn => "ArtCNN C4F32 DN (실험)",
-            Self::WgslArtcnnC4F32Ds => "ArtCNN C4F32 DS (실험)",
-            Self::WgslSrLabSpanX2 => "SR Lab SPAN x2 (실험)",
-            _ => self.label(),
+            Self::Auto => i18n.text("state.auto"),
+            Self::None => i18n.text("state.none"),
+            _ => self.label().to_owned(),
+        }
+    }
+
+    pub fn settings_label_i18n(self, i18n: I18n) -> String {
+        match self {
+            Self::WgslFsr1Style
+            | Self::WgslNisStyle
+            | Self::WgslArtcnnC4F16
+            | Self::WgslArtcnnC4F16Dn
+            | Self::WgslArtcnnC4F16Ds
+            | Self::WgslArtcnnC4F32
+            | Self::WgslArtcnnC4F32Dn
+            | Self::WgslArtcnnC4F32Ds
+            | Self::WgslSrLabSpanX2 => i18n.experimental_label(self.label()),
+            _ => self.label_i18n(i18n),
         }
     }
 
@@ -158,7 +167,7 @@ impl DisplayUpscaler {
         match self {
             Self::Auto => upscaler_candidate!(
                 "Control",
-                "자동",
+                "Auto",
                 "first-party",
                 "license-neutral",
                 "auto",
@@ -168,7 +177,7 @@ impl DisplayUpscaler {
             ),
             Self::None => upscaler_candidate!(
                 "Control",
-                "없음",
+                "None",
                 "first-party",
                 "license-neutral",
                 "1x",

@@ -1,9 +1,9 @@
 use super::image_info::ImageInfoStatus;
 use super::ui::{dialog, icons, theme};
 use super::{SuiSuiViewApp, ViewMode};
-use crate::core::effects::ImageFilter;
+use crate::core::i18n::I18n;
 use crate::core::image_info::{ColorProfileInfo, ExifInfo, ImageExifTag, ImageInfo};
-use crate::core::state::{AiUpscaleBackend, DecodeMode, FitMode, ReadingDirection};
+use crate::core::state::AiUpscaleBackend;
 use eframe::egui::{self, RichText};
 use std::path::Path;
 
@@ -20,19 +20,19 @@ pub(super) enum AboutSection {
 impl AboutSection {
     const ALL: [Self; 3] = [Self::Image, Self::App, Self::Notices];
 
-    fn label(self) -> &'static str {
+    fn label(self, i18n: I18n) -> String {
         match self {
-            Self::Image => "이미지 정보",
-            Self::App => "앱 정보",
-            Self::Notices => "오픈소스",
+            Self::Image => i18n.text("about.section.image"),
+            Self::App => i18n.text("about.section.app"),
+            Self::Notices => i18n.text("about.section.notices"),
         }
     }
 
-    fn description(self) -> &'static str {
+    fn description(self, i18n: I18n) -> String {
         match self {
-            Self::Image => "현재 페이지의 파일, EXIF, 색상 정보를 확인합니다.",
-            Self::App => "버전과 라이선스 정보를 짧게 확인합니다.",
-            Self::Notices => "번들된 오픈소스 구성 요소와 라이선스 고지입니다.",
+            Self::Image => i18n.text("about.section.image.desc"),
+            Self::App => i18n.text("about.section.app.desc"),
+            Self::Notices => i18n.text("about.section.notices.desc"),
         }
     }
 
@@ -62,6 +62,7 @@ impl SuiSuiViewApp {
 
         let mut open = self.about_open;
         let mut active_section = self.about_section;
+        let i18n = self.i18n();
         let image_section_enabled = self.has_image_info_target();
         if !image_section_enabled && active_section == AboutSection::Image {
             active_section = AboutSection::App;
@@ -72,7 +73,7 @@ impl SuiSuiViewApp {
             dialog::MIN_ABOUT_DIALOG_SIZE,
         );
 
-        egui::Window::new("정보")
+        egui::Window::new(i18n.text("about.window"))
             .open(&mut open)
             .fixed_size(dialog_size)
             .collapsible(false)
@@ -90,7 +91,7 @@ impl SuiSuiViewApp {
                     dialog::show_sized_frame(ui, nav_size, dialog::rail_frame(), |ui| {
                         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                             ui.label(
-                                RichText::new("정보")
+                                RichText::new(i18n.text("about.nav_title"))
                                     .strong()
                                     .size(15.0)
                                     .color(theme::TEXT_PRIMARY),
@@ -107,14 +108,14 @@ impl SuiSuiViewApp {
                                             active_section == section,
                                             icon,
                                             icon_style,
-                                            section.label(),
+                                            &section.label(i18n),
                                         )
                                     })
                                     .inner;
                                 let response = if enabled {
                                     response
                                 } else {
-                                    response.on_hover_text("이미지를 열면 사용할 수 있습니다.")
+                                    response.on_hover_text(i18n.text("about.image_unavailable"))
                                 };
                                 if response.clicked() {
                                     active_section = section;
@@ -128,8 +129,8 @@ impl SuiSuiViewApp {
                         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                             dialog::section_heading(
                                 ui,
-                                active_section.label(),
-                                active_section.description(),
+                                &active_section.label(i18n),
+                                &active_section.description(i18n),
                             );
 
                             match active_section {
@@ -145,9 +146,9 @@ impl SuiSuiViewApp {
                                         .id_salt("about_app_section")
                                         .max_height(ui.available_height())
                                         .auto_shrink([false, false])
-                                        .show(ui, show_app_info);
+                                        .show(ui, |ui| show_app_info(ui, i18n));
                                 }
-                                AboutSection::Notices => show_notices(ui),
+                                AboutSection::Notices => show_notices(ui, i18n),
                             }
                         });
                     });
@@ -168,155 +169,218 @@ impl SuiSuiViewApp {
 }
 
 fn show_image_info(app: &mut SuiSuiViewApp, ctx: &egui::Context, ui: &mut egui::Ui) {
+    let i18n = app.i18n();
     match app.current_image_info_status(ctx) {
         ImageInfoStatus::Empty => {
-            info_card(ui, "이미지 없음", |ui| {
-                ui.label("이미지를 열면 정보가 표시됩니다.");
+            info_card(ui, &i18n.text("about.image.empty.title"), |ui| {
+                ui.label(i18n.text("about.image.empty.body"));
             });
         }
         ImageInfoStatus::Loading => {
-            info_card(ui, "분석 중", |ui| {
-                ui.label("현재 페이지의 이미지 정보를 읽는 중입니다.");
+            info_card(ui, &i18n.text("about.image.loading.title"), |ui| {
+                ui.label(i18n.text("about.image.loading.body"));
             });
         }
         ImageInfoStatus::Failed(error) => {
-            info_card(ui, "분석 실패", |ui| {
+            info_card(ui, &i18n.text("about.image.failed.title"), |ui| {
                 ui.label(RichText::new(error).color(theme::TEXT_MUTED));
             });
         }
-        ImageInfoStatus::Ready(info) => show_image_info_ready(app, ui, info.as_ref()),
+        ImageInfoStatus::Ready(info) => show_image_info_ready(app, ui, info.as_ref(), i18n),
     }
 }
 
-fn show_image_info_ready(app: &SuiSuiViewApp, ui: &mut egui::Ui, info: &ImageInfo) {
-    show_summary_card(ui, info);
-    show_exif_card(ui, &info.exif);
-    show_color_card(ui, &info.color, app);
-    show_detail_tags_card(ui, &info.exif_tags, &info.gps_tags);
-    show_file_location_card(ui, app, info);
-    show_view_state_card(ui, app);
+fn show_image_info_ready(app: &SuiSuiViewApp, ui: &mut egui::Ui, info: &ImageInfo, i18n: I18n) {
+    show_summary_card(ui, info, i18n);
+    show_exif_card(ui, &info.exif, i18n);
+    show_color_card(ui, &info.color, app, i18n);
+    show_detail_tags_card(ui, &info.exif_tags, &info.gps_tags, i18n);
+    show_file_location_card(ui, app, info, i18n);
+    show_view_state_card(ui, app, i18n);
 }
 
-fn show_summary_card(ui: &mut egui::Ui, info: &ImageInfo) {
-    info_card(ui, "이미지 요약", |ui| {
+fn show_summary_card(ui: &mut egui::Ui, info: &ImageInfo, i18n: I18n) {
+    info_card(ui, &i18n.text("about.image.summary.title"), |ui| {
         info_grid(
             ui,
             "image_summary_grid",
             &[
-                ("형식", info.summary.format.clone().unwrap_or_else(unknown)),
                 (
-                    "원본 해상도",
+                    &i18n.text("about.image.summary.format"),
+                    info.summary.format.clone().unwrap_or_else(|| unknown(i18n)),
+                ),
+                (
+                    &i18n.text("about.image.summary.dimensions"),
                     format!("{} x {}", info.summary.width, info.summary.height),
                 ),
-                ("파일 크기", bytes_label(info.summary.file_bytes)),
-                ("색상 타입", info.summary.color_type.clone()),
-                ("채널 수", info.summary.channel_count.to_string()),
                 (
-                    "비트 깊이",
+                    &i18n.text("about.image.summary.file_size"),
+                    bytes_label(info.summary.file_bytes),
+                ),
+                (
+                    &i18n.text("about.image.summary.color_type"),
+                    info.summary.color_type.clone(),
+                ),
+                (
+                    &i18n.text("about.image.summary.channels"),
+                    info.summary.channel_count.to_string(),
+                ),
+                (
+                    &i18n.text("about.image.summary.bit_depth"),
                     info.summary
                         .bit_depth
                         .map(|depth| format!("{depth}-bit"))
-                        .unwrap_or_else(unknown),
+                        .unwrap_or_else(|| unknown(i18n)),
                 ),
                 (
-                    "픽셀 비트 수",
+                    &i18n.text("about.image.summary.bits_per_pixel"),
                     format!("{} bpp", info.summary.bits_per_pixel),
                 ),
-                ("알파 채널", yes_no(info.summary.has_alpha)),
                 (
-                    "애니메이션",
+                    &i18n.text("about.image.summary.alpha"),
+                    yes_no(info.summary.has_alpha, i18n),
+                ),
+                (
+                    &i18n.text("about.image.summary.animation"),
                     info.summary
                         .animation
                         .clone()
-                        .unwrap_or_else(|| "없음".to_owned()),
+                        .unwrap_or_else(|| i18n.text("state.none")),
                 ),
             ],
         );
     });
 }
 
-fn show_exif_card(ui: &mut egui::Ui, exif: &ExifInfo) {
+fn show_exif_card(ui: &mut egui::Ui, exif: &ExifInfo, i18n: I18n) {
     info_card(ui, "EXIF", |ui| {
         info_grid(
             ui,
             "image_exif_grid",
             &[
-                ("Orientation", value_or_unknown(&exif.orientation)),
-                ("촬영 일시", value_or_unknown(&exif.captured_at)),
-                ("카메라 제조사", value_or_unknown(&exif.camera_make)),
-                ("카메라 모델", value_or_unknown(&exif.camera_model)),
-                ("렌즈", value_or_unknown(&exif.lens_model)),
-                ("ISO", value_or_unknown(&exif.iso)),
-                ("셔터 속도", value_or_unknown(&exif.exposure_time)),
-                ("조리개", value_or_unknown(&exif.f_number)),
-                ("초점 거리", value_or_unknown(&exif.focal_length)),
-                ("노출 보정", value_or_unknown(&exif.exposure_bias)),
-                ("플래시", value_or_unknown(&exif.flash)),
+                ("Orientation", value_or_unknown(&exif.orientation, i18n)),
+                (
+                    &i18n.text("about.image.exif.captured_at"),
+                    value_or_unknown(&exif.captured_at, i18n),
+                ),
+                (
+                    &i18n.text("about.image.exif.camera_make"),
+                    value_or_unknown(&exif.camera_make, i18n),
+                ),
+                (
+                    &i18n.text("about.image.exif.camera_model"),
+                    value_or_unknown(&exif.camera_model, i18n),
+                ),
+                (
+                    &i18n.text("about.image.exif.lens"),
+                    value_or_unknown(&exif.lens_model, i18n),
+                ),
+                ("ISO", value_or_unknown(&exif.iso, i18n)),
+                (
+                    &i18n.text("about.image.exif.shutter"),
+                    value_or_unknown(&exif.exposure_time, i18n),
+                ),
+                (
+                    &i18n.text("about.image.exif.aperture"),
+                    value_or_unknown(&exif.f_number, i18n),
+                ),
+                (
+                    &i18n.text("about.image.exif.focal_length"),
+                    value_or_unknown(&exif.focal_length, i18n),
+                ),
+                (
+                    &i18n.text("about.image.exif.exposure_bias"),
+                    value_or_unknown(&exif.exposure_bias, i18n),
+                ),
+                (
+                    &i18n.text("about.image.exif.flash"),
+                    value_or_unknown(&exif.flash, i18n),
+                ),
             ],
         );
     });
 }
 
-fn show_color_card(ui: &mut egui::Ui, color: &ColorProfileInfo, app: &SuiSuiViewApp) {
+fn show_color_card(ui: &mut egui::Ui, color: &ColorProfileInfo, app: &SuiSuiViewApp, i18n: I18n) {
     let icc_state = match color.icc_profile_bytes {
-        Some(bytes) => format!("포함됨 ({})", bytes_label(bytes)),
-        None => "없음".to_owned(),
+        Some(bytes) => i18n.with_vars(
+            "about.image.color.included",
+            &[("size", bytes_label(bytes))],
+        ),
+        None => i18n.text("state.none"),
     };
     let icc_read_state = match (color.icc_profile_bytes, color.icc_profile_error.as_ref()) {
         (Some(_), Some(error)) => error.clone(),
-        (Some(_), None) => "정상".to_owned(),
+        (Some(_), None) => i18n.text("about.image.color.ok"),
         (None, _) => "-".to_owned(),
     };
-    info_card(ui, "컬러 / 프로파일", |ui| {
+    info_card(ui, &i18n.text("about.image.color.title"), |ui| {
         info_grid(
             ui,
             "image_color_grid",
             &[
-                ("ICC 프로파일", icc_state),
-                ("ICC 이름", value_or_unknown(&color.icc_profile_name)),
-                ("ICC 읽기 상태", icc_read_state),
-                ("PNG 색상 타입", value_or_unknown(&color.png_color_type)),
+                (&i18n.text("about.image.color.icc_profile"), icc_state),
                 (
-                    "PNG 비트 깊이",
+                    &i18n.text("about.image.color.icc_name"),
+                    value_or_unknown(&color.icc_profile_name, i18n),
+                ),
+                (&i18n.text("about.image.color.icc_state"), icc_read_state),
+                (
+                    &i18n.text("about.image.color.png_color_type"),
+                    value_or_unknown(&color.png_color_type, i18n),
+                ),
+                (
+                    &i18n.text("about.image.color.png_bit_depth"),
                     color
                         .png_bit_depth
                         .map(|depth| format!("{depth}-bit"))
-                        .unwrap_or_else(unknown),
+                        .unwrap_or_else(|| unknown(i18n)),
                 ),
-                ("sRGB", value_or_unknown(&color.png_srgb)),
-                ("Gamma", value_or_unknown(&color.png_gamma)),
-                ("Chromaticity", value_or_unknown(&color.png_chromaticities)),
-                ("Density", value_or_unknown(&color.png_density)),
-                ("ICC 적용 설정", on_off(app.settings.apply_embedded_icc)),
+                ("sRGB", value_or_unknown(&color.png_srgb, i18n)),
+                ("Gamma", value_or_unknown(&color.png_gamma, i18n)),
+                (
+                    "Chromaticity",
+                    value_or_unknown(&color.png_chromaticities, i18n),
+                ),
+                ("Density", value_or_unknown(&color.png_density, i18n)),
+                (
+                    &i18n.text("about.image.color.icc_setting"),
+                    on_off(app.settings.apply_embedded_icc, i18n),
+                ),
             ],
         );
     });
 }
 
-fn show_detail_tags_card(ui: &mut egui::Ui, tags: &[ImageExifTag], gps_tags: &[ImageExifTag]) {
-    info_card(ui, "상세 태그", |ui| {
+fn show_detail_tags_card(
+    ui: &mut egui::Ui,
+    tags: &[ImageExifTag],
+    gps_tags: &[ImageExifTag],
+    i18n: I18n,
+) {
+    info_card(ui, &i18n.text("about.image.tags.title"), |ui| {
         if tags.is_empty() && gps_tags.is_empty() {
-            ui.label("EXIF 태그가 없습니다.");
+            ui.label(i18n.text("about.image.tags.empty_exif"));
             return;
         }
 
-        egui::CollapsingHeader::new("전체 EXIF 태그")
+        egui::CollapsingHeader::new(i18n.text("about.image.tags.all_exif"))
             .default_open(false)
-            .show(ui, |ui| show_tag_grid(ui, "all_exif_tags", tags));
+            .show(ui, |ui| show_tag_grid(ui, "all_exif_tags", tags, i18n));
 
-        egui::CollapsingHeader::new("GPS 태그")
+        egui::CollapsingHeader::new(i18n.text("about.image.tags.gps"))
             .default_open(false)
             .show(ui, |ui| {
                 if gps_tags.is_empty() {
-                    ui.label("GPS 태그가 없습니다.");
+                    ui.label(i18n.text("about.image.tags.empty_gps"));
                 } else {
-                    show_tag_grid(ui, "gps_exif_tags", gps_tags);
+                    show_tag_grid(ui, "gps_exif_tags", gps_tags, i18n);
                 }
             });
     });
 }
 
-fn show_file_location_card(ui: &mut egui::Ui, app: &SuiSuiViewApp, info: &ImageInfo) {
+fn show_file_location_card(ui: &mut egui::Ui, app: &SuiSuiViewApp, info: &ImageInfo, i18n: I18n) {
     let Some(source) = app.source.as_ref() else {
         return;
     };
@@ -336,17 +400,23 @@ fn show_file_location_card(ui: &mut egui::Ui, app: &SuiSuiViewApp, info: &ImageI
         })
         .unwrap_or("-");
 
-    info_card(ui, "파일 / 위치", |ui| {
+    info_card(ui, &i18n.text("about.image.file.title"), |ui| {
         info_grid(
             ui,
             "image_file_grid",
             &[
-                ("파일명", file_name.to_owned()),
-                ("전체 경로", display_path),
-                ("책 / 폴더", source.title().to_owned()),
-                ("원본 위치", source.source_path().display().to_string()),
+                (&i18n.text("about.image.file.name"), file_name.to_owned()),
+                (&i18n.text("about.image.file.full_path"), display_path),
                 (
-                    "압축 내부 경로",
+                    &i18n.text("about.image.file.book"),
+                    source.title().to_owned(),
+                ),
+                (
+                    &i18n.text("about.image.file.source"),
+                    source.source_path().display().to_string(),
+                ),
+                (
+                    &i18n.text("about.image.file.archive_path"),
                     if page_file_path.is_some() {
                         "-".to_owned()
                     } else {
@@ -354,55 +424,76 @@ fn show_file_location_card(ui: &mut egui::Ui, app: &SuiSuiViewApp, info: &ImageI
                     },
                 ),
                 (
-                    "현재 페이지",
+                    &i18n.text("about.image.file.current_page"),
                     format!("{} / {}", app.current_page + 1, source.page_count()),
                 ),
-                ("원본 바이트", bytes_label(info.summary.file_bytes)),
+                (
+                    &i18n.text("about.image.file.source_bytes"),
+                    bytes_label(info.summary.file_bytes),
+                ),
             ],
         );
     });
 }
 
-fn show_view_state_card(ui: &mut egui::Ui, app: &SuiSuiViewApp) {
+fn show_view_state_card(ui: &mut egui::Ui, app: &SuiSuiViewApp, i18n: I18n) {
     let transform = app.effects.transform;
-    info_card(ui, "현재 보기 상태", |ui| {
+    info_card(ui, &i18n.text("about.image.view.title"), |ui| {
         info_grid(
             ui,
             "image_view_state_grid",
             &[
-                ("보기 모드", view_mode_label(app.view_mode).to_owned()),
-                ("맞춤 / 줌", fit_mode_label(app.fit_mode).to_owned()),
                 (
-                    "읽기 방향",
-                    reading_direction_label(app.reading_direction).to_owned(),
+                    &i18n.text("about.image.view.mode"),
+                    view_mode_label(app.view_mode, i18n),
                 ),
                 (
-                    "회전",
+                    &i18n.text("about.image.view.fit"),
+                    app.fit_mode.label_i18n(i18n),
+                ),
+                (
+                    &i18n.text("about.image.view.reading"),
+                    app.reading_direction.label_i18n(i18n),
+                ),
+                (
+                    &i18n.text("about.image.view.rotation"),
                     format!("{}°", u16::from(transform.rotation_quadrants % 4) * 90),
                 ),
-                ("좌우 반전", on_off(transform.flip_horizontal)),
-                ("상하 반전", on_off(transform.flip_vertical)),
-                ("색 반전", on_off(app.effects.invert_colors)),
-                ("필터", filter_label(app.effects.filter).to_owned()),
                 (
-                    "EXIF 회전 적용",
-                    on_off(app.settings.apply_exif_orientation),
+                    &i18n.text("about.image.view.flip_h"),
+                    on_off(transform.flip_horizontal, i18n),
                 ),
                 (
-                    "디코드 모드",
-                    decode_mode_label(app.settings.decode_mode).to_owned(),
+                    &i18n.text("about.image.view.flip_v"),
+                    on_off(transform.flip_vertical, i18n),
                 ),
                 (
-                    "리사이즈 필터",
+                    &i18n.text("about.image.view.invert"),
+                    on_off(app.effects.invert_colors, i18n),
+                ),
+                (
+                    &i18n.text("about.image.view.filter"),
+                    app.effects.filter.label_i18n(i18n),
+                ),
+                (
+                    &i18n.text("about.image.view.exif_orientation"),
+                    on_off(app.settings.apply_exif_orientation, i18n),
+                ),
+                (
+                    &i18n.text("about.image.view.decode_mode"),
+                    app.settings.decode_mode.label_i18n(i18n),
+                ),
+                (
+                    &i18n.text("about.image.view.resize_filter"),
                     app.settings.resize_filter.label().to_owned(),
                 ),
-                ("AI 보정", ai_state_label(app)),
+                (&i18n.text("about.image.view.ai"), ai_state_label(app, i18n)),
             ],
         );
     });
 }
 
-fn show_app_info(ui: &mut egui::Ui) {
+fn show_app_info(ui: &mut egui::Ui, i18n: I18n) {
     info_card(ui, "SuiSuiView", |ui| {
         ui.label(
             RichText::new(concat!("SuiSuiView ", env!("CARGO_PKG_VERSION")))
@@ -411,37 +502,38 @@ fn show_app_info(ui: &mut egui::Ui) {
                 .color(theme::TEXT_PRIMARY),
         );
         ui.add_space(4.0);
-        ui.label("Rust와 egui로 만든 가벼운 이미지/만화 뷰어");
+        ui.label(i18n.text("about.app.tagline"));
     });
 
-    info_card(ui, "라이선스", |ui| {
+    info_card(ui, &i18n.text("about.app.license.title"), |ui| {
         info_grid(
             ui,
             "about_app_grid",
             &[
-                ("앱 라이선스", env!("CARGO_PKG_LICENSE").to_owned()),
                 (
-                    "소스 코드",
-                    "GPL-3.0-only 조건에 따라 배포 버전에 대응하는 소스 코드를 제공합니다."
-                        .to_owned(),
+                    &i18n.text("about.app.license"),
+                    env!("CARGO_PKG_LICENSE").to_owned(),
                 ),
                 (
-                    "배포",
-                    "GitHub판은 수동 업데이트, Store판은 Microsoft Store 자동 업데이트를 사용합니다."
-                        .to_owned(),
+                    &i18n.text("about.app.source_code"),
+                    i18n.text("about.app.source_code.value"),
                 ),
                 (
-                    "고지",
-                    "오픈소스 탭에서 전체 구성 요소를 확인할 수 있습니다.".to_owned(),
+                    &i18n.text("about.app.distribution"),
+                    i18n.text("about.app.distribution.value"),
+                ),
+                (
+                    &i18n.text("about.app.notices"),
+                    i18n.text("about.app.notices.value"),
                 ),
             ],
         );
     });
 }
 
-fn show_notices(ui: &mut egui::Ui) {
-    info_card(ui, "오픈소스", |ui| {
-        ui.label("이 앱은 아래 오픈소스 구성 요소와 라이선스를 포함합니다.");
+fn show_notices(ui: &mut egui::Ui, i18n: I18n) {
+    info_card(ui, &i18n.text("about.section.notices"), |ui| {
+        ui.label(i18n.text("about.notices.intro"));
     });
 
     ui.add_space(8.0);
@@ -483,9 +575,9 @@ fn info_grid(ui: &mut egui::Ui, id: &'static str, rows: &[(&str, String)]) {
         });
 }
 
-fn show_tag_grid(ui: &mut egui::Ui, id: &'static str, tags: &[ImageExifTag]) {
+fn show_tag_grid(ui: &mut egui::Ui, id: &'static str, tags: &[ImageExifTag], i18n: I18n) {
     if tags.is_empty() {
-        ui.label("태그가 없습니다.");
+        ui.label(i18n.text("about.image.tags.empty"));
         return;
     }
 
@@ -532,8 +624,8 @@ fn bytes_label(bytes: usize) -> String {
     }
 }
 
-fn value_or_unknown(value: &Option<String>) -> String {
-    value.clone().unwrap_or_else(unknown)
+fn value_or_unknown(value: &Option<String>, i18n: I18n) -> String {
+    value.clone().unwrap_or_else(|| unknown(i18n))
 }
 
 fn value_or_dash(value: &str) -> String {
@@ -544,76 +636,42 @@ fn value_or_dash(value: &str) -> String {
     }
 }
 
-fn unknown() -> String {
-    "정보 없음".to_owned()
+fn unknown(i18n: I18n) -> String {
+    i18n.text("state.unknown")
 }
 
-fn yes_no(value: bool) -> String {
+fn yes_no(value: bool, i18n: I18n) -> String {
     if value {
-        "있음".to_owned()
+        i18n.text("state.yes")
     } else {
-        "없음".to_owned()
+        i18n.text("state.no")
     }
 }
 
-fn on_off(value: bool) -> String {
+fn on_off(value: bool, i18n: I18n) -> String {
     if value {
-        "켜짐".to_owned()
+        i18n.text("state.on")
     } else {
-        "꺼짐".to_owned()
+        i18n.text("state.off")
     }
 }
 
-fn view_mode_label(mode: ViewMode) -> &'static str {
+fn view_mode_label(mode: ViewMode, i18n: I18n) -> String {
     match mode {
-        ViewMode::Single => "한 페이지",
-        ViewMode::DoubleLeftToRight => "두 페이지 L→R",
-        ViewMode::DoubleRightToLeft => "두 페이지 R→L",
-        ViewMode::SmartDoubleLeftToRight => "스마트 두 페이지 L→R",
-        ViewMode::SmartDoubleRightToLeft => "스마트 두 페이지 R→L",
+        ViewMode::Single => i18n.text("label.view.single"),
+        ViewMode::DoubleLeftToRight => i18n.text("label.view.double_ltr"),
+        ViewMode::DoubleRightToLeft => i18n.text("label.view.double_rtl"),
+        ViewMode::SmartDoubleLeftToRight => i18n.text("label.view.smart_ltr"),
+        ViewMode::SmartDoubleRightToLeft => i18n.text("label.view.smart_rtl"),
     }
 }
 
-fn fit_mode_label(mode: FitMode) -> &'static str {
-    match mode {
-        FitMode::FitPage => "화면 맞춤",
-        FitMode::FitWidth => "폭 맞춤",
-        FitMode::FitHeight => "높이 맞춤",
-        FitMode::Original => "원본 크기",
-        FitMode::Manual => "수동 줌",
-    }
-}
-
-fn reading_direction_label(direction: ReadingDirection) -> &'static str {
-    match direction {
-        ReadingDirection::LeftToRight => "왼쪽에서 오른쪽",
-        ReadingDirection::RightToLeft => "오른쪽에서 왼쪽",
-    }
-}
-
-fn decode_mode_label(mode: DecodeMode) -> &'static str {
-    match mode {
-        DecodeMode::AutoFast => "Auto Fast",
-        DecodeMode::Compatibility => "호환성 우선",
-        DecodeMode::Custom => "커스텀",
-    }
-}
-
-fn filter_label(filter: ImageFilter) -> &'static str {
-    match filter {
-        ImageFilter::None => "꺼짐",
-        ImageFilter::Smooth => "부드럽게",
-        ImageFilter::SmoothSharpen => "부드럽게 + 선명하게",
-        ImageFilter::RcasSharpen => "RCAS 선명하게",
-    }
-}
-
-fn ai_state_label(app: &SuiSuiViewApp) -> String {
+fn ai_state_label(app: &SuiSuiViewApp, i18n: I18n) -> String {
     match app.settings.ai_upscale.backend {
-        AiUpscaleBackend::Off => "꺼짐".to_owned(),
+        AiUpscaleBackend::Off => AiUpscaleBackend::Off.label_i18n(i18n),
         AiUpscaleBackend::RealEsrganNcnn if app.use_ai_upscaled_pages => {
-            "켜짐 / 표시 사용".to_owned()
+            i18n.text("about.image.ai.on_display")
         }
-        AiUpscaleBackend::RealEsrganNcnn => "켜짐 / 원본 표시".to_owned(),
+        AiUpscaleBackend::RealEsrganNcnn => i18n.text("about.image.ai.on_original"),
     }
 }

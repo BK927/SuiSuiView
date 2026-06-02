@@ -131,8 +131,8 @@ settings.
 `F5` opens the settings window. Settings are saved with bookmarks in the app
 state file.
 
-- General: delete confirmation, ESC exit, always-on-top, and first/last page
-  behavior.
+- General: UI language, delete confirmation, ESC exit, always-on-top, and
+  first/last page behavior.
 - Rendering: transition effect, default/fallback upscaler, GPU acceleration,
   GPU upscaler, EXIF orientation, embedded ICC conversion, prefetch, cache
   memory, and experimental Real-ESRGAN AI upscale settings.
@@ -143,6 +143,12 @@ state file.
 - View, keyboard, and mouse: large-image starting position, visible viewer UI,
   customizable keyboard shortcuts, double-click maximize, middle-click
   fullscreen, and wheel behavior.
+
+The UI language can be set to system default, Korean, or English. UI text and
+state words such as Default, Off, and Experimental are localized, while
+algorithm, model, codec, library, and file-format names such as ArtCNN,
+Real-ESRGAN ncnn-vulkan, libwebp, PDFium, JPEG, and ZIP/CBZ keep their English
+technical names.
 
 ## Bookmarks And State
 

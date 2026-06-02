@@ -344,7 +344,7 @@ impl SuiSuiViewApp {
             painter.text(
                 rect.center(),
                 Align2::CENTER_CENTER,
-                "파일이나 폴더를 열어주세요",
+                self.i18n().text("viewer.empty"),
                 FontId::proportional(22.0),
                 ui::theme::TEXT_PRIMARY,
             );

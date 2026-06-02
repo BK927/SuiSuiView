@@ -1,3 +1,4 @@
+use crate::core::i18n::I18n;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,6 +17,14 @@ impl DecodeMode {
             Self::AutoFast => "Auto Fast",
             Self::Compatibility => "호환성 우선",
             Self::Custom => "커스텀",
+        }
+    }
+
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        match self {
+            Self::AutoFast => i18n.text("label.decode.auto_fast"),
+            Self::Compatibility => i18n.text("label.decode.compatibility"),
+            Self::Custom => i18n.text("label.decode.custom"),
         }
     }
 }
@@ -56,6 +65,13 @@ impl DecoderPreference {
             Self::Resvg => "resvg",
             Self::ZunePsd => "zune-psd",
             Self::PdfiumAi => "PDFium",
+        }
+    }
+
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        match self {
+            Self::Default => i18n.text("state.default"),
+            _ => self.label().to_owned(),
         }
     }
 

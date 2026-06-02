@@ -15,29 +15,65 @@ impl SuiSuiViewApp {
         response.context_menu(|ui| {
             ui.set_min_width(280.0);
             let has_book = self.source.is_some();
+            let i18n = self.i18n();
 
-            self.context_action(ui, ctx, "열기", "F2", AppCommand::OpenFile, true);
-            self.context_action(ui, ctx, "폴더 열기", "F", AppCommand::OpenFolder, true);
-            self.context_action(ui, ctx, "닫기", "F4", AppCommand::CloseBook, has_book);
+            self.context_action(
+                ui,
+                ctx,
+                &i18n.text("context.open"),
+                "F2",
+                AppCommand::OpenFile,
+                true,
+            );
+            self.context_action(
+                ui,
+                ctx,
+                &i18n.text("context.open_folder"),
+                "F",
+                AppCommand::OpenFolder,
+                true,
+            );
+            self.context_action(
+                ui,
+                ctx,
+                &i18n.text("context.close"),
+                "F4",
+                AppCommand::CloseBook,
+                has_book,
+            );
 
             ui.separator();
-            self.context_filter(ui, ctx, "필터적용 안함", "U", ImageFilter::None, has_book);
-            self.context_filter(ui, ctx, "부드럽게", "I", ImageFilter::Smooth, has_book);
             self.context_filter(
                 ui,
                 ctx,
-                "부드럽게+선명하게",
+                &ImageFilter::None.label_i18n(i18n),
+                "U",
+                ImageFilter::None,
+                has_book,
+            );
+            self.context_filter(
+                ui,
+                ctx,
+                &ImageFilter::Smooth.label_i18n(i18n),
+                "I",
+                ImageFilter::Smooth,
+                has_book,
+            );
+            self.context_filter(
+                ui,
+                ctx,
+                &ImageFilter::SmoothSharpen.label_i18n(i18n),
                 "S",
                 ImageFilter::SmoothSharpen,
                 has_book,
             );
 
             ui.separator();
-            ui.menu_button("이미지 이동", |ui| {
+            ui.menu_button(i18n.text("context.image_move"), |ui| {
                 self.context_action(
                     ui,
                     ctx,
-                    "다음 이미지",
+                    &i18n.text("context.next_image"),
                     "PgDn",
                     AppCommand::NextPage,
                     has_book,
@@ -45,7 +81,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "이전 이미지",
+                    &i18n.text("context.previous_image"),
                     "PgUp",
                     AppCommand::PreviousPage,
                     has_book,
@@ -53,7 +89,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "맨 처음 이미지",
+                    &i18n.text("context.first_image"),
                     "Home",
                     AppCommand::Home,
                     has_book,
@@ -61,7 +97,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "맨 마지막 이미지",
+                    &i18n.text("context.last_image"),
                     "End",
                     AppCommand::End,
                     has_book,
@@ -70,7 +106,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "다음 10페이지",
+                    &i18n.text("context.next_10"),
                     "Ctrl+PgDn",
                     AppCommand::MovePages(10),
                     has_book,
@@ -78,7 +114,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "이전 10페이지",
+                    &i18n.text("context.previous_10"),
                     "Ctrl+PgUp",
                     AppCommand::MovePages(-10),
                     has_book,
@@ -86,7 +122,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "랜덤하게 다음 페이지",
+                    &i18n.text("context.random_next"),
                     "Ctrl+Alt+PgDn",
                     AppCommand::RandomForward,
                     has_book,
@@ -94,7 +130,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "랜덤하게 이전 페이지",
+                    &i18n.text("context.random_previous"),
                     "Ctrl+Alt+PgUp",
                     AppCommand::RandomBackward,
                     has_book,
@@ -103,7 +139,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "다음 폴더/압축파일",
+                    &i18n.text("context.next_book"),
                     "]",
                     AppCommand::NextBook,
                     has_book,
@@ -111,29 +147,43 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "이전 폴더/압축파일",
+                    &i18n.text("context.previous_book"),
                     "[",
                     AppCommand::PreviousBook,
                     has_book,
                 );
             });
 
-            ui.menu_button("보기 모드", |ui| {
-                self.context_fit_mode(ui, ctx, "원본 크기(100%)", "0", FitMode::Original, has_book);
+            ui.menu_button(i18n.text("context.view_mode"), |ui| {
                 self.context_fit_mode(
                     ui,
                     ctx,
-                    "꽉 차게 보기",
+                    &i18n.text("context.original_size"),
+                    "0",
+                    FitMode::Original,
+                    has_book,
+                );
+                self.context_fit_mode(
+                    ui,
+                    ctx,
+                    &i18n.text("context.fit_page"),
                     "1 / 9 / Z",
                     FitMode::FitPage,
                     has_book,
                 );
-                self.context_fit_mode(ui, ctx, "폭맞춤", "8", FitMode::FitWidth, has_book);
+                self.context_fit_mode(
+                    ui,
+                    ctx,
+                    &i18n.text("context.fit_width"),
+                    "8",
+                    FitMode::FitWidth,
+                    has_book,
+                );
                 ui.separator();
                 self.context_action(
                     ui,
                     ctx,
-                    "두장 보기(왼쪽→오른쪽)",
+                    &i18n.text("context.double_ltr"),
                     "7",
                     AppCommand::SetDouble(ReadingDirection::LeftToRight),
                     has_book,
@@ -141,7 +191,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "두장 보기(왼쪽←오른쪽)",
+                    &i18n.text("context.double_rtl"),
                     "6",
                     AppCommand::SetDouble(ReadingDirection::RightToLeft),
                     has_book,
@@ -149,20 +199,34 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "두장 보기 모드 전환",
+                    &i18n.text("context.toggle_double"),
                     "2",
                     AppCommand::ToggleDouble,
                     has_book,
                 );
             });
 
-            ui.menu_button("축소/확대 보기", |ui| {
-                self.context_action(ui, ctx, "확대", "+", AppCommand::Zoom(1.1), has_book);
-                self.context_action(ui, ctx, "축소", "-", AppCommand::Zoom(0.9), has_book);
+            ui.menu_button(i18n.text("context.zoom_menu"), |ui| {
                 self.context_action(
                     ui,
                     ctx,
-                    "1% 크게 보기",
+                    &i18n.text("context.zoom_in"),
+                    "+",
+                    AppCommand::Zoom(1.1),
+                    has_book,
+                );
+                self.context_action(
+                    ui,
+                    ctx,
+                    &i18n.text("context.zoom_out"),
+                    "-",
+                    AppCommand::Zoom(0.9),
+                    has_book,
+                );
+                self.context_action(
+                    ui,
+                    ctx,
+                    &i18n.text("context.zoom_fine_in"),
                     "Ctrl++",
                     AppCommand::ZoomFine(0.01),
                     has_book,
@@ -170,18 +234,18 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "1% 작게 보기",
+                    &i18n.text("context.zoom_fine_out"),
                     "Ctrl+-",
                     AppCommand::ZoomFine(-0.01),
                     has_book,
                 );
             });
 
-            ui.menu_button("이미지 돌려보기", |ui| {
+            ui.menu_button(i18n.text("context.rotate_menu"), |ui| {
                 self.context_action(
                     ui,
                     ctx,
-                    "돌려보지 않기",
+                    &i18n.text("context.rotate_0"),
                     "Alt+↑",
                     AppCommand::SetRotation(0),
                     has_book,
@@ -189,7 +253,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "왼쪽으로 돌려보기",
+                    &i18n.text("context.rotate_left"),
                     "Alt+←",
                     AppCommand::SetRotation(3),
                     has_book,
@@ -197,7 +261,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "오른쪽으로 돌려보기",
+                    &i18n.text("context.rotate_right"),
                     "Alt+→",
                     AppCommand::SetRotation(1),
                     has_book,
@@ -205,7 +269,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "거꾸로 돌려보기",
+                    &i18n.text("context.rotate_180"),
                     "Alt+↓",
                     AppCommand::SetRotation(2),
                     has_book,
@@ -214,7 +278,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "반시계 방향으로 돌려보기",
+                    &i18n.text("context.rotate_ccw"),
                     "Ctrl+L",
                     AppCommand::RotateCounterClockwise,
                     has_book,
@@ -222,18 +286,18 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "시계 방향으로 돌려보기",
+                    &i18n.text("context.rotate_cw"),
                     "Ctrl+R",
                     AppCommand::RotateClockwise,
                     has_book,
                 );
             });
 
-            ui.menu_button("영상 처리", |ui| {
+            ui.menu_button(i18n.text("context.processing"), |ui| {
                 self.context_toggle(
                     ui,
                     ctx,
-                    "이미지 반전",
+                    &i18n.text("context.invert"),
                     "Ctrl+I",
                     self.effects.invert_colors,
                     AppCommand::ToggleInvert,
@@ -241,7 +305,7 @@ impl SuiSuiViewApp {
                 self.context_toggle(
                     ui,
                     ctx,
-                    "감마 보정",
+                    &i18n.text("context.gamma"),
                     "Ctrl+G",
                     self.effects.gamma,
                     AppCommand::ToggleGamma,
@@ -249,7 +313,7 @@ impl SuiSuiViewApp {
                 self.context_toggle(
                     ui,
                     ctx,
-                    "상하 반전",
+                    &i18n.text("context.flip_vertical"),
                     "Ctrl+F",
                     self.effects.transform.flip_vertical,
                     AppCommand::ToggleFlipVertical,
@@ -257,7 +321,7 @@ impl SuiSuiViewApp {
                 self.context_toggle(
                     ui,
                     ctx,
-                    "좌우 반전",
+                    &i18n.text("context.flip_horizontal"),
                     "Ctrl+M",
                     self.effects.transform.flip_horizontal,
                     AppCommand::ToggleFlipHorizontal,
@@ -266,7 +330,7 @@ impl SuiSuiViewApp {
                 self.context_action(
                     ui,
                     ctx,
-                    "AI 업스케일",
+                    &i18n.text("context.ai_upscale"),
                     "",
                     AppCommand::UpscaleCurrentPage,
                     has_book,
@@ -277,7 +341,7 @@ impl SuiSuiViewApp {
             self.context_action(
                 ui,
                 ctx,
-                "윈도우 탐색기 열기",
+                &i18n.text("context.open_explorer"),
                 "Ctrl+Enter",
                 AppCommand::OpenExplorer,
                 has_book,
@@ -285,7 +349,7 @@ impl SuiSuiViewApp {
             self.context_action(
                 ui,
                 ctx,
-                "파일 삭제",
+                &i18n.text("context.delete_file"),
                 "Del",
                 AppCommand::Delete(DeleteMode::Recycle),
                 has_book,
@@ -293,7 +357,7 @@ impl SuiSuiViewApp {
             self.context_action(
                 ui,
                 ctx,
-                "파일 완전히 삭제",
+                &i18n.text("context.delete_permanent"),
                 "Shift+Del",
                 AppCommand::Delete(DeleteMode::Permanent),
                 has_book,
@@ -301,7 +365,7 @@ impl SuiSuiViewApp {
             self.context_action(
                 ui,
                 ctx,
-                "클립보드로 복사하기",
+                &i18n.text("context.copy_page"),
                 "Ctrl+C",
                 AppCommand::CopyPageImage,
                 has_book,
@@ -309,7 +373,7 @@ impl SuiSuiViewApp {
             self.context_action(
                 ui,
                 ctx,
-                "보이는 이미지 복사",
+                &i18n.text("context.copy_display"),
                 "Ctrl+Alt+C",
                 AppCommand::CopyDisplayImage,
                 has_book,
@@ -317,7 +381,7 @@ impl SuiSuiViewApp {
             self.context_action(
                 ui,
                 ctx,
-                "파일 경로 복사",
+                &i18n.text("context.copy_path"),
                 "Ctrl+Alt+Shift+C",
                 AppCommand::CopyPath,
                 has_book,
@@ -327,7 +391,7 @@ impl SuiSuiViewApp {
             self.context_action(
                 ui,
                 ctx,
-                "전체화면",
+                &i18n.text("context.fullscreen"),
                 "F11",
                 AppCommand::ToggleFullscreen,
                 true,
@@ -335,16 +399,23 @@ impl SuiSuiViewApp {
             self.context_action(
                 ui,
                 ctx,
-                "최대화/복원",
+                &i18n.text("context.maximize"),
                 "M",
                 AppCommand::ToggleMaximized,
                 true,
             );
-            self.context_action(ui, ctx, "최소화", "Q", AppCommand::Minimize, true);
+            self.context_action(
+                ui,
+                ctx,
+                &i18n.text("context.minimize"),
+                "Q",
+                AppCommand::Minimize,
+                true,
+            );
             if context_selectable(
                 ui,
                 self.settings.always_on_top,
-                "항상 위에 표시",
+                &i18n.text("context.always_on_top"),
                 "Ctrl+A",
                 true,
             )
@@ -353,9 +424,30 @@ impl SuiSuiViewApp {
                 self.apply_command(ctx, AppCommand::ToggleAlwaysOnTop);
                 ui.close();
             }
-            self.context_action(ui, ctx, "환경설정", "F5", AppCommand::OpenSettings, true);
-            self.context_action(ui, ctx, "정보", "F1", AppCommand::OpenAbout, true);
-            self.context_action(ui, ctx, "종료", "X", AppCommand::Quit, true);
+            self.context_action(
+                ui,
+                ctx,
+                &i18n.text("topbar.settings"),
+                "F5",
+                AppCommand::OpenSettings,
+                true,
+            );
+            self.context_action(
+                ui,
+                ctx,
+                &i18n.text("topbar.info"),
+                "F1",
+                AppCommand::OpenAbout,
+                true,
+            );
+            self.context_action(
+                ui,
+                ctx,
+                &i18n.text("context.quit"),
+                "X",
+                AppCommand::Quit,
+                true,
+            );
         });
     }
 

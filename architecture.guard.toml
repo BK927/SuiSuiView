@@ -103,6 +103,18 @@ signals = ["prioritized_jobs", "prioritized_indices", "prune_worker_cache", "cle
 # expires = "2026-06-15"
 
 [[waivers]]
+path = "src/app.rs"
+rule = "legacy_growth"
+reason = "Temporary waiver for pre-existing app shell ratchet while this i18n patch keeps new behavior in focused modules; shrink app.rs in a focused shell cleanup."
+expires = "2026-06-15"
+
+[[waivers]]
+path = "src/core/i18n.rs"
+rule = "large_new_file"
+reason = "Initial i18n catalog keeps ko-KR/en-US keys side-by-side until translation coverage stabilizes; split locale catalogs after the first localization pass."
+expires = "2026-06-15"
+
+[[waivers]]
 path = "src/core/worker.rs"
 rule = "legacy_growth"
 reason = "Temporary opt-in decode-ahead experiment wiring; move remaining worker-loop hooks after rollout decision."

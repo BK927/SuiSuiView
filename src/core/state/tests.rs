@@ -1,8 +1,9 @@
 use super::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, DecodeMode,
-    DecoderPreferences, DisplayUpscaler, EdgePageAction, GpuEffectMode, PageTransitionStyle,
-    PersistedState, RendererMode, ResizeFilter, WheelMode, WindowPlacement,
+    DecoderPreference, DecoderPreferences, DisplayUpscaler, EdgePageAction, GpuEffectMode,
+    PageTransitionStyle, PersistedState, RendererMode, ResizeFilter, WheelMode, WindowPlacement,
 };
+use crate::core::i18n::{I18n, Language, ResolvedLanguage};
 
 #[test]
 fn old_state_without_settings_loads_defaults() {
@@ -28,6 +29,7 @@ fn old_settings_without_decoder_preferences_load_defaults() {
 fn settings_defaults_match_viewer_policy() {
     let settings = AppSettings::default();
 
+    assert_eq!(settings.language, Language::Auto);
     assert!(settings.confirm_delete);
     assert!(settings.esc_to_quit);
     assert!(settings.show_toasts);
@@ -68,6 +70,26 @@ fn settings_defaults_match_viewer_policy() {
         "realesrgan-x4plus-anime"
     );
     assert_eq!(settings.ai_upscale.ncnn.scale, 4);
+}
+
+#[test]
+fn old_settings_without_language_load_auto_default() {
+    let state: PersistedState =
+        serde_json::from_str(r#"{"version":1,"settings":{},"books":{}}"#).unwrap();
+
+    assert_eq!(state.settings.language, Language::Auto);
+}
+
+#[test]
+fn language_setting_round_trips() {
+    let json = serde_json::to_string(&AppSettings {
+        language: Language::EnUs,
+        ..AppSettings::default()
+    })
+    .unwrap();
+    let settings: AppSettings = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(settings.language, Language::EnUs);
 }
 
 #[test]
@@ -196,16 +218,48 @@ fn product_display_upscalers_keep_experiments_separate() {
     assert!(DisplayUpscaler::WgslSrLabSpanX2.user_selectable());
     assert!(!DisplayUpscaler::NvidiaNis.user_selectable());
     assert_eq!(
-        DisplayUpscaler::WgslArtcnnC4F16.settings_label(),
+        DisplayUpscaler::WgslArtcnnC4F16
+            .settings_label_i18n(I18n::resolved(ResolvedLanguage::KoKr)),
         "ArtCNN C4F16 (실험)"
     );
     assert_eq!(
-        DisplayUpscaler::WgslSrLabSpanX2.settings_label(),
+        DisplayUpscaler::WgslSrLabSpanX2
+            .settings_label_i18n(I18n::resolved(ResolvedLanguage::KoKr)),
         "SR Lab SPAN x2 (실험)"
     );
     assert_eq!(
-        DisplayUpscaler::WgslFsr1EasuRcas.settings_label(),
+        DisplayUpscaler::WgslFsr1EasuRcas
+            .settings_label_i18n(I18n::resolved(ResolvedLanguage::KoKr)),
         "WGSL FSR1 EASU+RCAS"
+    );
+    assert_eq!(
+        DisplayUpscaler::WgslArtcnnC4F16
+            .settings_label_i18n(I18n::resolved(ResolvedLanguage::EnUs)),
+        "ArtCNN C4F16 (Experimental)"
+    );
+    assert_eq!(
+        DisplayUpscaler::Auto.label_i18n(I18n::resolved(ResolvedLanguage::KoKr)),
+        "자동"
+    );
+    assert_eq!(
+        DisplayUpscaler::Auto.label_i18n(I18n::resolved(ResolvedLanguage::EnUs)),
+        "Auto"
+    );
+    assert_eq!(
+        DecoderPreference::Default.label_i18n(I18n::resolved(ResolvedLanguage::KoKr)),
+        "기본값"
+    );
+    assert_eq!(
+        DecoderPreference::Default.label_i18n(I18n::resolved(ResolvedLanguage::EnUs)),
+        "Default"
+    );
+    assert_eq!(
+        AiUpscaleBackend::Off.label_i18n(I18n::resolved(ResolvedLanguage::KoKr)),
+        "사용 안 함"
+    );
+    assert_eq!(
+        AiUpscaleBackend::Off.label_i18n(I18n::resolved(ResolvedLanguage::EnUs)),
+        "Off"
     );
     assert!(!DisplayUpscaler::WgslSrLabSpanX2.is_benchmark_only());
     assert!(!DisplayUpscaler::GPU_METHODS.contains(&DisplayUpscaler::WgslSrLabSpanX2));

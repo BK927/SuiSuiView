@@ -3,6 +3,7 @@ use super::super::debug_compare::DebugCompareTarget;
 use super::super::{SuiSuiViewApp, ViewMode};
 use super::{icons, path_labels, theme};
 use crate::core::effects::ImageFilter;
+use crate::core::i18n::I18n;
 use crate::core::state::{AiUpscaleBackend, FitMode, PageTransitionStyle};
 use eframe::egui::{
     self, Align2, Button, Color32, FontId, Frame, Margin, RichText, Sense, Stroke, Vec2,
@@ -122,6 +123,7 @@ impl SuiSuiViewApp {
     }
 
     fn show_top_bar_contents(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+        let i18n = self.i18n();
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
         ui.horizontal_centered(|ui| {
             self.show_open_group(ui);
@@ -137,7 +139,7 @@ impl SuiSuiViewApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(icon_button(icons::INFO, icons::IconStyle::Regular, 19.0))
-                    .on_hover_text("정보")
+                    .on_hover_text(i18n.text("topbar.info"))
                     .clicked()
                 {
                     self.open_about_window();
@@ -148,7 +150,7 @@ impl SuiSuiViewApp {
                         icons::IconStyle::Regular,
                         20.0,
                     ))
-                    .on_hover_text("환경설정")
+                    .on_hover_text(i18n.text("topbar.settings"))
                     .clicked()
                 {
                     self.settings_open = true;
@@ -169,9 +171,9 @@ impl SuiSuiViewApp {
             (icons::PIN, icons::IconStyle::Regular, theme::TEXT_PRIMARY)
         };
         let tooltip = if self.settings.top_bar_pinned {
-            "상단 도구막대 고정 해제"
+            self.i18n().text("topbar.unpin")
         } else {
-            "상단 도구막대 고정"
+            self.i18n().text("topbar.pin")
         };
         if ui
             .add(icon_button_colored(icon, style, 18.0, color))
@@ -188,68 +190,79 @@ impl SuiSuiViewApp {
     }
 
     fn show_open_group(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button(icons::icon_text(icons::FOLDER_OPEN, "열기"), |ui| {
-            self.hold_top_bar_open_for_menu();
-            let recent_books = if self.settings.remember_recent_locations {
-                self.store.recent_books(8)
-            } else {
-                Vec::new()
-            };
-            let menu_width = recent_open_menu_width(ui, &recent_books);
-            ui.set_min_width(menu_width);
-            ui.set_max_width(menu_width);
-
-            if ui
-                .button(icons::icon_text(icons::DOCUMENT, "파일 열기"))
-                .clicked()
-            {
-                self.open_file_dialog();
-                ui.close();
-            }
-            if ui
-                .button(icons::icon_text(icons::FOLDER_OPEN, "폴더 열기"))
-                .clicked()
-            {
-                self.open_folder_dialog();
-                ui.close();
-            }
-
-            ui.separator();
-            ui.label(RichText::new("최근").color(theme::TEXT_MUTED));
-            if !self.settings.remember_recent_locations {
-                ui.add_enabled(false, egui::Label::new("최근 위치 저장이 꺼져 있습니다."));
-                return;
-            }
-            if recent_books.is_empty() {
-                ui.add_enabled(false, egui::Label::new("최근 책 없음"));
-                return;
-            }
-
-            for book in &recent_books {
-                if let Some(path) = book.known_paths.last() {
-                    if recent_path_row(ui, path, menu_width)
-                        .on_hover_text(path)
-                        .clicked()
-                    {
-                        self.open_path(PathBuf::from(path));
-                        ui.close();
-                    }
+        let i18n = self.i18n();
+        ui.menu_button(
+            icons::icon_text(icons::FOLDER_OPEN, &i18n.text("topbar.open")),
+            |ui| {
+                self.hold_top_bar_open_for_menu();
+                let recent_books = if self.settings.remember_recent_locations {
+                    self.store.recent_books(8)
                 } else {
-                    ui.add_enabled(false, egui::Label::new(&book.title))
-                        .on_hover_text("최근 책 경로를 찾을 수 없습니다.");
+                    Vec::new()
+                };
+                let menu_width = recent_open_menu_width(ui, &recent_books);
+                ui.set_min_width(menu_width);
+                ui.set_max_width(menu_width);
+
+                if ui
+                    .button(icons::icon_text(
+                        icons::DOCUMENT,
+                        &i18n.text("topbar.open_file"),
+                    ))
+                    .clicked()
+                {
+                    self.open_file_dialog();
+                    ui.close();
                 }
-            }
-        });
+                if ui
+                    .button(icons::icon_text(
+                        icons::FOLDER_OPEN,
+                        &i18n.text("topbar.open_folder"),
+                    ))
+                    .clicked()
+                {
+                    self.open_folder_dialog();
+                    ui.close();
+                }
+
+                ui.separator();
+                ui.label(RichText::new(i18n.text("topbar.recent")).color(theme::TEXT_MUTED));
+                if !self.settings.remember_recent_locations {
+                    ui.add_enabled(false, egui::Label::new(i18n.text("topbar.recent_disabled")));
+                    return;
+                }
+                if recent_books.is_empty() {
+                    ui.add_enabled(false, egui::Label::new(i18n.text("topbar.no_recent")));
+                    return;
+                }
+
+                for book in &recent_books {
+                    if let Some(path) = book.known_paths.last() {
+                        if recent_path_row(ui, path, menu_width)
+                            .on_hover_text(path)
+                            .clicked()
+                        {
+                            self.open_path(PathBuf::from(path));
+                            ui.close();
+                        }
+                    } else {
+                        ui.add_enabled(false, egui::Label::new(&book.title))
+                            .on_hover_text(i18n.text("topbar.recent_missing"));
+                    }
+                }
+            },
+        );
     }
 
     fn show_page_group(&mut self, ui: &mut egui::Ui) {
+        let i18n = self.i18n();
         let has_book = self.source.is_some();
         let previous = ui
             .add_enabled(
                 has_book,
                 icon_button(icons::CHEVRON_LEFT, icons::IconStyle::Regular, 22.0),
             )
-            .on_hover_text("이전 페이지");
+            .on_hover_text(i18n.text("topbar.previous_page"));
         if previous.clicked() {
             self.previous_page();
         }
@@ -278,18 +291,23 @@ impl SuiSuiViewApp {
                 has_book,
                 icon_button(icons::CHEVRON_RIGHT, icons::IconStyle::Regular, 22.0),
             )
-            .on_hover_text("다음 페이지");
+            .on_hover_text(i18n.text("topbar.next_page"));
         if next.clicked() {
             self.next_page();
         }
     }
 
     fn show_view_group(&mut self, ui: &mut egui::Ui) {
-        let label = format!("보기: {}", self.fit_mode.label());
+        let i18n = self.i18n();
+        let label = format!(
+            "{}: {}",
+            i18n.text("topbar.view"),
+            self.fit_mode.label_i18n(i18n)
+        );
         ui.menu_button(icons::icon_text(icons::EYE, &label), |ui| {
             self.hold_top_bar_open_for_menu();
             ui.set_min_width(260.0);
-            ui.label("레이아웃");
+            ui.label(i18n.text("topbar.layout"));
             ui.horizontal_wrapped(|ui| {
                 for mode in [
                     ViewMode::Single,
@@ -299,7 +317,7 @@ impl SuiSuiViewApp {
                     ViewMode::SmartDoubleRightToLeft,
                 ] {
                     if ui
-                        .selectable_label(self.view_mode == mode, view_mode_label(mode))
+                        .selectable_label(self.view_mode == mode, view_mode_label(mode, i18n))
                         .clicked()
                     {
                         self.set_view_mode(mode);
@@ -308,11 +326,11 @@ impl SuiSuiViewApp {
             });
 
             ui.separator();
-            ui.label("맞춤");
+            ui.label(i18n.text("topbar.fit"));
             ui.horizontal_wrapped(|ui| {
                 for mode in FitMode::ALL {
                     if ui
-                        .selectable_label(self.fit_mode == mode, mode.label())
+                        .selectable_label(self.fit_mode == mode, mode.label_i18n(i18n))
                         .clicked()
                     {
                         self.set_fit_mode(mode);
@@ -322,7 +340,7 @@ impl SuiSuiViewApp {
 
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label("줌");
+                ui.label(i18n.text("topbar.zoom"));
                 if ui.button("-").clicked() {
                     self.adjust_zoom(0.9);
                 }
@@ -335,69 +353,80 @@ impl SuiSuiViewApp {
     }
 
     fn show_correction_group(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        ui.menu_button(icons::icon_text(icons::WAND, "보정"), |ui| {
-            self.hold_top_bar_open_for_menu();
-            ui.set_min_width(220.0);
-            let ai_enabled = self.settings.ai_upscale.backend == AiUpscaleBackend::RealEsrganNcnn;
-            if ui
-                .add_enabled(
-                    ai_enabled && self.source.is_some(),
-                    egui::Button::new("AI x4"),
-                )
-                .clicked()
-            {
-                self.upscale_current_page();
-                ui.close();
-            }
-            ui.add_enabled_ui(self.source.is_some(), |ui| {
-                let mut use_ai = self.use_ai_upscaled_pages;
-                if ui.checkbox(&mut use_ai, "AI 결과 우선 표시").changed() {
-                    self.set_use_ai_upscaled_pages(use_ai);
-                }
-            });
-
-            ui.separator();
-            ui.label("페이지 전환");
-            let active_transition = self.settings.effective_page_transition_style();
-            for style in PageTransitionStyle::ALL {
+        let i18n = self.i18n();
+        ui.menu_button(
+            icons::icon_text(icons::WAND, &i18n.text("topbar.correction")),
+            |ui| {
+                self.hold_top_bar_open_for_menu();
+                ui.set_min_width(220.0);
+                let ai_enabled =
+                    self.settings.ai_upscale.backend == AiUpscaleBackend::RealEsrganNcnn;
                 if ui
-                    .selectable_label(active_transition == style, style.label())
+                    .add_enabled(
+                        ai_enabled && self.source.is_some(),
+                        egui::Button::new("AI x4"),
+                    )
                     .clicked()
                 {
-                    let mut settings = self.settings.clone();
-                    settings.set_page_transition_style(style);
-                    self.apply_settings(ctx, settings);
+                    self.upscale_current_page();
                     ui.close();
                 }
-            }
+                ui.add_enabled_ui(self.source.is_some(), |ui| {
+                    let mut use_ai = self.use_ai_upscaled_pages;
+                    if ui
+                        .checkbox(&mut use_ai, i18n.text("topbar.prefer_ai"))
+                        .changed()
+                    {
+                        self.set_use_ai_upscaled_pages(use_ai);
+                    }
+                });
 
-            ui.separator();
-            ui.label("필터");
-            for filter in [
-                ImageFilter::None,
-                ImageFilter::Smooth,
-                ImageFilter::SmoothSharpen,
-                ImageFilter::RcasSharpen,
-            ] {
-                if ui
-                    .selectable_label(self.effects.filter == filter, filter.label())
-                    .clicked()
-                {
-                    self.apply_command(ctx, AppCommand::SetFilter(filter));
+                ui.separator();
+                ui.label(i18n.text("topbar.transition"));
+                let active_transition = self.settings.effective_page_transition_style();
+                for style in PageTransitionStyle::ALL {
+                    if ui
+                        .selectable_label(active_transition == style, style.label_i18n(i18n))
+                        .clicked()
+                    {
+                        let mut settings = self.settings.clone();
+                        settings.set_page_transition_style(style);
+                        self.apply_settings(ctx, settings);
+                        ui.close();
+                    }
                 }
-            }
-        });
+
+                ui.separator();
+                ui.label(i18n.text("topbar.filter"));
+                for filter in [
+                    ImageFilter::None,
+                    ImageFilter::Smooth,
+                    ImageFilter::SmoothSharpen,
+                    ImageFilter::RcasSharpen,
+                ] {
+                    if ui
+                        .selectable_label(self.effects.filter == filter, filter.label_i18n(i18n))
+                        .clicked()
+                    {
+                        self.apply_command(ctx, AppCommand::SetFilter(filter));
+                    }
+                }
+            },
+        );
     }
 
     fn show_debug_compare_group(&mut self, ui: &mut egui::Ui) {
         let has_book = self.source.is_some();
         let response = ui.add_enabled(
             has_book,
-            egui::Button::new("비교")
+            egui::Button::new(self.i18n().text("topbar.compare"))
                 .selected(self.debug_compare.enabled)
                 .min_size(egui::vec2(52.0, 34.0)),
         );
-        if response.on_hover_text("디버그 좌우 비교 모드").clicked() {
+        if response
+            .on_hover_text(self.i18n().text("topbar.compare_tooltip"))
+            .clicked()
+        {
             self.set_debug_compare_enabled(!self.debug_compare.enabled);
         }
 
@@ -778,13 +807,13 @@ fn bookmark_toolbar_button(
     }
 }
 
-fn view_mode_label(mode: ViewMode) -> &'static str {
+fn view_mode_label(mode: ViewMode, i18n: I18n) -> String {
     match mode {
-        ViewMode::Single => "1장",
-        ViewMode::DoubleLeftToRight => "2장 L→R",
-        ViewMode::DoubleRightToLeft => "2장 R→L",
-        ViewMode::SmartDoubleLeftToRight => "스마트 L→R",
-        ViewMode::SmartDoubleRightToLeft => "스마트 R→L",
+        ViewMode::Single => i18n.text("label.view.single"),
+        ViewMode::DoubleLeftToRight => i18n.text("label.view.double_ltr"),
+        ViewMode::DoubleRightToLeft => i18n.text("label.view.double_rtl"),
+        ViewMode::SmartDoubleLeftToRight => i18n.text("label.view.smart_ltr"),
+        ViewMode::SmartDoubleRightToLeft => i18n.text("label.view.smart_rtl"),
     }
 }
 

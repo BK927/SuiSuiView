@@ -1,3 +1,4 @@
+use crate::core::i18n::I18n;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -188,6 +189,73 @@ impl CommandId {
         }
     }
 
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        i18n.text(self.label_key())
+    }
+
+    fn label_key(self) -> &'static str {
+        match self {
+            Self::OpenFile => "label.command.open_file",
+            Self::OpenFolder => "label.command.open_folder",
+            Self::CloseBook => "label.command.close_book",
+            Self::Quit => "label.command.quit",
+            Self::QuitFromEsc => "label.command.quit_esc",
+            Self::ToggleFullscreen => "label.command.fullscreen",
+            Self::ToggleMaximized => "label.command.maximize",
+            Self::Minimize => "label.command.minimize",
+            Self::OpenSettings => "label.command.settings",
+            Self::OpenAbout => "label.command.about",
+            Self::ToggleAlwaysOnTop => "label.command.always_on_top",
+            Self::NextPage => "label.command.next_page",
+            Self::PreviousPage => "label.command.previous_page",
+            Self::MoveForward10 => "label.command.forward_10",
+            Self::MoveBackward10 => "label.command.backward_10",
+            Self::MoveForward100 => "label.command.forward_100",
+            Self::MoveBackward100 => "label.command.backward_100",
+            Self::ForceNextPage => "label.command.force_next",
+            Self::ForcePreviousPage => "label.command.force_previous",
+            Self::Home => "label.command.home",
+            Self::End => "label.command.end",
+            Self::RandomForward => "label.command.random_forward",
+            Self::RandomBackward => "label.command.random_backward",
+            Self::NextBook => "label.command.next_book",
+            Self::PreviousBook => "label.command.previous_book",
+            Self::FitOriginal => "label.command.fit_original",
+            Self::FitPage => "label.command.fit_page",
+            Self::FitWidth => "label.command.fit_width",
+            Self::FitHeight => "label.command.fit_height",
+            Self::SetDoubleLeftToRight => "label.command.double_ltr",
+            Self::SetDoubleRightToLeft => "label.command.double_rtl",
+            Self::ToggleDouble => "label.command.toggle_double",
+            Self::ZoomIn => "label.command.zoom_in",
+            Self::ZoomOut => "label.command.zoom_out",
+            Self::ZoomFineIn => "label.command.zoom_fine_in",
+            Self::ZoomFineOut => "label.command.zoom_fine_out",
+            Self::RotateClockwise => "label.command.rotate_cw",
+            Self::RotateCounterClockwise => "label.command.rotate_ccw",
+            Self::Rotate0 => "label.command.rotate_0",
+            Self::Rotate90 => "label.command.rotate_90",
+            Self::Rotate180 => "label.command.rotate_180",
+            Self::Rotate270 => "label.command.rotate_270",
+            Self::FlipHorizontal => "label.command.flip_horizontal",
+            Self::FlipVertical => "label.command.flip_vertical",
+            Self::ToggleInvert => "label.command.invert",
+            Self::FilterNone => "label.command.filter_none",
+            Self::FilterSmooth => "label.command.filter_smooth",
+            Self::FilterSmoothSharpen => "label.command.filter_smooth_sharpen",
+            Self::ToggleGamma => "label.command.gamma",
+            Self::DeleteRecycle => "label.command.delete_recycle",
+            Self::DeletePermanent => "label.command.delete_permanent",
+            Self::OpenExplorer => "label.command.open_explorer",
+            Self::CopyPageImage => "label.command.copy_page",
+            Self::CopyDisplayImage => "label.command.copy_display",
+            Self::CopyPath => "label.command.copy_path",
+            Self::UpscaleCurrentPage => "label.command.ai_upscale",
+            Self::ToggleCurrentPageBookmark => "label.command.bookmark_page",
+            Self::ToggleBookmarkPopover => "label.command.bookmark_popover",
+        }
+    }
+
     pub fn group(self) -> &'static str {
         match self {
             Self::OpenFile
@@ -249,6 +317,70 @@ impl CommandId {
             | Self::ToggleCurrentPageBookmark
             | Self::ToggleBookmarkPopover => "작업",
         }
+    }
+
+    pub fn group_i18n(self, i18n: I18n) -> String {
+        let key = match self {
+            Self::OpenFile
+            | Self::OpenFolder
+            | Self::CloseBook
+            | Self::Quit
+            | Self::QuitFromEsc
+            | Self::OpenSettings
+            | Self::OpenAbout
+            | Self::OpenExplorer
+            | Self::CopyPath => "label.command.group.file",
+            Self::ToggleFullscreen
+            | Self::ToggleMaximized
+            | Self::Minimize
+            | Self::ToggleAlwaysOnTop => "label.command.group.window",
+            Self::NextPage
+            | Self::PreviousPage
+            | Self::MoveForward10
+            | Self::MoveBackward10
+            | Self::MoveForward100
+            | Self::MoveBackward100
+            | Self::ForceNextPage
+            | Self::ForcePreviousPage
+            | Self::Home
+            | Self::End
+            | Self::RandomForward
+            | Self::RandomBackward
+            | Self::NextBook
+            | Self::PreviousBook => "label.command.group.navigation",
+            Self::FitOriginal
+            | Self::FitPage
+            | Self::FitWidth
+            | Self::FitHeight
+            | Self::SetDoubleLeftToRight
+            | Self::SetDoubleRightToLeft
+            | Self::ToggleDouble
+            | Self::ZoomIn
+            | Self::ZoomOut
+            | Self::ZoomFineIn
+            | Self::ZoomFineOut => "label.command.group.view",
+            Self::RotateClockwise
+            | Self::RotateCounterClockwise
+            | Self::Rotate0
+            | Self::Rotate90
+            | Self::Rotate180
+            | Self::Rotate270
+            | Self::FlipHorizontal
+            | Self::FlipVertical
+            | Self::ToggleInvert
+            | Self::FilterNone
+            | Self::FilterSmooth
+            | Self::FilterSmoothSharpen
+            | Self::ToggleGamma
+            | Self::UpscaleCurrentPage => "label.command.group.processing",
+            Self::DeleteRecycle
+            | Self::DeletePermanent
+            | Self::CopyPageImage
+            | Self::CopyDisplayImage
+            | Self::ToggleCurrentPageBookmark
+            | Self::ToggleBookmarkPopover => "label.command.group.action",
+        };
+        i18n.text(key)
     }
 }
 
@@ -514,6 +646,19 @@ impl MouseGesture {
             Self::CtrlWheelUp => "Ctrl+휠 위",
             Self::CtrlWheelDown => "Ctrl+휠 아래",
         }
+    }
+
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        let key = match self {
+            Self::DoubleClick => "label.mouse.double_click",
+            Self::MiddleClick => "label.mouse.middle_click",
+            Self::CtrlMiddleClick => "label.mouse.ctrl_middle_click",
+            Self::WheelUp => "label.mouse.wheel_up",
+            Self::WheelDown => "label.mouse.wheel_down",
+            Self::CtrlWheelUp => "label.mouse.ctrl_wheel_up",
+            Self::CtrlWheelDown => "label.mouse.ctrl_wheel_down",
+        };
+        i18n.text(key)
     }
 }
 

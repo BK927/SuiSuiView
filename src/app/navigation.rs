@@ -2,7 +2,7 @@ use super::{
     edge_prompt_button, perf, sibling_book_path, transition_screen_sign, ui,
     worker_center_page_for_mode, OpenOrigin, PageCacheKey, SuiSuiViewApp, Transition, ViewMode,
 };
-use crate::core::effects::{transform_status_suffix, ViewEffects};
+use crate::core::effects::ViewEffects;
 use crate::core::state::{
     CommandId, EdgePageAction, FitMode, PageTransitionStyle, ReadingDirection,
 };
@@ -176,9 +176,10 @@ impl SuiSuiViewApp {
                     .show(ui, |ui| {
                         ui.set_width(width - 44.0);
                         ui.vertical_centered(|ui| {
+                            let i18n = self.i18n();
                             let title = match prompt.direction {
-                                NavigationDirection::Forward => "마지막 이미지입니다.",
-                                NavigationDirection::Backward => "첫 번째 이미지입니다.",
+                                NavigationDirection::Forward => i18n.text("navigation.edge.last"),
+                                NavigationDirection::Backward => i18n.text("navigation.edge.first"),
                             };
                             ui.label(
                                 RichText::new(title)
@@ -188,15 +189,19 @@ impl SuiSuiViewApp {
                             );
                             ui.add_space(18.0);
                             ui.horizontal_centered(|ui| {
-                                let previous_label = self
-                                    .edge_action_button_text("이전 파일", CommandId::PreviousBook);
+                                let previous_file = i18n.text("navigation.edge.previous_file");
+                                let previous_label = self.edge_action_button_text(
+                                    &previous_file,
+                                    CommandId::PreviousBook,
+                                );
                                 if edge_prompt_button(ui, &previous_label).clicked() {
                                     self.edge_prompt = None;
                                     self.open_sibling_book(-1);
                                 }
 
+                                let next_file = i18n.text("navigation.edge.next_file");
                                 let next_label =
-                                    self.edge_action_button_text("다음 파일", CommandId::NextBook);
+                                    self.edge_action_button_text(&next_file, CommandId::NextBook);
                                 if edge_prompt_button(ui, &next_label).clicked() {
                                     self.edge_prompt = None;
                                     self.open_sibling_book(1);
@@ -592,9 +597,9 @@ impl SuiSuiViewApp {
         }
         self.use_ai_upscaled_pages = enabled;
         if enabled {
-            self.set_status("AI 업스케일 결과를 기본 표시에서 우선 사용합니다.");
+            self.set_status(self.i18n().text("status.ai_result_enabled"));
         } else {
-            self.set_status("AI 업스케일 결과를 숨기고 일반 표시를 사용합니다.");
+            self.set_status(self.i18n().text("status.ai_result_disabled"));
         }
     }
 
@@ -602,22 +607,41 @@ impl SuiSuiViewApp {
         update(&mut self.effects);
         self.textures.clear();
         self.request_original_texture_only_decode_if_needed();
-        self.set_status(format!(
-            "{}{}{}{}",
-            self.effects.filter.label(),
-            if self.effects.gamma { ", gamma" } else { "" },
-            if self.effects.invert_colors {
-                ", inverted"
-            } else {
-                ""
-            },
-            transform_status_suffix(self.effects.transform)
-        ));
+        self.set_status(self.effect_status());
+    }
+
+    fn effect_status(&self) -> String {
+        let i18n = self.i18n();
+        let mut parts = vec![self.effects.filter.label_i18n(i18n)];
+        if self.effects.gamma {
+            parts.push(i18n.text("status.effect.gamma"));
+        }
+        if self.effects.invert_colors {
+            parts.push(i18n.text("status.effect.inverted"));
+        }
+
+        let transform = self.effects.transform;
+        if transform.rotation_quadrants != 0 {
+            parts.push(i18n.with_vars(
+                "status.effect.rotation",
+                &[(
+                    "degrees",
+                    (u16::from(transform.rotation_quadrants % 4) * 90).to_string(),
+                )],
+            ));
+        }
+        if transform.flip_horizontal {
+            parts.push(i18n.text("status.effect.flip_h"));
+        }
+        if transform.flip_vertical {
+            parts.push(i18n.text("status.effect.flip_v"));
+        }
+        parts.join(", ")
     }
 
     pub(in crate::app) fn open_sibling_book(&mut self, direction: isize) {
         let Some(current) = self.current_book_reference_path() else {
-            self.set_status("No current book to move from.");
+            self.set_status(self.i18n().text("status.no_current_book"));
             return;
         };
         if perf::adjacent_seed_prefetch_enabled() {
@@ -653,7 +677,7 @@ impl SuiSuiViewApp {
             perf::record_adjacent_seed_prefetch_hit(false, self.target_long_edge);
         }
         let Some(next) = sibling_book_path(&current, direction) else {
-            self.set_status("No sibling folder, ZIP, or CBZ found.");
+            self.set_status(self.i18n().text("status.no_sibling_book"));
             return;
         };
         self.open_path_with_initial_direction(next, navigation_direction_for_sibling(direction));

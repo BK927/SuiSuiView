@@ -1,4 +1,5 @@
 use super::path_labels;
+use crate::core::i18n::I18n;
 use crate::core::state::{PageBookmark, PageBookmarkEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -9,10 +10,10 @@ pub(in crate::app) enum BookmarkFilter {
 }
 
 impl BookmarkFilter {
-    pub(in crate::app) fn label(self) -> &'static str {
+    pub(in crate::app) fn label_i18n(self, i18n: I18n) -> String {
         match self {
-            Self::All => "전체",
-            Self::ThisBook => "이 책",
+            Self::All => i18n.text("bookmark.tab_all"),
+            Self::ThisBook => i18n.text("bookmark.tab_this_book"),
         }
     }
 }

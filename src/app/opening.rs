@@ -90,7 +90,7 @@ impl SuiSuiViewApp {
                 let tx = self.loader_tx.clone();
                 let ctx = self.egui_ctx.clone();
                 let load_path = path.clone();
-                self.set_status("파일을 여는 중입니다...");
+                self.set_status(self.i18n().text("status.opening"));
 
                 let _ = thread::Builder::new()
                     .name("suisuiview-source-loader".to_owned())
@@ -257,11 +257,13 @@ impl SuiSuiViewApp {
             self.visible_page_count(),
             self.worker_options(),
         );
-        self.set_status(format!(
-            "열림: {} [{} / {}]",
-            source.title(),
-            self.current_page + 1,
-            page_count
+        self.set_status(self.i18n().with_vars(
+            "status.opened",
+            &[
+                ("title", source.title().to_owned()),
+                ("page", (self.current_page + 1).to_string()),
+                ("count", page_count.to_string()),
+            ],
         ));
         self.persist_current_bookmark();
         self.refresh_ai_prefetch_queue();

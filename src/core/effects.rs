@@ -1,3 +1,4 @@
+use crate::core::i18n::I18n;
 use eframe::egui::{Color32, ColorImage, Vec2};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -46,6 +47,15 @@ impl ImageFilter {
             Self::Smooth => "Smooth",
             Self::SmoothSharpen => "Smooth+sharp",
             Self::RcasSharpen => "RCAS sharpen",
+        }
+    }
+
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        match self {
+            Self::None => i18n.text("label.filter.none"),
+            Self::Smooth => i18n.text("label.filter.smooth"),
+            Self::SmoothSharpen => i18n.text("label.filter.smooth_sharpen"),
+            Self::RcasSharpen => i18n.text("label.filter.rcas"),
         }
     }
 }
