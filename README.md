@@ -25,6 +25,7 @@ full media-management suite.
 | Comic friendly | Folder, `.zip`, and `.cbz` support with single-page and two-page spread modes. |
 | Stable bookmarks | ZIP/CBZ bookmarks are based on book contents, so moving or renaming a book should keep your place. |
 | Tunable decoders | Auto Fast uses the app default fast paths, compatibility mode keeps the broad `image` baseline, and custom mode lets you override per-format decoders. |
+| Tunable scaling | Separate CPU and WGPU scaler choices let display preparation stay light while GPU rendering can use quality-first downscaling. |
 | Safe viewing tools | Rotate, flip, invert, smooth, sharpen, and gamma effects are session-only and never rewrite the source image. |
 | Optional AI upscale | Real-ESRGAN ncnn-vulkan can be used for the current page when you provide your own local executable and models. |
 
@@ -136,9 +137,18 @@ state file.
 - Rendering: transition effect, CPU up/down scaler filters, GPU acceleration,
   GPU upscaler, WGPU downscaler, EXIF orientation, embedded ICC conversion,
   prefetch, cache memory, and experimental Real-ESRGAN AI upscale settings.
-  CPU downscaling defaults to Hamming for balanced preparation cost, while WGPU
-  display downscaling defaults to Pyramid + Lanczos3 for quality-first shrink
-  when the renderer is active.
+  CPU preparation has separate upscaler and downscaler filters. The CPU
+  upscaler defaults to CatmullRom, and the CPU downscaler defaults to Hamming
+  for balanced preparation cost.
+  WGPU display downscaling is separate from CPU preparation. It applies when
+  the WGPU renderer shrinks a prepared texture for display, and it does not
+  change the prepared-page cache. Existing single-pass filters remain available,
+  and the WGPU default is Pyramid + Lanczos3 for quality-first shrink. That
+  default can cost more GPU time than simpler filters such as Hamming or
+  Bilinear.
+  WGPU downscaler choices include Hardware Mipmap Linear, Pyramid Box/Tent,
+  Pyramid + Hamming, Pyramid + Mitchell, Pyramid + Lanczos2, and Pyramid +
+  Lanczos3.
   GPU upscaler `Auto` is content-aware only for enlargement: confident webtoon,
   anime, and manga pages use Anime4K M, while photos and uncertain images keep
   the FSR fallback.
@@ -196,6 +206,8 @@ standalone files.
 - [x] Optional Real-ESRGAN current-page upscale.
 - [x] WGSL display effects and real-time upscaler candidates.
 - [x] Content-aware Auto display upscaling for drawn pages.
+- [x] Separate CPU/WGPU scaler controls with quality-first WGPU pyramid
+  downscaling.
 - [x] Per-format decoder benchmarks and user-selectable decoder settings.
 - [x] Current-page EXIF/file/color information panel.
 - [ ] CBR/RAR read-only archive support after backend and license review.
