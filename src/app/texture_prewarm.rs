@@ -3,6 +3,7 @@ use super::{
     texture_options_for_target, PageCacheKey, SuiSuiViewApp, TextureCacheKey, TextureEntry,
 };
 use crate::core::effects::ViewEffects;
+use crate::core::state::DisplayUpscaler;
 use crate::core::worker::{NavigationDirection, MAX_TARGET_LONG_EDGE};
 use eframe::egui::{self, ImageData};
 use std::sync::Arc;
@@ -64,7 +65,7 @@ impl SuiSuiViewApp {
             && self.source.is_some()
             && self.target_long_edge <= MAX_TARGET_LONG_EDGE
             && self.effects == ViewEffects::default()
-            && !self.can_paint_wgsl_effects()
+            && self.active_display_upscaler() == DisplayUpscaler::None
             && !self.debug_compare.enabled
             && self.transition.is_none()
             && self.pending_page_turn.is_none()

@@ -224,6 +224,7 @@ impl SuiSuiViewApp {
                 ),
                 effects: self.effects,
                 display_upscaler,
+                wgpu_downscaler: self.settings.wgpu_downscaler,
             };
         }
         let image = if self.effects == ViewEffects::default() {
@@ -520,6 +521,7 @@ impl SuiSuiViewApp {
                     rgba,
                     effects,
                     display_upscaler,
+                    wgpu_downscaler,
                     ..
                 } => {
                     if !self.paint_ready_gpu_visual(
@@ -532,6 +534,7 @@ impl SuiSuiViewApp {
                             rgba,
                             effects,
                             display_upscaler,
+                            wgpu_downscaler,
                             opacity: request.alpha,
                         },
                         tint,

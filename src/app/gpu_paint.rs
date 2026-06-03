@@ -3,10 +3,11 @@ use super::{PageCacheKey, SuiSuiViewApp};
 use crate::core::effects::ViewEffects;
 use crate::core::gpu_effect::{
     output_size_for_effects, params_for_effects, params_for_effects_with_shader_method,
+    params_for_hardware_mipmap_sample,
 };
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
-use crate::core::state::{DisplayUpscaler, GpuEffectMode, RendererMode};
+use crate::core::state::{DisplayUpscaler, GpuEffectMode, RendererMode, WgpuDownscaler};
 use eframe::egui::{self, PaintCallbackInfo, Rect};
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use lru::LruCache;
@@ -45,6 +46,7 @@ pub(super) struct GpuPaintRequest {
     pub(super) rgba: Arc<[u8]>,
     pub(super) effects: ViewEffects,
     pub(super) display_upscaler: DisplayUpscaler,
+    pub(super) wgpu_downscaler: WgpuDownscaler,
     pub(super) opacity: f32,
 }
 
@@ -77,7 +79,9 @@ impl SuiSuiViewApp {
     pub(super) fn can_paint_wgsl_effects(&self) -> bool {
         let display_upscaler = self.active_display_upscaler();
         self.gpu_effects_available
-            && (self.effects != ViewEffects::default() || display_upscaler != DisplayUpscaler::None)
+            && (self.effects != ViewEffects::default()
+                || display_upscaler != DisplayUpscaler::None
+                || self.settings.wgpu_downscaler != WgpuDownscaler::Bilinear)
             && matches!(
                 self.settings.gpu_effect_mode,
                 GpuEffectMode::Auto | GpuEffectMode::Wgsl
@@ -99,6 +103,7 @@ impl SuiSuiViewApp {
             rgba: request.rgba,
             effects: request.effects,
             display_upscaler: request.display_upscaler,
+            wgpu_downscaler: request.wgpu_downscaler,
             opacity: request.opacity.clamp(0.0, 1.0),
             rect: request.rect,
             target_format,
@@ -106,6 +111,7 @@ impl SuiSuiViewApp {
                 request.source_key,
                 request.effects,
                 request.display_upscaler,
+                request.wgpu_downscaler,
                 request.rect,
                 request.opacity,
             ),
@@ -233,6 +239,7 @@ struct GpuEffectCallback {
     rgba: Arc<[u8]>,
     effects: ViewEffects,
     display_upscaler: DisplayUpscaler,
+    wgpu_downscaler: WgpuDownscaler,
     opacity: f32,
     rect: Rect,
     target_format: wgpu::TextureFormat,
@@ -282,6 +289,7 @@ impl CallbackTrait for GpuEffectCallback {
                 output_size,
                 self.effects,
                 self.display_upscaler,
+                self.wgpu_downscaler,
                 origin,
                 target_size,
                 self.opacity,
@@ -315,6 +323,7 @@ struct GpuPaintResources {
     target_format: wgpu::TextureFormat,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     params_bind_group_layout: wgpu::BindGroupLayout,
+    texture_sampler: wgpu::Sampler,
     pipeline: wgpu::RenderPipeline,
     source_textures: LruCache<GpuPaintSourceKey, GpuSourceTexture>,
     source_texture_bytes: usize,
@@ -336,13 +345,14 @@ struct GpuSourceTexture {
 struct GpuDrawState {
     texture_bind_group: Arc<wgpu::BindGroup>,
     params_bind_group: wgpu::BindGroup,
-    _intermediate_pin: Option<Arc<GpuIntermediateTexture>>,
+    _intermediate_pins: Vec<Arc<GpuIntermediateTexture>>,
     intermediate_byte_size: usize,
 }
 
 struct GpuIntermediateTexture {
     _texture: wgpu::Texture,
     _view: wgpu::TextureView,
+    mip_views: Vec<wgpu::TextureView>,
     bind_group: Arc<wgpu::BindGroup>,
     size: [usize; 2],
     byte_size: usize,
@@ -352,15 +362,16 @@ impl GpuDrawState {
     fn new(
         texture_bind_group: Arc<wgpu::BindGroup>,
         params_bind_group: wgpu::BindGroup,
-        intermediate_pin: Option<Arc<GpuIntermediateTexture>>,
+        intermediate_pins: Vec<Arc<GpuIntermediateTexture>>,
     ) -> Self {
-        let intermediate_byte_size = intermediate_pin
-            .as_ref()
-            .map_or(0, |texture| texture.byte_size);
+        let intermediate_byte_size = intermediate_pins
+            .iter()
+            .map(|texture| texture.byte_size)
+            .sum();
         Self {
             texture_bind_group,
             params_bind_group,
-            _intermediate_pin: intermediate_pin,
+            _intermediate_pins: intermediate_pins,
             intermediate_byte_size,
         }
     }
@@ -377,16 +388,24 @@ impl GpuPaintResources {
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("suisuiview-gpu-effect-texture-layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
             });
         let params_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -432,10 +451,21 @@ impl GpuPaintResources {
             multiview: None,
             cache: None,
         });
+        let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("suisuiview-gpu-effect-linear-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         Self {
             target_format,
             texture_bind_group_layout,
             params_bind_group_layout,
+            texture_sampler,
             pipeline,
             source_textures: LruCache::new(
                 NonZeroUsize::new(GPU_SOURCE_TEXTURE_CACHE_LIMIT).unwrap(),
@@ -548,6 +578,7 @@ impl GpuPaintResources {
         output_size: [usize; 2],
         effects: ViewEffects,
         display_upscaler: DisplayUpscaler,
+        wgpu_downscaler: WgpuDownscaler,
         origin: [u32; 2],
         target_size: [u32; 2],
         opacity: f32,
@@ -556,6 +587,7 @@ impl GpuPaintResources {
         let effective_upscaler = display_upscaler
             .resolve_for_render(output_size, target_size)
             .unwrap_or(DisplayUpscaler::None);
+        let effective_downscaler = wgpu_downscaler.resolve_for_render(output_size, target_size);
         self.realtime_sr
             .cancel_inactive_pending_work(effective_upscaler);
         if RealtimeSrResources::is_supported(effective_upscaler) {
@@ -590,6 +622,7 @@ impl GpuPaintResources {
                     output_size_for_effects(intermediate.size, effects),
                     effects,
                     DisplayUpscaler::None,
+                    effective_downscaler,
                     origin,
                     target_size,
                     opacity,
@@ -597,7 +630,7 @@ impl GpuPaintResources {
                 return GpuDrawState::new(
                     intermediate.bind_group.clone(),
                     self.params_bind_group_for(device, params),
-                    Some(intermediate),
+                    vec![intermediate],
                 );
             }
         }
@@ -617,12 +650,16 @@ impl GpuPaintResources {
                 .expect("intermediate texture should be cached before rendering")
                 .clone();
             let intermediate_bind_group = intermediate.bind_group.clone();
-            let intermediate_view = &intermediate._view;
+            let intermediate_view = intermediate
+                .mip_views
+                .first()
+                .expect("intermediate textures should expose a renderable mip 0 view");
             let easu_params = params_for_effects(
                 source_size,
                 output_size,
                 effects,
                 effective_upscaler,
+                WgpuDownscaler::Bilinear,
                 [0, 0],
                 target_size,
                 1.0,
@@ -640,6 +677,7 @@ impl GpuPaintResources {
                 [target_size[0] as usize, target_size[1] as usize],
                 ViewEffects::default(),
                 rcas_method,
+                0,
                 origin,
                 target_size,
                 opacity,
@@ -656,7 +694,39 @@ impl GpuPaintResources {
             return GpuDrawState::new(
                 intermediate_bind_group,
                 params_bind_group,
-                Some(intermediate),
+                vec![intermediate],
+            );
+        }
+
+        if effective_downscaler.is_hardware_mipmap() {
+            return self.prepare_hardware_mipmap_draw_state(
+                device,
+                encoder,
+                source_key,
+                source_bind_group,
+                source_size,
+                output_size,
+                effects,
+                origin,
+                target_size,
+                opacity,
+            );
+        }
+
+        if effective_downscaler.is_pyramid() && needs_multi_pass_downscale(output_size, target_size)
+        {
+            return self.prepare_pyramid_downscale_draw_state(
+                device,
+                encoder,
+                source_key,
+                source_bind_group,
+                source_size,
+                output_size,
+                effects,
+                effective_downscaler,
+                origin,
+                target_size,
+                opacity,
             );
         }
 
@@ -675,6 +745,7 @@ impl GpuPaintResources {
             output_size,
             effects,
             effective_upscaler,
+            effective_downscaler,
             origin,
             target_size,
             opacity,
@@ -682,7 +753,257 @@ impl GpuPaintResources {
         GpuDrawState::new(
             source_bind_group,
             self.params_bind_group_for(device, params),
-            None,
+            Vec::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_pyramid_downscale_draw_state(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source_key: GpuPaintSourceKey,
+        source_bind_group: Arc<wgpu::BindGroup>,
+        source_size: [usize; 2],
+        output_size: [usize; 2],
+        effects: ViewEffects,
+        downscaler: WgpuDownscaler,
+        origin: [u32; 2],
+        target_size: [u32; 2],
+        opacity: f32,
+    ) -> GpuDrawState {
+        let mut pins = Vec::new();
+        let mut current_bind_group = source_bind_group.clone();
+        let mut current_size = output_size;
+        let mut first_stage = true;
+        let mut stage_index = 0u32;
+
+        while needs_multi_pass_downscale(current_size, target_size) {
+            let stage_size = next_pyramid_stage_size(current_size, target_size);
+            if stage_size == current_size.map(|dimension| dimension as u32) {
+                break;
+            }
+            let stage_filter = downscaler.pyramid_stage_filter();
+            let intermediate = self.render_downscale_stage(
+                device,
+                encoder,
+                source_key,
+                source_size,
+                output_size,
+                effects,
+                downscaler,
+                stage_filter,
+                &current_bind_group,
+                current_size,
+                stage_size,
+                stage_index,
+                first_stage,
+            );
+            current_bind_group = intermediate.bind_group.clone();
+            current_size = intermediate.size;
+            pins.push(intermediate);
+            first_stage = false;
+            stage_index = stage_index.saturating_add(1);
+        }
+
+        let final_size = target_size.map(|dimension| dimension.max(1) as usize);
+        if current_size != final_size {
+            let intermediate = self.render_downscale_stage(
+                device,
+                encoder,
+                source_key,
+                source_size,
+                output_size,
+                effects,
+                downscaler,
+                downscaler.base_filter(),
+                &current_bind_group,
+                current_size,
+                target_size.map(|dimension| dimension.max(1)),
+                stage_index,
+                first_stage,
+            );
+            current_bind_group = intermediate.bind_group.clone();
+            current_size = intermediate.size;
+            pins.push(intermediate);
+        }
+
+        if pins.is_empty() {
+            let params = params_for_effects(
+                source_size,
+                output_size,
+                effects,
+                DisplayUpscaler::None,
+                downscaler.base_filter(),
+                origin,
+                target_size,
+                opacity,
+            );
+            return GpuDrawState::new(
+                source_bind_group,
+                self.params_bind_group_for(device, params),
+                Vec::new(),
+            );
+        }
+
+        let params = params_for_effects(
+            current_size,
+            current_size,
+            ViewEffects::default(),
+            DisplayUpscaler::None,
+            WgpuDownscaler::Bilinear,
+            origin,
+            target_size,
+            opacity,
+        );
+        GpuDrawState::new(
+            current_bind_group,
+            self.params_bind_group_for(device, params),
+            pins,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_downscale_stage(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source_key: GpuPaintSourceKey,
+        source_size: [usize; 2],
+        output_size: [usize; 2],
+        effects: ViewEffects,
+        downscaler: WgpuDownscaler,
+        stage_filter: WgpuDownscaler,
+        current_bind_group: &wgpu::BindGroup,
+        current_size: [usize; 2],
+        stage_size: [u32; 2],
+        stage_index: u32,
+        first_stage: bool,
+    ) -> Arc<GpuIntermediateTexture> {
+        let stage_size = stage_size.map(|dimension| dimension.max(1));
+        let stage_key = downscale_intermediate_texture_key(
+            "pyramid",
+            source_key,
+            source_size,
+            output_size,
+            effects,
+            downscaler,
+            [stage_size[0], stage_size[1]],
+            current_size,
+            stage_index,
+        );
+        self.ensure_intermediate_texture(device, stage_key, stage_size);
+        let intermediate = self
+            .intermediate_textures
+            .peek(&stage_key)
+            .expect("pyramid stage texture should be cached before rendering")
+            .clone();
+        let params = if first_stage {
+            params_for_effects(
+                source_size,
+                output_size,
+                effects,
+                DisplayUpscaler::None,
+                stage_filter,
+                [0, 0],
+                stage_size,
+                1.0,
+            )
+        } else {
+            params_for_effects(
+                current_size,
+                current_size,
+                ViewEffects::default(),
+                DisplayUpscaler::None,
+                stage_filter,
+                [0, 0],
+                stage_size,
+                1.0,
+            )
+        };
+        let params_bind_group = self.params_bind_group_for(device, params);
+        let stage_view = intermediate
+            .mip_views
+            .first()
+            .expect("pyramid stage textures should expose a renderable mip 0 view");
+        self.render_fullscreen(encoder, stage_view, current_bind_group, &params_bind_group);
+        intermediate
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_hardware_mipmap_draw_state(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source_key: GpuPaintSourceKey,
+        source_bind_group: Arc<wgpu::BindGroup>,
+        source_size: [usize; 2],
+        output_size: [usize; 2],
+        effects: ViewEffects,
+        origin: [u32; 2],
+        target_size: [u32; 2],
+        opacity: f32,
+    ) -> GpuDrawState {
+        let mip_levels = mip_level_count(output_size);
+        let mip_key =
+            mipmap_intermediate_texture_key(source_key, source_size, output_size, effects);
+        self.ensure_mipmapped_intermediate_texture(
+            device,
+            mip_key,
+            output_size.map(|dimension| dimension.max(1) as u32),
+            mip_levels,
+        );
+        let intermediate = self
+            .intermediate_textures
+            .peek(&mip_key)
+            .expect("mipmapped intermediate texture should be cached before rendering")
+            .clone();
+        let mip0_params = params_for_effects(
+            source_size,
+            output_size,
+            effects,
+            DisplayUpscaler::None,
+            WgpuDownscaler::Bilinear,
+            [0, 0],
+            output_size.map(|dimension| dimension.max(1) as u32),
+            1.0,
+        );
+        let mip0_params_bind_group = self.params_bind_group_for(device, mip0_params);
+        self.render_fullscreen(
+            encoder,
+            &intermediate.mip_views[0],
+            &source_bind_group,
+            &mip0_params_bind_group,
+        );
+
+        for level in 1..mip_levels {
+            let prev_size = mip_size(output_size, level - 1);
+            let next_size = mip_size(output_size, level);
+            let prev_bind_group =
+                self.texture_bind_group_for(device, &intermediate.mip_views[level as usize - 1]);
+            let params = params_for_hardware_mipmap_sample(
+                prev_size,
+                [0, 0],
+                next_size.map(|dimension| dimension as u32),
+                1.0,
+                0.0,
+            );
+            let params_bind_group = self.params_bind_group_for(device, params);
+            self.render_fullscreen(
+                encoder,
+                &intermediate.mip_views[level as usize],
+                &prev_bind_group,
+                &params_bind_group,
+            );
+        }
+
+        let lod = downscale_lod(output_size, target_size).min(mip_levels.saturating_sub(1) as f32);
+        let params =
+            params_for_hardware_mipmap_sample(output_size, origin, target_size, opacity, lod);
+        GpuDrawState::new(
+            intermediate.bind_group.clone(),
+            self.params_bind_group_for(device, params),
+            vec![intermediate],
         )
     }
 
@@ -695,9 +1016,7 @@ impl GpuPaintResources {
         if self.intermediate_textures.get(&key).is_some() {
             return;
         }
-        let byte_size = (target_size[0] as usize)
-            .saturating_mul(target_size[1] as usize)
-            .saturating_mul(4);
+        let byte_size = texture_byte_size(target_size, 1);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("suisuiview-gpu-upscale-intermediate"),
             size: wgpu::Extent3d {
@@ -713,12 +1032,63 @@ impl GpuPaintResources {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mip_views = vec![texture.create_view(&mip_view_descriptor(0))];
         let bind_group = Arc::new(self.texture_bind_group_for(device, &view));
         if let Some((_old_key, old_texture)) = self.intermediate_textures.push(
             key,
             Arc::new(GpuIntermediateTexture {
                 _texture: texture,
                 _view: view,
+                mip_views,
+                bind_group,
+                size: [target_size[0] as usize, target_size[1] as usize],
+                byte_size,
+            }),
+        ) {
+            self.intermediate_texture_bytes = self
+                .intermediate_texture_bytes
+                .saturating_sub(old_texture.byte_size);
+        }
+        self.intermediate_texture_bytes = self.intermediate_texture_bytes.saturating_add(byte_size);
+        self.prune_intermediate_textures();
+    }
+
+    fn ensure_mipmapped_intermediate_texture(
+        &mut self,
+        device: &wgpu::Device,
+        key: u64,
+        target_size: [u32; 2],
+        mip_levels: u32,
+    ) {
+        if self.intermediate_textures.get(&key).is_some() {
+            return;
+        }
+        let byte_size = texture_byte_size(target_size, mip_levels);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("suisuiview-gpu-downscale-mipmap-intermediate"),
+            size: wgpu::Extent3d {
+                width: target_size[0],
+                height: target_size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mip_levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mip_views = (0..mip_levels)
+            .map(|level| texture.create_view(&mip_view_descriptor(level)))
+            .collect::<Vec<_>>();
+        let bind_group = Arc::new(self.texture_bind_group_for(device, &view));
+        if let Some((_old_key, old_texture)) = self.intermediate_textures.push(
+            key,
+            Arc::new(GpuIntermediateTexture {
+                _texture: texture,
+                _view: view,
+                mip_views,
                 bind_group,
                 size: [target_size[0] as usize, target_size[1] as usize],
                 byte_size,
@@ -769,12 +1139,14 @@ impl GpuPaintResources {
         let output_size = output.size;
         let output_byte_size = output.byte_size;
         let bind_group = Arc::new(self.texture_bind_group_for(device, &output.view));
+        let mip_views = vec![output.texture.create_view(&mip_view_descriptor(0))];
         let evicted_on_insert = if let Some((_old_key, old_texture)) =
             self.intermediate_textures.push(
                 key,
                 Arc::new(GpuIntermediateTexture {
                     _texture: output.texture,
                     _view: output.view,
+                    mip_views,
                     bind_group,
                     size: output_size,
                     byte_size: output_byte_size,
@@ -822,10 +1194,16 @@ impl GpuPaintResources {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("suisuiview-gpu-effect-texture-bind-group"),
             layout: &self.texture_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(source_view),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.texture_sampler),
+                },
+            ],
         })
     }
 
@@ -1021,6 +1399,7 @@ fn draw_id(
     source_key: GpuPaintSourceKey,
     effects: ViewEffects,
     display_upscaler: DisplayUpscaler,
+    wgpu_downscaler: WgpuDownscaler,
     rect: Rect,
     opacity: f32,
 ) -> u64 {
@@ -1028,6 +1407,7 @@ fn draw_id(
     source_key.hash(&mut hasher);
     effects.hash(&mut hasher);
     display_upscaler.token().hash(&mut hasher);
+    wgpu_downscaler.token().hash(&mut hasher);
     rect.min.x.to_bits().hash(&mut hasher);
     rect.min.y.to_bits().hash(&mut hasher);
     rect.max.x.to_bits().hash(&mut hasher);
@@ -1084,6 +1464,117 @@ fn intermediate_texture_key(
     hasher.finish()
 }
 
+fn downscale_intermediate_texture_key(
+    namespace: &'static str,
+    source_key: GpuPaintSourceKey,
+    source_size: [usize; 2],
+    output_size: [usize; 2],
+    effects: ViewEffects,
+    downscaler: WgpuDownscaler,
+    stage_size: [u32; 2],
+    current_size: [usize; 2],
+    stage_index: u32,
+) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    namespace.hash(&mut hasher);
+    source_key.hash(&mut hasher);
+    source_size.hash(&mut hasher);
+    output_size.hash(&mut hasher);
+    effects.hash(&mut hasher);
+    downscaler.token().hash(&mut hasher);
+    stage_size.hash(&mut hasher);
+    current_size.hash(&mut hasher);
+    stage_index.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn mipmap_intermediate_texture_key(
+    source_key: GpuPaintSourceKey,
+    source_size: [usize; 2],
+    output_size: [usize; 2],
+    effects: ViewEffects,
+) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "hardware_mipmap_linear".hash(&mut hasher);
+    source_key.hash(&mut hasher);
+    source_size.hash(&mut hasher);
+    output_size.hash(&mut hasher);
+    effects.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn needs_multi_pass_downscale(source_size: [usize; 2], target_size: [u32; 2]) -> bool {
+    downscale_ratio(source_size, target_size) > 2.0
+}
+
+fn downscale_ratio(source_size: [usize; 2], target_size: [u32; 2]) -> f32 {
+    let target_width = target_size[0].max(1) as f32;
+    let target_height = target_size[1].max(1) as f32;
+    ((source_size[0].max(1) as f32) / target_width)
+        .max((source_size[1].max(1) as f32) / target_height)
+}
+
+fn downscale_lod(source_size: [usize; 2], target_size: [u32; 2]) -> f32 {
+    downscale_ratio(source_size, target_size).max(1.0).log2()
+}
+
+fn next_pyramid_stage_size(current_size: [usize; 2], target_size: [u32; 2]) -> [u32; 2] {
+    [
+        next_pyramid_stage_dimension(current_size[0], target_size[0]),
+        next_pyramid_stage_dimension(current_size[1], target_size[1]),
+    ]
+}
+
+fn next_pyramid_stage_dimension(current: usize, target: u32) -> u32 {
+    let current = current.max(1);
+    let target = target.max(1) as usize;
+    if target >= current {
+        current as u32
+    } else if current > target.saturating_mul(2) {
+        ((current + 1) / 2).max(target) as u32
+    } else {
+        target as u32
+    }
+}
+
+fn mip_level_count(size: [usize; 2]) -> u32 {
+    let mut width = size[0].max(1);
+    let mut height = size[1].max(1);
+    let mut levels = 1u32;
+    while width > 1 || height > 1 {
+        width = (width / 2).max(1);
+        height = (height / 2).max(1);
+        levels = levels.saturating_add(1);
+    }
+    levels
+}
+
+fn mip_size(size: [usize; 2], level: u32) -> [usize; 2] {
+    [
+        size[0].checked_shr(level).unwrap_or(0).max(1),
+        size[1].checked_shr(level).unwrap_or(0).max(1),
+    ]
+}
+
+fn texture_byte_size(size: [u32; 2], mip_levels: u32) -> usize {
+    (0..mip_levels)
+        .map(|level| {
+            let mip_size = mip_size([size[0] as usize, size[1] as usize], level);
+            mip_size[0].saturating_mul(mip_size[1]).saturating_mul(4)
+        })
+        .sum()
+}
+
+fn mip_view_descriptor(base_mip_level: u32) -> wgpu::TextureViewDescriptor<'static> {
+    wgpu::TextureViewDescriptor {
+        label: Some("suisuiview-gpu-effect-mip-view"),
+        dimension: Some(wgpu::TextureViewDimension::D2),
+        base_mip_level,
+        mip_level_count: Some(1),
+        ..Default::default()
+    }
+}
+
 fn defer_initial_realtime_sr_frame(method: DisplayUpscaler) -> bool {
     method.is_artcnn() || matches!(method, DisplayUpscaler::WgslSrLabSpanX2)
 }
@@ -1126,6 +1617,7 @@ mod tests {
                 source_key,
                 ViewEffects::default(),
                 DisplayUpscaler::WgslFsr1Style,
+                WgpuDownscaler::Bilinear,
                 left,
                 1.0,
             ),
@@ -1133,6 +1625,7 @@ mod tests {
                 source_key,
                 ViewEffects::default(),
                 DisplayUpscaler::WgslFsr1Style,
+                WgpuDownscaler::Bilinear,
                 right,
                 1.0,
             )
@@ -1201,5 +1694,296 @@ mod tests {
         assert!(!defer_initial_realtime_sr_frame(
             DisplayUpscaler::WgslAnime4kV32CnnX2S
         ));
+    }
+
+    #[test]
+    fn pyramid_stage_size_halves_until_target_is_within_two_x() {
+        assert!(needs_multi_pass_downscale([4096, 4096], [1024, 1024]));
+        assert_eq!(
+            next_pyramid_stage_size([4096, 4096], [1024, 1024]),
+            [2048, 2048]
+        );
+        assert!(!needs_multi_pass_downscale([2048, 2048], [1024, 1024]));
+        assert_eq!(
+            next_pyramid_stage_size([4096, 1000], [1024, 1200]),
+            [2048, 1000]
+        );
+    }
+
+    #[test]
+    fn mip_helpers_match_expected_floor_chain() {
+        assert_eq!(mip_level_count([4096, 1024]), 13);
+        assert_eq!(mip_size([4096, 1024], 0), [4096, 1024]);
+        assert_eq!(mip_size([4096, 1024], 2), [1024, 256]);
+        assert_eq!(mip_size([3, 3], 1), [1, 1]);
+    }
+
+    #[test]
+    #[ignore = "requires a local WGPU adapter and reads back large render targets"]
+    fn wgpu_pyramid_downscalers_render_nonblank_output() {
+        let cases = [
+            WgpuDownscaler::HardwareMipmapLinear,
+            WgpuDownscaler::PyramidBoxTent,
+            WgpuDownscaler::PyramidHamming,
+            WgpuDownscaler::PyramidMitchell,
+            WgpuDownscaler::PyramidLanczos2,
+            WgpuDownscaler::PyramidLanczos3,
+        ];
+        pollster::block_on(async {
+            let Some((device, queue)) = smoke_device().await else {
+                eprintln!("Skipping WGPU downscaler smoke: no adapter available");
+                return;
+            };
+            for source_size in [[2048, 2048], [4096, 4096]] {
+                for downscaler in cases {
+                    assert!(
+                        render_downscale_smoke(&device, &queue, source_size, downscaler),
+                        "{} {:?} -> 1024x1024 produced a blank output",
+                        downscaler.token(),
+                        source_size
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    #[ignore = "release timing probe for local GPU downscale paths"]
+    fn wgpu_default_downscaler_timing_probe() {
+        pollster::block_on(async {
+            let Some((device, queue)) = smoke_device().await else {
+                eprintln!("Skipping WGPU downscaler timing: no adapter available");
+                return;
+            };
+            for source_size in [[2048, 2048], [4096, 4096]] {
+                for downscaler in [WgpuDownscaler::Hamming, WgpuDownscaler::PyramidLanczos3] {
+                    let mut fixture = DownscaleSmokeFixture::new(&device, &queue, source_size);
+                    for _ in 0..2 {
+                        assert!(render_downscale_frame(
+                            &device,
+                            &queue,
+                            &mut fixture,
+                            downscaler
+                        ));
+                    }
+                    let mut samples = Vec::with_capacity(12);
+                    for _ in 0..12 {
+                        let started = std::time::Instant::now();
+                        assert!(render_downscale_frame(
+                            &device,
+                            &queue,
+                            &mut fixture,
+                            downscaler
+                        ));
+                        samples.push(started.elapsed().as_secs_f64() * 1000.0);
+                    }
+                    samples.sort_by(|left, right| left.total_cmp(right));
+                    let avg = samples.iter().sum::<f64>() / samples.len() as f64;
+                    let p95_index = (samples.len() * 95).div_ceil(100).saturating_sub(1);
+                    println!(
+                        "wgpu_downscale_timing source={}x{} target=1024x1024 method={} avg_ms={:.3} p95_ms={:.3}",
+                        source_size[0],
+                        source_size[1],
+                        downscaler.token(),
+                        avg,
+                        samples[p95_index]
+                    );
+                }
+            }
+        });
+    }
+
+    async fn smoke_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::default();
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
+            .await
+            .ok()?;
+        adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("suisuiview-gpu-downscale-smoke-device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                    .using_resolution(adapter.limits()),
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::Off,
+            })
+            .await
+            .ok()
+    }
+
+    fn render_downscale_smoke(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source_size: [usize; 2],
+        downscaler: WgpuDownscaler,
+    ) -> bool {
+        let mut fixture = DownscaleSmokeFixture::new(device, queue, source_size);
+        render_downscale_frame(device, queue, &mut fixture, downscaler)
+    }
+
+    struct DownscaleSmokeFixture {
+        resources: GpuPaintResources,
+        source_key: GpuPaintSourceKey,
+        source_size: [usize; 2],
+    }
+
+    impl DownscaleSmokeFixture {
+        fn new(device: &wgpu::Device, queue: &wgpu::Queue, source_size: [usize; 2]) -> Self {
+            let mut resources = GpuPaintResources::new(device, wgpu::TextureFormat::Rgba8Unorm);
+            let source_key = GpuPaintSourceKey {
+                book: 1,
+                page: PageCacheKey {
+                    index: source_size[0],
+                    target_long_edge: source_size[0] as u32,
+                    decode: DecodeOptions::default(),
+                },
+                upscaled: false,
+                generation: 1,
+            };
+            let rgba = smoke_rgba(source_size);
+            resources.ensure_source_texture(device, queue, source_key, source_size, &rgba);
+            Self {
+                resources,
+                source_key,
+                source_size,
+            }
+        }
+    }
+
+    fn render_downscale_frame(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        fixture: &mut DownscaleSmokeFixture,
+        downscaler: WgpuDownscaler,
+    ) -> bool {
+        let resources = &mut fixture.resources;
+        let source_key = fixture.source_key;
+        let source_bind_group = resources
+            .source_textures
+            .peek(&source_key)
+            .expect("smoke source texture should be uploaded")
+            .bind_group
+            .clone();
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("suisuiview-gpu-downscale-smoke-encoder"),
+        });
+        let draw_state = resources.prepare_draw_state(
+            device,
+            &mut encoder,
+            source_key,
+            source_bind_group,
+            fixture.source_size,
+            fixture.source_size,
+            ViewEffects::default(),
+            DisplayUpscaler::None,
+            downscaler,
+            [0, 0],
+            [1024, 1024],
+            1.0,
+            &egui::Context::default(),
+        );
+        let output_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("suisuiview-gpu-downscale-smoke-output"),
+            size: wgpu::Extent3d {
+                width: 1024,
+                height: 1024,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("suisuiview-gpu-downscale-smoke-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&resources.pipeline);
+            pass.set_bind_group(0, draw_state.texture_bind_group.as_ref(), &[]);
+            pass.set_bind_group(1, &draw_state.params_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        let padded_bytes_per_row = align_to_smoke(1024 * 4, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("suisuiview-gpu-downscale-smoke-readback"),
+            size: padded_bytes_per_row as u64 * 1024,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &output_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(1024),
+                },
+            },
+            wgpu::Extent3d {
+                width: 1024,
+                height: 1024,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+        let buffer_slice = readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        device.poll(wgpu::PollType::Wait).unwrap();
+        rx.recv().unwrap().unwrap();
+        let mapped = buffer_slice.get_mapped_range();
+        let nonblank = mapped
+            .chunks_exact(4)
+            .any(|pixel| pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0 || pixel[3] != 0);
+        drop(mapped);
+        readback.unmap();
+        nonblank
+    }
+
+    fn smoke_rgba(size: [usize; 2]) -> Vec<u8> {
+        let [width, height] = size;
+        let mut rgba = vec![0u8; width * height * 4];
+        for y in 0..height {
+            for x in 0..width {
+                let offset = (y * width + x) * 4;
+                rgba[offset] = (x % 251) as u8;
+                rgba[offset + 1] = (y % 241) as u8;
+                rgba[offset + 2] = ((x + y) % 239) as u8;
+                rgba[offset + 3] = 255;
+            }
+        }
+        rgba
+    }
+
+    fn align_to_smoke(value: u32, alignment: u32) -> u32 {
+        value.div_ceil(alignment) * alignment
     }
 }

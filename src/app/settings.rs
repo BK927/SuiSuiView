@@ -2,8 +2,8 @@ use super::ui::{dialog, icons, theme};
 use super::{platform, settings_bookmarks, settings_input, settings_performance, SuiSuiViewApp};
 use crate::core::i18n::I18n;
 use crate::core::state::{
-    AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, DisplayUpscaler, EdgePageAction,
-    GpuEffectMode, Language, PageTransitionStyle, RendererMode, ResizeFilter,
+    AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CpuScaleFilter, DisplayUpscaler,
+    EdgePageAction, GpuEffectMode, Language, PageTransitionStyle, RendererMode, WgpuDownscaler,
 };
 use eframe::egui::{self, RichText};
 use rfd::FileDialog;
@@ -350,6 +350,7 @@ impl SuiSuiViewApp {
         let previous_ai = self.settings.ai_upscale.clone();
         let previous_gpu_effect_mode = self.settings.gpu_effect_mode;
         let previous_display_upscaler = self.settings.display_upscaler;
+        let previous_wgpu_downscaler = self.settings.wgpu_downscaler;
         let previous_renderer_mode = self.settings.renderer_mode;
         let previous_max_remembered_books = self.settings.max_remembered_books;
         let mut textures_invalidated = false;
@@ -416,6 +417,7 @@ impl SuiSuiViewApp {
         }
         if previous_gpu_effect_mode != self.settings.gpu_effect_mode
             || previous_display_upscaler != self.settings.display_upscaler
+            || previous_wgpu_downscaler != self.settings.wgpu_downscaler
         {
             self.textures.clear();
             textures_invalidated = true;
@@ -646,22 +648,42 @@ fn show_rendering_settings(
         |ui| {
             let mut gpu_enabled = matches!(draft.renderer_mode, RendererMode::Wgpu);
 
-            egui::Grid::new("settings_default_upscaler_grid")
+            egui::Grid::new("settings_scaler_grid")
                 .num_columns(2)
                 .spacing([14.0, 8.0])
                 .show(ui, |ui| {
                     grid_label_with_help(
                         ui,
-                        &i18n.text("settings.rendering.default_upscaler"),
-                        &i18n.text("settings.rendering.default_upscaler.help"),
+                        &i18n.text("settings.rendering.cpu_upscaler"),
+                        &i18n.text("settings.rendering.cpu_upscaler.help"),
                     );
-                    egui::ComboBox::from_id_salt("resize_filter")
-                        .selected_text(draft.resize_filter.label())
+                    egui::ComboBox::from_id_salt("cpu_upscaler")
+                        .selected_text(draft.cpu_upscaler.label())
                         .show_ui(ui, |ui| {
-                            for filter in ResizeFilter::ALL {
+                            for filter in CpuScaleFilter::ALL {
                                 *changed |= ui
                                     .selectable_value(
-                                        &mut draft.resize_filter,
+                                        &mut draft.cpu_upscaler,
+                                        filter,
+                                        filter.label(),
+                                    )
+                                    .changed();
+                            }
+                        });
+                    ui.end_row();
+
+                    grid_label_with_help(
+                        ui,
+                        &i18n.text("settings.rendering.cpu_downscaler"),
+                        &i18n.text("settings.rendering.cpu_downscaler.help"),
+                    );
+                    egui::ComboBox::from_id_salt("cpu_downscaler")
+                        .selected_text(draft.cpu_downscaler.label())
+                        .show_ui(ui, |ui| {
+                            for filter in CpuScaleFilter::ALL {
+                                *changed |= ui
+                                    .selectable_value(
+                                        &mut draft.cpu_downscaler,
                                         filter,
                                         filter.label(),
                                     )
@@ -748,6 +770,30 @@ fn show_rendering_settings(
                         draft.display_upscaler = selected_upscaler;
                         *changed = true;
                     }
+                    ui.end_row();
+
+                    grid_label_with_help(
+                        ui,
+                        &i18n.text("settings.rendering.wgpu_downscaler"),
+                        &i18n.text("settings.rendering.wgpu_downscaler.help"),
+                    );
+                    ui.add_enabled_ui(gpu_enabled, |ui| {
+                        egui::ComboBox::from_id_salt("wgpu_downscaler")
+                            .selected_text(draft.wgpu_downscaler.label())
+                            .show_ui(ui, |ui| {
+                                for downscaler in WgpuDownscaler::ALL {
+                                    *changed |= ui
+                                        .selectable_value(
+                                            &mut draft.wgpu_downscaler,
+                                            downscaler,
+                                            downscaler.label(),
+                                        )
+                                        .changed();
+                                }
+                            });
+                    })
+                    .response
+                    .on_hover_text(i18n.text("settings.rendering.wgpu_downscaler.help"));
                     ui.end_row();
                 });
             ui.add_space(4.0);

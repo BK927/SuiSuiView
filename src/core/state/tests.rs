@@ -1,7 +1,8 @@
 use super::{
-    AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, DecodeMode,
-    DecoderPreference, DecoderPreferences, DisplayUpscaler, EdgePageAction, GpuEffectMode,
-    PageTransitionStyle, PersistedState, RendererMode, ResizeFilter, WheelMode, WindowPlacement,
+    AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, CpuScaleFilter,
+    DecodeMode, DecoderPreference, DecoderPreferences, DisplayUpscaler, EdgePageAction,
+    GpuEffectMode, PageTransitionStyle, PersistedState, RendererMode, WgpuDownscaler, WheelMode,
+    WindowPlacement,
 };
 use crate::core::i18n::{I18n, Language, ResolvedLanguage};
 
@@ -40,10 +41,13 @@ fn settings_defaults_match_viewer_policy() {
     assert_eq!(settings.edge_page_action, EdgePageAction::Stop);
     assert_eq!(settings.decode_mode, DecodeMode::AutoFast);
     assert_eq!(settings.decoder_preferences, DecoderPreferences::default());
-    assert_eq!(settings.resize_filter, ResizeFilter::Bicubic);
+    assert_eq!(settings.legacy_resize_filter, None);
+    assert_eq!(settings.cpu_upscaler, CpuScaleFilter::CatmullRom);
+    assert_eq!(settings.cpu_downscaler, CpuScaleFilter::Hamming);
     assert_eq!(settings.gpu_effect_mode, GpuEffectMode::Auto);
     assert_eq!(settings.renderer_mode, RendererMode::LowMemoryGlow);
     assert_eq!(settings.display_upscaler, DisplayUpscaler::None);
+    assert_eq!(settings.wgpu_downscaler, WgpuDownscaler::PyramidLanczos3);
     assert!(settings.prefetch_enabled);
     assert!(!settings.progressive_preview_enabled);
     assert!(!settings.transition_effect);
@@ -78,6 +82,34 @@ fn old_settings_without_language_load_auto_default() {
         serde_json::from_str(r#"{"version":1,"settings":{},"books":{}}"#).unwrap();
 
     assert_eq!(state.settings.language, Language::Auto);
+}
+
+#[test]
+fn persisted_wgpu_downscaler_values_still_load() {
+    let hamming: PersistedState = serde_json::from_str(
+        r#"{"version":1,"settings":{"wgpu_downscaler":"Hamming"},"books":{}}"#,
+    )
+    .unwrap();
+    let lanczos3: PersistedState = serde_json::from_str(
+        r#"{"version":1,"settings":{"wgpu_downscaler":"Lanczos3"},"books":{}}"#,
+    )
+    .unwrap();
+
+    assert_eq!(hamming.settings.wgpu_downscaler, WgpuDownscaler::Hamming);
+    assert_eq!(lanczos3.settings.wgpu_downscaler, WgpuDownscaler::Lanczos3);
+}
+
+#[test]
+fn legacy_resize_filter_migrates_to_cpu_scale_filters() {
+    let mut state: PersistedState =
+        serde_json::from_str(r#"{"version":1,"settings":{"resize_filter":"Lanczos3"},"books":{}}"#)
+            .unwrap();
+
+    state.settings.normalize_product_choices();
+
+    assert_eq!(state.settings.legacy_resize_filter, None);
+    assert_eq!(state.settings.cpu_upscaler, CpuScaleFilter::Lanczos3);
+    assert_eq!(state.settings.cpu_downscaler, CpuScaleFilter::Lanczos3);
 }
 
 #[test]
@@ -174,6 +206,37 @@ fn automatic_display_upscaler_only_uses_heavy_shader_for_actual_upscale() {
         DisplayUpscaler::WgslSrLabSpanX2.resolve_for_render([1600, 2400], [800, 1200]),
         None
     );
+}
+
+#[test]
+fn wgpu_downscaler_resolves_only_when_page_is_shrunk() {
+    assert_eq!(
+        WgpuDownscaler::Hamming.resolve_for_render([1600, 2400], [800, 1200]),
+        WgpuDownscaler::Hamming
+    );
+    assert_eq!(
+        WgpuDownscaler::Hamming.resolve_for_render([800, 1200], [1600, 2400]),
+        WgpuDownscaler::Bilinear
+    );
+    assert_eq!(WgpuDownscaler::Lanczos2.shader_method_id(), 7);
+    assert_eq!(
+        WgpuDownscaler::PyramidLanczos3.resolve_for_render([1600, 2400], [800, 1200]),
+        WgpuDownscaler::PyramidLanczos3
+    );
+    assert_eq!(
+        WgpuDownscaler::PyramidLanczos3.resolve_for_render([800, 1200], [1600, 2400]),
+        WgpuDownscaler::Bilinear
+    );
+    assert_eq!(WgpuDownscaler::PyramidLanczos3.shader_method_id(), 8);
+    assert_eq!(
+        WgpuDownscaler::PyramidBoxTent.base_filter(),
+        WgpuDownscaler::Bilinear
+    );
+    assert_eq!(
+        WgpuDownscaler::PyramidBoxTent.pyramid_stage_filter(),
+        WgpuDownscaler::Box
+    );
+    assert!(WgpuDownscaler::HardwareMipmapLinear.is_hardware_mipmap());
 }
 
 #[test]

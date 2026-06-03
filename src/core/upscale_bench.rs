@@ -1,7 +1,7 @@
 use crate::core::artcnn::{exact_output_size as artcnn_exact_output_size, ArtcnnVariant};
 use crate::core::gpu_effect::{color_image_to_rgba, image_diff};
 use crate::core::source::open_source_from_path;
-use crate::core::state::{DisplayUpscaler, ResizeFilter};
+use crate::core::state::{CpuScaleFilter, DisplayUpscaler, ResizeFilter};
 use crate::core::worker::{
     clamp_target_long_edge, display_dimensions_with_upscale, prepare_image_with_options,
     DecodeOptions, DecodeStrategy,
@@ -312,7 +312,7 @@ fn prepare_page_pair(
         source_long_edge,
         DecodeOptions {
             strategy: DecodeStrategy::Auto,
-            resize_filter: ResizeFilter::Lanczos3,
+            cpu_downscaler: CpuScaleFilter::Lanczos3,
             allow_display_upscale: false,
             ..DecodeOptions::default()
         },
@@ -328,7 +328,8 @@ fn prepare_page_pair(
         target_width.max(target_height),
         DecodeOptions {
             strategy: DecodeStrategy::ImageCrate,
-            resize_filter: ResizeFilter::Lanczos3,
+            cpu_upscaler: CpuScaleFilter::Lanczos3,
+            cpu_downscaler: CpuScaleFilter::Lanczos3,
             allow_display_upscale: true,
             ..DecodeOptions::default()
         },

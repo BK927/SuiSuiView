@@ -4,7 +4,6 @@ use super::{
     prepared_page_from_rgba, reject_oversized_original, resize_rgba, DecodeBackend, DecodeOptions,
     PreparedPage,
 };
-use crate::core::state::ResizeFilter;
 use image::DynamicImage;
 
 pub(super) fn prepare_image_with_image_crate(
@@ -15,7 +14,7 @@ pub(super) fn prepare_image_with_image_crate(
     prepare_image_with_image_crate_and_icc(
         bytes,
         target_long_edge,
-        options.resize_filter,
+        options,
         options.allow_display_upscale,
         None,
     )
@@ -24,7 +23,7 @@ pub(super) fn prepare_image_with_image_crate(
 pub(super) fn prepare_image_with_image_crate_and_icc(
     bytes: &[u8],
     target_long_edge: u32,
-    resize_filter: ResizeFilter,
+    options: DecodeOptions,
     allow_display_upscale: bool,
     icc_profile: Option<&[u8]>,
 ) -> Result<PreparedPage, String> {
@@ -39,6 +38,7 @@ pub(super) fn prepare_image_with_image_crate_and_icc(
         .map_err(|error| error.to_string())?;
     let (display_width, display_height) =
         display_dimensions_with_upscale(width, height, target_long_edge, allow_display_upscale)?;
+    let resize_filter = options.scale_filter_for(width, height, display_width, display_height);
     let display_rgba = if display_width == width && display_height == height {
         image.into_rgba8()
     } else if should_resize_before_rgba(&image) {

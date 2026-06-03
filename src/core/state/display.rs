@@ -1,42 +1,6 @@
 use crate::core::i18n::I18n;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ResizeFilter {
-    #[default]
-    Bicubic,
-    Lanczos3,
-    FastTriangle,
-    Nearest,
-}
-
-impl ResizeFilter {
-    pub const ALL: [Self; 4] = [
-        Self::Bicubic,
-        Self::Lanczos3,
-        Self::FastTriangle,
-        Self::Nearest,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Bicubic => "Bicubic",
-            Self::Lanczos3 => "Lanczos3",
-            Self::FastTriangle => "Fast / Triangle",
-            Self::Nearest => "Nearest",
-        }
-    }
-
-    pub fn token(self) -> &'static str {
-        match self {
-            Self::Bicubic => "bicubic",
-            Self::Lanczos3 => "lanczos3",
-            Self::FastTriangle => "triangle",
-            Self::Nearest => "nearest",
-        }
-    }
-}
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GpuEffectMode {
     #[default]

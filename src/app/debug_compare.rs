@@ -5,7 +5,7 @@ use super::{
 };
 use crate::core::effects::ViewEffects;
 use crate::core::source::SharedSource;
-use crate::core::state::{DisplayUpscaler, ResizeFilter};
+use crate::core::state::{CpuScaleFilter, DisplayUpscaler, WgpuDownscaler};
 use crate::core::worker::{prepare_image_with_options, DecodeOptions, PreparedPage};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use eframe::egui::{self, Align2, Color32, ImageData, Pos2, Rect, Vec2};
@@ -39,6 +39,9 @@ impl Default for DebugCompareState {
 pub(in crate::app) enum DebugCompareTarget {
     Current,
     Bicubic,
+    Hamming,
+    Mitchell,
+    Lanczos2,
     Lanczos3,
     FastTriangle,
     Nearest,
@@ -50,9 +53,12 @@ pub(in crate::app) enum DebugCompareTarget {
 }
 
 impl DebugCompareTarget {
-    pub(in crate::app) const ALL: [Self; 10] = [
+    pub(in crate::app) const ALL: [Self; 13] = [
         Self::Current,
         Self::Bicubic,
+        Self::Hamming,
+        Self::Mitchell,
+        Self::Lanczos2,
         Self::Lanczos3,
         Self::FastTriangle,
         Self::Nearest,
@@ -66,9 +72,12 @@ impl DebugCompareTarget {
     pub(in crate::app) fn label(self) -> &'static str {
         match self {
             Self::Current => "앱 기본",
-            Self::Bicubic => "Bicubic",
+            Self::Bicubic => "CatmullRom",
+            Self::Hamming => "Hamming",
+            Self::Mitchell => "Mitchell",
+            Self::Lanczos2 => "Lanczos2",
             Self::Lanczos3 => "Lanczos3",
-            Self::FastTriangle => "Fast/Triangle",
+            Self::FastTriangle => "Bilinear",
             Self::Nearest => "Nearest",
             Self::WgslBilinear => "WGSL Bilinear",
             Self::WgslFsr1Style => "WGSL FSR-style",
@@ -79,12 +88,15 @@ impl DebugCompareTarget {
     }
 
     fn decode_options(self, current: DecodeOptions) -> Option<DecodeOptions> {
-        let resize_filter = match self {
+        let scale_filter = match self {
             Self::Current => return Some(current),
-            Self::Bicubic => ResizeFilter::Bicubic,
-            Self::Lanczos3 => ResizeFilter::Lanczos3,
-            Self::FastTriangle => ResizeFilter::FastTriangle,
-            Self::Nearest => ResizeFilter::Nearest,
+            Self::Bicubic => CpuScaleFilter::CatmullRom,
+            Self::Hamming => CpuScaleFilter::Hamming,
+            Self::Mitchell => CpuScaleFilter::Mitchell,
+            Self::Lanczos2 => CpuScaleFilter::Lanczos2,
+            Self::Lanczos3 => CpuScaleFilter::Lanczos3,
+            Self::FastTriangle => CpuScaleFilter::Bilinear,
+            Self::Nearest => CpuScaleFilter::Nearest,
             Self::WgslBilinear
             | Self::WgslFsr1Style
             | Self::WgslFsr1EasuRcas
@@ -92,7 +104,8 @@ impl DebugCompareTarget {
             Self::AiResult => return None,
         };
         Some(DecodeOptions {
-            resize_filter,
+            cpu_upscaler: scale_filter,
+            cpu_downscaler: scale_filter,
             ..current
         })
     }
@@ -298,6 +311,7 @@ impl SuiSuiViewApp {
                 rgba,
                 effects,
                 display_upscaler,
+                wgpu_downscaler,
                 ..
             } => {
                 if !self.paint_wgsl_effects(
@@ -309,6 +323,7 @@ impl SuiSuiViewApp {
                         rgba,
                         effects,
                         display_upscaler,
+                        wgpu_downscaler,
                         opacity: 1.0,
                     },
                 ) {
@@ -409,6 +424,7 @@ impl SuiSuiViewApp {
             size: page_natural_size(&page),
             effects: ViewEffects::default(),
             display_upscaler,
+            wgpu_downscaler: WgpuDownscaler::Bilinear,
         }
     }
 
@@ -591,14 +607,15 @@ fn run_debug_compare_worker(
 #[cfg(test)]
 mod tests {
     use super::DebugCompareTarget;
-    use crate::core::state::ResizeFilter;
+    use crate::core::state::CpuScaleFilter;
     use crate::core::worker::{DecodeOptions, DecodeStrategy};
 
     #[test]
-    fn compare_targets_override_only_resize_filter() {
+    fn compare_targets_override_only_cpu_scale_filters() {
         let current = DecodeOptions {
             strategy: DecodeStrategy::ImageCrate,
-            resize_filter: ResizeFilter::Nearest,
+            cpu_upscaler: CpuScaleFilter::Nearest,
+            cpu_downscaler: CpuScaleFilter::Nearest,
             allow_display_upscale: true,
             apply_exif_orientation: true,
             apply_embedded_icc: true,
@@ -609,7 +626,8 @@ mod tests {
             .decode_options(current)
             .unwrap();
 
-        assert_eq!(lanczos.resize_filter, ResizeFilter::Lanczos3);
+        assert_eq!(lanczos.cpu_upscaler, CpuScaleFilter::Lanczos3);
+        assert_eq!(lanczos.cpu_downscaler, CpuScaleFilter::Lanczos3);
         assert_eq!(lanczos.strategy, DecodeStrategy::ImageCrate);
         assert!(lanczos.allow_display_upscale);
         assert!(lanczos.apply_exif_orientation);

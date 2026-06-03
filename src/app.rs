@@ -616,7 +616,8 @@ impl SuiSuiViewApp {
         DecodeOptions {
             strategy,
             decoder_preferences,
-            resize_filter: self.settings.resize_filter,
+            cpu_upscaler: self.settings.cpu_upscaler,
+            cpu_downscaler: self.settings.cpu_downscaler,
             allow_display_upscale: self.should_allow_display_upscale(),
             apply_exif_orientation: self.settings.apply_exif_orientation,
             apply_embedded_icc: self.settings.apply_embedded_icc,
@@ -1325,7 +1326,7 @@ mod tests {
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
         AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, DisplayUpscaler, FitMode, KeyCode,
-        KeyShortcut, PageTransitionStyle, ReadingDirection,
+        KeyShortcut, PageTransitionStyle, ReadingDirection, WgpuDownscaler,
     };
     use crate::core::worker::{
         DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PreparedPage,
@@ -2216,6 +2217,14 @@ mod tests {
             [1000, 1500],
             ViewEffects::default(),
             DisplayUpscaler::Auto,
+            WgpuDownscaler::Bilinear,
+        ));
+        assert!(gpu_visual_needs_wgsl(
+            [2000, 3000],
+            [1000, 1500],
+            ViewEffects::default(),
+            DisplayUpscaler::Auto,
+            WgpuDownscaler::Hamming,
         ));
     }
 
@@ -2226,12 +2235,14 @@ mod tests {
             [1600, 2400],
             ViewEffects::default(),
             DisplayUpscaler::Auto,
+            WgpuDownscaler::Bilinear,
         ));
         assert!(gpu_visual_needs_wgsl(
             [2000, 3000],
             [1000, 1500],
             ViewEffects::default(),
             DisplayUpscaler::WgslNisStyle,
+            WgpuDownscaler::Bilinear,
         ));
         assert!(gpu_visual_needs_wgsl(
             [2000, 3000],
@@ -2241,6 +2252,7 @@ mod tests {
                 ..ViewEffects::default()
             },
             DisplayUpscaler::Auto,
+            WgpuDownscaler::Bilinear,
         ));
     }
 

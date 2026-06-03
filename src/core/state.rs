@@ -12,18 +12,20 @@ mod decoders;
 mod display;
 mod input;
 mod rendering;
+mod scalers;
 #[cfg(test)]
 mod tests;
 pub use crate::core::i18n::Language;
 use bookmarks::path_key;
 pub use bookmarks::{Bookmark, BookmarkInput, PageBookmark, PageBookmarkEntry, ReadingPosition};
 pub use decoders::{DecodeMode, DecoderPreference, DecoderPreferences};
-pub use display::{DisplayUpscaler, GpuEffectMode, ResizeFilter};
+pub use display::{DisplayUpscaler, GpuEffectMode};
 pub use input::{
     default_key_bindings, default_mouse_bindings, CommandId, KeyBinding, KeyCode, KeyShortcut,
     MouseBinding, MouseGesture,
 };
 pub use rendering::RendererMode;
+pub use scalers::{CpuScaleFilter, ResizeFilter, WgpuDownscaler};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReadingDirection {
@@ -371,14 +373,24 @@ pub struct AppSettings {
     pub decode_mode: DecodeMode,
     #[serde(default)]
     pub decoder_preferences: DecoderPreferences,
-    #[serde(default)]
-    pub resize_filter: ResizeFilter,
+    #[serde(
+        default,
+        rename = "resize_filter",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub legacy_resize_filter: Option<ResizeFilter>,
+    #[serde(default = "default_cpu_upscaler")]
+    pub cpu_upscaler: CpuScaleFilter,
+    #[serde(default = "default_cpu_downscaler")]
+    pub cpu_downscaler: CpuScaleFilter,
     #[serde(default)]
     pub gpu_effect_mode: GpuEffectMode,
     #[serde(default)]
     pub renderer_mode: RendererMode,
     #[serde(default)]
     pub display_upscaler: DisplayUpscaler,
+    #[serde(default = "default_wgpu_downscaler")]
+    pub wgpu_downscaler: WgpuDownscaler,
     #[serde(default = "default_true")]
     pub prefetch_enabled: bool,
     #[serde(default)]
@@ -429,6 +441,11 @@ pub struct AppSettings {
 
 impl AppSettings {
     pub fn normalize_product_choices(&mut self) {
+        if let Some(legacy_resize_filter) = self.legacy_resize_filter.take() {
+            let migrated_filter = CpuScaleFilter::from(legacy_resize_filter);
+            self.cpu_upscaler = migrated_filter;
+            self.cpu_downscaler = migrated_filter;
+        }
         if !self.display_upscaler.user_selectable() {
             self.display_upscaler = DisplayUpscaler::Auto;
         }
@@ -480,10 +497,13 @@ impl Default for AppSettings {
             archive_edge_page_action: default_archive_edge_page_action(),
             decode_mode: DecodeMode::AutoFast,
             decoder_preferences: DecoderPreferences::default(),
-            resize_filter: ResizeFilter::Bicubic,
+            legacy_resize_filter: None,
+            cpu_upscaler: default_cpu_upscaler(),
+            cpu_downscaler: default_cpu_downscaler(),
             gpu_effect_mode: GpuEffectMode::Auto,
             renderer_mode: RendererMode::LowMemoryGlow,
             display_upscaler: DisplayUpscaler::None,
+            wgpu_downscaler: default_wgpu_downscaler(),
             prefetch_enabled: true,
             progressive_preview_enabled: false,
             cache_memory_mode: CacheMemoryMode::Auto,
@@ -816,6 +836,18 @@ fn default_archive_edge_page_action() -> EdgePageAction {
 
 fn default_manual_cache_mb() -> u32 {
     160
+}
+
+fn default_cpu_upscaler() -> CpuScaleFilter {
+    CpuScaleFilter::CatmullRom
+}
+
+fn default_cpu_downscaler() -> CpuScaleFilter {
+    CpuScaleFilter::Hamming
+}
+
+fn default_wgpu_downscaler() -> WgpuDownscaler {
+    WgpuDownscaler::PyramidLanczos3
 }
 
 fn default_max_remembered_books() -> usize {

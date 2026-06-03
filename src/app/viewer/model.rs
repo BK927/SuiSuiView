@@ -1,6 +1,6 @@
 use super::super::gpu_paint::GpuPaintSourceKey;
 use crate::core::effects::ViewEffects;
-use crate::core::state::{DisplayUpscaler, PageTransitionStyle, ReadingDirection};
+use crate::core::state::{DisplayUpscaler, PageTransitionStyle, ReadingDirection, WgpuDownscaler};
 use crate::core::worker::PreparedPage;
 use eframe::egui::{TextureHandle, Vec2};
 use std::collections::HashMap;
@@ -183,6 +183,7 @@ pub(in crate::app) enum PageVisual {
         size: Vec2,
         effects: ViewEffects,
         display_upscaler: DisplayUpscaler,
+        wgpu_downscaler: WgpuDownscaler,
     },
     Loading {
         index: usize,

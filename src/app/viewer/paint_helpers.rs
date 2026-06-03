@@ -44,6 +44,7 @@ impl SuiSuiViewApp {
             target_size,
             request.effects,
             request.display_upscaler,
+            request.wgpu_downscaler,
         ) {
             let texture = self.texture_for_gpu_fallback(
                 ctx,

@@ -160,7 +160,7 @@ mod tests {
         should_skip_published_app_cache_hint, PublishedAppCacheHints,
         PUBLISHED_APP_CACHE_HINT_LIMIT,
     };
-    use crate::core::state::{DecoderPreference, DecoderPreferences, ResizeFilter};
+    use crate::core::state::{CpuScaleFilter, DecoderPreference, DecoderPreferences};
     use crate::core::worker::{
         CachedPageKey, DecodeBackend, DecodeOptions, PreparedPage, MAX_TARGET_LONG_EDGE,
     };
@@ -194,7 +194,7 @@ mod tests {
             1,
             2048,
             DecodeOptions {
-                resize_filter: ResizeFilter::Lanczos3,
+                cpu_downscaler: CpuScaleFilter::Lanczos3,
                 ..DecodeOptions::default()
             },
         );

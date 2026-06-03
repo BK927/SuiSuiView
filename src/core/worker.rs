@@ -2,7 +2,7 @@ use crate::core::decoder_backend::{self, DecoderFormat};
 use crate::core::formats::unsupported_message_for_bytes;
 use crate::core::perf_trace::{self, PerfField};
 use crate::core::source::SharedSource;
-use crate::core::state::{DecoderPreferences, ResizeFilter};
+use crate::core::state::{CpuScaleFilter, DecoderPreferences};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use eframe::egui::{ColorImage, Context};
 use image::{ImageReader, Limits};
@@ -223,7 +223,8 @@ impl DecodeStrategy {
 pub struct DecodeOptions {
     pub strategy: DecodeStrategy,
     pub decoder_preferences: DecoderPreferences,
-    pub resize_filter: ResizeFilter,
+    pub cpu_upscaler: CpuScaleFilter,
+    pub cpu_downscaler: CpuScaleFilter,
     pub allow_display_upscale: bool,
     pub apply_exif_orientation: bool,
     pub apply_embedded_icc: bool,
@@ -234,7 +235,8 @@ impl Default for DecodeOptions {
         Self {
             strategy: DecodeStrategy::Auto,
             decoder_preferences: DecoderPreferences::default(),
-            resize_filter: ResizeFilter::Bicubic,
+            cpu_upscaler: CpuScaleFilter::CatmullRom,
+            cpu_downscaler: CpuScaleFilter::Hamming,
             allow_display_upscale: false,
             apply_exif_orientation: false,
             apply_embedded_icc: false,
@@ -245,12 +247,12 @@ impl Default for DecodeOptions {
 impl DecodeOptions {
     pub fn cache_token(self) -> String {
         format!(
-            "{}-{}-{}-{}{}{}",
+            "{}-{}-down-{}-{}{}{}",
             self.strategy.as_str(),
             self.decoder_preferences.cache_token(),
-            self.resize_filter.token(),
+            self.cpu_downscaler.token(),
             if self.allow_display_upscale {
-                "upscale"
+                self.cpu_upscaler.token()
             } else {
                 "no-upscale"
             },
@@ -261,6 +263,20 @@ impl DecodeOptions {
             },
             if self.apply_embedded_icc { "-icc" } else { "" }
         )
+    }
+
+    pub fn scale_filter_for(
+        self,
+        source_width: u32,
+        source_height: u32,
+        target_width: u32,
+        target_height: u32,
+    ) -> CpuScaleFilter {
+        if target_width > source_width || target_height > source_height {
+            self.cpu_upscaler
+        } else {
+            self.cpu_downscaler
+        }
     }
 }
 
@@ -571,7 +587,7 @@ pub fn prepare_image_with_options(
         prepare_image_with_image_crate_and_icc(
             bytes,
             target_long_edge,
-            options.resize_filter,
+            options,
             options.allow_display_upscale,
             icc_profile.as_deref(),
         )?
@@ -1347,7 +1363,7 @@ mod tests {
         MAX_TARGET_LONG_EDGE,
     };
     use crate::core::source::{BookSource, SharedSource, SourceError};
-    use crate::core::state::{DecoderPreference, DecoderPreferences};
+    use crate::core::state::{CpuScaleFilter, DecoderPreference, DecoderPreferences};
     use crossbeam_channel::unbounded;
     use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
     use std::io::Cursor;
@@ -1380,6 +1396,43 @@ mod tests {
             assert_eq!(page.display_width, 48);
             assert_eq!(page.display_height, 32);
         }
+    }
+
+    #[test]
+    fn decode_options_select_scale_filter_by_direction() {
+        let options = DecodeOptions {
+            cpu_upscaler: CpuScaleFilter::Lanczos3,
+            cpu_downscaler: CpuScaleFilter::Hamming,
+            ..DecodeOptions::default()
+        };
+
+        assert_eq!(
+            options.scale_filter_for(800, 600, 400, 300),
+            CpuScaleFilter::Hamming
+        );
+        assert_eq!(
+            options.scale_filter_for(800, 600, 1200, 900),
+            CpuScaleFilter::Lanczos3
+        );
+    }
+
+    #[test]
+    fn decode_cache_token_tracks_cpu_upscaler_only_when_allowed() {
+        let normal = DecodeOptions::default().cache_token();
+        let changed_upscaler = DecodeOptions {
+            cpu_upscaler: CpuScaleFilter::Lanczos3,
+            ..DecodeOptions::default()
+        }
+        .cache_token();
+        let allowed_upscaler = DecodeOptions {
+            cpu_upscaler: CpuScaleFilter::Lanczos3,
+            allow_display_upscale: true,
+            ..DecodeOptions::default()
+        }
+        .cache_token();
+
+        assert_eq!(normal, changed_upscaler);
+        assert_ne!(normal, allowed_upscaler);
     }
 
     #[test]

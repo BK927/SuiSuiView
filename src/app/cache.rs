@@ -2,7 +2,7 @@
 use super::perf;
 use super::{ai_prefetch_pages_for, gpu_paint, SuiSuiViewApp};
 use crate::core::effects::ViewEffects;
-use crate::core::state::{AppSettings, CacheMemoryMode, DisplayUpscaler, FitMode};
+use crate::core::state::{AppSettings, CacheMemoryMode, DisplayUpscaler, FitMode, WgpuDownscaler};
 use crate::core::worker::{
     clamp_target_long_edge, preview_prefetch_indices, CachedPageKey, DecodeOptions,
     NavigationDirection, FULL_QUALITY_PREFETCH_BACKWARD_PAGES, FULL_QUALITY_PREFETCH_FORWARD_PAGES,
@@ -529,11 +529,13 @@ pub(in crate::app) fn gpu_visual_needs_wgsl(
     target_size: [u32; 2],
     effects: ViewEffects,
     display_upscaler: DisplayUpscaler,
+    wgpu_downscaler: WgpuDownscaler,
 ) -> bool {
     effects != ViewEffects::default()
         || display_upscaler
             .resolve_for_render(image_size, target_size)
             .is_some()
+        || wgpu_downscaler.resolve_for_render(image_size, target_size) != WgpuDownscaler::Bilinear
 }
 
 pub(in crate::app) fn rect_target_size(rect: Rect) -> [u32; 2] {

@@ -9,6 +9,9 @@ struct Params {
 @group(0) @binding(0)
 var source_texture: texture_2d<f32>;
 
+@group(0) @binding(1)
+var source_sampler: sampler;
+
 @group(1) @binding(0)
 var<uniform> params: Params;
 
@@ -368,8 +371,148 @@ fn fsr_rcas_effect_sample(coord: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(clamp(e.rgb + (e.rgb - average) * amount, vec3<f32>(0.0), vec3<f32>(1.0)), e.a);
 }
 
+fn downscale_sinc(x: f32) -> f32 {
+    if abs(x) < 0.000001 {
+        return 1.0;
+    }
+    let pix = 3.141592653589793 * x;
+    return sin(pix) / pix;
+}
+
+fn downscale_hamming_weight(x: f32) -> f32 {
+    let ax = abs(x);
+    if ax >= 1.0 {
+        return 0.0;
+    }
+    if ax < 0.000001 {
+        return 1.0;
+    }
+    let pix = 3.141592653589793 * ax;
+    return (0.54 + 0.46 * cos(pix)) * sin(pix) / pix;
+}
+
+fn downscale_catmull_weight(x: f32) -> f32 {
+    let ax = abs(x);
+    if ax < 1.0 {
+        return 1.5 * ax * ax * ax - 2.5 * ax * ax + 1.0;
+    }
+    if ax < 2.0 {
+        return -0.5 * ax * ax * ax + 2.5 * ax * ax - 4.0 * ax + 2.0;
+    }
+    return 0.0;
+}
+
+fn downscale_mitchell_weight(x: f32) -> f32 {
+    let ax = abs(x);
+    if ax < 1.0 {
+        return (7.0 * ax / 6.0 - 2.0) * ax * ax + 16.0 / 18.0;
+    }
+    if ax < 2.0 {
+        return ((2.0 - 7.0 * ax / 18.0) * ax - 10.0 / 3.0) * ax + 16.0 / 9.0;
+    }
+    return 0.0;
+}
+
+fn downscale_lanczos_weight(x: f32, support: f32) -> f32 {
+    if abs(x) >= support {
+        return 0.0;
+    }
+    return downscale_sinc(x) * downscale_sinc(x / support);
+}
+
+fn downscale_filter_support(method: u32) -> f32 {
+    if method == 3u {
+        return 0.5;
+    }
+    if method == 4u {
+        return 1.0;
+    }
+    if method == 5u || method == 6u || method == 7u {
+        return 2.0;
+    }
+    if method == 8u {
+        return 3.0;
+    }
+    return 1.0;
+}
+
+fn downscale_filter_weight(method: u32, x: f32) -> f32 {
+    let ax = abs(x);
+    if method == 3u {
+        return select(0.0, 1.0, ax <= 0.5);
+    }
+    if method == 4u {
+        return downscale_hamming_weight(x);
+    }
+    if method == 5u {
+        return downscale_catmull_weight(x);
+    }
+    if method == 6u {
+        return downscale_mitchell_weight(x);
+    }
+    if method == 7u {
+        return downscale_lanczos_weight(x, 2.0);
+    }
+    if method == 8u {
+        return downscale_lanczos_weight(x, 3.0);
+    }
+    return max(1.0 - ax, 0.0);
+}
+
+fn downscale_effect_sample(coord: vec2<f32>, method: u32) -> vec4<f32> {
+    if method == 1u {
+        return effect_pixel_clamped(i32(round(coord.x)), i32(round(coord.y)));
+    }
+    if method == 2u {
+        return sample_effect(coord.x, coord.y);
+    }
+
+    let scale_x = max(f32(params.source_output.z) / max(params.opacity.y, 1.0), 1.0);
+    let scale_y = max(f32(params.source_output.w) / max(params.opacity.z, 1.0), 1.0);
+    let support = downscale_filter_support(method);
+    let radius_x = min(support * scale_x, 3.0);
+    let radius_y = min(support * scale_y, 3.0);
+    let weight_scale_x = min(scale_x, 3.0);
+    let weight_scale_y = min(scale_y, 3.0);
+    let base = vec2<i32>(floor(coord));
+
+    var color = vec4<f32>(0.0);
+    var total = 0.0;
+    for (var yy = -3; yy <= 3; yy = yy + 1) {
+        let dy = f32(base.y + yy) - coord.y;
+        if abs(dy) <= radius_y {
+            let wy = downscale_filter_weight(method, dy / weight_scale_y);
+            for (var xx = -3; xx <= 3; xx = xx + 1) {
+                let dx = f32(base.x + xx) - coord.x;
+                if abs(dx) <= radius_x {
+                    let wx = downscale_filter_weight(method, dx / weight_scale_x);
+                    let weight = wx * wy;
+                    color = color + effect_pixel_clamped(base.x + xx, base.y + yy) * weight;
+                    total = total + weight;
+                }
+            }
+        }
+    }
+    return clamp(color / max(total, 0.0001), vec4<f32>(0.0), vec4<f32>(1.0));
+}
+
+fn hardware_mipmap_sample(coord: vec2<f32>, lod: f32) -> vec4<f32> {
+    let size = vec2<f32>(f32(params.source_output.z), f32(params.source_output.w));
+    let uv = clamp((coord + vec2<f32>(0.5)) / max(size, vec2<f32>(1.0)), vec2<f32>(0.0), vec2<f32>(1.0));
+    return textureSampleLevel(source_texture, source_sampler, uv, max(lod, 0.0));
+}
+
 fn sample_display(sample_x: f32, sample_y: f32) -> vec4<f32> {
     let coord = vec2<f32>(sample_x, sample_y);
+    if params.upscale.z == 1u {
+        return hardware_mipmap_sample(coord, params.opacity.w);
+    }
+    let target_is_smaller =
+        params.opacity.y < f32(params.source_output.z) ||
+        params.opacity.z < f32(params.source_output.w);
+    if target_is_smaller && params.upscale.y != 0u {
+        return downscale_effect_sample(coord, params.upscale.y);
+    }
     if params.upscale.x == 2u {
         return fsr1_style_effect_sample(coord);
     }

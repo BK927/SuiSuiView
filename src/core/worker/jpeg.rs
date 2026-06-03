@@ -121,7 +121,9 @@ pub(super) fn prepare_image_with_scaled_jpeg(
     } else {
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let resize_started = Instant::now();
-        let display = resize_rgba(&rgba, display_width, display_height, options.resize_filter);
+        let resize_filter =
+            options.scale_filter_for(scaled_width, scaled_height, display_width, display_height);
+        let display = resize_rgba(&rgba, display_width, display_height, resize_filter);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         super::record_prepare_stage(
             "jpeg_scaled_resize",

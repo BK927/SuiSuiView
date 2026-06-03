@@ -478,7 +478,9 @@ fn prepare_decoded_rgba(
     } else {
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let resize_started = Instant::now();
-        let display = resize_rgba(&rgba, display_width, display_height, options.resize_filter);
+        let resize_filter =
+            options.scale_filter_for(decoded.width, decoded.height, display_width, display_height);
+        let display = resize_rgba(&rgba, display_width, display_height, resize_filter);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         super::record_prepare_stage(
             "direct_resize",

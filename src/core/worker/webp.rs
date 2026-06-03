@@ -15,7 +15,11 @@ pub(super) fn prepare_image_with_scaled_libwebp(
     target_long_edge: u32,
     options: DecodeOptions,
 ) -> Result<Option<PreparedPage>, String> {
-    if options.resize_filter != crate::core::state::ResizeFilter::Bicubic {
+    if !matches!(
+        options.cpu_downscaler,
+        crate::core::state::CpuScaleFilter::Hamming
+            | crate::core::state::CpuScaleFilter::CatmullRom
+    ) {
         return Ok(None);
     }
 
@@ -145,7 +149,7 @@ mod tests {
     }
 
     #[test]
-    fn scaled_libwebp_defers_non_bicubic_filter_to_full_path() {
+    fn scaled_libwebp_defers_non_default_downscale_filter_to_full_path() {
         let bytes = encoded_webp(2304, 1536);
         let page = prepare_image_with_options(
             &bytes,
@@ -155,7 +159,7 @@ mod tests {
                     webp: DecoderPreference::LibWebp,
                     ..DecoderPreferences::default()
                 },
-                resize_filter: crate::core::state::ResizeFilter::Lanczos3,
+                cpu_downscaler: crate::core::state::CpuScaleFilter::Lanczos3,
                 ..DecodeOptions::default()
             },
         )

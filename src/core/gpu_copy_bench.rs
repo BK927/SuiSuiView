@@ -3,7 +3,7 @@ use crate::core::gpu_effect::{
     color_image_to_rgba, params_for_effects, params_for_effects_with_shader_method, EffectParams,
 };
 use crate::core::source::open_source_from_path;
-use crate::core::state::{DisplayUpscaler, ResizeFilter};
+use crate::core::state::{CpuScaleFilter, DisplayUpscaler, WgpuDownscaler};
 use crate::core::worker::{
     clamp_target_long_edge, prepare_image_with_options, DecodeOptions, DecodeStrategy, PreparedPage,
 };
@@ -192,7 +192,7 @@ fn prepare_page(bytes: &[u8], target_long_edge: u32) -> Result<Arc<PreparedPage>
         target_long_edge,
         DecodeOptions {
             strategy: DecodeStrategy::Auto,
-            resize_filter: ResizeFilter::Lanczos3,
+            cpu_downscaler: CpuScaleFilter::Lanczos3,
             allow_display_upscale: false,
             ..DecodeOptions::default()
         },
@@ -208,6 +208,7 @@ struct GpuCopyBench {
     texture_bind_group_layout: wgpu::BindGroupLayout,
     params_bind_group_layout: wgpu::BindGroupLayout,
     legacy_bind_group_layout: wgpu::BindGroupLayout,
+    texture_sampler: wgpu::Sampler,
 }
 
 impl GpuCopyBench {
@@ -247,16 +248,24 @@ impl GpuCopyBench {
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("suisuiview-gpu-copy-bench-texture-layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
             });
         let params_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -328,6 +337,16 @@ impl GpuCopyBench {
             multiview: None,
             cache: None,
         });
+        let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("suisuiview-gpu-copy-linear-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
         Ok(Self {
             device,
@@ -337,6 +356,7 @@ impl GpuCopyBench {
             texture_bind_group_layout,
             params_bind_group_layout,
             legacy_bind_group_layout,
+            texture_sampler,
         })
     }
 
@@ -395,6 +415,7 @@ impl GpuCopyBench {
             [width, height],
             ViewEffects::default(),
             DisplayUpscaler::None,
+            WgpuDownscaler::Bilinear,
             [0, 0],
             [width as u32, height as u32],
             1.0,
@@ -634,6 +655,7 @@ impl GpuCopyBench {
             source_size,
             ViewEffects::default(),
             DisplayUpscaler::WgslFsr1EasuRcas,
+            WgpuDownscaler::Bilinear,
             [0, 0],
             target_size,
             1.0,
@@ -654,6 +676,7 @@ impl GpuCopyBench {
             [target_size[0] as usize, target_size[1] as usize],
             ViewEffects::default(),
             rcas_method,
+            0,
             [0, 0],
             target_size,
             1.0,
@@ -672,10 +695,16 @@ impl GpuCopyBench {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("suisuiview-gpu-copy-texture-bind-group"),
             layout: &self.texture_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(source_view),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.texture_sampler),
+                },
+            ],
         })
     }
 

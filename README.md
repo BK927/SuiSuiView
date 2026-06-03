@@ -133,11 +133,15 @@ state file.
 
 - General: UI language, delete confirmation, ESC exit, always-on-top, and
   first/last page behavior.
-- Rendering: transition effect, default/fallback upscaler, GPU acceleration,
-  GPU upscaler, EXIF orientation, embedded ICC conversion, prefetch, cache
-  memory, and experimental Real-ESRGAN AI upscale settings.
-  GPU upscaler `Auto` is content-aware: confident webtoon, anime, and manga
-  pages use Anime4K M, while photos and uncertain images keep the FSR fallback.
+- Rendering: transition effect, CPU up/down scaler filters, GPU acceleration,
+  GPU upscaler, WGPU downscaler, EXIF orientation, embedded ICC conversion,
+  prefetch, cache memory, and experimental Real-ESRGAN AI upscale settings.
+  CPU downscaling defaults to Hamming for balanced preparation cost, while WGPU
+  display downscaling defaults to Pyramid + Lanczos3 for quality-first shrink
+  when the renderer is active.
+  GPU upscaler `Auto` is content-aware only for enlargement: confident webtoon,
+  anime, and manga pages use Anime4K M, while photos and uncertain images keep
+  the FSR fallback.
   GPU upscalers marked `(실험)` are selectable for local testing but are not
   treated as stable defaults; SR Lab SPAN also requires a local manifest.
 - Decoders: decode mode and per-format decoder choices. `기본값` is shown as
@@ -252,7 +256,7 @@ After configuring Real-ESRGAN in settings, use the `AI x4` toolbar button or
 the right-click `AI upscale` action to upscale the current page.
 
 The top-bar compare toggle can split the current page into A/B panes. Each side
-can use the app default, a CPU resize filter, a WGSL display upscaler, or a
+can use the app default, CPU scaler filters, a WGSL display upscaler, or a
 cached AI result.
 
 ### Mouse

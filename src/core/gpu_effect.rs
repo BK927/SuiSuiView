@@ -1,5 +1,5 @@
 use crate::core::effects::{ImageFilter, ViewEffects};
-use crate::core::state::DisplayUpscaler;
+use crate::core::state::{DisplayUpscaler, WgpuDownscaler};
 use eframe::egui::ColorImage;
 use std::borrow::Cow;
 use std::sync::mpsc;
@@ -24,6 +24,7 @@ pub struct GpuEffectBench {
     pipeline: wgpu::RenderPipeline,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     params_bind_group_layout: wgpu::BindGroupLayout,
+    texture_sampler: wgpu::Sampler,
 }
 
 pub struct GpuEffectOutput {
@@ -65,16 +66,24 @@ impl GpuEffectBench {
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("suisuiview-effect-bench-texture-layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
             });
         let params_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -120,6 +129,16 @@ impl GpuEffectBench {
             multiview: None,
             cache: None,
         });
+        let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("suisuiview-effect-bench-linear-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
         Ok(Self {
             device,
@@ -127,6 +146,7 @@ impl GpuEffectBench {
             pipeline,
             texture_bind_group_layout,
             params_bind_group_layout,
+            texture_sampler,
         })
     }
 
@@ -194,6 +214,7 @@ impl GpuEffectBench {
             output_size,
             effects,
             DisplayUpscaler::None,
+            WgpuDownscaler::Bilinear,
             [0, 0],
             [output_size[0] as u32, output_size[1] as u32],
             1.0,
@@ -209,10 +230,16 @@ impl GpuEffectBench {
         let texture_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("suisuiview-effect-texture-bind-group"),
             layout: &self.texture_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&source_view),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.texture_sampler),
+                },
+            ],
         });
         let params_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("suisuiview-effect-params-bind-group"),
@@ -315,6 +342,7 @@ pub(crate) fn params_for_effects(
     output_size: [usize; 2],
     effects: ViewEffects,
     display_upscaler: DisplayUpscaler,
+    wgpu_downscaler: WgpuDownscaler,
     output_origin: [u32; 2],
     target_size: [u32; 2],
     opacity: f32,
@@ -324,6 +352,7 @@ pub(crate) fn params_for_effects(
         output_size,
         effects,
         display_upscaler.shader_method_id(),
+        wgpu_downscaler.shader_method_id(),
         output_origin,
         target_size,
         opacity,
@@ -335,6 +364,7 @@ pub(crate) fn params_for_effects_with_shader_method(
     output_size: [usize; 2],
     effects: ViewEffects,
     shader_method_id: u32,
+    downscale_method_id: u32,
     output_origin: [u32; 2],
     target_size: [u32; 2],
     opacity: f32,
@@ -364,12 +394,39 @@ pub(crate) fn params_for_effects_with_shader_method(
             output_origin[0],
             output_origin[1],
         ],
-        upscale: [shader_method_id, 0, 0, 0],
+        upscale: [shader_method_id, downscale_method_id, 0, 0],
         opacity: [
             opacity,
             target_size[0].max(1) as f32,
             target_size[1].max(1) as f32,
             0.0,
+        ],
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn params_for_hardware_mipmap_sample(
+    source_size: [usize; 2],
+    output_origin: [u32; 2],
+    target_size: [u32; 2],
+    opacity: f32,
+    lod: f32,
+) -> EffectParams {
+    EffectParams {
+        source_output: [
+            source_size[0] as u32,
+            source_size[1] as u32,
+            source_size[0] as u32,
+            source_size[1] as u32,
+        ],
+        transform_filter: [0, 0, 0, 0],
+        color_origin: [0, 0, output_origin[0], output_origin[1]],
+        upscale: [0, 0, 1, 0],
+        opacity: [
+            opacity,
+            target_size[0].max(1) as f32,
+            target_size[1].max(1) as f32,
+            lod.max(0.0),
         ],
     }
 }
