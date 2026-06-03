@@ -1,10 +1,7 @@
 use crate::core::source::open_source_from_path;
 use crate::core::state::{DisplayUpscaler, ResizeFilter};
 use crate::core::upscale_bench::{gpu::GpuUpscaleBench, gpu_methods_for_filter};
-use crate::core::worker::{
-    clamp_target_long_edge, display_dimensions_with_upscale, prepare_image_with_options,
-    DecodeOptions, DecodeStrategy,
-};
+use crate::core::worker::clamp_target_long_edge;
 use eframe::egui::ColorImage;
 use image::{imageops::FilterType, RgbaImage};
 use serde::Serialize;
@@ -100,7 +97,7 @@ pub fn run_upscale_quality_scan(
 ) -> Result<(), String> {
     let report = scan_upscale_quality(
         path,
-        clamp_target_long_edge(source_long_edge),
+        clamp_upscale_source_long_edge(source_long_edge),
         clamp_target_long_edge(target_long_edge),
         visual_dir,
         method_filter,
@@ -165,9 +162,7 @@ pub fn scan_upscale_quality(
             .and_then(|bytes| prepare_page_pair(&bytes, source_long_edge, target_long_edge));
 
         match result {
-            Ok((input, baseline)) => {
-                let input_image = input.color_image();
-                let baseline_image = baseline.color_image();
+            Ok((input_image, baseline_image)) => {
                 let output_size = baseline_image.size;
                 page.source_width = Some(input_image.size[0]);
                 page.source_height = Some(input_image.size[1]);
@@ -277,40 +272,60 @@ fn prepare_page_pair(
     bytes: &[u8],
     source_long_edge: u32,
     target_long_edge: u32,
-) -> Result<
-    (
-        crate::core::worker::PreparedPage,
-        crate::core::worker::PreparedPage,
-    ),
-    String,
-> {
-    let baseline = prepare_image_with_options(
-        bytes,
+) -> Result<(ColorImage, ColorImage), String> {
+    let original = image::load_from_memory(bytes)
+        .map_err(|error| error.to_string())?
+        .to_rgba8();
+    let original_width = original.width() as usize;
+    let original_height = original.height() as usize;
+    let (target_width, target_height) = quality_display_dimensions(
+        original_width as u32,
+        original_height as u32,
         target_long_edge,
-        DecodeOptions {
-            strategy: DecodeStrategy::ImageCrate,
-            resize_filter: ResizeFilter::Lanczos3,
-            allow_display_upscale: true,
-            ..DecodeOptions::default()
-        },
+        true,
     )?;
-    let (source_width, source_height) = display_dimensions_with_upscale(
-        baseline.original_width as u32,
-        baseline.original_height as u32,
+    let baseline = image::imageops::resize(
+        &original,
+        target_width,
+        target_height,
+        image_filter_type(ResizeFilter::Lanczos3),
+    );
+    let (source_width, source_height) = quality_display_dimensions(
+        original_width as u32,
+        original_height as u32,
         source_long_edge,
         false,
     )?;
-    let input = prepare_image_with_options(
-        bytes,
-        source_width.max(source_height),
-        DecodeOptions {
-            strategy: DecodeStrategy::Auto,
-            resize_filter: ResizeFilter::Lanczos3,
-            allow_display_upscale: false,
-            ..DecodeOptions::default()
-        },
-    )?;
-    Ok((input, baseline))
+    let input = image::imageops::resize(
+        &original,
+        source_width,
+        source_height,
+        image_filter_type(ResizeFilter::Lanczos3),
+    );
+    Ok((rgba_to_color_image(input), rgba_to_color_image(baseline)))
+}
+
+fn quality_display_dimensions(
+    width: u32,
+    height: u32,
+    target_long_edge: u32,
+    allow_upscale: bool,
+) -> Result<(u32, u32), String> {
+    if width == 0 || height == 0 {
+        return Err("Image has zero-sized dimensions".to_owned());
+    }
+    let longest = width.max(height);
+    if longest <= target_long_edge && !allow_upscale {
+        return Ok((width, height));
+    }
+    let scale = target_long_edge as f64 / longest as f64;
+    let scaled = |value: u32| ((value as f64 * scale).round() as u32).max(1);
+    Ok((scaled(width), scaled(height)))
+}
+
+fn rgba_to_color_image(image: image::RgbaImage) -> ColorImage {
+    let size = [image.width() as usize, image.height() as usize];
+    ColorImage::from_rgba_unmultiplied(size, image.as_raw())
 }
 
 fn run_cpu_case(
@@ -773,6 +788,10 @@ fn scanned_page_count(page_count: usize, max_pages: Option<usize>) -> usize {
 
 pub fn default_upscale_quality_report_path() -> PathBuf {
     PathBuf::from("perf-fixtures").join("upscale-quality-report.json")
+}
+
+fn clamp_upscale_source_long_edge(source_long_edge: u32) -> u32 {
+    source_long_edge.clamp(64, 4096)
 }
 
 #[cfg(test)]

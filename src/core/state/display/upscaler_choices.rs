@@ -41,7 +41,7 @@ impl DisplayUpscaler {
         Self::Cunny8x32Ds,
     ];
 
-    pub const GPU_METHODS: [Self; 44] = [
+    pub const GPU_METHODS: [Self; 45] = [
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
@@ -55,6 +55,7 @@ impl DisplayUpscaler {
         Self::WgslArtcnnC4F32,
         Self::WgslArtcnnC4F32Dn,
         Self::WgslArtcnnC4F32Ds,
+        Self::WgslSrLabSpanX2,
         Self::WgslAcnetF8B4Luma,
         Self::WgslAcnetF8B4BoxLuma,
         Self::WgslAcnetF8B4HdnLuma,

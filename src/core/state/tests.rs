@@ -262,7 +262,7 @@ fn product_display_upscalers_keep_experiments_separate() {
         "Off"
     );
     assert!(!DisplayUpscaler::WgslSrLabSpanX2.is_benchmark_only());
-    assert!(!DisplayUpscaler::GPU_METHODS.contains(&DisplayUpscaler::WgslSrLabSpanX2));
+    assert!(DisplayUpscaler::GPU_METHODS.contains(&DisplayUpscaler::WgslSrLabSpanX2));
     assert!(DisplayUpscaler::GPU_METHODS.contains(&DisplayUpscaler::WgslArtcnnC4F16));
     assert!(DisplayUpscaler::WgslArtcnnC4F16.is_benchmark_only());
     assert!(DisplayUpscaler::WgslArtcnnC4F32Ds.is_benchmark_only());

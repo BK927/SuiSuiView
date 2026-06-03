@@ -1,9 +1,9 @@
 use super::{
-    compare_features, timing_stats, validate_comparison, validation, SpanGpuComparison,
-    SpanGpuExecutor, SpanGpuTimingStats,
+    buffers::SpanGpuModel, compare_features, timing_stats, validate_comparison, validation,
+    SpanGpuComparison, SpanGpuExecutor, SpanGpuTimingStats,
 };
 use crate::core::sr_lab::cpu::{self, FeatureMap};
-use crate::core::sr_lab::SrLabManifest;
+use crate::core::sr_lab::{blob::SrLabWeights, SrLabManifest};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
@@ -50,6 +50,69 @@ pub struct SpanGpuTileReport {
     pub crop_width: usize,
     pub crop_height: usize,
     pub gpu_elapsed_ms: f64,
+}
+
+pub(crate) struct SpanGpuTiledRunner {
+    executor: SpanGpuExecutor,
+    model: SpanGpuModel,
+}
+
+pub(crate) struct SpanGpuTiledRun {
+    pub(crate) output: FeatureMap,
+}
+
+impl SpanGpuTiledRunner {
+    pub(crate) fn new(weights: &SrLabWeights) -> Result<Self, String> {
+        let executor = SpanGpuExecutor::new()?;
+        let model = executor.upload_model(weights);
+        Ok(Self { executor, model })
+    }
+
+    pub(crate) fn run(
+        &self,
+        manifest: &SrLabManifest,
+        input: &FeatureMap,
+        tile_edge: usize,
+    ) -> Result<SpanGpuTiledRun, String> {
+        if tile_edge == 0 {
+            return Err("SPAN tile edge must be positive".to_owned());
+        }
+        validation::validate_span_manifest(manifest, input)?;
+        let halo = span_tile_halo(manifest)?;
+        let scale = manifest.scale as usize;
+        let output_channels = manifest.output_channels as usize;
+        let tile_specs = span_tile_specs(input, tile_edge, halo);
+        let workspace_shape_count = workspace_shape_count(&tile_specs);
+        if workspace_shape_count > MAX_TILED_WORKSPACE_SHAPES {
+            return Err(format!(
+                "SPAN tile edge produced {workspace_shape_count} distinct workspace shapes; increase tile edge or keep shapes at {MAX_TILED_WORKSPACE_SHAPES} or fewer"
+            ));
+        }
+
+        let mut stitched = FeatureMap::zeros(
+            output_channels,
+            checked_scaled(input.height, scale)?,
+            checked_scaled(input.width, scale)?,
+        );
+        let mut sessions = HashMap::new();
+        for spec in tile_specs.iter().copied() {
+            let crop = crop_input(input, spec);
+            let shape = (crop.width, crop.height);
+            if !sessions.contains_key(&shape) {
+                let session =
+                    self.executor
+                        .create_readback_session(manifest, &self.model, &crop)?;
+                sessions.insert(shape, session);
+            }
+            let gpu = sessions
+                .get(&shape)
+                .ok_or_else(|| "SPAN GPU tiled session cache lookup failed".to_owned())?
+                .run(&crop)?;
+            stitch_tile_output(&mut stitched, &gpu.output, spec, scale)?;
+        }
+
+        Ok(SpanGpuTiledRun { output: stitched })
+    }
 }
 
 pub fn run_span_gpu_tiled_reference(

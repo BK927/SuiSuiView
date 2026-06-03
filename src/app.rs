@@ -1,3 +1,4 @@
+use crate::core::auto_kind::AutoKindPrediction;
 use crate::core::effects::ViewEffects;
 use crate::core::formats::OPENABLE_FILE_EXTENSIONS;
 use crate::core::source::{BookSource, SharedSource};
@@ -28,6 +29,7 @@ use ui::{BookmarkFilter, BookmarkRowsCache, BookmarkThumbnails};
 
 mod about;
 mod adjacent_seed;
+mod auto_kind;
 mod cache;
 mod commands;
 mod context_menu;
@@ -179,6 +181,10 @@ pub struct SuiSuiViewApp {
     debug_compare: DebugCompareState,
     debug_compare_worker: DebugCompareWorker,
     debug_compare_inflight: HashSet<PageCacheKey>,
+    auto_kind_worker: auto_kind::AutoKindWorker,
+    auto_kind_generation: u64,
+    auto_kind_hints: HashMap<PageCacheKey, AutoKindPrediction>,
+    auto_kind_inflight: HashSet<PageCacheKey>,
     bookmark_thumbnails: BookmarkThumbnails,
     gpu_effects_available: bool,
     gpu_target_format: Option<wgpu::TextureFormat>,
@@ -290,6 +296,10 @@ impl SuiSuiViewApp {
             debug_compare: DebugCompareState::default(),
             debug_compare_worker: DebugCompareWorker::new(cc.egui_ctx.clone()),
             debug_compare_inflight: HashSet::new(),
+            auto_kind_worker: auto_kind::AutoKindWorker::new(cc.egui_ctx.clone()),
+            auto_kind_generation: 0,
+            auto_kind_hints: HashMap::new(),
+            auto_kind_inflight: HashSet::new(),
             bookmark_thumbnails: BookmarkThumbnails::new(cc.egui_ctx.clone()),
             gpu_effects_available: cc.wgpu_render_state.is_some(),
             gpu_target_format: cc
@@ -479,7 +489,8 @@ impl SuiSuiViewApp {
                     }
                     self.page_metrics
                         .insert(index, PageMetrics::from_page(&page));
-                    self.insert_prepared_page(key, page);
+                    self.insert_prepared_page(key, page.clone());
+                    self.maybe_enqueue_auto_kind(key, page);
                     if !self.original_inspection_cache_cleanup_pending() {
                         self.prune_decoded_cache();
                     }
@@ -782,6 +793,7 @@ impl SuiSuiViewApp {
         self.upscaled_bytes = 0;
         self.textures.clear();
         self.clear_debug_compare_requests();
+        self.clear_auto_kind_state();
         self.bookmark_thumbnails.clear();
         self.page_errors.clear();
         self.upscale_generation = self.upscale_generation.wrapping_add(1);

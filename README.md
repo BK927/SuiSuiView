@@ -136,6 +136,8 @@ state file.
 - Rendering: transition effect, default/fallback upscaler, GPU acceleration,
   GPU upscaler, EXIF orientation, embedded ICC conversion, prefetch, cache
   memory, and experimental Real-ESRGAN AI upscale settings.
+  GPU upscaler `Auto` is content-aware: confident webtoon, anime, and manga
+  pages use Anime4K M, while photos and uncertain images keep the FSR fallback.
   GPU upscalers marked `(실험)` are selectable for local testing but are not
   treated as stable defaults; SR Lab SPAN also requires a local manifest.
 - Decoders: decode mode and per-format decoder choices. `기본값` is shown as
@@ -189,6 +191,7 @@ standalone files.
 - [x] Large-image preview, cache, and display preparation policy.
 - [x] Optional Real-ESRGAN current-page upscale.
 - [x] WGSL display effects and real-time upscaler candidates.
+- [x] Content-aware Auto display upscaling for drawn pages.
 - [x] Per-format decoder benchmarks and user-selectable decoder settings.
 - [x] Current-page EXIF/file/color information panel.
 - [ ] CBR/RAR read-only archive support after backend and license review.

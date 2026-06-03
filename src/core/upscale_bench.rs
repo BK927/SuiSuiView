@@ -144,6 +144,29 @@ pub fn run_artcnn_render(
     Ok(())
 }
 
+pub fn run_upscale_render(
+    method: DisplayUpscaler,
+    input_path: &Path,
+    output_path: &Path,
+    output_size: [usize; 2],
+) -> Result<(), String> {
+    let input = load_color_image(input_path)?;
+    let gpu = GpuUpscaleBench::new_for_method(Some(method))?;
+    let output = gpu.apply(&input, output_size, method)?;
+    write_color_image(output_path, &output.image)?;
+    println!(
+        "{}: {}x{} -> {}x{} in {:.2} ms",
+        method.label(),
+        input.size[0],
+        input.size[1],
+        output_size[0],
+        output_size[1],
+        millis(output.elapsed)
+    );
+    println!("Output: {}", output_path.display());
+    Ok(())
+}
+
 pub(crate) fn gpu_methods_for_filter(
     method_filter: Option<DisplayUpscaler>,
 ) -> Vec<DisplayUpscaler> {
@@ -152,7 +175,9 @@ pub(crate) fn gpu_methods_for_filter(
         None => DisplayUpscaler::GPU_METHODS
             .iter()
             .copied()
-            .filter(|method| !method.is_artcnn())
+            .filter(|method| {
+                !method.is_artcnn() && !matches!(method, DisplayUpscaler::WgslSrLabSpanX2)
+            })
             .collect(),
     }
 }

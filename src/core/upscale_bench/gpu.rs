@@ -14,12 +14,14 @@ mod anime4k_m;
 mod artcnn;
 mod cunny;
 mod nvidia_nis;
+mod span;
 use acnet::AcnetBench;
 use anime4k::Anime4kBench;
 use anime4k_m::Anime4kMBench;
 use artcnn::ArtcnnBench;
 use cunny::CunnyBench;
 use nvidia_nis::NvidiaNisBench;
+use span::SpanBench;
 
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -39,6 +41,7 @@ pub(crate) struct GpuUpscaleBench {
     anime4k: Option<Anime4kBench>,
     anime4k_m: Option<Anime4kMBench>,
     artcnn: Vec<ArtcnnBench>,
+    span: Option<SpanBench>,
     acnet: Option<AcnetBench>,
     cunny: Option<CunnyBench>,
 }
@@ -158,6 +161,11 @@ impl GpuUpscaleBench {
                 }
             }
         }
+        let span = if method == Some(DisplayUpscaler::WgslSrLabSpanX2) {
+            SpanBench::try_new()
+        } else {
+            None
+        };
         let acnet = if wants_group(method, is_acnet_method) {
             AcnetBench::try_new(&device).await
         } else {
@@ -178,6 +186,7 @@ impl GpuUpscaleBench {
             anime4k,
             anime4k_m,
             artcnn,
+            span,
             acnet,
             cunny,
         })
@@ -215,6 +224,17 @@ impl GpuUpscaleBench {
                 .find(|bench| bench.variant() == variant)
                 .ok_or_else(|| format!("{} GPU pipelines unavailable", variant.label()))?
                 .apply(&self.device, &self.queue, image, output_size);
+        }
+        if method == DisplayUpscaler::WgslSrLabSpanX2 {
+            return self
+                .span
+                .as_ref()
+                .ok_or_else(|| "SR Lab SPAN x2 GPU pipeline unavailable".to_owned())?
+                .apply(image, output_size)
+                .map(|output| GpuUpscaleOutput {
+                    image: output.image,
+                    elapsed: output.elapsed,
+                });
         }
         if method == DisplayUpscaler::NvidiaNis {
             return self

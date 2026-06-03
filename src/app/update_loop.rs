@@ -29,6 +29,9 @@ impl SuiSuiViewApp {
         self.drain_worker_events();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("drain_worker_events");
+        self.drain_auto_kind_events();
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        record_update_phase!("drain_auto_kind_events");
         self.drain_debug_compare_events();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("drain_debug_compare_events");

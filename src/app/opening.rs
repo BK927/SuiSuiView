@@ -233,6 +233,7 @@ impl SuiSuiViewApp {
         self.upscaled_pages.clear();
         self.upscaled_bytes = 0;
         self.textures.clear();
+        self.clear_auto_kind_state();
         self.bookmark_thumbnails.clear();
         self.page_errors.clear();
         self.upscale_generation = self.upscale_generation.wrapping_add(1);
