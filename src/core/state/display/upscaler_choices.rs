@@ -1,6 +1,6 @@
-use super::DisplayUpscaler;
+use super::WgpuUpscaleMethod;
 
-impl DisplayUpscaler {
+impl WgpuUpscaleMethod {
     pub const ALL: [Self; 37] = [
         Self::Auto,
         Self::None,

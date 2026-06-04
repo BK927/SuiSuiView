@@ -194,7 +194,7 @@ mod tests {
             1,
             2048,
             DecodeOptions {
-                cpu_downscaler: CpuScaleFilter::Lanczos3,
+                cpu_downscale_filter: CpuScaleFilter::Lanczos3,
                 ..DecodeOptions::default()
             },
         );

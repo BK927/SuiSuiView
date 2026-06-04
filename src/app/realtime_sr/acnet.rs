@@ -1,5 +1,5 @@
 use super::{RealtimeSrOutput, TEXTURE_FORMAT};
-use crate::core::state::DisplayUpscaler;
+use crate::core::state::WgpuUpscaleMethod;
 use std::borrow::Cow;
 use wgpu::util::DeviceExt;
 
@@ -24,7 +24,7 @@ pub(super) struct AcnetRenderer {
 }
 
 struct AcnetVariant {
-    method: DisplayUpscaler,
+    method: WgpuUpscaleMethod,
     name: &'static str,
     entry_points: &'static [&'static str],
     body_blocks: usize,
@@ -96,7 +96,7 @@ impl AcnetRenderer {
 
     pub(super) fn render(
         &self,
-        method: DisplayUpscaler,
+        method: WgpuUpscaleMethod,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
@@ -333,7 +333,7 @@ struct WorkSizes {
 }
 
 struct AcnetVariantSource {
-    method: DisplayUpscaler,
+    method: WgpuUpscaleMethod,
     name: &'static str,
     shader: &'static str,
     entry_points: &'static [&'static str],
@@ -342,28 +342,28 @@ struct AcnetVariantSource {
 
 const ACNET_VARIANTS: [AcnetVariantSource; 4] = [
     AcnetVariantSource {
-        method: DisplayUpscaler::WgslAcnetF8B4Luma,
+        method: WgpuUpscaleMethod::WgslAcnetF8B4Luma,
         name: "ACNet F8B4 Luma",
         shader: include_str!("../../core/acnet_f8b4_luma.wgsl"),
         entry_points: &F8B4_ENTRY_POINTS,
         body_blocks: 4,
     },
     AcnetVariantSource {
-        method: DisplayUpscaler::WgslAcnetF8B4BoxLuma,
+        method: WgpuUpscaleMethod::WgslAcnetF8B4BoxLuma,
         name: "ACNet F8B4 Box Luma",
         shader: include_str!("../../core/acnet_f8b4_box_luma.wgsl"),
         entry_points: &F8B4_ENTRY_POINTS,
         body_blocks: 4,
     },
     AcnetVariantSource {
-        method: DisplayUpscaler::WgslAcnetF8B4HdnLuma,
+        method: WgpuUpscaleMethod::WgslAcnetF8B4HdnLuma,
         name: "ACNet F8B4 HDN Luma",
         shader: include_str!("../../core/acnet_f8b4_hdn_luma.wgsl"),
         entry_points: &F8B4_ENTRY_POINTS,
         body_blocks: 4,
     },
     AcnetVariantSource {
-        method: DisplayUpscaler::WgslAcnetF8B4BoxHdnLuma,
+        method: WgpuUpscaleMethod::WgslAcnetF8B4BoxHdnLuma,
         name: "ACNet F8B4 Box HDN Luma",
         shader: include_str!("../../core/acnet_f8b4_box_hdn_luma.wgsl"),
         entry_points: &F8B4_ENTRY_POINTS,

@@ -4,7 +4,7 @@ use crate::core::artcnn::{
 };
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
-use crate::core::state::DisplayUpscaler;
+use crate::core::state::WgpuUpscaleMethod;
 use crossbeam_channel::{bounded, Receiver, TryRecvError};
 use std::thread;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -48,7 +48,7 @@ impl ArtcnnRenderer {
 
     pub(super) fn render(
         &mut self,
-        method: DisplayUpscaler,
+        method: WgpuUpscaleMethod,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
@@ -68,7 +68,7 @@ impl ArtcnnRenderer {
         matches!(self.state, ArtcnnRendererState::Loading { .. })
     }
 
-    pub(super) fn warm_up(&mut self, method: DisplayUpscaler, device: &wgpu::Device) {
+    pub(super) fn warm_up(&mut self, method: WgpuUpscaleMethod, device: &wgpu::Device) {
         let Some(variant) = artcnn_variant_for_method(method) else {
             return;
         };
@@ -310,14 +310,14 @@ fn artcnn_skip_reason(error: &str) -> &'static str {
     }
 }
 
-pub(super) fn artcnn_variant_for_method(method: DisplayUpscaler) -> Option<ArtcnnVariant> {
+pub(super) fn artcnn_variant_for_method(method: WgpuUpscaleMethod) -> Option<ArtcnnVariant> {
     match method {
-        DisplayUpscaler::WgslArtcnnC4F16 => Some(ArtcnnVariant::C4F16),
-        DisplayUpscaler::WgslArtcnnC4F16Dn => Some(ArtcnnVariant::C4F16Dn),
-        DisplayUpscaler::WgslArtcnnC4F16Ds => Some(ArtcnnVariant::C4F16Ds),
-        DisplayUpscaler::WgslArtcnnC4F32 => Some(ArtcnnVariant::C4F32),
-        DisplayUpscaler::WgslArtcnnC4F32Dn => Some(ArtcnnVariant::C4F32Dn),
-        DisplayUpscaler::WgslArtcnnC4F32Ds => Some(ArtcnnVariant::C4F32Ds),
+        WgpuUpscaleMethod::WgslArtcnnC4F16 => Some(ArtcnnVariant::C4F16),
+        WgpuUpscaleMethod::WgslArtcnnC4F16Dn => Some(ArtcnnVariant::C4F16Dn),
+        WgpuUpscaleMethod::WgslArtcnnC4F16Ds => Some(ArtcnnVariant::C4F16Ds),
+        WgpuUpscaleMethod::WgslArtcnnC4F32 => Some(ArtcnnVariant::C4F32),
+        WgpuUpscaleMethod::WgslArtcnnC4F32Dn => Some(ArtcnnVariant::C4F32Dn),
+        WgpuUpscaleMethod::WgslArtcnnC4F32Ds => Some(ArtcnnVariant::C4F32Ds),
         _ => None,
     }
 }

@@ -487,9 +487,9 @@ fn show_view_state_card(ui: &mut egui::Ui, app: &SuiSuiViewApp, i18n: I18n) {
                     &i18n.text("about.image.view.resize_filter"),
                     format!(
                         "CPU up: {} / CPU down: {} / WGPU down: {}",
-                        app.settings.cpu_upscaler.label(),
-                        app.settings.cpu_downscaler.label(),
-                        app.settings.wgpu_downscaler.label()
+                        app.settings.cpu_upscale_filter.label(),
+                        app.settings.cpu_downscale_filter.label(),
+                        app.settings.wgpu_downscale_method.label()
                     ),
                 ),
                 (&i18n.text("about.image.view.ai"), ai_state_label(app, i18n)),

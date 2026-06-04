@@ -75,7 +75,7 @@ pub enum CliCommand {
         path: PathBuf,
         source_long_edge: u32,
         target_long_edge: u32,
-        method_filter: Option<crate::core::state::DisplayUpscaler>,
+        method_filter: Option<crate::core::state::WgpuUpscaleMethod>,
         max_pages: Option<usize>,
         report_path: Option<PathBuf>,
     },
@@ -83,7 +83,7 @@ pub enum CliCommand {
         path: PathBuf,
         source_long_edge: u32,
         target_long_edge: u32,
-        method_filter: Option<crate::core::state::DisplayUpscaler>,
+        method_filter: Option<crate::core::state::WgpuUpscaleMethod>,
         max_pages: Option<usize>,
         report_path: Option<PathBuf>,
         visual_dir: Option<PathBuf>,
@@ -110,12 +110,12 @@ pub enum CliCommand {
     },
     ArtcnnRender {
         variant: ArtcnnVariant,
-        method: crate::core::state::DisplayUpscaler,
+        method: crate::core::state::WgpuUpscaleMethod,
         input_path: PathBuf,
         output_path: PathBuf,
     },
     UpscaleRender {
-        method: crate::core::state::DisplayUpscaler,
+        method: crate::core::state::WgpuUpscaleMethod,
         input_path: PathBuf,
         output_path: PathBuf,
         output_size: [usize; 2],
@@ -798,7 +798,7 @@ mod tests {
         };
         assert_eq!(
             method_filter,
-            Some(crate::core::state::DisplayUpscaler::WgslArtcnnC4F16)
+            Some(crate::core::state::WgpuUpscaleMethod::WgslArtcnnC4F16)
         );
         assert_eq!(max_pages, Some(1));
     }
@@ -825,7 +825,7 @@ mod tests {
         };
         assert_eq!(
             method_filter,
-            Some(crate::core::state::DisplayUpscaler::WgslSrLabSpanX2)
+            Some(crate::core::state::WgpuUpscaleMethod::WgslSrLabSpanX2)
         );
         assert_eq!(max_pages, Some(2));
     }

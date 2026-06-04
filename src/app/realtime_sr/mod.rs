@@ -1,6 +1,6 @@
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
-use crate::core::state::DisplayUpscaler;
+use crate::core::state::WgpuUpscaleMethod;
 use std::borrow::Cow;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::time::{Duration, Instant};
@@ -64,53 +64,53 @@ impl RealtimeSrResources {
         }
     }
 
-    pub(super) fn is_supported(method: DisplayUpscaler) -> bool {
+    pub(super) fn is_supported(method: WgpuUpscaleMethod) -> bool {
         matches!(
             method,
-            DisplayUpscaler::CunnyVeryfastNvl
-                | DisplayUpscaler::CunnyVeryfastSoft
-                | DisplayUpscaler::CunnyFasterNvl
-                | DisplayUpscaler::CunnyFasterSoft
-                | DisplayUpscaler::CunnyFasterDs
-                | DisplayUpscaler::CunnyFastNvl
-                | DisplayUpscaler::CunnyFastSoft
-                | DisplayUpscaler::CunnyFastDs
-                | DisplayUpscaler::Cunny2x12Soft
-                | DisplayUpscaler::Cunny2x12Ds
-                | DisplayUpscaler::Cunny3x12Nvl
-                | DisplayUpscaler::Cunny3x12Soft
-                | DisplayUpscaler::Cunny3x12Ds
-                | DisplayUpscaler::Cunny4x12Nvl
-                | DisplayUpscaler::Cunny4x12Soft
-                | DisplayUpscaler::Cunny4x12Ds
-                | DisplayUpscaler::Cunny4x16Nvl
-                | DisplayUpscaler::Cunny4x16Soft
-                | DisplayUpscaler::Cunny4x16Ds
-                | DisplayUpscaler::Cunny4x24Nvl
-                | DisplayUpscaler::Cunny4x24Soft
-                | DisplayUpscaler::Cunny4x24Ds
-                | DisplayUpscaler::Cunny4x32Nvl
-                | DisplayUpscaler::Cunny4x32Soft
-                | DisplayUpscaler::Cunny4x32Ds
-                | DisplayUpscaler::Cunny8x32Nvl
-                | DisplayUpscaler::Cunny8x32Ds
-                | DisplayUpscaler::WgslAnime4kV32CnnX2S
-                | DisplayUpscaler::WgslAnime4kV32CnnX2M
-                | DisplayUpscaler::WgslArtcnnC4F16
-                | DisplayUpscaler::WgslArtcnnC4F16Dn
-                | DisplayUpscaler::WgslArtcnnC4F16Ds
-                | DisplayUpscaler::WgslArtcnnC4F32
-                | DisplayUpscaler::WgslArtcnnC4F32Dn
-                | DisplayUpscaler::WgslArtcnnC4F32Ds
-                | DisplayUpscaler::WgslSrLabSpanX2
-                | DisplayUpscaler::WgslAcnetF8B4Luma
-                | DisplayUpscaler::WgslAcnetF8B4BoxLuma
-                | DisplayUpscaler::WgslAcnetF8B4HdnLuma
-                | DisplayUpscaler::WgslAcnetF8B4BoxHdnLuma
+            WgpuUpscaleMethod::CunnyVeryfastNvl
+                | WgpuUpscaleMethod::CunnyVeryfastSoft
+                | WgpuUpscaleMethod::CunnyFasterNvl
+                | WgpuUpscaleMethod::CunnyFasterSoft
+                | WgpuUpscaleMethod::CunnyFasterDs
+                | WgpuUpscaleMethod::CunnyFastNvl
+                | WgpuUpscaleMethod::CunnyFastSoft
+                | WgpuUpscaleMethod::CunnyFastDs
+                | WgpuUpscaleMethod::Cunny2x12Soft
+                | WgpuUpscaleMethod::Cunny2x12Ds
+                | WgpuUpscaleMethod::Cunny3x12Nvl
+                | WgpuUpscaleMethod::Cunny3x12Soft
+                | WgpuUpscaleMethod::Cunny3x12Ds
+                | WgpuUpscaleMethod::Cunny4x12Nvl
+                | WgpuUpscaleMethod::Cunny4x12Soft
+                | WgpuUpscaleMethod::Cunny4x12Ds
+                | WgpuUpscaleMethod::Cunny4x16Nvl
+                | WgpuUpscaleMethod::Cunny4x16Soft
+                | WgpuUpscaleMethod::Cunny4x16Ds
+                | WgpuUpscaleMethod::Cunny4x24Nvl
+                | WgpuUpscaleMethod::Cunny4x24Soft
+                | WgpuUpscaleMethod::Cunny4x24Ds
+                | WgpuUpscaleMethod::Cunny4x32Nvl
+                | WgpuUpscaleMethod::Cunny4x32Soft
+                | WgpuUpscaleMethod::Cunny4x32Ds
+                | WgpuUpscaleMethod::Cunny8x32Nvl
+                | WgpuUpscaleMethod::Cunny8x32Ds
+                | WgpuUpscaleMethod::WgslAnime4kV32CnnX2S
+                | WgpuUpscaleMethod::WgslAnime4kV32CnnX2M
+                | WgpuUpscaleMethod::WgslArtcnnC4F16
+                | WgpuUpscaleMethod::WgslArtcnnC4F16Dn
+                | WgpuUpscaleMethod::WgslArtcnnC4F16Ds
+                | WgpuUpscaleMethod::WgslArtcnnC4F32
+                | WgpuUpscaleMethod::WgslArtcnnC4F32Dn
+                | WgpuUpscaleMethod::WgslArtcnnC4F32Ds
+                | WgpuUpscaleMethod::WgslSrLabSpanX2
+                | WgpuUpscaleMethod::WgslAcnetF8B4Luma
+                | WgpuUpscaleMethod::WgslAcnetF8B4BoxLuma
+                | WgpuUpscaleMethod::WgslAcnetF8B4HdnLuma
+                | WgpuUpscaleMethod::WgslAcnetF8B4BoxHdnLuma
         )
     }
 
-    pub(super) fn output_size(method: DisplayUpscaler, source_size: [usize; 2]) -> [usize; 2] {
+    pub(super) fn output_size(method: WgpuUpscaleMethod, source_size: [usize; 2]) -> [usize; 2] {
         if Self::is_supported(method) {
             [
                 source_size[0].saturating_mul(2),
@@ -123,7 +123,7 @@ impl RealtimeSrResources {
 
     pub(super) fn render(
         &mut self,
-        method: DisplayUpscaler,
+        method: WgpuUpscaleMethod,
         request_key: u64,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -131,43 +131,43 @@ impl RealtimeSrResources {
         source_size: [usize; 2],
     ) -> Option<RealtimeSrOutput> {
         match method {
-            DisplayUpscaler::CunnyVeryfastNvl
-            | DisplayUpscaler::CunnyVeryfastSoft
-            | DisplayUpscaler::CunnyFasterNvl
-            | DisplayUpscaler::CunnyFasterSoft
-            | DisplayUpscaler::CunnyFasterDs
-            | DisplayUpscaler::CunnyFastNvl
-            | DisplayUpscaler::CunnyFastSoft
-            | DisplayUpscaler::CunnyFastDs
-            | DisplayUpscaler::Cunny2x12Soft
-            | DisplayUpscaler::Cunny2x12Ds
-            | DisplayUpscaler::Cunny3x12Nvl
-            | DisplayUpscaler::Cunny3x12Soft
-            | DisplayUpscaler::Cunny3x12Ds
-            | DisplayUpscaler::Cunny4x12Nvl
-            | DisplayUpscaler::Cunny4x12Soft
-            | DisplayUpscaler::Cunny4x12Ds
-            | DisplayUpscaler::Cunny4x16Nvl
-            | DisplayUpscaler::Cunny4x16Soft
-            | DisplayUpscaler::Cunny4x16Ds
-            | DisplayUpscaler::Cunny4x24Nvl
-            | DisplayUpscaler::Cunny4x24Soft
-            | DisplayUpscaler::Cunny4x24Ds
-            | DisplayUpscaler::Cunny4x32Nvl
-            | DisplayUpscaler::Cunny4x32Soft
-            | DisplayUpscaler::Cunny4x32Ds
-            | DisplayUpscaler::Cunny8x32Nvl
-            | DisplayUpscaler::Cunny8x32Ds => Some(
+            WgpuUpscaleMethod::CunnyVeryfastNvl
+            | WgpuUpscaleMethod::CunnyVeryfastSoft
+            | WgpuUpscaleMethod::CunnyFasterNvl
+            | WgpuUpscaleMethod::CunnyFasterSoft
+            | WgpuUpscaleMethod::CunnyFasterDs
+            | WgpuUpscaleMethod::CunnyFastNvl
+            | WgpuUpscaleMethod::CunnyFastSoft
+            | WgpuUpscaleMethod::CunnyFastDs
+            | WgpuUpscaleMethod::Cunny2x12Soft
+            | WgpuUpscaleMethod::Cunny2x12Ds
+            | WgpuUpscaleMethod::Cunny3x12Nvl
+            | WgpuUpscaleMethod::Cunny3x12Soft
+            | WgpuUpscaleMethod::Cunny3x12Ds
+            | WgpuUpscaleMethod::Cunny4x12Nvl
+            | WgpuUpscaleMethod::Cunny4x12Soft
+            | WgpuUpscaleMethod::Cunny4x12Ds
+            | WgpuUpscaleMethod::Cunny4x16Nvl
+            | WgpuUpscaleMethod::Cunny4x16Soft
+            | WgpuUpscaleMethod::Cunny4x16Ds
+            | WgpuUpscaleMethod::Cunny4x24Nvl
+            | WgpuUpscaleMethod::Cunny4x24Soft
+            | WgpuUpscaleMethod::Cunny4x24Ds
+            | WgpuUpscaleMethod::Cunny4x32Nvl
+            | WgpuUpscaleMethod::Cunny4x32Soft
+            | WgpuUpscaleMethod::Cunny4x32Ds
+            | WgpuUpscaleMethod::Cunny8x32Nvl
+            | WgpuUpscaleMethod::Cunny8x32Ds => Some(
                 self.cunny
                     .get_or_insert_with(|| CunnyRenderer::new(device))
                     .render(method, device, encoder, source_view, source_size),
             ),
-            DisplayUpscaler::WgslAnime4kV32CnnX2S => Some(
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2S => Some(
                 self.anime4k_s
                     .get_or_insert_with(|| Anime4kSRenderer::new(device))
                     .render(device, encoder, source_view, source_size),
             ),
-            DisplayUpscaler::WgslAnime4kV32CnnX2M => Some(
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2M => Some(
                 self.anime4k_m
                     .get_or_insert_with(|| Anime4kMRenderer::new(device))
                     .render(device, encoder, source_view, source_size),
@@ -176,14 +176,14 @@ impl RealtimeSrResources {
                 .artcnn
                 .get_or_insert_with(ArtcnnRenderer::new)
                 .render(method, device, encoder, source_view, source_size),
-            DisplayUpscaler::WgslSrLabSpanX2 => self
+            WgpuUpscaleMethod::WgslSrLabSpanX2 => self
                 .span
                 .get_or_insert_with(SpanRenderer::new)
                 .render(request_key, device, encoder, source_view, source_size),
-            DisplayUpscaler::WgslAcnetF8B4Luma
-            | DisplayUpscaler::WgslAcnetF8B4BoxLuma
-            | DisplayUpscaler::WgslAcnetF8B4HdnLuma
-            | DisplayUpscaler::WgslAcnetF8B4BoxHdnLuma => self
+            WgpuUpscaleMethod::WgslAcnetF8B4Luma
+            | WgpuUpscaleMethod::WgslAcnetF8B4BoxLuma
+            | WgpuUpscaleMethod::WgslAcnetF8B4HdnLuma
+            | WgpuUpscaleMethod::WgslAcnetF8B4BoxHdnLuma => self
                 .acnet
                 .get_or_insert_with(|| AcnetRenderer::new(device))
                 .render(method, device, encoder, source_view, source_size),
@@ -191,12 +191,12 @@ impl RealtimeSrResources {
         }
     }
 
-    pub(super) fn has_pending_async_work(&self, method: DisplayUpscaler) -> bool {
+    pub(super) fn has_pending_async_work(&self, method: WgpuUpscaleMethod) -> bool {
         match method {
             method if method.is_artcnn() => {
                 self.artcnn.as_ref().is_some_and(ArtcnnRenderer::is_loading)
             }
-            DisplayUpscaler::WgslSrLabSpanX2 => self
+            WgpuUpscaleMethod::WgslSrLabSpanX2 => self
                 .span
                 .as_ref()
                 .is_some_and(SpanRenderer::has_pending_work),
@@ -204,21 +204,21 @@ impl RealtimeSrResources {
         }
     }
 
-    pub(super) fn cancel_inactive_pending_work(&mut self, active_method: DisplayUpscaler) {
-        if !matches!(active_method, DisplayUpscaler::WgslSrLabSpanX2) {
+    pub(super) fn cancel_inactive_pending_work(&mut self, active_method: WgpuUpscaleMethod) {
+        if !matches!(active_method, WgpuUpscaleMethod::WgslSrLabSpanX2) {
             if let Some(span) = &mut self.span {
                 span.cancel_pending_render();
             }
         }
     }
 
-    pub(super) fn warm_up_async(&mut self, method: DisplayUpscaler, device: &wgpu::Device) {
+    pub(super) fn warm_up_async(&mut self, method: WgpuUpscaleMethod, device: &wgpu::Device) {
         match method {
             method if method.is_artcnn() => self
                 .artcnn
                 .get_or_insert_with(ArtcnnRenderer::new)
                 .warm_up(method, device),
-            DisplayUpscaler::WgslSrLabSpanX2 => self
+            WgpuUpscaleMethod::WgslSrLabSpanX2 => self
                 .span
                 .get_or_insert_with(SpanRenderer::new)
                 .warm_up(device),
@@ -234,7 +234,7 @@ struct CunnyRenderer {
 }
 
 struct CunnyVariant {
-    method: DisplayUpscaler,
+    method: WgpuUpscaleMethod,
     name: &'static str,
     shader: &'static str,
     entry_points: &'static [&'static str],
@@ -300,7 +300,7 @@ impl CunnyRenderer {
 
     fn render(
         &mut self,
-        method: DisplayUpscaler,
+        method: WgpuUpscaleMethod,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
@@ -479,7 +479,7 @@ fn intermediate_view<'a>(
 }
 
 struct CunnyVariantSource {
-    method: DisplayUpscaler,
+    method: WgpuUpscaleMethod,
     name: &'static str,
     shader: &'static str,
     entry_points: &'static [&'static str],
@@ -488,189 +488,189 @@ struct CunnyVariantSource {
 
 const CUNNY_VARIANTS: [CunnyVariantSource; 27] = [
     CunnyVariantSource {
-        method: DisplayUpscaler::CunnyVeryfastNvl,
+        method: WgpuUpscaleMethod::CunnyVeryfastNvl,
         name: "CuNNy veryfast NVL",
         shader: include_str!("../../core/cunny_veryfast_nvl.wgsl"),
         entry_points: &CUNNY_VERYFAST_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_VERYFAST_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::CunnyVeryfastSoft,
+        method: WgpuUpscaleMethod::CunnyVeryfastSoft,
         name: "CuNNy veryfast SOFT",
         shader: include_str!("../../core/cunny_veryfast_soft.wgsl"),
         entry_points: &CUNNY_VERYFAST_SOFT_ENTRY_POINTS,
         pass_specs: &CUNNY_VERYFAST_SOFT_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::CunnyFasterNvl,
+        method: WgpuUpscaleMethod::CunnyFasterNvl,
         name: "CuNNy faster NVL",
         shader: include_str!("../../core/cunny_faster_nvl.wgsl"),
         entry_points: &CUNNY_FASTER_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_FASTER_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::CunnyFasterSoft,
+        method: WgpuUpscaleMethod::CunnyFasterSoft,
         name: "CuNNy faster SOFT",
         shader: include_str!("../../core/cunny_faster_soft.wgsl"),
         entry_points: &CUNNY_FASTER_SOFT_ENTRY_POINTS,
         pass_specs: &CUNNY_FASTER_SOFT_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::CunnyFasterDs,
+        method: WgpuUpscaleMethod::CunnyFasterDs,
         name: "CuNNy faster DS",
         shader: include_str!("../../core/cunny_faster_ds.wgsl"),
         entry_points: &CUNNY_FASTER_DS_ENTRY_POINTS,
         pass_specs: &CUNNY_FASTER_DS_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::CunnyFastNvl,
+        method: WgpuUpscaleMethod::CunnyFastNvl,
         name: "CuNNy fast NVL",
         shader: include_str!("../../core/cunny_fast_nvl.wgsl"),
         entry_points: &CUNNY_FAST_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_FAST_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::CunnyFastSoft,
+        method: WgpuUpscaleMethod::CunnyFastSoft,
         name: "CuNNy fast SOFT",
         shader: include_str!("../../core/cunny_fast_soft.wgsl"),
         entry_points: &CUNNY_FAST_SOFT_ENTRY_POINTS,
         pass_specs: &CUNNY_FAST_SOFT_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::CunnyFastDs,
+        method: WgpuUpscaleMethod::CunnyFastDs,
         name: "CuNNy fast DS",
         shader: include_str!("../../core/cunny_fast_ds.wgsl"),
         entry_points: &CUNNY_FAST_DS_ENTRY_POINTS,
         pass_specs: &CUNNY_FAST_DS_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny2x12Soft,
+        method: WgpuUpscaleMethod::Cunny2x12Soft,
         name: "CuNNy 2x12 SOFT",
         shader: include_str!("../../core/cunny_2x12_soft.wgsl"),
         entry_points: &CUNNY_2X12_SOFT_ENTRY_POINTS,
         pass_specs: &CUNNY_2X12_MPV_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny2x12Ds,
+        method: WgpuUpscaleMethod::Cunny2x12Ds,
         name: "CuNNy 2x12 DS",
         shader: include_str!("../../core/cunny_2x12_ds.wgsl"),
         entry_points: &CUNNY_2X12_DS_ENTRY_POINTS,
         pass_specs: &CUNNY_2X12_MPV_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny3x12Nvl,
+        method: WgpuUpscaleMethod::Cunny3x12Nvl,
         name: "CuNNy 3x12 NVL",
         shader: include_str!("../../core/cunny_3x12_nvl.wgsl"),
         entry_points: &CUNNY_3X12_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_3X12_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny3x12Soft,
+        method: WgpuUpscaleMethod::Cunny3x12Soft,
         name: "CuNNy 3x12 SOFT",
         shader: include_str!("../../core/cunny_3x12_soft.wgsl"),
         entry_points: &CUNNY_3X12_SOFT_ENTRY_POINTS,
         pass_specs: &CUNNY_3X12_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny3x12Ds,
+        method: WgpuUpscaleMethod::Cunny3x12Ds,
         name: "CuNNy 3x12 DS",
         shader: include_str!("../../core/cunny_3x12_ds.wgsl"),
         entry_points: &CUNNY_3X12_DS_ENTRY_POINTS,
         pass_specs: &CUNNY_3X12_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny4x12Nvl,
+        method: WgpuUpscaleMethod::Cunny4x12Nvl,
         name: "CuNNy 4x12 NVL",
         shader: include_str!("../../core/cunny_4x12_nvl.wgsl"),
         entry_points: &CUNNY_4X12_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_4X12_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny4x12Soft,
+        method: WgpuUpscaleMethod::Cunny4x12Soft,
         name: "CuNNy 4x12 SOFT",
         shader: include_str!("../../core/cunny_4x12_soft.wgsl"),
         entry_points: &CUNNY_4X12_SOFT_ENTRY_POINTS,
         pass_specs: &CUNNY_4X12_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny4x12Ds,
+        method: WgpuUpscaleMethod::Cunny4x12Ds,
         name: "CuNNy 4x12 DS",
         shader: include_str!("../../core/cunny_4x12_ds.wgsl"),
         entry_points: &CUNNY_4X12_DS_ENTRY_POINTS,
         pass_specs: &CUNNY_4X12_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny4x16Nvl,
+        method: WgpuUpscaleMethod::Cunny4x16Nvl,
         name: "CuNNy 4x16 NVL",
         shader: include_str!("../../core/cunny_4x16_nvl.wgsl"),
         entry_points: &CUNNY_4X16_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_4X16_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny4x16Soft,
+        method: WgpuUpscaleMethod::Cunny4x16Soft,
         name: "CuNNy 4x16 SOFT",
         shader: include_str!("../../core/cunny_4x16_soft.wgsl"),
         entry_points: &CUNNY_4X16_SOFT_ENTRY_POINTS,
         pass_specs: &CUNNY_4X16_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny4x16Ds,
+        method: WgpuUpscaleMethod::Cunny4x16Ds,
         name: "CuNNy 4x16 DS",
         shader: include_str!("../../core/cunny_4x16_ds.wgsl"),
         entry_points: &CUNNY_4X16_DS_ENTRY_POINTS,
         pass_specs: &CUNNY_4X16_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny4x24Nvl,
+        method: WgpuUpscaleMethod::Cunny4x24Nvl,
         name: "CuNNy 4x24 NVL",
         shader: include_str!("../../core/cunny_4x24_nvl.wgsl"),
         entry_points: &CUNNY_4X24_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_4X24_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny4x24Soft,
+        method: WgpuUpscaleMethod::Cunny4x24Soft,
         name: "CuNNy 4x24 SOFT",
         shader: include_str!("../../core/cunny_4x24_soft.wgsl"),
         entry_points: &CUNNY_4X24_SOFT_ENTRY_POINTS,
         pass_specs: &CUNNY_4X24_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny4x24Ds,
+        method: WgpuUpscaleMethod::Cunny4x24Ds,
         name: "CuNNy 4x24 DS",
         shader: include_str!("../../core/cunny_4x24_ds.wgsl"),
         entry_points: &CUNNY_4X24_DS_ENTRY_POINTS,
         pass_specs: &CUNNY_4X24_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny4x32Nvl,
+        method: WgpuUpscaleMethod::Cunny4x32Nvl,
         name: "CuNNy 4x32 NVL",
         shader: include_str!("../../core/cunny_4x32_nvl.wgsl"),
         entry_points: &CUNNY_4X32_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_4X32_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny4x32Soft,
+        method: WgpuUpscaleMethod::Cunny4x32Soft,
         name: "CuNNy 4x32 SOFT",
         shader: include_str!("../../core/cunny_4x32_soft.wgsl"),
         entry_points: &CUNNY_4X32_SOFT_ENTRY_POINTS,
         pass_specs: &CUNNY_4X32_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny4x32Ds,
+        method: WgpuUpscaleMethod::Cunny4x32Ds,
         name: "CuNNy 4x32 DS",
         shader: include_str!("../../core/cunny_4x32_ds.wgsl"),
         entry_points: &CUNNY_4X32_DS_ENTRY_POINTS,
         pass_specs: &CUNNY_4X32_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny8x32Nvl,
+        method: WgpuUpscaleMethod::Cunny8x32Nvl,
         name: "CuNNy 8x32 NVL",
         shader: include_str!("../../core/cunny_8x32_nvl.wgsl"),
         entry_points: &CUNNY_8X32_NVL_ENTRY_POINTS,
         pass_specs: &CUNNY_8X32_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: DisplayUpscaler::Cunny8x32Ds,
+        method: WgpuUpscaleMethod::Cunny8x32Ds,
         name: "CuNNy 8x32 DS",
         shader: include_str!("../../core/cunny_8x32_ds.wgsl"),
         entry_points: &CUNNY_8X32_DS_ENTRY_POINTS,

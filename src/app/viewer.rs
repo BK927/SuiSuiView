@@ -198,8 +198,8 @@ impl SuiSuiViewApp {
         .cloned()
         .expect("best page key should exist in decoded cache");
         if use_wgsl_effects {
-            let display_upscaler =
-                self.content_aware_display_upscaler(best_key, self.active_display_upscaler());
+            let wgpu_upscale_method =
+                self.content_aware_wgpu_upscale_method(best_key, self.active_wgpu_upscale_method());
             #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
             perf::record_open_to_first_visible_if_pending(
                 &mut self.open_to_first_visible_trace,
@@ -223,8 +223,8 @@ impl SuiSuiViewApp {
                     self.effects.transform,
                 ),
                 effects: self.effects,
-                display_upscaler,
-                wgpu_downscaler: self.settings.wgpu_downscaler,
+                wgpu_upscale_method,
+                wgpu_downscale_method: self.settings.wgpu_downscale_method,
             };
         }
         let image = if self.effects == ViewEffects::default() {
@@ -520,8 +520,8 @@ impl SuiSuiViewApp {
                     image_size,
                     rgba,
                     effects,
-                    display_upscaler,
-                    wgpu_downscaler,
+                    wgpu_upscale_method,
+                    wgpu_downscale_method,
                     ..
                 } => {
                     if !self.paint_ready_gpu_visual(
@@ -533,8 +533,8 @@ impl SuiSuiViewApp {
                             image_size,
                             rgba,
                             effects,
-                            display_upscaler,
-                            wgpu_downscaler,
+                            wgpu_upscale_method,
+                            wgpu_downscale_method,
                             opacity: request.alpha,
                         },
                         tint,

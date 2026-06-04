@@ -16,7 +16,7 @@ pub(super) fn prepare_image_with_scaled_libwebp(
     options: DecodeOptions,
 ) -> Result<Option<PreparedPage>, String> {
     if !matches!(
-        options.cpu_downscaler,
+        options.cpu_downscale_filter,
         crate::core::state::CpuScaleFilter::Hamming
             | crate::core::state::CpuScaleFilter::CatmullRom
     ) {
@@ -159,7 +159,7 @@ mod tests {
                     webp: DecoderPreference::LibWebp,
                     ..DecoderPreferences::default()
                 },
-                cpu_downscaler: crate::core::state::CpuScaleFilter::Lanczos3,
+                cpu_downscale_filter: crate::core::state::CpuScaleFilter::Lanczos3,
                 ..DecodeOptions::default()
             },
         )

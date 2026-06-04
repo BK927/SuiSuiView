@@ -7,7 +7,9 @@ use crate::core::gpu_effect::{
 };
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
-use crate::core::state::{DisplayUpscaler, GpuEffectMode, RendererMode, WgpuDownscaler};
+use crate::core::state::{
+    GpuEffectMode, RendererMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod,
+};
 use eframe::egui::{self, PaintCallbackInfo, Rect};
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use lru::LruCache;
@@ -26,7 +28,7 @@ const GPU_SOURCE_TEXTURE_CACHE_LIMIT: usize = 32;
 const GPU_DRAW_BIND_GROUP_CACHE_LIMIT: usize = 16;
 const GPU_INTERMEDIATE_TEXTURE_CACHE_LIMIT: usize = 16;
 const GPU_REALTIME_SR_DEFER_CACHE_LIMIT: usize = 64;
-const EXPERIMENT_DISPLAY_UPSCALER_ENV: &str = "SUISUIVIEW_EXPERIMENT_DISPLAY_UPSCALER";
+const EXPERIMENT_WGPU_UPSCALE_METHOD_ENV: &str = "SUISUIVIEW_EXPERIMENT_WGPU_UPSCALE_METHOD";
 const EXPERIMENT_SPAN_DISPLAY_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_DISPLAY";
 const EXPERIMENT_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_SPAN_MANIFEST";
 const SR_LAB_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_MANIFEST";
@@ -45,8 +47,8 @@ pub(super) struct GpuPaintRequest {
     pub(super) image_size: [usize; 2],
     pub(super) rgba: Arc<[u8]>,
     pub(super) effects: ViewEffects,
-    pub(super) display_upscaler: DisplayUpscaler,
-    pub(super) wgpu_downscaler: WgpuDownscaler,
+    pub(super) wgpu_upscale_method: WgpuUpscaleMethod,
+    pub(super) wgpu_downscale_method: WgpuDownscaleMethod,
     pub(super) opacity: f32,
 }
 
@@ -58,30 +60,30 @@ impl SuiSuiViewApp {
         hasher.finish()
     }
 
-    pub(super) fn active_display_upscaler(&self) -> DisplayUpscaler {
+    pub(super) fn active_wgpu_upscale_method(&self) -> WgpuUpscaleMethod {
         if !self.gpu_effects_available
             || self.gpu_target_format.is_none()
             || matches!(self.settings.gpu_effect_mode, GpuEffectMode::CpuOnly)
             || !matches!(self.settings.renderer_mode, RendererMode::Wgpu)
         {
-            return DisplayUpscaler::None;
+            return WgpuUpscaleMethod::None;
         }
-        if let Some(upscaler) = experimental_display_upscaler_override() {
+        if let Some(upscaler) = experimental_wgpu_upscale_method_override() {
             return upscaler;
         }
         let span_manifest_present = matches!(
-            self.settings.display_upscaler,
-            DisplayUpscaler::WgslSrLabSpanX2
+            self.settings.wgpu_upscale_method,
+            WgpuUpscaleMethod::WgslSrLabSpanX2
         ) && span_manifest_env_present();
-        display_upscaler_from_settings(self.settings.display_upscaler, span_manifest_present)
+        wgpu_upscale_method_from_settings(self.settings.wgpu_upscale_method, span_manifest_present)
     }
 
     pub(super) fn can_paint_wgsl_effects(&self) -> bool {
-        let display_upscaler = self.active_display_upscaler();
+        let wgpu_upscale_method = self.active_wgpu_upscale_method();
         self.gpu_effects_available
             && (self.effects != ViewEffects::default()
-                || display_upscaler != DisplayUpscaler::None
-                || self.settings.wgpu_downscaler != WgpuDownscaler::Bilinear)
+                || wgpu_upscale_method != WgpuUpscaleMethod::None
+                || self.settings.wgpu_downscale_method != WgpuDownscaleMethod::Bilinear)
             && matches!(
                 self.settings.gpu_effect_mode,
                 GpuEffectMode::Auto | GpuEffectMode::Wgsl
@@ -102,16 +104,16 @@ impl SuiSuiViewApp {
             image_size: request.image_size,
             rgba: request.rgba,
             effects: request.effects,
-            display_upscaler: request.display_upscaler,
-            wgpu_downscaler: request.wgpu_downscaler,
+            wgpu_upscale_method: request.wgpu_upscale_method,
+            wgpu_downscale_method: request.wgpu_downscale_method,
             opacity: request.opacity.clamp(0.0, 1.0),
             rect: request.rect,
             target_format,
             draw_id: draw_id(
                 request.source_key,
                 request.effects,
-                request.display_upscaler,
-                request.wgpu_downscaler,
+                request.wgpu_upscale_method,
+                request.wgpu_downscale_method,
                 request.rect,
                 request.opacity,
             ),
@@ -140,11 +142,11 @@ impl SuiSuiViewApp {
     }
 }
 
-fn experimental_display_upscaler_override() -> Option<DisplayUpscaler> {
-    static OVERRIDE: OnceLock<Option<DisplayUpscaler>> = OnceLock::new();
+fn experimental_wgpu_upscale_method_override() -> Option<WgpuUpscaleMethod> {
+    static OVERRIDE: OnceLock<Option<WgpuUpscaleMethod>> = OnceLock::new();
     *OVERRIDE.get_or_init(|| {
-        let generic_value = std::env::var(EXPERIMENT_DISPLAY_UPSCALER_ENV).ok();
-        parse_experimental_display_upscaler(
+        let generic_value = std::env::var(EXPERIMENT_WGPU_UPSCALE_METHOD_ENV).ok();
+        parse_experimental_wgpu_upscale_method(
             generic_value.as_deref(),
             opt_in_env_enabled(EXPERIMENT_SPAN_DISPLAY_ENV),
             span_manifest_env_present(),
@@ -152,41 +154,41 @@ fn experimental_display_upscaler_override() -> Option<DisplayUpscaler> {
     })
 }
 
-fn parse_experimental_display_upscaler(
+fn parse_experimental_wgpu_upscale_method(
     generic_value: Option<&str>,
     explicit_span: bool,
     span_manifest_present: bool,
-) -> Option<DisplayUpscaler> {
+) -> Option<WgpuUpscaleMethod> {
     if let Some(value) = generic_value.map(str::trim) {
-        if let Some(method) = DisplayUpscaler::GPU_METHODS
+        if let Some(method) = WgpuUpscaleMethod::GPU_METHODS
             .iter()
             .copied()
             .find(|method| method.is_artcnn() && value.eq_ignore_ascii_case(method.token()))
         {
             return Some(method);
         }
-        if value.eq_ignore_ascii_case(DisplayUpscaler::WgslSrLabSpanX2.token()) {
+        if value.eq_ignore_ascii_case(WgpuUpscaleMethod::WgslSrLabSpanX2.token()) {
             if span_manifest_present {
-                return Some(DisplayUpscaler::WgslSrLabSpanX2);
+                return Some(WgpuUpscaleMethod::WgslSrLabSpanX2);
             }
         }
     }
     if explicit_span && span_manifest_present {
-        Some(DisplayUpscaler::WgslSrLabSpanX2)
+        Some(WgpuUpscaleMethod::WgslSrLabSpanX2)
     } else {
         None
     }
 }
 
-fn display_upscaler_from_settings(
-    upscaler: DisplayUpscaler,
+fn wgpu_upscale_method_from_settings(
+    upscaler: WgpuUpscaleMethod,
     span_manifest_present: bool,
-) -> DisplayUpscaler {
+) -> WgpuUpscaleMethod {
     match upscaler {
-        DisplayUpscaler::None => DisplayUpscaler::None,
-        DisplayUpscaler::WgslSrLabSpanX2 if !span_manifest_present => DisplayUpscaler::Auto,
+        WgpuUpscaleMethod::None => WgpuUpscaleMethod::None,
+        WgpuUpscaleMethod::WgslSrLabSpanX2 if !span_manifest_present => WgpuUpscaleMethod::Auto,
         upscaler if upscaler.user_selectable() => upscaler,
-        _ => DisplayUpscaler::Auto,
+        _ => WgpuUpscaleMethod::Auto,
     }
 }
 
@@ -238,8 +240,8 @@ struct GpuEffectCallback {
     image_size: [usize; 2],
     rgba: Arc<[u8]>,
     effects: ViewEffects,
-    display_upscaler: DisplayUpscaler,
-    wgpu_downscaler: WgpuDownscaler,
+    wgpu_upscale_method: WgpuUpscaleMethod,
+    wgpu_downscale_method: WgpuDownscaleMethod,
     opacity: f32,
     rect: Rect,
     target_format: wgpu::TextureFormat,
@@ -292,10 +294,12 @@ impl CallbackTrait for GpuEffectCallback {
         let output_size = output_size_for_effects(self.image_size, self.effects);
         let (origin, target_size) = viewport_rect(self.rect, screen_descriptor);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        let effective_upscaler = self
-            .display_upscaler
-            .resolve_for_render(output_size, target_size)
-            .unwrap_or(DisplayUpscaler::None);
+        let scale_plan = WgpuScalePlan::resolve(
+            output_size,
+            target_size,
+            self.wgpu_upscale_method,
+            self.wgpu_downscale_method,
+        );
         if let Some(source_bind_group) = resources
             .source_textures
             .peek(&self.source_key)
@@ -309,8 +313,8 @@ impl CallbackTrait for GpuEffectCallback {
                 self.image_size,
                 output_size,
                 self.effects,
-                self.display_upscaler,
-                self.wgpu_downscaler,
+                self.wgpu_upscale_method,
+                self.wgpu_downscale_method,
                 origin,
                 target_size,
                 self.opacity,
@@ -332,9 +336,17 @@ impl CallbackTrait for GpuEffectCallback {
                 PerfField::Bool("resources_created", resources_created),
                 PerfField::Bool("resources_recreated", resources_recreated),
                 PerfField::Bool("source_uploaded", source_uploaded),
-                PerfField::Str("display_upscaler", self.display_upscaler.token()),
-                PerfField::Str("effective_display_upscaler", effective_upscaler.token()),
-                PerfField::Str("wgpu_downscaler", self.wgpu_downscaler.token()),
+                PerfField::Str("wgpu_upscale_method", self.wgpu_upscale_method.token()),
+                PerfField::Str(
+                    "effective_wgpu_upscale_method",
+                    scale_plan.effective_upscale_method.token(),
+                ),
+                PerfField::Str("wgpu_downscale_method", self.wgpu_downscale_method.token()),
+                PerfField::Str(
+                    "effective_wgpu_downscale_method",
+                    scale_plan.effective_downscale_method.token(),
+                ),
+                PerfField::Str("scale_direction", scale_plan.direction.token()),
             ],
         );
         Vec::new()
@@ -620,17 +632,21 @@ impl GpuPaintResources {
         source_size: [usize; 2],
         output_size: [usize; 2],
         effects: ViewEffects,
-        display_upscaler: DisplayUpscaler,
-        wgpu_downscaler: WgpuDownscaler,
+        wgpu_upscale_method: WgpuUpscaleMethod,
+        wgpu_downscale_method: WgpuDownscaleMethod,
         origin: [u32; 2],
         target_size: [u32; 2],
         opacity: f32,
         ctx: &egui::Context,
     ) -> GpuDrawState {
-        let effective_upscaler = display_upscaler
-            .resolve_for_render(output_size, target_size)
-            .unwrap_or(DisplayUpscaler::None);
-        let effective_downscaler = wgpu_downscaler.resolve_for_render(output_size, target_size);
+        let scale_plan = WgpuScalePlan::resolve(
+            output_size,
+            target_size,
+            wgpu_upscale_method,
+            wgpu_downscale_method,
+        );
+        let effective_upscaler = scale_plan.effective_upscale_method;
+        let effective_downscaler = scale_plan.effective_downscale_method;
         self.realtime_sr
             .cancel_inactive_pending_work(effective_upscaler);
         if RealtimeSrResources::is_supported(effective_upscaler) {
@@ -652,7 +668,7 @@ impl GpuPaintResources {
                 ctx.request_repaint_after(Duration::from_millis(16));
             }
             if let Some(intermediate) = self.intermediate_textures.peek(&sr_key).cloned() {
-                record_display_upscaler_render(
+                record_wgpu_upscale_method_render(
                     effective_upscaler,
                     source_size,
                     output_size,
@@ -664,7 +680,7 @@ impl GpuPaintResources {
                     intermediate.size,
                     output_size_for_effects(intermediate.size, effects),
                     effects,
-                    DisplayUpscaler::None,
+                    WgpuUpscaleMethod::None,
                     effective_downscaler,
                     origin,
                     target_size,
@@ -702,7 +718,7 @@ impl GpuPaintResources {
                 output_size,
                 effects,
                 effective_upscaler,
-                WgpuDownscaler::Bilinear,
+                WgpuDownscaleMethod::Bilinear,
                 [0, 0],
                 target_size,
                 1.0,
@@ -726,7 +742,7 @@ impl GpuPaintResources {
                 opacity,
             );
             let params_bind_group = self.params_bind_group_for(device, rcas_params);
-            record_display_upscaler_render(
+            record_wgpu_upscale_method_render(
                 effective_upscaler,
                 source_size,
                 output_size,
@@ -774,7 +790,7 @@ impl GpuPaintResources {
         }
 
         if effective_upscaler.shader_method_id() != 0 {
-            record_display_upscaler_render(
+            record_wgpu_upscale_method_render(
                 effective_upscaler,
                 source_size,
                 output_size,
@@ -810,7 +826,7 @@ impl GpuPaintResources {
         source_size: [usize; 2],
         output_size: [usize; 2],
         effects: ViewEffects,
-        downscaler: WgpuDownscaler,
+        downscaler: WgpuDownscaleMethod,
         origin: [u32; 2],
         target_size: [u32; 2],
         opacity: f32,
@@ -876,7 +892,7 @@ impl GpuPaintResources {
                 source_size,
                 output_size,
                 effects,
-                DisplayUpscaler::None,
+                WgpuUpscaleMethod::None,
                 downscaler.base_filter(),
                 origin,
                 target_size,
@@ -893,8 +909,8 @@ impl GpuPaintResources {
             current_size,
             current_size,
             ViewEffects::default(),
-            DisplayUpscaler::None,
-            WgpuDownscaler::Bilinear,
+            WgpuUpscaleMethod::None,
+            WgpuDownscaleMethod::Bilinear,
             origin,
             target_size,
             opacity,
@@ -915,8 +931,8 @@ impl GpuPaintResources {
         source_size: [usize; 2],
         output_size: [usize; 2],
         effects: ViewEffects,
-        downscaler: WgpuDownscaler,
-        stage_filter: WgpuDownscaler,
+        downscaler: WgpuDownscaleMethod,
+        stage_filter: WgpuDownscaleMethod,
         current_bind_group: &wgpu::BindGroup,
         current_size: [usize; 2],
         stage_size: [u32; 2],
@@ -946,7 +962,7 @@ impl GpuPaintResources {
                 source_size,
                 output_size,
                 effects,
-                DisplayUpscaler::None,
+                WgpuUpscaleMethod::None,
                 stage_filter,
                 [0, 0],
                 stage_size,
@@ -957,7 +973,7 @@ impl GpuPaintResources {
                 current_size,
                 current_size,
                 ViewEffects::default(),
-                DisplayUpscaler::None,
+                WgpuUpscaleMethod::None,
                 stage_filter,
                 [0, 0],
                 stage_size,
@@ -1005,8 +1021,8 @@ impl GpuPaintResources {
             source_size,
             output_size,
             effects,
-            DisplayUpscaler::None,
-            WgpuDownscaler::Bilinear,
+            WgpuUpscaleMethod::None,
+            WgpuDownscaleMethod::Bilinear,
             [0, 0],
             output_size.map(|dimension| dimension.max(1) as u32),
             1.0,
@@ -1145,7 +1161,11 @@ impl GpuPaintResources {
         self.prune_intermediate_textures();
     }
 
-    fn should_defer_realtime_sr_first_frame(&mut self, key: u64, method: DisplayUpscaler) -> bool {
+    fn should_defer_realtime_sr_first_frame(
+        &mut self,
+        key: u64,
+        method: WgpuUpscaleMethod,
+    ) -> bool {
         if !defer_initial_realtime_sr_frame(method)
             || self.intermediate_textures.peek(&key).is_some()
         {
@@ -1165,7 +1185,7 @@ impl GpuPaintResources {
         key: u64,
         source_key: GpuPaintSourceKey,
         source_size: [usize; 2],
-        method: DisplayUpscaler,
+        method: WgpuUpscaleMethod,
     ) {
         if self.intermediate_textures.get(&key).is_some() {
             return;
@@ -1362,8 +1382,8 @@ impl GpuPaintResources {
 }
 
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-fn record_display_upscaler_render(
-    method: DisplayUpscaler,
+fn record_wgpu_upscale_method_render(
+    method: WgpuUpscaleMethod,
     source_size: [usize; 2],
     output_size: [usize; 2],
     target_size: [u32; 2],
@@ -1371,7 +1391,7 @@ fn record_display_upscaler_render(
     path: &'static str,
 ) {
     perf_trace::record_duration(
-        "display_upscaler_render",
+        "wgpu_upscale_method_render",
         Duration::ZERO,
         &[
             PerfField::Str("method", method.token()),
@@ -1390,7 +1410,7 @@ fn record_display_upscaler_render(
 
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 fn record_realtime_sr_texture_ready(
-    method: DisplayUpscaler,
+    method: WgpuUpscaleMethod,
     source_size: [usize; 2],
     output_size: [usize; 2],
     output_byte_size: usize,
@@ -1417,7 +1437,7 @@ fn record_realtime_sr_texture_ready(
 
 #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
 fn record_realtime_sr_texture_ready(
-    _method: DisplayUpscaler,
+    _method: WgpuUpscaleMethod,
     _source_size: [usize; 2],
     _output_size: [usize; 2],
     _output_byte_size: usize,
@@ -1428,8 +1448,8 @@ fn record_realtime_sr_texture_ready(
 }
 
 #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
-fn record_display_upscaler_render(
-    _method: DisplayUpscaler,
+fn record_wgpu_upscale_method_render(
+    _method: WgpuUpscaleMethod,
     _source_size: [usize; 2],
     _output_size: [usize; 2],
     _target_size: [u32; 2],
@@ -1441,16 +1461,16 @@ fn record_display_upscaler_render(
 fn draw_id(
     source_key: GpuPaintSourceKey,
     effects: ViewEffects,
-    display_upscaler: DisplayUpscaler,
-    wgpu_downscaler: WgpuDownscaler,
+    wgpu_upscale_method: WgpuUpscaleMethod,
+    wgpu_downscale_method: WgpuDownscaleMethod,
     rect: Rect,
     opacity: f32,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     source_key.hash(&mut hasher);
     effects.hash(&mut hasher);
-    display_upscaler.token().hash(&mut hasher);
-    wgpu_downscaler.token().hash(&mut hasher);
+    wgpu_upscale_method.token().hash(&mut hasher);
+    wgpu_downscale_method.token().hash(&mut hasher);
     rect.min.x.to_bits().hash(&mut hasher);
     rect.min.y.to_bits().hash(&mut hasher);
     rect.max.x.to_bits().hash(&mut hasher);
@@ -1494,7 +1514,7 @@ fn intermediate_texture_key(
     source_size: [usize; 2],
     output_size: [usize; 2],
     effects: ViewEffects,
-    display_upscaler: DisplayUpscaler,
+    wgpu_upscale_method: WgpuUpscaleMethod,
     target_size: [u32; 2],
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1502,7 +1522,7 @@ fn intermediate_texture_key(
     source_size.hash(&mut hasher);
     output_size.hash(&mut hasher);
     effects.hash(&mut hasher);
-    display_upscaler.token().hash(&mut hasher);
+    wgpu_upscale_method.token().hash(&mut hasher);
     target_size.hash(&mut hasher);
     hasher.finish()
 }
@@ -1513,7 +1533,7 @@ fn downscale_intermediate_texture_key(
     source_size: [usize; 2],
     output_size: [usize; 2],
     effects: ViewEffects,
-    downscaler: WgpuDownscaler,
+    downscaler: WgpuDownscaleMethod,
     stage_size: [u32; 2],
     current_size: [usize; 2],
     stage_index: u32,
@@ -1688,19 +1708,19 @@ fn mip_view_descriptor(base_mip_level: u32) -> wgpu::TextureViewDescriptor<'stat
     }
 }
 
-fn defer_initial_realtime_sr_frame(method: DisplayUpscaler) -> bool {
-    method.is_artcnn() || matches!(method, DisplayUpscaler::WgslSrLabSpanX2)
+fn defer_initial_realtime_sr_frame(method: WgpuUpscaleMethod) -> bool {
+    method.is_artcnn() || matches!(method, WgpuUpscaleMethod::WgslSrLabSpanX2)
 }
 
 fn realtime_sr_texture_key(
     source_key: GpuPaintSourceKey,
     source_size: [usize; 2],
-    display_upscaler: DisplayUpscaler,
+    wgpu_upscale_method: WgpuUpscaleMethod,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     source_key.hash(&mut hasher);
     source_size.hash(&mut hasher);
-    display_upscaler.token().hash(&mut hasher);
+    wgpu_upscale_method.token().hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1729,16 +1749,16 @@ mod tests {
             draw_id(
                 source_key,
                 ViewEffects::default(),
-                DisplayUpscaler::WgslFsr1Style,
-                WgpuDownscaler::Bilinear,
+                WgpuUpscaleMethod::WgslFsr1Style,
+                WgpuDownscaleMethod::Bilinear,
                 left,
                 1.0,
             ),
             draw_id(
                 source_key,
                 ViewEffects::default(),
-                DisplayUpscaler::WgslFsr1Style,
-                WgpuDownscaler::Bilinear,
+                WgpuUpscaleMethod::WgslFsr1Style,
+                WgpuDownscaleMethod::Bilinear,
                 right,
                 1.0,
             )
@@ -1746,66 +1766,66 @@ mod tests {
     }
 
     #[test]
-    fn experimental_display_upscaler_parses_hidden_artcnn() {
+    fn experimental_wgpu_upscale_method_parses_hidden_artcnn() {
         assert_eq!(
-            parse_experimental_display_upscaler(Some(" artcnn_c4f16 "), false, false),
-            Some(DisplayUpscaler::WgslArtcnnC4F16)
+            parse_experimental_wgpu_upscale_method(Some(" artcnn_c4f16 "), false, false),
+            Some(WgpuUpscaleMethod::WgslArtcnnC4F16)
         );
         assert_eq!(
-            parse_experimental_display_upscaler(Some("artcnn_c4f32_ds"), false, false),
-            Some(DisplayUpscaler::WgslArtcnnC4F32Ds)
+            parse_experimental_wgpu_upscale_method(Some("artcnn_c4f32_ds"), false, false),
+            Some(WgpuUpscaleMethod::WgslArtcnnC4F32Ds)
         );
     }
 
     #[test]
-    fn experimental_display_upscaler_keeps_span_manifest_gated() {
+    fn experimental_wgpu_upscale_method_keeps_span_manifest_gated() {
         assert_eq!(
-            parse_experimental_display_upscaler(Some("srlab_span_x2"), false, false),
+            parse_experimental_wgpu_upscale_method(Some("srlab_span_x2"), false, false),
             None
         );
         assert_eq!(
-            parse_experimental_display_upscaler(Some("srlab_span_x2"), false, true),
-            Some(DisplayUpscaler::WgslSrLabSpanX2)
+            parse_experimental_wgpu_upscale_method(Some("srlab_span_x2"), false, true),
+            Some(WgpuUpscaleMethod::WgslSrLabSpanX2)
         );
         assert_eq!(
-            parse_experimental_display_upscaler(None, true, true),
-            Some(DisplayUpscaler::WgslSrLabSpanX2)
+            parse_experimental_wgpu_upscale_method(None, true, true),
+            Some(WgpuUpscaleMethod::WgslSrLabSpanX2)
         );
     }
 
     #[test]
     fn settings_span_upscaler_requires_manifest_for_render() {
         assert_eq!(
-            display_upscaler_from_settings(DisplayUpscaler::WgslSrLabSpanX2, false),
-            DisplayUpscaler::Auto
+            wgpu_upscale_method_from_settings(WgpuUpscaleMethod::WgslSrLabSpanX2, false),
+            WgpuUpscaleMethod::Auto
         );
         assert_eq!(
-            display_upscaler_from_settings(DisplayUpscaler::WgslSrLabSpanX2, true),
-            DisplayUpscaler::WgslSrLabSpanX2
+            wgpu_upscale_method_from_settings(WgpuUpscaleMethod::WgslSrLabSpanX2, true),
+            WgpuUpscaleMethod::WgslSrLabSpanX2
         );
         assert_eq!(
-            display_upscaler_from_settings(DisplayUpscaler::WgslArtcnnC4F16, false),
-            DisplayUpscaler::WgslArtcnnC4F16
+            wgpu_upscale_method_from_settings(WgpuUpscaleMethod::WgslArtcnnC4F16, false),
+            WgpuUpscaleMethod::WgslArtcnnC4F16
         );
         assert_eq!(
-            display_upscaler_from_settings(DisplayUpscaler::NvidiaNis, true),
-            DisplayUpscaler::Auto
+            wgpu_upscale_method_from_settings(WgpuUpscaleMethod::NvidiaNis, true),
+            WgpuUpscaleMethod::Auto
         );
     }
 
     #[test]
     fn hidden_realtime_sr_methods_defer_the_first_frame() {
         assert!(defer_initial_realtime_sr_frame(
-            DisplayUpscaler::WgslArtcnnC4F16
+            WgpuUpscaleMethod::WgslArtcnnC4F16
         ));
         assert!(defer_initial_realtime_sr_frame(
-            DisplayUpscaler::WgslArtcnnC4F32Ds
+            WgpuUpscaleMethod::WgslArtcnnC4F32Ds
         ));
         assert!(defer_initial_realtime_sr_frame(
-            DisplayUpscaler::WgslSrLabSpanX2
+            WgpuUpscaleMethod::WgslSrLabSpanX2
         ));
         assert!(!defer_initial_realtime_sr_frame(
-            DisplayUpscaler::WgslAnime4kV32CnnX2S
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2S
         ));
     }
 
@@ -1835,12 +1855,12 @@ mod tests {
     #[ignore = "requires a local WGPU adapter and reads back large render targets"]
     fn wgpu_pyramid_downscalers_render_nonblank_output() {
         let cases = [
-            WgpuDownscaler::HardwareMipmapLinear,
-            WgpuDownscaler::PyramidBoxTent,
-            WgpuDownscaler::PyramidHamming,
-            WgpuDownscaler::PyramidMitchell,
-            WgpuDownscaler::PyramidLanczos2,
-            WgpuDownscaler::PyramidLanczos3,
+            WgpuDownscaleMethod::HardwareMipmapLinear,
+            WgpuDownscaleMethod::PyramidBoxTent,
+            WgpuDownscaleMethod::PyramidHamming,
+            WgpuDownscaleMethod::PyramidMitchell,
+            WgpuDownscaleMethod::PyramidLanczos2,
+            WgpuDownscaleMethod::PyramidLanczos3,
         ];
         pollster::block_on(async {
             let Some((device, queue)) = smoke_device().await else {
@@ -1869,7 +1889,10 @@ mod tests {
                 return;
             };
             for source_size in [[2048, 2048], [4096, 4096]] {
-                for downscaler in [WgpuDownscaler::Hamming, WgpuDownscaler::PyramidLanczos3] {
+                for downscaler in [
+                    WgpuDownscaleMethod::Hamming,
+                    WgpuDownscaleMethod::PyramidLanczos3,
+                ] {
                     let mut fixture = DownscaleSmokeFixture::new(&device, &queue, source_size);
                     for _ in 0..2 {
                         assert!(render_downscale_frame(
@@ -1933,7 +1956,7 @@ mod tests {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         source_size: [usize; 2],
-        downscaler: WgpuDownscaler,
+        downscaler: WgpuDownscaleMethod,
     ) -> bool {
         let mut fixture = DownscaleSmokeFixture::new(device, queue, source_size);
         render_downscale_frame(device, queue, &mut fixture, downscaler)
@@ -1972,7 +1995,7 @@ mod tests {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         fixture: &mut DownscaleSmokeFixture,
-        downscaler: WgpuDownscaler,
+        downscaler: WgpuDownscaleMethod,
     ) -> bool {
         let resources = &mut fixture.resources;
         let source_key = fixture.source_key;
@@ -1993,7 +2016,7 @@ mod tests {
             fixture.source_size,
             fixture.source_size,
             ViewEffects::default(),
-            DisplayUpscaler::None,
+            WgpuUpscaleMethod::None,
             downscaler,
             [0, 0],
             [1024, 1024],

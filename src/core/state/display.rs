@@ -10,7 +10,7 @@ pub enum GpuEffectMode {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum DisplayUpscaler {
+pub enum WgpuUpscaleMethod {
     Auto,
     #[default]
     None,
@@ -99,7 +99,7 @@ macro_rules! upscaler_candidate {
     };
 }
 
-impl DisplayUpscaler {
+impl WgpuUpscaleMethod {
     pub fn label(self) -> &'static str {
         self.candidate().exact_label
     }
@@ -645,95 +645,11 @@ impl DisplayUpscaler {
         )
     }
 
-    pub fn resolve_for_render(
-        self,
-        output_size: [usize; 2],
-        target_size: [u32; 2],
-    ) -> Option<Self> {
-        let target_is_larger =
-            target_size[0] > output_size[0] as u32 || target_size[1] > output_size[1] as u32;
+    pub fn resolve_for_upscale(self) -> Option<Self> {
         match self {
-            Self::Auto if target_is_larger => Some(Self::WgslFsr1EasuRcas),
-            Self::Auto | Self::None | Self::NvidiaNis => None,
-            method if method.is_artcnn() && target_is_larger => Some(self),
-            method if method.is_artcnn() => None,
-            Self::WgslSrLabSpanX2 if target_is_larger => Some(self),
-            Self::WgslSrLabSpanX2 => None,
-            Self::WgslAnime4kV32CnnX2S | Self::WgslAnime4kV32CnnX2M if target_is_larger => {
-                Some(self)
-            }
-            Self::WgslAnime4kV32CnnX2S | Self::WgslAnime4kV32CnnX2M => None,
-            Self::WgslAcnetF8B4Luma
-            | Self::WgslAcnetF8B4BoxLuma
-            | Self::WgslAcnetF8B4HdnLuma
-            | Self::WgslAcnetF8B4BoxHdnLuma
-                if target_is_larger =>
-            {
-                Some(self)
-            }
-            Self::WgslAcnetF8B4Luma
-            | Self::WgslAcnetF8B4BoxLuma
-            | Self::WgslAcnetF8B4HdnLuma
-            | Self::WgslAcnetF8B4BoxHdnLuma => None,
-            Self::CunnyVeryfastNvl
-            | Self::CunnyVeryfastSoft
-            | Self::CunnyFasterNvl
-            | Self::CunnyFasterSoft
-            | Self::CunnyFasterDs
-            | Self::CunnyFastNvl
-            | Self::CunnyFastSoft
-            | Self::CunnyFastDs
-            | Self::Cunny2x12Soft
-            | Self::Cunny2x12Ds
-            | Self::Cunny3x12Nvl
-            | Self::Cunny3x12Soft
-            | Self::Cunny3x12Ds
-            | Self::Cunny4x12Nvl
-            | Self::Cunny4x12Soft
-            | Self::Cunny4x12Ds
-            | Self::Cunny4x16Nvl
-            | Self::Cunny4x16Soft
-            | Self::Cunny4x16Ds
-            | Self::Cunny4x24Nvl
-            | Self::Cunny4x24Soft
-            | Self::Cunny4x24Ds
-            | Self::Cunny4x32Nvl
-            | Self::Cunny4x32Soft
-            | Self::Cunny4x32Ds
-            | Self::Cunny8x32Nvl
-            | Self::Cunny8x32Ds
-                if target_is_larger =>
-            {
-                Some(self)
-            }
-            Self::CunnyVeryfastNvl
-            | Self::CunnyVeryfastSoft
-            | Self::CunnyFasterNvl
-            | Self::CunnyFasterSoft
-            | Self::CunnyFasterDs
-            | Self::CunnyFastNvl
-            | Self::CunnyFastSoft
-            | Self::CunnyFastDs
-            | Self::Cunny2x12Soft
-            | Self::Cunny2x12Ds
-            | Self::Cunny3x12Nvl
-            | Self::Cunny3x12Soft
-            | Self::Cunny3x12Ds
-            | Self::Cunny4x12Nvl
-            | Self::Cunny4x12Soft
-            | Self::Cunny4x12Ds
-            | Self::Cunny4x16Nvl
-            | Self::Cunny4x16Soft
-            | Self::Cunny4x16Ds
-            | Self::Cunny4x24Nvl
-            | Self::Cunny4x24Soft
-            | Self::Cunny4x24Ds
-            | Self::Cunny4x32Nvl
-            | Self::Cunny4x32Soft
-            | Self::Cunny4x32Ds
-            | Self::Cunny8x32Nvl
-            | Self::Cunny8x32Ds => None,
-            other => Some(other),
+            Self::Auto => Some(Self::WgslFsr1EasuRcas),
+            Self::None | Self::NvidiaNis => None,
+            method => Some(method),
         }
     }
 

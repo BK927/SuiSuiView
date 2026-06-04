@@ -223,8 +223,8 @@ impl DecodeStrategy {
 pub struct DecodeOptions {
     pub strategy: DecodeStrategy,
     pub decoder_preferences: DecoderPreferences,
-    pub cpu_upscaler: CpuScaleFilter,
-    pub cpu_downscaler: CpuScaleFilter,
+    pub cpu_upscale_filter: CpuScaleFilter,
+    pub cpu_downscale_filter: CpuScaleFilter,
     pub allow_display_upscale: bool,
     pub apply_exif_orientation: bool,
     pub apply_embedded_icc: bool,
@@ -235,8 +235,8 @@ impl Default for DecodeOptions {
         Self {
             strategy: DecodeStrategy::Auto,
             decoder_preferences: DecoderPreferences::default(),
-            cpu_upscaler: CpuScaleFilter::CatmullRom,
-            cpu_downscaler: CpuScaleFilter::Hamming,
+            cpu_upscale_filter: CpuScaleFilter::CatmullRom,
+            cpu_downscale_filter: CpuScaleFilter::Hamming,
             allow_display_upscale: false,
             apply_exif_orientation: false,
             apply_embedded_icc: false,
@@ -250,9 +250,9 @@ impl DecodeOptions {
             "{}-{}-down-{}-{}{}{}",
             self.strategy.as_str(),
             self.decoder_preferences.cache_token(),
-            self.cpu_downscaler.token(),
+            self.cpu_downscale_filter.token(),
             if self.allow_display_upscale {
-                self.cpu_upscaler.token()
+                self.cpu_upscale_filter.token()
             } else {
                 "no-upscale"
             },
@@ -273,9 +273,9 @@ impl DecodeOptions {
         target_height: u32,
     ) -> CpuScaleFilter {
         if target_width > source_width || target_height > source_height {
-            self.cpu_upscaler
+            self.cpu_upscale_filter
         } else {
-            self.cpu_downscaler
+            self.cpu_downscale_filter
         }
     }
 }
@@ -1401,8 +1401,8 @@ mod tests {
     #[test]
     fn decode_options_select_scale_filter_by_direction() {
         let options = DecodeOptions {
-            cpu_upscaler: CpuScaleFilter::Lanczos3,
-            cpu_downscaler: CpuScaleFilter::Hamming,
+            cpu_upscale_filter: CpuScaleFilter::Lanczos3,
+            cpu_downscale_filter: CpuScaleFilter::Hamming,
             ..DecodeOptions::default()
         };
 
@@ -1417,15 +1417,15 @@ mod tests {
     }
 
     #[test]
-    fn decode_cache_token_tracks_cpu_upscaler_only_when_allowed() {
+    fn decode_cache_token_tracks_cpu_upscale_filter_only_when_allowed() {
         let normal = DecodeOptions::default().cache_token();
         let changed_upscaler = DecodeOptions {
-            cpu_upscaler: CpuScaleFilter::Lanczos3,
+            cpu_upscale_filter: CpuScaleFilter::Lanczos3,
             ..DecodeOptions::default()
         }
         .cache_token();
         let allowed_upscaler = DecodeOptions {
-            cpu_upscaler: CpuScaleFilter::Lanczos3,
+            cpu_upscale_filter: CpuScaleFilter::Lanczos3,
             allow_display_upscale: true,
             ..DecodeOptions::default()
         }

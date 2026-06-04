@@ -1,6 +1,6 @@
 use crate::core::artcnn::ArtcnnVariant;
 use crate::core::gpu_effect::color_image_to_rgba;
-use crate::core::state::DisplayUpscaler;
+use crate::core::state::WgpuUpscaleMethod;
 use eframe::egui::ColorImage;
 use std::borrow::Cow;
 use std::sync::mpsc;
@@ -52,11 +52,11 @@ pub(crate) struct GpuUpscaleOutput {
 }
 
 impl GpuUpscaleBench {
-    pub(crate) fn new_for_method(method: Option<DisplayUpscaler>) -> Result<Self, String> {
+    pub(crate) fn new_for_method(method: Option<WgpuUpscaleMethod>) -> Result<Self, String> {
         pollster::block_on(Self::new_async(method))
     }
 
-    async fn new_async(method: Option<DisplayUpscaler>) -> Result<Self, String> {
+    async fn new_async(method: Option<WgpuUpscaleMethod>) -> Result<Self, String> {
         let instance = wgpu::Instance::default();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -138,17 +138,17 @@ impl GpuUpscaleBench {
             cache: None,
         });
 
-        let nvidia_nis = if wants_method(method, DisplayUpscaler::NvidiaNis) {
+        let nvidia_nis = if wants_method(method, WgpuUpscaleMethod::NvidiaNis) {
             NvidiaNisBench::try_new(&device).await
         } else {
             None
         };
-        let anime4k = if wants_method(method, DisplayUpscaler::WgslAnime4kV32CnnX2S) {
+        let anime4k = if wants_method(method, WgpuUpscaleMethod::WgslAnime4kV32CnnX2S) {
             Anime4kBench::try_new(&device).await
         } else {
             None
         };
-        let anime4k_m = if wants_method(method, DisplayUpscaler::WgslAnime4kV32CnnX2M) {
+        let anime4k_m = if wants_method(method, WgpuUpscaleMethod::WgslAnime4kV32CnnX2M) {
             Anime4kMBench::try_new(&device).await
         } else {
             None
@@ -161,7 +161,7 @@ impl GpuUpscaleBench {
                 }
             }
         }
-        let span = if method == Some(DisplayUpscaler::WgslSrLabSpanX2) {
+        let span = if method == Some(WgpuUpscaleMethod::WgslSrLabSpanX2) {
             SpanBench::try_new()
         } else {
             None
@@ -196,21 +196,21 @@ impl GpuUpscaleBench {
         &self,
         image: &ColorImage,
         output_size: [usize; 2],
-        method: DisplayUpscaler,
+        method: WgpuUpscaleMethod,
     ) -> Result<GpuUpscaleOutput, String> {
         let [source_width, source_height] = image.size;
         let [output_width, output_height] = output_size;
         if source_width == 0 || source_height == 0 || output_width == 0 || output_height == 0 {
             return Err("cannot upscale an empty image".to_owned());
         }
-        if method == DisplayUpscaler::WgslAnime4kV32CnnX2S {
+        if method == WgpuUpscaleMethod::WgslAnime4kV32CnnX2S {
             return self
                 .anime4k
                 .as_ref()
                 .ok_or_else(|| "Anime4K v3.2 CNN x2 S GPU pipelines unavailable".to_owned())?
                 .apply(&self.device, &self.queue, image, output_size);
         }
-        if method == DisplayUpscaler::WgslAnime4kV32CnnX2M {
+        if method == WgpuUpscaleMethod::WgslAnime4kV32CnnX2M {
             return self
                 .anime4k_m
                 .as_ref()
@@ -225,7 +225,7 @@ impl GpuUpscaleBench {
                 .ok_or_else(|| format!("{} GPU pipelines unavailable", variant.label()))?
                 .apply(&self.device, &self.queue, image, output_size);
         }
-        if method == DisplayUpscaler::WgslSrLabSpanX2 {
+        if method == WgpuUpscaleMethod::WgslSrLabSpanX2 {
             return self
                 .span
                 .as_ref()
@@ -236,7 +236,7 @@ impl GpuUpscaleBench {
                     elapsed: output.elapsed,
                 });
         }
-        if method == DisplayUpscaler::NvidiaNis {
+        if method == WgpuUpscaleMethod::NvidiaNis {
             return self
                 .nvidia_nis
                 .as_ref()
@@ -245,10 +245,10 @@ impl GpuUpscaleBench {
         }
         if matches!(
             method,
-            DisplayUpscaler::WgslAcnetF8B4Luma
-                | DisplayUpscaler::WgslAcnetF8B4BoxLuma
-                | DisplayUpscaler::WgslAcnetF8B4HdnLuma
-                | DisplayUpscaler::WgslAcnetF8B4BoxHdnLuma
+            WgpuUpscaleMethod::WgslAcnetF8B4Luma
+                | WgpuUpscaleMethod::WgslAcnetF8B4BoxLuma
+                | WgpuUpscaleMethod::WgslAcnetF8B4HdnLuma
+                | WgpuUpscaleMethod::WgslAcnetF8B4BoxHdnLuma
         ) {
             return self
                 .acnet
@@ -258,33 +258,33 @@ impl GpuUpscaleBench {
         }
         if matches!(
             method,
-            DisplayUpscaler::CunnyVeryfastNvl
-                | DisplayUpscaler::CunnyVeryfastSoft
-                | DisplayUpscaler::CunnyFasterNvl
-                | DisplayUpscaler::CunnyFasterSoft
-                | DisplayUpscaler::CunnyFasterDs
-                | DisplayUpscaler::CunnyFastNvl
-                | DisplayUpscaler::CunnyFastSoft
-                | DisplayUpscaler::CunnyFastDs
-                | DisplayUpscaler::Cunny2x12Soft
-                | DisplayUpscaler::Cunny2x12Ds
-                | DisplayUpscaler::Cunny3x12Nvl
-                | DisplayUpscaler::Cunny3x12Soft
-                | DisplayUpscaler::Cunny3x12Ds
-                | DisplayUpscaler::Cunny4x12Nvl
-                | DisplayUpscaler::Cunny4x12Soft
-                | DisplayUpscaler::Cunny4x12Ds
-                | DisplayUpscaler::Cunny4x16Nvl
-                | DisplayUpscaler::Cunny4x16Soft
-                | DisplayUpscaler::Cunny4x16Ds
-                | DisplayUpscaler::Cunny4x24Nvl
-                | DisplayUpscaler::Cunny4x24Soft
-                | DisplayUpscaler::Cunny4x24Ds
-                | DisplayUpscaler::Cunny4x32Nvl
-                | DisplayUpscaler::Cunny4x32Soft
-                | DisplayUpscaler::Cunny4x32Ds
-                | DisplayUpscaler::Cunny8x32Nvl
-                | DisplayUpscaler::Cunny8x32Ds
+            WgpuUpscaleMethod::CunnyVeryfastNvl
+                | WgpuUpscaleMethod::CunnyVeryfastSoft
+                | WgpuUpscaleMethod::CunnyFasterNvl
+                | WgpuUpscaleMethod::CunnyFasterSoft
+                | WgpuUpscaleMethod::CunnyFasterDs
+                | WgpuUpscaleMethod::CunnyFastNvl
+                | WgpuUpscaleMethod::CunnyFastSoft
+                | WgpuUpscaleMethod::CunnyFastDs
+                | WgpuUpscaleMethod::Cunny2x12Soft
+                | WgpuUpscaleMethod::Cunny2x12Ds
+                | WgpuUpscaleMethod::Cunny3x12Nvl
+                | WgpuUpscaleMethod::Cunny3x12Soft
+                | WgpuUpscaleMethod::Cunny3x12Ds
+                | WgpuUpscaleMethod::Cunny4x12Nvl
+                | WgpuUpscaleMethod::Cunny4x12Soft
+                | WgpuUpscaleMethod::Cunny4x12Ds
+                | WgpuUpscaleMethod::Cunny4x16Nvl
+                | WgpuUpscaleMethod::Cunny4x16Soft
+                | WgpuUpscaleMethod::Cunny4x16Ds
+                | WgpuUpscaleMethod::Cunny4x24Nvl
+                | WgpuUpscaleMethod::Cunny4x24Soft
+                | WgpuUpscaleMethod::Cunny4x24Ds
+                | WgpuUpscaleMethod::Cunny4x32Nvl
+                | WgpuUpscaleMethod::Cunny4x32Soft
+                | WgpuUpscaleMethod::Cunny4x32Ds
+                | WgpuUpscaleMethod::Cunny8x32Nvl
+                | WgpuUpscaleMethod::Cunny8x32Ds
         ) {
             return self
                 .cunny
@@ -512,61 +512,61 @@ impl GpuUpscaleBench {
     }
 }
 
-fn wants_method(filter: Option<DisplayUpscaler>, method: DisplayUpscaler) -> bool {
+fn wants_method(filter: Option<WgpuUpscaleMethod>, method: WgpuUpscaleMethod) -> bool {
     filter.map_or(true, |selected| selected == method)
 }
 
-fn wants_artcnn_variant(filter: Option<DisplayUpscaler>, variant: ArtcnnVariant) -> bool {
+fn wants_artcnn_variant(filter: Option<WgpuUpscaleMethod>, variant: ArtcnnVariant) -> bool {
     filter.is_some_and(|method| ArtcnnBench::variant_for_method(method) == Some(variant))
 }
 
 fn wants_group(
-    filter: Option<DisplayUpscaler>,
-    group_predicate: fn(DisplayUpscaler) -> bool,
+    filter: Option<WgpuUpscaleMethod>,
+    group_predicate: fn(WgpuUpscaleMethod) -> bool,
 ) -> bool {
     filter.map_or(true, group_predicate)
 }
 
-fn is_acnet_method(method: DisplayUpscaler) -> bool {
+fn is_acnet_method(method: WgpuUpscaleMethod) -> bool {
     matches!(
         method,
-        DisplayUpscaler::WgslAcnetF8B4Luma
-            | DisplayUpscaler::WgslAcnetF8B4BoxLuma
-            | DisplayUpscaler::WgslAcnetF8B4HdnLuma
-            | DisplayUpscaler::WgslAcnetF8B4BoxHdnLuma
+        WgpuUpscaleMethod::WgslAcnetF8B4Luma
+            | WgpuUpscaleMethod::WgslAcnetF8B4BoxLuma
+            | WgpuUpscaleMethod::WgslAcnetF8B4HdnLuma
+            | WgpuUpscaleMethod::WgslAcnetF8B4BoxHdnLuma
     )
 }
 
-fn is_cunny_method(method: DisplayUpscaler) -> bool {
+fn is_cunny_method(method: WgpuUpscaleMethod) -> bool {
     matches!(
         method,
-        DisplayUpscaler::CunnyVeryfastNvl
-            | DisplayUpscaler::CunnyVeryfastSoft
-            | DisplayUpscaler::CunnyFasterNvl
-            | DisplayUpscaler::CunnyFasterSoft
-            | DisplayUpscaler::CunnyFasterDs
-            | DisplayUpscaler::CunnyFastNvl
-            | DisplayUpscaler::CunnyFastSoft
-            | DisplayUpscaler::CunnyFastDs
-            | DisplayUpscaler::Cunny2x12Soft
-            | DisplayUpscaler::Cunny2x12Ds
-            | DisplayUpscaler::Cunny3x12Nvl
-            | DisplayUpscaler::Cunny3x12Soft
-            | DisplayUpscaler::Cunny3x12Ds
-            | DisplayUpscaler::Cunny4x12Nvl
-            | DisplayUpscaler::Cunny4x12Soft
-            | DisplayUpscaler::Cunny4x12Ds
-            | DisplayUpscaler::Cunny4x16Nvl
-            | DisplayUpscaler::Cunny4x16Soft
-            | DisplayUpscaler::Cunny4x16Ds
-            | DisplayUpscaler::Cunny4x24Nvl
-            | DisplayUpscaler::Cunny4x24Soft
-            | DisplayUpscaler::Cunny4x24Ds
-            | DisplayUpscaler::Cunny4x32Nvl
-            | DisplayUpscaler::Cunny4x32Soft
-            | DisplayUpscaler::Cunny4x32Ds
-            | DisplayUpscaler::Cunny8x32Nvl
-            | DisplayUpscaler::Cunny8x32Ds
+        WgpuUpscaleMethod::CunnyVeryfastNvl
+            | WgpuUpscaleMethod::CunnyVeryfastSoft
+            | WgpuUpscaleMethod::CunnyFasterNvl
+            | WgpuUpscaleMethod::CunnyFasterSoft
+            | WgpuUpscaleMethod::CunnyFasterDs
+            | WgpuUpscaleMethod::CunnyFastNvl
+            | WgpuUpscaleMethod::CunnyFastSoft
+            | WgpuUpscaleMethod::CunnyFastDs
+            | WgpuUpscaleMethod::Cunny2x12Soft
+            | WgpuUpscaleMethod::Cunny2x12Ds
+            | WgpuUpscaleMethod::Cunny3x12Nvl
+            | WgpuUpscaleMethod::Cunny3x12Soft
+            | WgpuUpscaleMethod::Cunny3x12Ds
+            | WgpuUpscaleMethod::Cunny4x12Nvl
+            | WgpuUpscaleMethod::Cunny4x12Soft
+            | WgpuUpscaleMethod::Cunny4x12Ds
+            | WgpuUpscaleMethod::Cunny4x16Nvl
+            | WgpuUpscaleMethod::Cunny4x16Soft
+            | WgpuUpscaleMethod::Cunny4x16Ds
+            | WgpuUpscaleMethod::Cunny4x24Nvl
+            | WgpuUpscaleMethod::Cunny4x24Soft
+            | WgpuUpscaleMethod::Cunny4x24Ds
+            | WgpuUpscaleMethod::Cunny4x32Nvl
+            | WgpuUpscaleMethod::Cunny4x32Soft
+            | WgpuUpscaleMethod::Cunny4x32Ds
+            | WgpuUpscaleMethod::Cunny8x32Nvl
+            | WgpuUpscaleMethod::Cunny8x32Ds
     )
 }
 

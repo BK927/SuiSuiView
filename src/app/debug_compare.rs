@@ -5,7 +5,7 @@ use super::{
 };
 use crate::core::effects::ViewEffects;
 use crate::core::source::SharedSource;
-use crate::core::state::{CpuScaleFilter, DisplayUpscaler, WgpuDownscaler};
+use crate::core::state::{CpuScaleFilter, WgpuDownscaleMethod, WgpuUpscaleMethod};
 use crate::core::worker::{prepare_image_with_options, DecodeOptions, PreparedPage};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use eframe::egui::{self, Align2, Color32, ImageData, Pos2, Rect, Vec2};
@@ -104,18 +104,18 @@ impl DebugCompareTarget {
             Self::AiResult => return None,
         };
         Some(DecodeOptions {
-            cpu_upscaler: scale_filter,
-            cpu_downscaler: scale_filter,
+            cpu_upscale_filter: scale_filter,
+            cpu_downscale_filter: scale_filter,
             ..current
         })
     }
 
-    fn display_upscaler(self) -> Option<DisplayUpscaler> {
+    fn wgpu_upscale_method(self) -> Option<WgpuUpscaleMethod> {
         match self {
-            Self::WgslBilinear => Some(DisplayUpscaler::WgslBilinear),
-            Self::WgslFsr1Style => Some(DisplayUpscaler::WgslFsr1Style),
-            Self::WgslFsr1EasuRcas => Some(DisplayUpscaler::WgslFsr1EasuRcas),
-            Self::WgslNisStyle => Some(DisplayUpscaler::WgslNisStyle),
+            Self::WgslBilinear => Some(WgpuUpscaleMethod::WgslBilinear),
+            Self::WgslFsr1Style => Some(WgpuUpscaleMethod::WgslFsr1Style),
+            Self::WgslFsr1EasuRcas => Some(WgpuUpscaleMethod::WgslFsr1EasuRcas),
+            Self::WgslNisStyle => Some(WgpuUpscaleMethod::WgslNisStyle),
             _ => None,
         }
     }
@@ -321,8 +321,8 @@ impl SuiSuiViewApp {
                 image_size,
                 rgba,
                 effects,
-                display_upscaler,
-                wgpu_downscaler,
+                wgpu_upscale_method,
+                wgpu_downscale_method,
                 ..
             } => {
                 if !self.paint_wgsl_effects(
@@ -333,8 +333,8 @@ impl SuiSuiViewApp {
                         image_size,
                         rgba,
                         effects,
-                        display_upscaler,
-                        wgpu_downscaler,
+                        wgpu_upscale_method,
+                        wgpu_downscale_method,
                         opacity: 1.0,
                     },
                 ) {
@@ -391,8 +391,8 @@ impl SuiSuiViewApp {
     }
 
     fn compare_visual(&mut self, ctx: &egui::Context, target: DebugCompareTarget) -> PageVisual {
-        if let Some(display_upscaler) = target.display_upscaler() {
-            return self.compare_wgsl_visual(display_upscaler);
+        if let Some(wgpu_upscale_method) = target.wgpu_upscale_method() {
+            return self.compare_wgsl_visual(wgpu_upscale_method);
         }
         match target {
             DebugCompareTarget::AiResult => self.compare_ai_visual(ctx),
@@ -400,7 +400,7 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn compare_wgsl_visual(&mut self, display_upscaler: DisplayUpscaler) -> PageVisual {
+    fn compare_wgsl_visual(&mut self, wgpu_upscale_method: WgpuUpscaleMethod) -> PageVisual {
         if !self.gpu_effects_available || self.gpu_target_format.is_none() {
             return PageVisual::Failed {
                 index: self.current_page,
@@ -434,8 +434,8 @@ impl SuiSuiViewApp {
             rgba: page.rgba.clone(),
             size: page_natural_size(&page),
             effects: ViewEffects::default(),
-            display_upscaler,
-            wgpu_downscaler: WgpuDownscaler::Bilinear,
+            wgpu_upscale_method,
+            wgpu_downscale_method: WgpuDownscaleMethod::Bilinear,
         }
     }
 
@@ -626,8 +626,8 @@ mod tests {
     fn compare_targets_override_only_cpu_scale_filters() {
         let current = DecodeOptions {
             strategy: DecodeStrategy::ImageCrate,
-            cpu_upscaler: CpuScaleFilter::Nearest,
-            cpu_downscaler: CpuScaleFilter::Nearest,
+            cpu_upscale_filter: CpuScaleFilter::Nearest,
+            cpu_downscale_filter: CpuScaleFilter::Nearest,
             allow_display_upscale: true,
             apply_exif_orientation: true,
             apply_embedded_icc: true,
@@ -638,8 +638,8 @@ mod tests {
             .decode_options(current)
             .unwrap();
 
-        assert_eq!(lanczos.cpu_upscaler, CpuScaleFilter::Lanczos3);
-        assert_eq!(lanczos.cpu_downscaler, CpuScaleFilter::Lanczos3);
+        assert_eq!(lanczos.cpu_upscale_filter, CpuScaleFilter::Lanczos3);
+        assert_eq!(lanczos.cpu_downscale_filter, CpuScaleFilter::Lanczos3);
         assert_eq!(lanczos.strategy, DecodeStrategy::ImageCrate);
         assert!(lanczos.allow_display_upscale);
         assert!(lanczos.apply_exif_orientation);

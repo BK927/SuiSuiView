@@ -1,7 +1,7 @@
 use super::acnet_manifest::VARIANTS;
 use super::{align_to, GpuUpscaleOutput, TEXTURE_FORMAT};
 use crate::core::gpu_effect::color_image_to_rgba;
-use crate::core::state::DisplayUpscaler;
+use crate::core::state::WgpuUpscaleMethod;
 use eframe::egui::ColorImage;
 use std::borrow::Cow;
 use std::sync::mpsc;
@@ -29,7 +29,7 @@ pub(super) struct AcnetBench {
 }
 
 struct AcnetVariantBench {
-    method: DisplayUpscaler,
+    method: WgpuUpscaleMethod,
     name: &'static str,
     entry_points: &'static [&'static str],
     body_blocks: usize,
@@ -115,7 +115,7 @@ impl AcnetBench {
 
     pub(super) fn apply(
         &self,
-        method: DisplayUpscaler,
+        method: WgpuUpscaleMethod,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         image: &ColorImage,

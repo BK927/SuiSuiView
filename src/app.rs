@@ -4,7 +4,7 @@ use crate::core::formats::OPENABLE_FILE_EXTENSIONS;
 use crate::core::source::{BookSource, SharedSource};
 use crate::core::state::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, BookmarkInput, DecodeMode,
-    DecoderPreferences, DisplayUpscaler, FitMode, ReadingDirection, StateStore,
+    DecoderPreferences, FitMode, ReadingDirection, StateStore, WgpuUpscaleMethod,
 };
 use crate::core::upscale::{AiUpscaleWorker, UpscaleEvent, UpscaleRequest};
 use crate::core::worker::{
@@ -684,8 +684,8 @@ impl SuiSuiViewApp {
         DecodeOptions {
             strategy,
             decoder_preferences,
-            cpu_upscaler: self.settings.cpu_upscaler,
-            cpu_downscaler: self.settings.cpu_downscaler,
+            cpu_upscale_filter: self.settings.cpu_upscale_filter,
+            cpu_downscale_filter: self.settings.cpu_downscale_filter,
             allow_display_upscale: self.should_allow_display_upscale(),
             apply_exif_orientation: self.settings.apply_exif_orientation,
             apply_embedded_icc: self.settings.apply_embedded_icc,
@@ -701,7 +701,7 @@ impl SuiSuiViewApp {
     }
 
     fn gpu_display_upscale_can_own_upscale(&self) -> bool {
-        self.active_display_upscaler() != DisplayUpscaler::None
+        self.active_wgpu_upscale_method() != WgpuUpscaleMethod::None
     }
 
     fn worker_options(&self) -> WorkerOptions {
@@ -1405,8 +1405,8 @@ mod tests {
     };
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
-        AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, DisplayUpscaler, FitMode, KeyCode,
-        KeyShortcut, PageTransitionStyle, ReadingDirection, WgpuDownscaler,
+        AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, FitMode, KeyCode, KeyShortcut,
+        PageTransitionStyle, ReadingDirection, WgpuDownscaleMethod, WgpuUpscaleMethod,
     };
     use crate::core::worker::{
         DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PreparedPage,
@@ -2296,15 +2296,15 @@ mod tests {
             [2000, 3000],
             [1000, 1500],
             ViewEffects::default(),
-            DisplayUpscaler::Auto,
-            WgpuDownscaler::Bilinear,
+            WgpuUpscaleMethod::Auto,
+            WgpuDownscaleMethod::Bilinear,
         ));
         assert!(gpu_visual_needs_wgsl(
             [2000, 3000],
             [1000, 1500],
             ViewEffects::default(),
-            DisplayUpscaler::Auto,
-            WgpuDownscaler::Hamming,
+            WgpuUpscaleMethod::Auto,
+            WgpuDownscaleMethod::Hamming,
         ));
     }
 
@@ -2314,15 +2314,15 @@ mod tests {
             [800, 1200],
             [1600, 2400],
             ViewEffects::default(),
-            DisplayUpscaler::Auto,
-            WgpuDownscaler::Bilinear,
+            WgpuUpscaleMethod::Auto,
+            WgpuDownscaleMethod::Bilinear,
         ));
         assert!(gpu_visual_needs_wgsl(
             [2000, 3000],
             [1000, 1500],
             ViewEffects::default(),
-            DisplayUpscaler::WgslNisStyle,
-            WgpuDownscaler::Bilinear,
+            WgpuUpscaleMethod::WgslNisStyle,
+            WgpuDownscaleMethod::Bilinear,
         ));
         assert!(gpu_visual_needs_wgsl(
             [2000, 3000],
@@ -2331,8 +2331,8 @@ mod tests {
                 invert_colors: true,
                 ..ViewEffects::default()
             },
-            DisplayUpscaler::Auto,
-            WgpuDownscaler::Bilinear,
+            WgpuUpscaleMethod::Auto,
+            WgpuDownscaleMethod::Bilinear,
         ));
     }
 

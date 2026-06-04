@@ -64,7 +64,7 @@ fn required_output_size(
 mod tests {
     use super::parse;
     use crate::cli::CliCommand;
-    use crate::core::state::DisplayUpscaler;
+    use crate::core::state::WgpuUpscaleMethod;
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -93,7 +93,7 @@ mod tests {
         else {
             panic!("expected upscale render command");
         };
-        assert_eq!(method, DisplayUpscaler::WgslAnime4kV32CnnX2S);
+        assert_eq!(method, WgpuUpscaleMethod::WgslAnime4kV32CnnX2S);
         assert_eq!(input_path, PathBuf::from("source.png"));
         assert_eq!(output_path, PathBuf::from("out.png"));
         assert_eq!(output_size, [1280, 720]);

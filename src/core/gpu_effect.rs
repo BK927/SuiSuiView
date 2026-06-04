@@ -1,5 +1,5 @@
 use crate::core::effects::{ImageFilter, ViewEffects};
-use crate::core::state::{DisplayUpscaler, WgpuDownscaler};
+use crate::core::state::{WgpuDownscaleMethod, WgpuUpscaleMethod};
 use eframe::egui::ColorImage;
 use std::borrow::Cow;
 use std::sync::mpsc;
@@ -213,8 +213,8 @@ impl GpuEffectBench {
             image.size,
             output_size,
             effects,
-            DisplayUpscaler::None,
-            WgpuDownscaler::Bilinear,
+            WgpuUpscaleMethod::None,
+            WgpuDownscaleMethod::Bilinear,
             [0, 0],
             [output_size[0] as u32, output_size[1] as u32],
             1.0,
@@ -341,8 +341,8 @@ pub(crate) fn params_for_effects(
     source_size: [usize; 2],
     output_size: [usize; 2],
     effects: ViewEffects,
-    display_upscaler: DisplayUpscaler,
-    wgpu_downscaler: WgpuDownscaler,
+    wgpu_upscale_method: WgpuUpscaleMethod,
+    wgpu_downscale_method: WgpuDownscaleMethod,
     output_origin: [u32; 2],
     target_size: [u32; 2],
     opacity: f32,
@@ -351,8 +351,8 @@ pub(crate) fn params_for_effects(
         source_size,
         output_size,
         effects,
-        display_upscaler.shader_method_id(),
-        wgpu_downscaler.shader_method_id(),
+        wgpu_upscale_method.shader_method_id(),
+        wgpu_downscale_method.shader_method_id(),
         output_origin,
         target_size,
         opacity,

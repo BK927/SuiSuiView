@@ -3,7 +3,7 @@ use crate::core::gpu_effect::{
     color_image_to_rgba, params_for_effects, params_for_effects_with_shader_method, EffectParams,
 };
 use crate::core::source::open_source_from_path;
-use crate::core::state::{CpuScaleFilter, DisplayUpscaler, WgpuDownscaler};
+use crate::core::state::{CpuScaleFilter, WgpuDownscaleMethod, WgpuUpscaleMethod};
 use crate::core::worker::{
     clamp_target_long_edge, prepare_image_with_options, DecodeOptions, DecodeStrategy, PreparedPage,
 };
@@ -192,7 +192,7 @@ fn prepare_page(bytes: &[u8], target_long_edge: u32) -> Result<Arc<PreparedPage>
         target_long_edge,
         DecodeOptions {
             strategy: DecodeStrategy::Auto,
-            cpu_downscaler: CpuScaleFilter::Lanczos3,
+            cpu_downscale_filter: CpuScaleFilter::Lanczos3,
             allow_display_upscale: false,
             ..DecodeOptions::default()
         },
@@ -414,8 +414,8 @@ impl GpuCopyBench {
             [width, height],
             [width, height],
             ViewEffects::default(),
-            DisplayUpscaler::None,
-            WgpuDownscaler::Bilinear,
+            WgpuUpscaleMethod::None,
+            WgpuDownscaleMethod::Bilinear,
             [0, 0],
             [width as u32, height as u32],
             1.0,
@@ -654,8 +654,8 @@ impl GpuCopyBench {
             source_size,
             source_size,
             ViewEffects::default(),
-            DisplayUpscaler::WgslFsr1EasuRcas,
-            WgpuDownscaler::Bilinear,
+            WgpuUpscaleMethod::WgslFsr1EasuRcas,
+            WgpuDownscaleMethod::Bilinear,
             [0, 0],
             target_size,
             1.0,
@@ -668,7 +668,7 @@ impl GpuCopyBench {
             &easu_params_bind_group,
         );
 
-        let rcas_method = DisplayUpscaler::WgslFsr1EasuRcas
+        let rcas_method = WgpuUpscaleMethod::WgslFsr1EasuRcas
             .rcas_shader_method_id()
             .expect("FSR1 EASU+RCAS should expose an RCAS shader method");
         let rcas_params = params_for_effects_with_shader_method(

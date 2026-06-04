@@ -2,7 +2,9 @@
 use super::perf;
 use super::{ai_prefetch_pages_for, gpu_paint, SuiSuiViewApp};
 use crate::core::effects::ViewEffects;
-use crate::core::state::{AppSettings, CacheMemoryMode, DisplayUpscaler, FitMode, WgpuDownscaler};
+use crate::core::state::{
+    AppSettings, CacheMemoryMode, FitMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod,
+};
 use crate::core::worker::{
     clamp_target_long_edge, preview_prefetch_indices, CachedPageKey, DecodeOptions,
     NavigationDirection, FULL_QUALITY_PREFETCH_BACKWARD_PAGES, FULL_QUALITY_PREFETCH_FORWARD_PAGES,
@@ -528,14 +530,18 @@ pub(in crate::app) fn gpu_visual_needs_wgsl(
     image_size: [usize; 2],
     target_size: [u32; 2],
     effects: ViewEffects,
-    display_upscaler: DisplayUpscaler,
-    wgpu_downscaler: WgpuDownscaler,
+    wgpu_upscale_method: WgpuUpscaleMethod,
+    wgpu_downscale_method: WgpuDownscaleMethod,
 ) -> bool {
+    let scale_plan = WgpuScalePlan::resolve(
+        image_size,
+        target_size,
+        wgpu_upscale_method,
+        wgpu_downscale_method,
+    );
     effects != ViewEffects::default()
-        || display_upscaler
-            .resolve_for_render(image_size, target_size)
-            .is_some()
-        || wgpu_downscaler.resolve_for_render(image_size, target_size) != WgpuDownscaler::Bilinear
+        || scale_plan.effective_upscale_method != WgpuUpscaleMethod::None
+        || scale_plan.effective_downscale_method != WgpuDownscaleMethod::Bilinear
 }
 
 pub(in crate::app) fn rect_target_size(rect: Rect) -> [u32; 2] {

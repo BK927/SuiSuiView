@@ -2,7 +2,7 @@ use super::{PageCacheKey, SuiSuiViewApp};
 use crate::core::auto_kind::{classify_rgba, AutoKind, AutoKindPrediction};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
-use crate::core::state::DisplayUpscaler;
+use crate::core::state::WgpuUpscaleMethod;
 use crate::core::worker::PreparedPage;
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use eframe::egui;
@@ -167,8 +167,8 @@ impl SuiSuiViewApp {
         key: PageCacheKey,
         page: Arc<PreparedPage>,
     ) {
-        if self.settings.display_upscaler != DisplayUpscaler::Auto
-            || self.active_display_upscaler() != DisplayUpscaler::Auto
+        if self.settings.wgpu_upscale_method != WgpuUpscaleMethod::Auto
+            || self.active_wgpu_upscale_method() != WgpuUpscaleMethod::Auto
             || self.auto_kind_hints.contains_key(&key)
             || self.auto_kind_inflight.contains(&key)
         {
@@ -209,20 +209,20 @@ impl SuiSuiViewApp {
         }
     }
 
-    pub(in crate::app) fn content_aware_display_upscaler(
+    pub(in crate::app) fn content_aware_wgpu_upscale_method(
         &self,
         key: PageCacheKey,
-        fallback: DisplayUpscaler,
-    ) -> DisplayUpscaler {
+        fallback: WgpuUpscaleMethod,
+    ) -> WgpuUpscaleMethod {
         route_auto_kind_hint(fallback, self.auto_kind_hints.get(&key))
     }
 }
 
 pub(in crate::app) fn route_auto_kind_hint(
-    fallback: DisplayUpscaler,
+    fallback: WgpuUpscaleMethod,
     prediction: Option<&AutoKindPrediction>,
-) -> DisplayUpscaler {
-    if fallback != DisplayUpscaler::Auto {
+) -> WgpuUpscaleMethod {
+    if fallback != WgpuUpscaleMethod::Auto {
         return fallback;
     }
 
@@ -232,12 +232,12 @@ pub(in crate::app) fn route_auto_kind_hint(
 
     match prediction.kind {
         AutoKind::MangaBw if prediction.confidence >= MANGA_BW_ROUTE_CONFIDENCE => {
-            DisplayUpscaler::WgslAnime4kV32CnnX2M
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2M
         }
         AutoKind::Anime | AutoKind::Webtoon
             if prediction.confidence >= COLOR_DRAWN_ROUTE_CONFIDENCE =>
         {
-            DisplayUpscaler::WgslAnime4kV32CnnX2M
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2M
         }
         _ => fallback,
     }
@@ -259,17 +259,17 @@ mod tests {
     fn route_keeps_non_auto_fallbacks_unchanged() {
         assert_eq!(
             route_auto_kind_hint(
-                DisplayUpscaler::WgslFsr1EasuRcas,
+                WgpuUpscaleMethod::WgslFsr1EasuRcas,
                 Some(&prediction(AutoKind::MangaBw, 0.99))
             ),
-            DisplayUpscaler::WgslFsr1EasuRcas
+            WgpuUpscaleMethod::WgslFsr1EasuRcas
         );
         assert_eq!(
             route_auto_kind_hint(
-                DisplayUpscaler::None,
+                WgpuUpscaleMethod::None,
                 Some(&prediction(AutoKind::Anime, 0.99))
             ),
-            DisplayUpscaler::None
+            WgpuUpscaleMethod::None
         );
     }
 
@@ -277,24 +277,24 @@ mod tests {
     fn route_uses_anime4k_m_for_confident_drawn_content() {
         assert_eq!(
             route_auto_kind_hint(
-                DisplayUpscaler::Auto,
+                WgpuUpscaleMethod::Auto,
                 Some(&prediction(AutoKind::MangaBw, 0.55))
             ),
-            DisplayUpscaler::WgslAnime4kV32CnnX2M
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2M
         );
         assert_eq!(
             route_auto_kind_hint(
-                DisplayUpscaler::Auto,
+                WgpuUpscaleMethod::Auto,
                 Some(&prediction(AutoKind::Anime, 0.65))
             ),
-            DisplayUpscaler::WgslAnime4kV32CnnX2M
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2M
         );
         assert_eq!(
             route_auto_kind_hint(
-                DisplayUpscaler::Auto,
+                WgpuUpscaleMethod::Auto,
                 Some(&prediction(AutoKind::Webtoon, 0.65))
             ),
-            DisplayUpscaler::WgslAnime4kV32CnnX2M
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2M
         );
     }
 
@@ -302,21 +302,21 @@ mod tests {
     fn route_falls_back_for_photo_and_low_confidence() {
         assert_eq!(
             route_auto_kind_hint(
-                DisplayUpscaler::Auto,
+                WgpuUpscaleMethod::Auto,
                 Some(&prediction(AutoKind::Photo, 0.99))
             ),
-            DisplayUpscaler::Auto
+            WgpuUpscaleMethod::Auto
         );
         assert_eq!(
             route_auto_kind_hint(
-                DisplayUpscaler::Auto,
+                WgpuUpscaleMethod::Auto,
                 Some(&prediction(AutoKind::Anime, 0.64))
             ),
-            DisplayUpscaler::Auto
+            WgpuUpscaleMethod::Auto
         );
         assert_eq!(
-            route_auto_kind_hint(DisplayUpscaler::Auto, None),
-            DisplayUpscaler::Auto
+            route_auto_kind_hint(WgpuUpscaleMethod::Auto, None),
+            WgpuUpscaleMethod::Auto
         );
     }
 }

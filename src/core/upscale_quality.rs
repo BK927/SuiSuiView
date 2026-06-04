@@ -1,5 +1,5 @@
 use crate::core::source::open_source_from_path;
-use crate::core::state::{DisplayUpscaler, ResizeFilter};
+use crate::core::state::{ResizeFilter, WgpuUpscaleMethod};
 use crate::core::upscale_bench::{gpu::GpuUpscaleBench, gpu_methods_for_filter};
 use crate::core::worker::clamp_target_long_edge;
 use eframe::egui::ColorImage;
@@ -92,7 +92,7 @@ pub fn run_upscale_quality_scan(
     visual_dir: Option<&Path>,
     source_long_edge: u32,
     target_long_edge: u32,
-    method_filter: Option<DisplayUpscaler>,
+    method_filter: Option<WgpuUpscaleMethod>,
     max_pages: Option<usize>,
 ) -> Result<(), String> {
     let report = scan_upscale_quality(
@@ -121,7 +121,7 @@ pub fn scan_upscale_quality(
     source_long_edge: u32,
     target_long_edge: u32,
     visual_dir: Option<&Path>,
-    method_filter: Option<DisplayUpscaler>,
+    method_filter: Option<WgpuUpscaleMethod>,
     max_pages: Option<usize>,
 ) -> Result<UpscaleQualityReport, String> {
     let (source, _forced_page) = open_source_from_path(path).map_err(|error| error.to_string())?;
@@ -347,7 +347,7 @@ fn run_gpu_case(
     input: &ColorImage,
     baseline: &ColorImage,
     output_size: [usize; 2],
-    method: DisplayUpscaler,
+    method: WgpuUpscaleMethod,
     page: &mut PageUpscaleQuality,
     summaries: &mut BTreeMap<String, SummaryAccumulator>,
 ) -> Option<ColorImage> {
@@ -664,7 +664,7 @@ fn print_report(report: &UpscaleQualityReport) {
 
 fn selected_method_failure(
     report: &UpscaleQualityReport,
-    method: DisplayUpscaler,
+    method: WgpuUpscaleMethod,
 ) -> Option<String> {
     let label = method.label();
     if !report.gpu_available {
@@ -800,7 +800,7 @@ mod tests {
         compare_images, resize_color_image, scanned_page_count, selected_method_failure,
         PageUpscaleQuality, UpscaleQualityReport,
     };
-    use crate::core::state::{DisplayUpscaler, ResizeFilter};
+    use crate::core::state::{ResizeFilter, WgpuUpscaleMethod};
     use eframe::egui::{Color32, ColorImage};
 
     #[test]
@@ -835,7 +835,7 @@ mod tests {
             pages: Vec::new(),
         };
 
-        let error = selected_method_failure(&report, DisplayUpscaler::WgslArtcnnC4F16).unwrap();
+        let error = selected_method_failure(&report, WgpuUpscaleMethod::WgslArtcnnC4F16).unwrap();
 
         assert!(error.contains("ArtCNN C4F16 produced no successful quality runs"));
     }
@@ -866,7 +866,7 @@ mod tests {
             }],
         };
 
-        let error = selected_method_failure(&report, DisplayUpscaler::WgslArtcnnC4F16).unwrap();
+        let error = selected_method_failure(&report, WgpuUpscaleMethod::WgslArtcnnC4F16).unwrap();
 
         assert!(error.contains("page-level failure"));
         assert!(error.contains("decode failed"));

@@ -3,7 +3,7 @@ use crate::core::artcnn::{
     extent_for_size, validate_render_options, Artcnn, ArtcnnRenderOptions, ArtcnnVariant,
 };
 use crate::core::gpu_effect::color_image_to_rgba;
-use crate::core::state::DisplayUpscaler;
+use crate::core::state::WgpuUpscaleMethod;
 use eframe::egui::ColorImage;
 use std::sync::mpsc;
 use std::time::Instant;
@@ -35,14 +35,14 @@ impl ArtcnnBench {
         }
     }
 
-    pub(super) fn variant_for_method(method: DisplayUpscaler) -> Option<ArtcnnVariant> {
+    pub(super) fn variant_for_method(method: WgpuUpscaleMethod) -> Option<ArtcnnVariant> {
         match method {
-            DisplayUpscaler::WgslArtcnnC4F16 => Some(ArtcnnVariant::C4F16),
-            DisplayUpscaler::WgslArtcnnC4F16Dn => Some(ArtcnnVariant::C4F16Dn),
-            DisplayUpscaler::WgslArtcnnC4F16Ds => Some(ArtcnnVariant::C4F16Ds),
-            DisplayUpscaler::WgslArtcnnC4F32 => Some(ArtcnnVariant::C4F32),
-            DisplayUpscaler::WgslArtcnnC4F32Dn => Some(ArtcnnVariant::C4F32Dn),
-            DisplayUpscaler::WgslArtcnnC4F32Ds => Some(ArtcnnVariant::C4F32Ds),
+            WgpuUpscaleMethod::WgslArtcnnC4F16 => Some(ArtcnnVariant::C4F16),
+            WgpuUpscaleMethod::WgslArtcnnC4F16Dn => Some(ArtcnnVariant::C4F16Dn),
+            WgpuUpscaleMethod::WgslArtcnnC4F16Ds => Some(ArtcnnVariant::C4F16Ds),
+            WgpuUpscaleMethod::WgslArtcnnC4F32 => Some(ArtcnnVariant::C4F32),
+            WgpuUpscaleMethod::WgslArtcnnC4F32Dn => Some(ArtcnnVariant::C4F32Dn),
+            WgpuUpscaleMethod::WgslArtcnnC4F32Ds => Some(ArtcnnVariant::C4F32Ds),
             _ => None,
         }
     }

@@ -459,8 +459,8 @@ fn startup_decode_options(settings: &AppSettings) -> DecodeOptions {
     DecodeOptions {
         strategy,
         decoder_preferences,
-        cpu_upscaler: settings.cpu_upscaler,
-        cpu_downscaler: settings.cpu_downscaler,
+        cpu_upscale_filter: settings.cpu_upscale_filter,
+        cpu_downscale_filter: settings.cpu_downscale_filter,
         allow_display_upscale: false,
         apply_exif_orientation: settings.apply_exif_orientation,
         apply_embedded_icc: settings.apply_embedded_icc,

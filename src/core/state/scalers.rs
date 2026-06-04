@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::display::WgpuUpscaleMethod;
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ResizeFilter {
     #[default]
@@ -109,7 +111,7 @@ impl From<ResizeFilter> for CpuScaleFilter {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum WgpuDownscaler {
+pub enum WgpuDownscaleMethod {
     Nearest,
     Bilinear,
     Box,
@@ -126,13 +128,13 @@ pub enum WgpuDownscaler {
     PyramidLanczos3,
 }
 
-impl Default for WgpuDownscaler {
+impl Default for WgpuDownscaleMethod {
     fn default() -> Self {
         Self::PyramidLanczos3
     }
 }
 
-impl WgpuDownscaler {
+impl WgpuDownscaleMethod {
     pub const ALL: [Self; 14] = [
         Self::Nearest,
         Self::Bilinear,
@@ -241,13 +243,75 @@ impl WgpuDownscaler {
         matches!(self, Self::HardwareMipmapLinear)
     }
 
-    pub fn resolve_for_render(self, output_size: [usize; 2], target_size: [u32; 2]) -> Self {
-        let target_is_smaller =
-            target_size[0] < output_size[0] as u32 || target_size[1] < output_size[1] as u32;
-        if target_is_smaller {
+    pub fn resolve_for_downscale(self, output_size: [usize; 2], target_size: [u32; 2]) -> Self {
+        if target_is_smaller(output_size, target_size) {
             self
         } else {
             Self::Bilinear
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WgpuScaleDirection {
+    Upscale,
+    Downscale,
+    Native,
+}
+
+impl WgpuScaleDirection {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Upscale => "upscale",
+            Self::Downscale => "downscale",
+            Self::Native => "native",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WgpuScalePlan {
+    pub direction: WgpuScaleDirection,
+    pub effective_upscale_method: WgpuUpscaleMethod,
+    pub effective_downscale_method: WgpuDownscaleMethod,
+}
+
+impl WgpuScalePlan {
+    pub fn resolve(
+        output_size: [usize; 2],
+        target_size: [u32; 2],
+        requested_upscale: WgpuUpscaleMethod,
+        requested_downscale: WgpuDownscaleMethod,
+    ) -> Self {
+        if target_is_larger(output_size, target_size) {
+            return Self {
+                direction: WgpuScaleDirection::Upscale,
+                effective_upscale_method: requested_upscale
+                    .resolve_for_upscale()
+                    .unwrap_or(WgpuUpscaleMethod::None),
+                effective_downscale_method: WgpuDownscaleMethod::Bilinear,
+            };
+        }
+        if target_is_smaller(output_size, target_size) {
+            return Self {
+                direction: WgpuScaleDirection::Downscale,
+                effective_upscale_method: WgpuUpscaleMethod::None,
+                effective_downscale_method: requested_downscale
+                    .resolve_for_downscale(output_size, target_size),
+            };
+        }
+        Self {
+            direction: WgpuScaleDirection::Native,
+            effective_upscale_method: WgpuUpscaleMethod::None,
+            effective_downscale_method: WgpuDownscaleMethod::Bilinear,
+        }
+    }
+}
+
+fn target_is_larger(output_size: [usize; 2], target_size: [u32; 2]) -> bool {
+    target_size[0] > output_size[0] as u32 || target_size[1] > output_size[1] as u32
+}
+
+fn target_is_smaller(output_size: [usize; 2], target_size: [u32; 2]) -> bool {
+    target_size[0] < output_size[0] as u32 || target_size[1] < output_size[1] as u32
 }

@@ -1,6 +1,6 @@
 use super::{required_path, unknown_arg, CliCommand, CliError};
 use crate::core::artcnn::ArtcnnVariant;
-use crate::core::state::DisplayUpscaler;
+use crate::core::state::WgpuUpscaleMethod;
 use std::ffi::OsString;
 
 pub(super) fn parse_c4f16(
@@ -25,7 +25,7 @@ pub(super) fn parse_c4f16(
 
     Ok(CliCommand::ArtcnnRender {
         variant: ArtcnnVariant::C4F16,
-        method: DisplayUpscaler::WgslArtcnnC4F16,
+        method: WgpuUpscaleMethod::WgslArtcnnC4F16,
         input_path,
         output_path: output_path
             .ok_or_else(|| CliError::new("--artcnn-c4f16-render requires --artcnn-output <png>"))?,
@@ -73,21 +73,25 @@ pub(super) fn parse_variant(
     })
 }
 
-fn parse_artcnn_variant(token: &str) -> Option<(ArtcnnVariant, DisplayUpscaler)> {
+fn parse_artcnn_variant(token: &str) -> Option<(ArtcnnVariant, WgpuUpscaleMethod)> {
     match token {
-        "artcnn_c4f16" | "c4f16" => Some((ArtcnnVariant::C4F16, DisplayUpscaler::WgslArtcnnC4F16)),
+        "artcnn_c4f16" | "c4f16" => {
+            Some((ArtcnnVariant::C4F16, WgpuUpscaleMethod::WgslArtcnnC4F16))
+        }
         "artcnn_c4f16_dn" | "c4f16_dn" => {
-            Some((ArtcnnVariant::C4F16Dn, DisplayUpscaler::WgslArtcnnC4F16Dn))
+            Some((ArtcnnVariant::C4F16Dn, WgpuUpscaleMethod::WgslArtcnnC4F16Dn))
         }
         "artcnn_c4f16_ds" | "c4f16_ds" => {
-            Some((ArtcnnVariant::C4F16Ds, DisplayUpscaler::WgslArtcnnC4F16Ds))
+            Some((ArtcnnVariant::C4F16Ds, WgpuUpscaleMethod::WgslArtcnnC4F16Ds))
         }
-        "artcnn_c4f32" | "c4f32" => Some((ArtcnnVariant::C4F32, DisplayUpscaler::WgslArtcnnC4F32)),
+        "artcnn_c4f32" | "c4f32" => {
+            Some((ArtcnnVariant::C4F32, WgpuUpscaleMethod::WgslArtcnnC4F32))
+        }
         "artcnn_c4f32_dn" | "c4f32_dn" => {
-            Some((ArtcnnVariant::C4F32Dn, DisplayUpscaler::WgslArtcnnC4F32Dn))
+            Some((ArtcnnVariant::C4F32Dn, WgpuUpscaleMethod::WgslArtcnnC4F32Dn))
         }
         "artcnn_c4f32_ds" | "c4f32_ds" => {
-            Some((ArtcnnVariant::C4F32Ds, DisplayUpscaler::WgslArtcnnC4F32Ds))
+            Some((ArtcnnVariant::C4F32Ds, WgpuUpscaleMethod::WgslArtcnnC4F32Ds))
         }
         _ => None,
     }
@@ -97,7 +101,7 @@ fn parse_artcnn_variant(token: &str) -> Option<(ArtcnnVariant, DisplayUpscaler)>
 mod tests {
     use super::super::{parse_args, CliAction, CliCommand};
     use crate::core::artcnn::ArtcnnVariant;
-    use crate::core::state::DisplayUpscaler;
+    use crate::core::state::WgpuUpscaleMethod;
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -121,7 +125,7 @@ mod tests {
             panic!("expected ArtCNN C4F16 render command");
         };
         assert_eq!(variant, ArtcnnVariant::C4F16);
-        assert_eq!(method, DisplayUpscaler::WgslArtcnnC4F16);
+        assert_eq!(method, WgpuUpscaleMethod::WgslArtcnnC4F16);
         assert_eq!(input_path, PathBuf::from("source.png"));
         assert_eq!(output_path, PathBuf::from("out.png"));
     }
@@ -132,27 +136,27 @@ mod tests {
             (
                 "artcnn_c4f16_dn",
                 ArtcnnVariant::C4F16Dn,
-                DisplayUpscaler::WgslArtcnnC4F16Dn,
+                WgpuUpscaleMethod::WgslArtcnnC4F16Dn,
             ),
             (
                 "artcnn_c4f16_ds",
                 ArtcnnVariant::C4F16Ds,
-                DisplayUpscaler::WgslArtcnnC4F16Ds,
+                WgpuUpscaleMethod::WgslArtcnnC4F16Ds,
             ),
             (
                 "artcnn_c4f32",
                 ArtcnnVariant::C4F32,
-                DisplayUpscaler::WgslArtcnnC4F32,
+                WgpuUpscaleMethod::WgslArtcnnC4F32,
             ),
             (
                 "artcnn_c4f32_dn",
                 ArtcnnVariant::C4F32Dn,
-                DisplayUpscaler::WgslArtcnnC4F32Dn,
+                WgpuUpscaleMethod::WgslArtcnnC4F32Dn,
             ),
             (
                 "artcnn_c4f32_ds",
                 ArtcnnVariant::C4F32Ds,
-                DisplayUpscaler::WgslArtcnnC4F32Ds,
+                WgpuUpscaleMethod::WgslArtcnnC4F32Ds,
             ),
         ] {
             let action = parse_args(vec![

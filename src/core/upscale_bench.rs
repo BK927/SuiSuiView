@@ -1,7 +1,7 @@
 use crate::core::artcnn::{exact_output_size as artcnn_exact_output_size, ArtcnnVariant};
 use crate::core::gpu_effect::{color_image_to_rgba, image_diff};
 use crate::core::source::open_source_from_path;
-use crate::core::state::{CpuScaleFilter, DisplayUpscaler, ResizeFilter};
+use crate::core::state::{CpuScaleFilter, ResizeFilter, WgpuUpscaleMethod};
 use crate::core::worker::{
     clamp_target_long_edge, display_dimensions_with_upscale, prepare_image_with_options,
     DecodeOptions, DecodeStrategy,
@@ -69,7 +69,7 @@ pub fn run_upscale_bench(
     report_path: Option<&Path>,
     source_long_edge: u32,
     target_long_edge: u32,
-    method_filter: Option<DisplayUpscaler>,
+    method_filter: Option<WgpuUpscaleMethod>,
     max_pages: Option<usize>,
 ) -> Result<(), String> {
     let report = scan_upscalers(
@@ -96,7 +96,7 @@ pub fn scan_upscalers(
     path: &Path,
     source_long_edge: u32,
     target_long_edge: u32,
-    method_filter: Option<DisplayUpscaler>,
+    method_filter: Option<WgpuUpscaleMethod>,
     max_pages: Option<usize>,
 ) -> Result<UpscaleBenchReport, String> {
     let gpu = match GpuUpscaleBench::new_for_method(method_filter) {
@@ -122,7 +122,7 @@ pub fn scan_upscalers(
 
 pub fn run_artcnn_render(
     variant: ArtcnnVariant,
-    method: DisplayUpscaler,
+    method: WgpuUpscaleMethod,
     input_path: &Path,
     output_path: &Path,
 ) -> Result<(), String> {
@@ -145,7 +145,7 @@ pub fn run_artcnn_render(
 }
 
 pub fn run_upscale_render(
-    method: DisplayUpscaler,
+    method: WgpuUpscaleMethod,
     input_path: &Path,
     output_path: &Path,
     output_size: [usize; 2],
@@ -168,15 +168,15 @@ pub fn run_upscale_render(
 }
 
 pub(crate) fn gpu_methods_for_filter(
-    method_filter: Option<DisplayUpscaler>,
-) -> Vec<DisplayUpscaler> {
+    method_filter: Option<WgpuUpscaleMethod>,
+) -> Vec<WgpuUpscaleMethod> {
     match method_filter {
         Some(method) => vec![method],
-        None => DisplayUpscaler::GPU_METHODS
+        None => WgpuUpscaleMethod::GPU_METHODS
             .iter()
             .copied()
             .filter(|method| {
-                !method.is_artcnn() && !matches!(method, DisplayUpscaler::WgslSrLabSpanX2)
+                !method.is_artcnn() && !matches!(method, WgpuUpscaleMethod::WgslSrLabSpanX2)
             })
             .collect(),
     }
@@ -186,7 +186,7 @@ fn scan_upscalers_with_gpu(
     path: &Path,
     source_long_edge: u32,
     target_long_edge: u32,
-    method_filter: Option<DisplayUpscaler>,
+    method_filter: Option<WgpuUpscaleMethod>,
     max_pages: Option<usize>,
     gpu: Option<&GpuUpscaleBench>,
     gpu_error: Option<String>,
@@ -312,7 +312,7 @@ fn prepare_page_pair(
         source_long_edge,
         DecodeOptions {
             strategy: DecodeStrategy::Auto,
-            cpu_downscaler: CpuScaleFilter::Lanczos3,
+            cpu_downscale_filter: CpuScaleFilter::Lanczos3,
             allow_display_upscale: false,
             ..DecodeOptions::default()
         },
@@ -328,8 +328,8 @@ fn prepare_page_pair(
         target_width.max(target_height),
         DecodeOptions {
             strategy: DecodeStrategy::ImageCrate,
-            cpu_upscaler: CpuScaleFilter::Lanczos3,
-            cpu_downscaler: CpuScaleFilter::Lanczos3,
+            cpu_upscale_filter: CpuScaleFilter::Lanczos3,
+            cpu_downscale_filter: CpuScaleFilter::Lanczos3,
             allow_display_upscale: true,
             ..DecodeOptions::default()
         },
@@ -380,7 +380,7 @@ fn run_gpu_case(
     input: &ColorImage,
     baseline: &ColorImage,
     output_size: [usize; 2],
-    method: DisplayUpscaler,
+    method: WgpuUpscaleMethod,
     page: &mut PageUpscaleBench,
     summaries: &mut BTreeMap<String, SummaryAccumulator>,
 ) {
@@ -522,7 +522,10 @@ fn print_report(report: &UpscaleBenchReport) {
     }
 }
 
-fn selected_method_failure(report: &UpscaleBenchReport, method: DisplayUpscaler) -> Option<String> {
+fn selected_method_failure(
+    report: &UpscaleBenchReport,
+    method: WgpuUpscaleMethod,
+) -> Option<String> {
     let label = method.label();
     if !report.gpu_available {
         return Some(format!(
@@ -597,7 +600,7 @@ mod tests {
         gpu_methods_for_filter, resize_color_image, scan_upscalers_with_gpu,
         selected_method_failure, PageUpscaleBench, UpscaleBenchReport, UpscaleBenchRun,
     };
-    use crate::core::state::{DisplayUpscaler, ResizeFilter};
+    use crate::core::state::{ResizeFilter, WgpuUpscaleMethod};
     use eframe::egui::{Color32, ColorImage};
     use image::{ImageBuffer, ImageFormat, Rgba};
     use std::fs;
@@ -656,17 +659,17 @@ mod tests {
     fn default_gpu_bench_methods_skip_hidden_artcnn_matrix() {
         let default_methods = gpu_methods_for_filter(None);
 
-        assert!(!default_methods.contains(&DisplayUpscaler::WgslArtcnnC4F16));
-        assert!(!default_methods.contains(&DisplayUpscaler::WgslArtcnnC4F32Ds));
+        assert!(!default_methods.contains(&WgpuUpscaleMethod::WgslArtcnnC4F16));
+        assert!(!default_methods.contains(&WgpuUpscaleMethod::WgslArtcnnC4F32Ds));
         assert_eq!(
-            gpu_methods_for_filter(Some(DisplayUpscaler::WgslArtcnnC4F16)),
-            vec![DisplayUpscaler::WgslArtcnnC4F16]
+            gpu_methods_for_filter(Some(WgpuUpscaleMethod::WgslArtcnnC4F16)),
+            vec![WgpuUpscaleMethod::WgslArtcnnC4F16]
         );
     }
 
     #[test]
     fn filtered_upscale_bench_reports_selected_method_error() {
-        let method = DisplayUpscaler::WgslArtcnnC4F16;
+        let method = WgpuUpscaleMethod::WgslArtcnnC4F16;
         let report = UpscaleBenchReport {
             path: "book.cbz".to_owned(),
             title: "book".to_owned(),
