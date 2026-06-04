@@ -291,6 +291,11 @@ impl CallbackTrait for GpuEffectCallback {
 
         let output_size = output_size_for_effects(self.image_size, self.effects);
         let (origin, target_size) = viewport_rect(self.rect, screen_descriptor);
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let effective_upscaler = self
+            .display_upscaler
+            .resolve_for_render(output_size, target_size)
+            .unwrap_or(DisplayUpscaler::None);
         if let Some(source_bind_group) = resources
             .source_textures
             .peek(&self.source_key)
@@ -320,10 +325,15 @@ impl CallbackTrait for GpuEffectCallback {
             &[
                 PerfField::Usize("width", self.image_size[0]),
                 PerfField::Usize("height", self.image_size[1]),
+                PerfField::Usize("output_width", output_size[0]),
+                PerfField::Usize("output_height", output_size[1]),
+                PerfField::U32("target_width", target_size[0]),
+                PerfField::U32("target_height", target_size[1]),
                 PerfField::Bool("resources_created", resources_created),
                 PerfField::Bool("resources_recreated", resources_recreated),
                 PerfField::Bool("source_uploaded", source_uploaded),
                 PerfField::Str("display_upscaler", self.display_upscaler.token()),
+                PerfField::Str("effective_display_upscaler", effective_upscaler.token()),
                 PerfField::Str("wgpu_downscaler", self.wgpu_downscaler.token()),
             ],
         );
