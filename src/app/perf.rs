@@ -133,9 +133,13 @@ pub(super) struct OpenToFirstVisibleTrace {
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 impl OpenToFirstVisibleTrace {
     pub(super) fn new(origin: &'static str) -> Self {
+        Self::new_at(origin, Instant::now())
+    }
+
+    pub(super) fn new_at(origin: &'static str, started_at: Instant) -> Self {
         Self {
             origin,
-            started_at: Instant::now(),
+            started_at,
             book_id: None,
         }
     }
@@ -150,6 +154,34 @@ pub(super) fn record_app_new(started: Instant) {
     );
 }
 
+pub(super) fn record_wgpu_render_state(render_state: &egui_wgpu::RenderState) {
+    let info = render_state.adapter.get_info();
+    #[cfg(not(target_arch = "wasm32"))]
+    let available_adapters = render_state.available_adapters.len();
+    #[cfg(target_arch = "wasm32")]
+    let available_adapters = 0;
+
+    perf_trace::record_duration(
+        "wgpu_render_state",
+        Duration::ZERO,
+        &[
+            PerfField::Str("backend", info.backend.to_str()),
+            PerfField::Str("device_type", wgpu_device_type_label(info.device_type)),
+            PerfField::U32("vendor", info.vendor),
+            PerfField::U32("device", info.device),
+            PerfField::Usize("available_adapters", available_adapters),
+            PerfField::U32(
+                "max_texture_dimension_2d",
+                render_state.device.limits().max_texture_dimension_2d,
+            ),
+            PerfField::Str(
+                "target_format",
+                wgpu_texture_format_label(render_state.target_format),
+            ),
+        ],
+    );
+}
+
 pub(super) fn record_open_source(started: Instant, origin: &'static str, success: bool) {
     perf_trace::record_duration_if_at_least(
         "open_source",
@@ -157,6 +189,53 @@ pub(super) fn record_open_source(started: Instant, origin: &'static str, success
         Duration::from_millis(50),
         &[
             PerfField::Str("origin", origin),
+            PerfField::Bool("success", success),
+        ],
+    );
+}
+
+pub(super) fn record_startup_open_preload(origin: &'static str) {
+    perf_trace::record_duration(
+        "startup_open_preload",
+        Duration::ZERO,
+        &[PerfField::Str("origin", origin)],
+    );
+}
+
+fn wgpu_device_type_label(device_type: wgpu::DeviceType) -> &'static str {
+    match device_type {
+        wgpu::DeviceType::Other => "other",
+        wgpu::DeviceType::IntegratedGpu => "integrated_gpu",
+        wgpu::DeviceType::DiscreteGpu => "discrete_gpu",
+        wgpu::DeviceType::VirtualGpu => "virtual_gpu",
+        wgpu::DeviceType::Cpu => "cpu",
+    }
+}
+
+fn wgpu_texture_format_label(format: wgpu::TextureFormat) -> &'static str {
+    match format {
+        wgpu::TextureFormat::Rgba8Unorm => "rgba8_unorm",
+        wgpu::TextureFormat::Rgba8UnormSrgb => "rgba8_unorm_srgb",
+        wgpu::TextureFormat::Bgra8Unorm => "bgra8_unorm",
+        wgpu::TextureFormat::Bgra8UnormSrgb => "bgra8_unorm_srgb",
+        _ => "other",
+    }
+}
+
+pub(super) fn record_startup_seed_prepare(
+    started: Instant,
+    origin: &'static str,
+    page: usize,
+    target_long_edge: u32,
+    success: bool,
+) {
+    perf_trace::record_duration(
+        "startup_seed_prepare",
+        started.elapsed(),
+        &[
+            PerfField::Str("origin", origin),
+            PerfField::Usize("page", page),
+            PerfField::U32("target_long_edge", target_long_edge),
             PerfField::Bool("success", success),
         ],
     );

@@ -1,13 +1,24 @@
-use super::{perf, PendingBookmarkJump, SeededPreparedPage, SuiSuiViewApp};
+use super::{
+    adjacent_seed::prepare_seeded_first_page, perf, PendingBookmarkJump, SeededPreparedPage,
+    SuiSuiViewApp,
+};
 use crate::core::effects::ViewEffects;
 use crate::core::formats::unsupported_message_for_extension;
 use crate::core::source::{
     classify_path, open_source_from_path, BookSource, SharedSource, SourceKind,
 };
-use crate::core::state::StateStore;
-use crate::core::worker::{NavigationDirection, PREVIEW_TARGET_LONG_EDGE};
+use crate::core::state::{
+    AppSettings, DecodeMode, DecoderPreferences, StateStore, WindowPlacement,
+};
+use crate::core::worker::{
+    clamp_navigation_target_long_edge, DecodeOptions, DecodeStrategy, NavigationDirection,
+    DEFAULT_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
+};
+use crate::startup_window::StartupPreviewImage;
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use eframe::egui::Vec2;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
 
@@ -34,6 +45,117 @@ pub(in crate::app) struct LoaderEvent {
     pub(in crate::app) origin: OpenOrigin,
     pub(in crate::app) initial_direction: NavigationDirection,
     pub(in crate::app) result: Result<(SharedSource, Option<usize>), String>,
+    pub(in crate::app) seeded_page: Option<SeededPreparedPage>,
+}
+
+pub(crate) struct StartupOpen {
+    loader_tx: Sender<LoaderEvent>,
+    loader_rx: Receiver<LoaderEvent>,
+    generation: u64,
+    origin: OpenOrigin,
+    started_at: Instant,
+}
+
+pub(in crate::app) struct StartupOpenParts {
+    pub(in crate::app) loader_tx: Sender<LoaderEvent>,
+    pub(in crate::app) loader_rx: Receiver<LoaderEvent>,
+    pub(in crate::app) generation: u64,
+    pub(in crate::app) origin: OpenOrigin,
+    pub(in crate::app) started_at: Instant,
+}
+
+impl StartupOpen {
+    pub(in crate::app) fn into_parts(self) -> StartupOpenParts {
+        StartupOpenParts {
+            loader_tx: self.loader_tx,
+            loader_rx: self.loader_rx,
+            generation: self.generation,
+            origin: self.origin,
+            started_at: self.started_at,
+        }
+    }
+}
+
+pub(crate) fn start_startup_open_loader(
+    path: PathBuf,
+    store: &StateStore,
+    preview_tx: Option<mpsc::Sender<StartupPreviewImage>>,
+) -> Option<StartupOpen> {
+    let origin = open_origin_for_source_kind(classify_path(&path))?;
+    let (loader_tx, loader_rx) = unbounded();
+    let event_tx = loader_tx.clone();
+    let generation = 1;
+    let started_at = Instant::now();
+    let load_path = path.clone();
+    let store = store.clone();
+    let settings = store.settings().clone();
+    let target_long_edge = startup_seed_target_long_edge(store.window_placement());
+    let decode = startup_decode_options(&settings);
+    let resume_by_file_identity = settings.resume_by_file_identity;
+    perf::record_startup_open_preload(origin.perf_label());
+    thread::Builder::new()
+        .name("suisuiview-startup-source-loader".to_owned())
+        .spawn(move || {
+            let started = Instant::now();
+            let result = open_source_from_path(&load_path).map_err(|error| error.to_string());
+            perf::record_open_source(started, origin.perf_label(), result.is_ok());
+            let seeded_page = result.as_ref().ok().and_then(|(source, forced_page)| {
+                let reading_position = reading_position_for_open(
+                    &store,
+                    source.as_ref(),
+                    origin,
+                    &load_path,
+                    resume_by_file_identity,
+                );
+                let page_index = selected_open_page(
+                    source.as_ref(),
+                    *forced_page,
+                    reading_position.as_ref(),
+                    None,
+                );
+                let started = Instant::now();
+                let seeded = prepare_seeded_first_page(
+                    source.as_ref(),
+                    page_index,
+                    target_long_edge,
+                    decode,
+                    true,
+                );
+                perf::record_startup_seed_prepare(
+                    started,
+                    origin.perf_label(),
+                    page_index,
+                    target_long_edge,
+                    seeded.is_some(),
+                );
+                if let (Some(preview_tx), Some(seed)) = (&preview_tx, seeded.as_ref()) {
+                    let page = seed.page.as_ref();
+                    let _ = preview_tx.send(StartupPreviewImage::from_rgba(
+                        page.display_width,
+                        page.display_height,
+                        &page.rgba,
+                    ));
+                }
+                seeded
+            });
+            let _ = event_tx.send(LoaderEvent {
+                generation,
+                path: load_path,
+                origin,
+                initial_direction: NavigationDirection::Forward,
+                result,
+                seeded_page,
+            });
+        })
+        .ok()?;
+
+    Some(StartupOpen {
+        loader_tx,
+        loader_rx,
+        generation,
+        origin,
+        started_at,
+    })
 }
 
 impl SuiSuiViewApp {
@@ -92,7 +214,7 @@ impl SuiSuiViewApp {
                 let load_path = path.clone();
                 self.set_status(self.i18n().text("status.opening"));
 
-                let _ = thread::Builder::new()
+                let spawn_result = thread::Builder::new()
                     .name("suisuiview-source-loader".to_owned())
                     .spawn(move || {
                         let started = Instant::now();
@@ -105,9 +227,22 @@ impl SuiSuiViewApp {
                             origin,
                             initial_direction,
                             result,
+                            seeded_page: None,
                         });
                         ctx.request_repaint();
                     });
+                match spawn_result {
+                    Ok(_) => {
+                        self.loader_pending = true;
+                    }
+                    Err(error) => {
+                        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+                        {
+                            self.open_to_first_visible_trace = None;
+                        }
+                        self.notify(format!("Could not start source loader: {error}"));
+                    }
+                }
             }
             SourceKind::UnsupportedRar => {
                 self.notify(
@@ -132,6 +267,7 @@ impl SuiSuiViewApp {
             if event.generation != self.loader_generation {
                 continue;
             }
+            self.loader_pending = false;
 
             match event.result {
                 Ok((source, forced_page)) => self.install_source(
@@ -139,7 +275,7 @@ impl SuiSuiViewApp {
                     forced_page,
                     event.origin,
                     event.path,
-                    None,
+                    event.seeded_page,
                     event.initial_direction,
                 ),
                 Err(message) => {
@@ -234,7 +370,9 @@ impl SuiSuiViewApp {
         self.upscaled_bytes = 0;
         self.textures.clear();
         self.clear_auto_kind_state();
-        self.bookmark_thumbnails.clear();
+        if let Some(thumbnails) = self.bookmark_thumbnails.as_mut() {
+            thumbnails.clear();
+        }
         self.page_errors.clear();
         self.upscale_generation = self.upscale_generation.wrapping_add(1);
         self.upscale_inflight = None;
@@ -293,6 +431,42 @@ pub(in crate::app) fn open_origin_for_source_kind(kind: SourceKind) -> Option<Op
     }
 }
 
+fn startup_seed_target_long_edge(placement: &WindowPlacement) -> u32 {
+    let stored_edge = placement
+        .inner_size
+        .map(|[width, height]| width.max(height).ceil().max(1.0) as u32)
+        .unwrap_or(DEFAULT_TARGET_LONG_EDGE);
+    let estimated_edge = if placement.maximized {
+        stored_edge.max(2304)
+    } else {
+        stored_edge.max(DEFAULT_TARGET_LONG_EDGE)
+    };
+    let quantized = estimated_edge.div_ceil(256) * 256;
+    clamp_navigation_target_long_edge(quantized)
+}
+
+fn startup_decode_options(settings: &AppSettings) -> DecodeOptions {
+    let strategy = match settings.decode_mode {
+        DecodeMode::AutoFast => DecodeStrategy::Auto,
+        DecodeMode::Compatibility => DecodeStrategy::ImageCrate,
+        DecodeMode::Custom => DecodeStrategy::Auto,
+    };
+    let decoder_preferences = if matches!(settings.decode_mode, DecodeMode::Custom) {
+        settings.decoder_preferences
+    } else {
+        DecoderPreferences::default()
+    };
+    DecodeOptions {
+        strategy,
+        decoder_preferences,
+        cpu_upscaler: settings.cpu_upscaler,
+        cpu_downscaler: settings.cpu_downscaler,
+        allow_display_upscale: false,
+        apply_exif_orientation: settings.apply_exif_orientation,
+        apply_embedded_icc: settings.apply_embedded_icc,
+    }
+}
+
 pub(in crate::app) fn reading_position_for_open(
     store: &StateStore,
     source: &dyn BookSource,
@@ -333,4 +507,50 @@ pub(in crate::app) fn page_index_for_name(
     page_name: &str,
 ) -> Option<usize> {
     (0..source.page_count()).find(|index| source.page_name(*index) == Some(page_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::startup_seed_target_long_edge;
+    use crate::core::state::WindowPlacement;
+    use crate::core::worker::DEFAULT_TARGET_LONG_EDGE;
+
+    #[test]
+    fn startup_seed_target_keeps_default_floor_for_normal_windows() {
+        let placement = WindowPlacement {
+            inner_size: Some([1280.0, 820.0]),
+            outer_position: None,
+            maximized: false,
+        };
+
+        assert_eq!(
+            startup_seed_target_long_edge(&placement),
+            DEFAULT_TARGET_LONG_EDGE
+        );
+    }
+
+    #[test]
+    fn startup_seed_target_uses_larger_floor_for_maximized_windows() {
+        let placement = WindowPlacement {
+            inner_size: Some([1280.0, 820.0]),
+            outer_position: None,
+            maximized: true,
+        };
+
+        assert_eq!(startup_seed_target_long_edge(&placement), 2304);
+    }
+
+    #[test]
+    fn startup_seed_target_uses_default_without_stored_size() {
+        let placement = WindowPlacement {
+            inner_size: None,
+            outer_position: None,
+            maximized: false,
+        };
+
+        assert_eq!(
+            startup_seed_target_long_edge(&placement),
+            DEFAULT_TARGET_LONG_EDGE
+        );
+    }
 }

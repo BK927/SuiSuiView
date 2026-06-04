@@ -4,6 +4,7 @@ mod app;
 #[allow(dead_code)]
 mod core;
 mod single_instance;
+mod startup_window;
 
 use crate::core::source::{classify_path, SourceKind};
 use crate::core::state::{AppSettings, RendererMode, StateStore, WindowPlacement};
@@ -38,12 +39,22 @@ fn main() -> eframe::Result<()> {
     } else {
         None
     };
+    let startup_preview = startup_window::start_preview_window(startup_preview_config(
+        &store,
+        startup_open_path.is_some(),
+    ));
+    let startup_open = startup_open_path.as_ref().and_then(|path| {
+        app::start_startup_open_loader(path.clone(), &store, startup_preview.page_sender())
+    });
     let options = eframe::NativeOptions {
         viewport: initial_viewport(&store, window_icon()),
         renderer: renderer_for_settings(store.settings()),
+        wgpu_options: wgpu_options_for_settings(store.settings()),
         persist_window: false,
         ..Default::default()
     };
+    let _startup_flash_guard = startup_window::start_flash_guard();
+    let _startup_preview = startup_preview;
 
     eframe::run_native(
         "SuiSuiView",
@@ -54,9 +65,27 @@ fn main() -> eframe::Result<()> {
                 store,
                 ipc_rx,
                 startup_open_path,
+                startup_open,
             )))
         }),
     )
+}
+
+fn startup_preview_config(
+    store: &StateStore,
+    has_startup_open: bool,
+) -> startup_window::StartupPreviewConfig {
+    let enabled = std::env::var_os("SUISUIVIEW_DISABLE_STARTUP_PREVIEW").is_none()
+        && std::env::var_os("SUISUIVIEW_DISABLE_WGPU_STARTUP_PREVIEW").is_none();
+    let placement = store.window_placement();
+    startup_window::StartupPreviewConfig {
+        enabled,
+        title: "SuiSuiView".to_owned(),
+        inner_size: valid_window_size(placement).unwrap_or(DEFAULT_WINDOW_SIZE),
+        position: valid_window_position(placement),
+        maximized: placement.maximized,
+        wait_for_first_image: has_startup_open,
+    }
 }
 
 fn show_cli_redirect_message() {
@@ -135,6 +164,30 @@ fn renderer_for_settings(settings: &AppSettings) -> eframe::Renderer {
         RendererMode::LowMemoryGlow => eframe::Renderer::Glow,
     }
 }
+
+fn wgpu_options_for_settings(settings: &AppSettings) -> egui_wgpu::WgpuConfiguration {
+    let mut options = egui_wgpu::WgpuConfiguration::default();
+    if matches!(settings.renderer_mode, RendererMode::Wgpu) {
+        tune_wgpu_startup_options(&mut options);
+    }
+    options
+}
+
+#[cfg(target_os = "windows")]
+fn tune_wgpu_startup_options(options: &mut egui_wgpu::WgpuConfiguration) {
+    if std::env::var_os("WGPU_BACKEND").is_some() {
+        return;
+    }
+    if let egui_wgpu::WgpuSetup::CreateNew(create_new) = &mut options.wgpu_setup {
+        // eframe includes the wgpu GL fallback by default; this app's WGPU mode
+        // targets native WGSL backends and keeps Glow as the OpenGL path.
+        create_new.instance_descriptor.backends = wgpu::Backends::PRIMARY;
+        create_new.instance_descriptor.flags = wgpu::InstanceFlags::empty().with_env();
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn tune_wgpu_startup_options(_options: &mut egui_wgpu::WgpuConfiguration) {}
 
 fn window_icon() -> eframe::egui::IconData {
     let image = image::load_from_memory(include_bytes!("../assets/app-icon.ico"))

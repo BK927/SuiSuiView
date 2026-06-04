@@ -45,7 +45,12 @@ impl SuiSuiViewApp {
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("drain_adjacent_seed_events");
         self.drain_pending_original_inspection_cache_cleanup(ctx);
-        self.bookmark_thumbnails.drain(ctx);
+        if let Some(thumbnails) = self.bookmark_thumbnails.as_mut() {
+            thumbnails.drain(ctx);
+        }
+        if self.loader_pending {
+            ctx.request_repaint_after(Duration::from_millis(25));
+        }
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("background_maintenance");
         self.handle_dropped_files(ctx);

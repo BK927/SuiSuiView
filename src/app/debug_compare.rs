@@ -204,7 +204,18 @@ enum DebugCompareCommand {
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn drain_debug_compare_events(&mut self) {
-        while let Some(event) = self.debug_compare_worker.try_recv() {
+        let events = self
+            .debug_compare_worker
+            .as_ref()
+            .map(|worker| {
+                let mut events = Vec::new();
+                while let Some(event) = worker.try_recv() {
+                    events.push(event);
+                }
+                events
+            })
+            .unwrap_or_default();
+        for event in events {
             let key = PageCacheKey {
                 index: event.page_index,
                 target_long_edge: event.target_long_edge,
@@ -535,13 +546,14 @@ impl SuiSuiViewApp {
             return;
         };
         self.debug_compare_inflight.insert(key);
-        self.debug_compare_worker.prepare(DebugCompareRequest {
+        let request = DebugCompareRequest {
             book_id,
             source,
             page_index: key.index,
             target_long_edge: key.target_long_edge,
             decode: key.decode,
-        });
+        };
+        self.ensure_debug_compare_worker().prepare(request);
     }
 
     pub(in crate::app) fn debug_compare_pin_keys(&self) -> Vec<PageCacheKey> {

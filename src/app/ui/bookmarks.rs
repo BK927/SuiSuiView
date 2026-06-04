@@ -543,7 +543,9 @@ impl SuiSuiViewApp {
         if removed == 0 {
             self.notify(self.i18n().text("bookmark.no_delete_target"));
         } else {
-            self.bookmark_thumbnails.clear();
+            if let Some(thumbnails) = self.bookmark_thumbnails.as_mut() {
+                thumbnails.clear();
+            }
             let key = if scope == BookmarkFilter::ThisBook {
                 "bookmark.clear_done_this_book"
             } else {
@@ -620,7 +622,7 @@ impl SuiSuiViewApp {
     ) -> BookmarkThumbnailState {
         let source = current_book.then(|| self.source.clone()).flatten();
         let decode = self.decode_options();
-        self.bookmark_thumbnails.thumbnail(
+        self.ensure_bookmark_thumbnails().thumbnail(
             source,
             &row.book_id,
             row.known_path.as_deref(),

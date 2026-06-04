@@ -155,8 +155,9 @@ fn auto_kind_token(kind: AutoKind) -> &'static str {
 impl SuiSuiViewApp {
     pub(in crate::app) fn clear_auto_kind_state(&mut self) {
         self.auto_kind_generation = self.auto_kind_generation.wrapping_add(1);
-        self.auto_kind_worker
-            .set_generation(self.auto_kind_generation);
+        if let Some(worker) = self.auto_kind_worker.as_ref() {
+            worker.set_generation(self.auto_kind_generation);
+        }
         self.auto_kind_hints.clear();
         self.auto_kind_inflight.clear();
     }
@@ -175,16 +176,28 @@ impl SuiSuiViewApp {
         }
 
         self.auto_kind_inflight.insert(key);
+        let generation = self.auto_kind_generation;
         if !self
-            .auto_kind_worker
-            .enqueue(self.auto_kind_generation, key, page)
+            .ensure_auto_kind_worker()
+            .enqueue(generation, key, page)
         {
             self.auto_kind_inflight.remove(&key);
         }
     }
 
     pub(in crate::app) fn drain_auto_kind_events(&mut self) {
-        while let Some(event) = self.auto_kind_worker.try_recv() {
+        let events = self
+            .auto_kind_worker
+            .as_ref()
+            .map(|worker| {
+                let mut events = Vec::new();
+                while let Some(event) = worker.try_recv() {
+                    events.push(event);
+                }
+                events
+            })
+            .unwrap_or_default();
+        for event in events {
             if event.generation != self.auto_kind_generation {
                 continue;
             }

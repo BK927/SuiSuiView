@@ -71,6 +71,7 @@ pub(in crate::app) use cache::{
     BYTES_PER_RGBA_PIXEL,
 };
 pub(in crate::app) use navigation::EdgePrompt;
+pub(crate) use opening::{start_startup_open_loader, StartupOpen};
 pub(in crate::app) use opening::{LoaderEvent, OpenOrigin};
 #[cfg(test)]
 use sibling_books::adjacent_sibling_book_paths;
@@ -150,6 +151,7 @@ pub struct SuiSuiViewApp {
     worker: PageWorker,
     loader_tx: Sender<LoaderEvent>,
     loader_rx: Receiver<LoaderEvent>,
+    loader_pending: bool,
     adjacent_seed_tx: Sender<AdjacentSeedEvent>,
     adjacent_seed_rx: Receiver<AdjacentSeedEvent>,
     adjacent_seed_generation: u64,
@@ -179,16 +181,16 @@ pub struct SuiSuiViewApp {
     page_errors: HashMap<usize, String>,
     textures: LruCache<TextureCacheKey, TextureEntry>,
     debug_compare: DebugCompareState,
-    debug_compare_worker: DebugCompareWorker,
+    debug_compare_worker: Option<DebugCompareWorker>,
     debug_compare_inflight: HashSet<PageCacheKey>,
-    auto_kind_worker: auto_kind::AutoKindWorker,
+    auto_kind_worker: Option<auto_kind::AutoKindWorker>,
     auto_kind_generation: u64,
     auto_kind_hints: HashMap<PageCacheKey, AutoKindPrediction>,
     auto_kind_inflight: HashSet<PageCacheKey>,
-    bookmark_thumbnails: BookmarkThumbnails,
+    bookmark_thumbnails: Option<BookmarkThumbnails>,
     gpu_effects_available: bool,
     gpu_target_format: Option<wgpu::TextureFormat>,
-    upscale_worker: AiUpscaleWorker,
+    upscale_worker: Option<AiUpscaleWorker>,
     upscale_generation: u64,
     upscale_inflight: Option<(u64, usize)>,
     ai_upscale_queue: VecDeque<usize>,
@@ -234,16 +236,31 @@ pub struct SuiSuiViewApp {
 }
 
 impl SuiSuiViewApp {
-    pub fn new(
+    pub(crate) fn new(
         cc: &eframe::CreationContext<'_>,
         store: StateStore,
         ipc_rx: Option<Receiver<Option<PathBuf>>>,
         startup_open_path: Option<PathBuf>,
+        startup_open: Option<StartupOpen>,
     ) -> Self {
         let app_started = Instant::now();
         platform::install_app_fonts(&cc.egui_ctx);
         ui::apply_app_theme(&cc.egui_ctx);
-        let (loader_tx, loader_rx) = unbounded();
+        let startup_open_parts = startup_open.map(StartupOpen::into_parts);
+        let (loader_tx, loader_rx, loader_generation, loader_pending, startup_open_trace) =
+            match startup_open_parts {
+                Some(parts) => (
+                    parts.loader_tx,
+                    parts.loader_rx,
+                    parts.generation,
+                    true,
+                    Some((parts.origin, parts.started_at)),
+                ),
+                None => {
+                    let (loader_tx, loader_rx) = unbounded();
+                    (loader_tx, loader_rx, 0, false, None)
+                }
+            };
         let (adjacent_seed_tx, adjacent_seed_rx) = unbounded();
         let settings = store.settings().clone();
         let initial_window_size = store.window_placement().inner_size;
@@ -262,9 +279,10 @@ impl SuiSuiViewApp {
             about_section: about::AboutSection::default(),
             image_info: ImageInfoState::new(),
             worker: PageWorker::new(cc.egui_ctx.clone()),
-            upscale_worker: AiUpscaleWorker::new(cc.egui_ctx.clone()),
+            upscale_worker: None,
             loader_tx,
             loader_rx,
+            loader_pending,
             adjacent_seed_tx,
             adjacent_seed_rx,
             adjacent_seed_generation: 0,
@@ -272,7 +290,7 @@ impl SuiSuiViewApp {
             adjacent_seed_cache: Vec::new(),
             pending_adjacent_seed_prefetch_at: None,
             ipc_rx,
-            loader_generation: 0,
+            loader_generation,
             source: None,
             book_id: None,
             open_origin: None,
@@ -294,13 +312,13 @@ impl SuiSuiViewApp {
             page_errors: HashMap::new(),
             textures: LruCache::new(NonZeroUsize::new(12).unwrap()),
             debug_compare: DebugCompareState::default(),
-            debug_compare_worker: DebugCompareWorker::new(cc.egui_ctx.clone()),
+            debug_compare_worker: None,
             debug_compare_inflight: HashSet::new(),
-            auto_kind_worker: auto_kind::AutoKindWorker::new(cc.egui_ctx.clone()),
+            auto_kind_worker: None,
             auto_kind_generation: 0,
             auto_kind_hints: HashMap::new(),
             auto_kind_inflight: HashSet::new(),
-            bookmark_thumbnails: BookmarkThumbnails::new(cc.egui_ctx.clone()),
+            bookmark_thumbnails: None,
             gpu_effects_available: cc.wgpu_render_state.is_some(),
             gpu_target_format: cc
                 .wgpu_render_state
@@ -349,11 +367,50 @@ impl SuiSuiViewApp {
             pending_bookmark_jump: None,
             edge_prompt: None,
         };
-        if let Some(path) = startup_open_path {
+        if let Some((origin, started_at)) = startup_open_trace {
+            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+            {
+                app.open_to_first_visible_trace = Some(perf::OpenToFirstVisibleTrace::new_at(
+                    origin.perf_label(),
+                    started_at,
+                ));
+            }
+            #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
+            let _ = (origin, started_at);
+            app.set_status(app.i18n().text("status.opening"));
+            cc.egui_ctx.request_repaint();
+        } else if let Some(path) = startup_open_path {
             app.open_path(path);
+        }
+        if let Some(render_state) = cc.wgpu_render_state.as_ref() {
+            perf::record_wgpu_render_state(render_state);
         }
         perf::record_app_new(app_started);
         app
+    }
+
+    fn ensure_debug_compare_worker(&mut self) -> &DebugCompareWorker {
+        self.debug_compare_worker
+            .get_or_insert_with(|| DebugCompareWorker::new(self.egui_ctx.clone()))
+    }
+
+    fn ensure_auto_kind_worker(&mut self) -> &auto_kind::AutoKindWorker {
+        let generation = self.auto_kind_generation;
+        let worker = self
+            .auto_kind_worker
+            .get_or_insert_with(|| auto_kind::AutoKindWorker::new(self.egui_ctx.clone()));
+        worker.set_generation(generation);
+        worker
+    }
+
+    fn ensure_bookmark_thumbnails(&mut self) -> &mut BookmarkThumbnails {
+        self.bookmark_thumbnails
+            .get_or_insert_with(|| BookmarkThumbnails::new(self.egui_ctx.clone()))
+    }
+
+    fn ensure_upscale_worker(&mut self) -> &AiUpscaleWorker {
+        self.upscale_worker
+            .get_or_insert_with(|| AiUpscaleWorker::new(self.egui_ctx.clone()))
     }
 
     fn set_status(&mut self, status: impl Into<String>) {
@@ -525,7 +582,18 @@ impl SuiSuiViewApp {
     }
 
     fn drain_upscale_events(&mut self) {
-        while let Some(event) = self.upscale_worker.try_recv() {
+        let events = self
+            .upscale_worker
+            .as_ref()
+            .map(|worker| {
+                let mut events = Vec::new();
+                while let Some(event) = worker.try_recv() {
+                    events.push(event);
+                }
+                events
+            })
+            .unwrap_or_default();
+        for event in events {
             match event {
                 UpscaleEvent::Finished {
                     generation,
@@ -795,7 +863,9 @@ impl SuiSuiViewApp {
         self.textures.clear();
         self.clear_debug_compare_requests();
         self.clear_auto_kind_state();
-        self.bookmark_thumbnails.clear();
+        if let Some(thumbnails) = self.bookmark_thumbnails.as_mut() {
+            thumbnails.clear();
+        }
         self.page_errors.clear();
         self.upscale_generation = self.upscale_generation.wrapping_add(1);
         self.upscale_inflight = None;
@@ -1121,7 +1191,7 @@ impl SuiSuiViewApp {
         self.upscale_generation = self.upscale_generation.wrapping_add(1);
         let generation = self.upscale_generation;
         self.upscale_inflight = Some((generation, page_index));
-        self.upscale_worker.upscale(UpscaleRequest {
+        let request = UpscaleRequest {
             generation,
             book_id,
             source: source.clone(),
@@ -1130,7 +1200,8 @@ impl SuiSuiViewApp {
             target_long_edge: self.target_long_edge,
             decode: self.decode_options(),
             settings: self.settings.ai_upscale.ncnn.clone(),
-        });
+        };
+        self.ensure_upscale_worker().upscale(request);
         let action = if page_index == self.current_page {
             "AI upscaling"
         } else {
@@ -1169,9 +1240,18 @@ impl Drop for SuiSuiViewApp {
     fn drop(&mut self) {
         let shutdown_started = Instant::now();
         let page_worker_stopped = self.worker.request_shutdown();
-        let debug_compare_stopped = self.debug_compare_worker.request_shutdown();
-        let thumbnails_stopped = self.bookmark_thumbnails.request_shutdown();
-        let upscale_stopped = self.upscale_worker.request_shutdown();
+        let debug_compare_stopped = self
+            .debug_compare_worker
+            .as_mut()
+            .map_or(true, DebugCompareWorker::request_shutdown);
+        let thumbnails_stopped = self
+            .bookmark_thumbnails
+            .as_mut()
+            .map_or(true, BookmarkThumbnails::request_shutdown);
+        let upscale_stopped = self
+            .upscale_worker
+            .as_mut()
+            .map_or(true, AiUpscaleWorker::request_shutdown);
         self.flush_deferred_state_save();
         perf::record_app_shutdown(
             shutdown_started,

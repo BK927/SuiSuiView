@@ -256,22 +256,38 @@ impl CallbackTrait for GpuEffectCallback {
         egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let prepare_started = Instant::now();
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let mut resources_created = false;
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let mut resources_recreated = false;
         if callback_resources.get::<GpuPaintResources>().is_none() {
             callback_resources.insert(GpuPaintResources::new(device, self.target_format));
+            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+            {
+                resources_created = true;
+            }
         }
         let resources = callback_resources
             .get_mut::<GpuPaintResources>()
             .expect("GPU paint resources should be inserted before use");
         if resources.target_format != self.target_format {
             *resources = GpuPaintResources::new(device, self.target_format);
+            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+            {
+                resources_recreated = true;
+            }
         }
-        resources.ensure_source_texture(
+        let source_uploaded = resources.ensure_source_texture(
             device,
             queue,
             self.source_key,
             self.image_size,
             &self.rgba,
         );
+        #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
+        let _ = source_uploaded;
 
         let output_size = output_size_for_effects(self.image_size, self.effects);
         let (origin, target_size) = viewport_rect(self.rect, screen_descriptor);
@@ -297,6 +313,20 @@ impl CallbackTrait for GpuEffectCallback {
             );
             resources.insert_draw_state(self.draw_id, draw_state);
         }
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        perf_trace::record_duration(
+            "gpu_effect_prepare",
+            prepare_started.elapsed(),
+            &[
+                PerfField::Usize("width", self.image_size[0]),
+                PerfField::Usize("height", self.image_size[1]),
+                PerfField::Bool("resources_created", resources_created),
+                PerfField::Bool("resources_recreated", resources_recreated),
+                PerfField::Bool("source_uploaded", source_uploaded),
+                PerfField::Str("display_upscaler", self.display_upscaler.token()),
+                PerfField::Str("wgpu_downscaler", self.wgpu_downscaler.token()),
+            ],
+        );
         Vec::new()
     }
 
@@ -325,6 +355,7 @@ struct GpuPaintResources {
     params_bind_group_layout: wgpu::BindGroupLayout,
     texture_sampler: wgpu::Sampler,
     pipeline: wgpu::RenderPipeline,
+    intermediate_pipeline: wgpu::RenderPipeline,
     source_textures: LruCache<GpuPaintSourceKey, GpuSourceTexture>,
     source_texture_bytes: usize,
     draw_bind_groups: LruCache<u64, GpuDrawState>,
@@ -379,6 +410,8 @@ impl GpuDrawState {
 
 impl GpuPaintResources {
     fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let started = Instant::now();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("suisuiview-gpu-effect-shader"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
@@ -426,31 +459,20 @@ impl GpuPaintResources {
             bind_group_layouts: &[&texture_bind_group_layout, &params_bind_group_layout],
             push_constant_ranges: &[],
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("suisuiview-gpu-effect-pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        let pipeline = create_effect_pipeline_timed(
+            device,
+            &shader,
+            &pipeline_layout,
+            target_format,
+            "suisuiview-gpu-effect-pipeline",
+        );
+        let intermediate_pipeline = create_effect_pipeline_timed(
+            device,
+            &shader,
+            &pipeline_layout,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "suisuiview-gpu-effect-intermediate-pipeline",
+        );
         let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("suisuiview-gpu-effect-linear-sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -461,12 +483,13 @@ impl GpuPaintResources {
             mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        Self {
+        let resources = Self {
             target_format,
             texture_bind_group_layout,
             params_bind_group_layout,
             texture_sampler,
             pipeline,
+            intermediate_pipeline,
             source_textures: LruCache::new(
                 NonZeroUsize::new(GPU_SOURCE_TEXTURE_CACHE_LIMIT).unwrap(),
             ),
@@ -483,7 +506,17 @@ impl GpuPaintResources {
                 NonZeroUsize::new(GPU_REALTIME_SR_DEFER_CACHE_LIMIT).unwrap(),
             ),
             realtime_sr: RealtimeSrResources::new(),
-        }
+        };
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        perf_trace::record_duration(
+            "gpu_paint_resources_create",
+            started.elapsed(),
+            &[PerfField::Str(
+                "target_format",
+                texture_format_label(target_format),
+            )],
+        );
+        resources
     }
 
     fn ensure_source_texture(
@@ -493,16 +526,16 @@ impl GpuPaintResources {
         key: GpuPaintSourceKey,
         image_size: [usize; 2],
         rgba: &[u8],
-    ) {
+    ) -> bool {
         if self.source_textures.get(&key).is_some() {
-            return;
+            return false;
         }
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let upload_started = Instant::now();
         let [width, height] = image_size;
         let byte_size = width.saturating_mul(height).saturating_mul(4);
         if rgba.len() != byte_size {
-            return;
+            return false;
         }
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("suisuiview-gpu-effect-source"),
@@ -555,16 +588,16 @@ impl GpuPaintResources {
         self.source_texture_bytes = self.source_texture_bytes.saturating_add(byte_size);
         self.prune_source_textures();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        perf_trace::record_duration_if_at_least(
+        perf_trace::record_duration(
             "gpu_texture_upload",
             upload_started.elapsed(),
-            Duration::from_millis(16),
             &[
                 PerfField::Usize("width", width),
                 PerfField::Usize("height", height),
                 PerfField::Bool("upscaled", key.upscaled),
             ],
         );
+        true
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1248,7 +1281,7 @@ impl GpuPaintResources {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(&self.intermediate_pipeline);
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, params_bind_group, &[]);
         pass.draw(0..3, 0..1);
@@ -1554,6 +1587,76 @@ fn mip_size(size: [usize; 2], level: u32) -> [usize; 2] {
         size[0].checked_shr(level).unwrap_or(0).max(1),
         size[1].checked_shr(level).unwrap_or(0).max(1),
     ]
+}
+
+fn create_effect_pipeline_timed(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    pipeline_layout: &wgpu::PipelineLayout,
+    target_format: wgpu::TextureFormat,
+    label: &'static str,
+) -> wgpu::RenderPipeline {
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    let started = Instant::now();
+    let pipeline = create_effect_pipeline(device, shader, pipeline_layout, target_format, label);
+    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+    perf_trace::record_duration(
+        "gpu_effect_pipeline_create",
+        started.elapsed(),
+        &[
+            PerfField::Str("label", label),
+            PerfField::Str("target_format", texture_format_label(target_format)),
+        ],
+    );
+    pipeline
+}
+
+fn create_effect_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    pipeline_layout: &wgpu::PipelineLayout,
+    target_format: wgpu::TextureFormat,
+    label: &'static str,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+#[cfg_attr(
+    not(any(feature = "perf-dev", feature = "perf-diagnostics")),
+    allow(dead_code)
+)]
+fn texture_format_label(format: wgpu::TextureFormat) -> &'static str {
+    match format {
+        wgpu::TextureFormat::Rgba8Unorm => "rgba8_unorm",
+        wgpu::TextureFormat::Rgba8UnormSrgb => "rgba8_unorm_srgb",
+        wgpu::TextureFormat::Bgra8Unorm => "bgra8_unorm",
+        wgpu::TextureFormat::Bgra8UnormSrgb => "bgra8_unorm_srgb",
+        _ => "other",
+    }
 }
 
 fn texture_byte_size(size: [u32; 2], mip_levels: u32) -> usize {
