@@ -185,9 +185,9 @@ pub(in crate::app) enum CpuScaleState {
 impl CpuScaleState {
     pub(in crate::app) fn label(self) -> String {
         match self {
-            Self::Native => "native".to_owned(),
-            Self::Upscale(filter) => format!("up {}", filter.label()),
-            Self::Downscale(filter) => format!("down {}", filter.label()),
+            Self::Native => "no CPU resize".to_owned(),
+            Self::Upscale(filter) => format!("CPU upscale ({})", filter.label()),
+            Self::Downscale(filter) => format!("CPU downscale ({})", filter.label()),
         }
     }
 
@@ -215,10 +215,10 @@ pub(in crate::app) enum WgpuScaleState {
 impl WgpuScaleState {
     pub(in crate::app) fn label(self) -> String {
         match self {
-            Self::Inactive => "inactive".to_owned(),
-            Self::Native => "native".to_owned(),
-            Self::Upscale(method) => format!("up {}", method.label()),
-            Self::Downscale(method) => format!("down {}", method.label()),
+            Self::Inactive => "no WGPU scaling".to_owned(),
+            Self::Native => "WGPU native-size draw".to_owned(),
+            Self::Upscale(method) => format!("WGPU upscale ({})", method.label()),
+            Self::Downscale(method) => format!("WGPU downscale ({})", method.label()),
         }
     }
 
