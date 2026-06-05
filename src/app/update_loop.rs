@@ -79,6 +79,7 @@ impl SuiSuiViewApp {
         self.show_status_surfaces(ctx);
         self.show_settings_window(ctx);
         self.show_about_window(ctx);
+        self.show_fast_start_failure_dialog(ctx);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("status_surfaces");
 

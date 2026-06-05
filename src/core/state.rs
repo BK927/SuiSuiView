@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 mod bookmarks;
 mod decoders;
 mod display;
+mod fast_start;
 mod input;
 mod rendering;
 mod scalers;
@@ -20,6 +21,7 @@ use bookmarks::path_key;
 pub use bookmarks::{Bookmark, BookmarkInput, PageBookmark, PageBookmarkEntry, ReadingPosition};
 pub use decoders::{DecodeMode, DecoderPreference, DecoderPreferences};
 pub use display::{GpuEffectMode, WgpuUpscaleMethod};
+pub use fast_start::FastStartFailureNotice;
 pub use input::{
     default_key_bindings, default_mouse_bindings, CommandId, KeyBinding, KeyCode, KeyShortcut,
     MouseBinding, MouseGesture,
@@ -524,6 +526,8 @@ pub struct PersistedState {
     pub settings: AppSettings,
     #[serde(default)]
     pub window: WindowPlacement,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast_start_failure: Option<FastStartFailureNotice>,
     pub books: BTreeMap<String, Bookmark>,
 }
 
@@ -533,6 +537,7 @@ impl Default for PersistedState {
             version: 4,
             settings: AppSettings::default(),
             window: WindowPlacement::default(),
+            fast_start_failure: None,
             books: BTreeMap::new(),
         }
     }
@@ -580,11 +585,40 @@ impl StateStore {
         &self.state.settings
     }
 
+    pub fn fast_start_failure_notice(&self) -> Option<&FastStartFailureNotice> {
+        self.state.fast_start_failure.as_ref()
+    }
+
     pub fn update_settings(&mut self, mut settings: AppSettings) {
         settings.normalize_product_choices();
         self.state.settings = settings;
         self.state.version = 4;
         let _ = self.save();
+    }
+
+    pub fn record_fast_start_failure(&mut self, notice: FastStartFailureNotice) {
+        self.state.fast_start_failure = Some(notice);
+        self.state.version = 4;
+        let _ = self.save();
+    }
+
+    pub fn mark_fast_start_failure_notice_shown(&mut self) {
+        let Some(notice) = self.state.fast_start_failure.as_mut() else {
+            return;
+        };
+        if notice.shown {
+            return;
+        }
+        notice.shown = true;
+        self.state.version = 4;
+        let _ = self.save();
+    }
+
+    pub fn clear_fast_start_failure_notice(&mut self) {
+        if self.state.fast_start_failure.take().is_some() {
+            self.state.version = 4;
+            let _ = self.save();
+        }
     }
 
     pub fn reload_from_disk(&mut self) -> bool {

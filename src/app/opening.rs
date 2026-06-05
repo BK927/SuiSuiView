@@ -14,11 +14,9 @@ use crate::core::worker::{
     clamp_navigation_target_long_edge, DecodeOptions, DecodeStrategy, NavigationDirection,
     DEFAULT_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
-use crate::startup_window::StartupPreviewImage;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use eframe::egui::Vec2;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
 
@@ -76,11 +74,7 @@ impl StartupOpen {
     }
 }
 
-pub(crate) fn start_startup_open_loader(
-    path: PathBuf,
-    store: &StateStore,
-    preview_tx: Option<mpsc::Sender<StartupPreviewImage>>,
-) -> Option<StartupOpen> {
+pub(crate) fn start_startup_open_loader(path: PathBuf, store: &StateStore) -> Option<StartupOpen> {
     let origin = open_origin_for_source_kind(classify_path(&path))?;
     let (loader_tx, loader_rx) = unbounded();
     let event_tx = loader_tx.clone();
@@ -128,14 +122,6 @@ pub(crate) fn start_startup_open_loader(
                     target_long_edge,
                     seeded.is_some(),
                 );
-                if let (Some(preview_tx), Some(seed)) = (&preview_tx, seeded.as_ref()) {
-                    let page = seed.page.as_ref();
-                    let _ = preview_tx.send(StartupPreviewImage::from_rgba(
-                        page.display_width,
-                        page.display_height,
-                        &page.rgba,
-                    ));
-                }
                 seeded
             });
             let _ = event_tx.send(LoaderEvent {

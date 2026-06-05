@@ -9,6 +9,7 @@ mod startup_window;
 use crate::core::source::{classify_path, SourceKind};
 use crate::core::state::{AppSettings, RendererMode, StateStore, WindowPlacement};
 use app::SuiSuiViewApp;
+use crossbeam_channel::Receiver;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -28,6 +29,7 @@ fn main() -> eframe::Result<()> {
 
     let store = StateStore::load();
     let startup_open_path = startup_open_path();
+
     let restart_bypasses_single_instance =
         std::env::var_os(RESTART_BYPASS_SINGLE_INSTANCE_ENV).is_some();
     let ipc_rx = if store.settings().single_instance && !restart_bypasses_single_instance {
@@ -39,13 +41,57 @@ fn main() -> eframe::Result<()> {
     } else {
         None
     };
-    let startup_preview = startup_window::start_preview_window(startup_preview_config(
-        &store,
-        startup_open_path.is_some(),
-    ));
-    let startup_open = startup_open_path.as_ref().and_then(|path| {
-        app::start_startup_open_loader(path.clone(), &store, startup_preview.page_sender())
-    });
+
+    #[cfg(feature = "wgpu-fast-start")]
+    if app::handoff_preview::requested()
+        || app::handoff_preview::enabled_for_settings(store.settings())
+    {
+        let mut handoff_store = store.clone();
+        handoff_store.clear_fast_start_failure_notice();
+        let startup_open = startup_open_path
+            .as_ref()
+            .and_then(|path| app::start_startup_open_loader(path.clone(), &handoff_store));
+        match app::handoff_preview::run(app::handoff_preview::HandoffPreviewOptions {
+            store: handoff_store,
+            ipc_rx: ipc_rx.clone(),
+            startup_open_path: startup_open_path.clone(),
+            startup_open,
+            icon: window_icon(),
+            default_window_size: DEFAULT_WINDOW_SIZE,
+            min_window_size: MIN_WINDOW_SIZE,
+        }) {
+            Ok(()) => return Ok(()),
+            Err(failure) => {
+                eprintln!(
+                    "SuiSuiView WGPU fast start failed at {}: {}",
+                    failure.stage.key(),
+                    failure.error
+                );
+                let fallback_store = app::fast_start::disable_gpu_after_handoff_failure(
+                    StateStore::load(),
+                    &failure,
+                    startup_open_path.as_deref(),
+                );
+                let result = run_eframe_app(fallback_store.clone(), ipc_rx, startup_open_path);
+                if let Err(error) = &result {
+                    show_fast_start_fallback_failed_message(&fallback_store, error);
+                }
+                return result;
+            }
+        }
+    }
+
+    run_eframe_app(store, ipc_rx, startup_open_path)
+}
+
+fn run_eframe_app(
+    store: StateStore,
+    ipc_rx: Option<Receiver<Option<PathBuf>>>,
+    startup_open_path: Option<PathBuf>,
+) -> eframe::Result<()> {
+    let startup_open = startup_open_path
+        .as_ref()
+        .and_then(|path| app::start_startup_open_loader(path.clone(), &store));
     let options = eframe::NativeOptions {
         viewport: initial_viewport(&store, window_icon()),
         renderer: renderer_for_settings(store.settings()),
@@ -54,13 +100,12 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     let _startup_flash_guard = startup_window::start_flash_guard();
-    let _startup_preview = startup_preview;
 
     eframe::run_native(
         "SuiSuiView",
         options,
         Box::new(|cc| {
-            Ok(Box::new(SuiSuiViewApp::new(
+            Ok(Box::new(SuiSuiViewApp::from_eframe(
                 cc,
                 store,
                 ipc_rx,
@@ -71,21 +116,21 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-fn startup_preview_config(
-    store: &StateStore,
-    has_startup_open: bool,
-) -> startup_window::StartupPreviewConfig {
-    let enabled = std::env::var_os("SUISUIVIEW_DISABLE_STARTUP_PREVIEW").is_none()
-        && std::env::var_os("SUISUIVIEW_DISABLE_WGPU_STARTUP_PREVIEW").is_none();
-    let placement = store.window_placement();
-    startup_window::StartupPreviewConfig {
-        enabled,
-        title: "SuiSuiView".to_owned(),
-        inner_size: valid_window_size(placement).unwrap_or(DEFAULT_WINDOW_SIZE),
-        position: valid_window_position(placement),
-        maximized: placement.maximized,
-        wait_for_first_image: has_startup_open,
-    }
+#[cfg(feature = "wgpu-fast-start")]
+fn show_fast_start_fallback_failed_message(store: &StateStore, error: &eframe::Error) {
+    let diagnostic_path = store
+        .fast_start_failure_notice()
+        .and_then(|notice| notice.diagnostic_path.as_deref())
+        .unwrap_or("진단 파일 경로 없음");
+    let message = format!(
+        "WGPU 빠른 시작 실패 후 일반 모드 실행도 실패했습니다.\n\n오류: {error}\n진단 파일: {diagnostic_path}"
+    );
+    let _ = rfd::MessageDialog::new()
+        .set_title("SuiSuiView 시작 실패")
+        .set_description(message)
+        .set_level(rfd::MessageLevel::Error)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
 }
 
 fn show_cli_redirect_message() {

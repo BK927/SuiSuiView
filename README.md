@@ -152,6 +152,10 @@ state file.
   GPU upscaler `Auto` is content-aware only for enlargement: confident webtoon,
   anime, and manga pages use Anime4K M, while photos and uncertain images keep
   the FSR fallback.
+  When GPU acceleration is enabled, SuiSuiView uses the WGPU fast-start handoff
+  path by default. If that startup handoff fails, the app falls back to normal
+  mode, turns GPU acceleration off, and shows a report dialog with a diagnostic
+  log location.
   GPU upscalers marked `(실험)` are selectable for local testing but are not
   treated as stable defaults; SR Lab SPAN also requires a local manifest.
 - Decoders: decode mode and per-format decoder choices. `기본값` is shown as

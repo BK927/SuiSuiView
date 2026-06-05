@@ -4,7 +4,8 @@ use crate::core::formats::OPENABLE_FILE_EXTENSIONS;
 use crate::core::source::{BookSource, SharedSource};
 use crate::core::state::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, BookmarkInput, DecodeMode,
-    DecoderPreferences, FitMode, ReadingDirection, StateStore, WgpuUpscaleMethod,
+    DecoderPreferences, FastStartFailureNotice, FitMode, ReadingDirection, StateStore,
+    WgpuUpscaleMethod,
 };
 use crate::core::upscale::{AiUpscaleWorker, UpscaleEvent, UpscaleRequest};
 use crate::core::worker::{
@@ -34,7 +35,11 @@ mod cache;
 mod commands;
 mod context_menu;
 mod debug_compare;
+mod eframe_host;
+pub(crate) mod fast_start;
 mod gpu_paint;
+#[cfg(feature = "wgpu-fast-start")]
+pub(crate) mod handoff_preview;
 mod image_header;
 mod image_info;
 mod navigation;
@@ -42,6 +47,7 @@ mod opening;
 mod perf;
 mod platform;
 mod realtime_sr;
+mod runtime;
 mod settings;
 mod settings_bookmarks;
 mod settings_input;
@@ -142,6 +148,7 @@ pub struct SuiSuiViewApp {
     settings_open: bool,
     settings_section: settings::SettingsSection,
     pending_gpu_acceleration: Option<bool>,
+    fast_start_failure_notice: Option<FastStartFailureNotice>,
     shortcut_capture: Option<settings_input::ShortcutCapture>,
     shortcut_conflict: Option<settings_input::ShortcutConflict>,
     shortcut_expanded_groups: HashSet<&'static str>,
@@ -237,15 +244,17 @@ pub struct SuiSuiViewApp {
 
 impl SuiSuiViewApp {
     pub(crate) fn new(
-        cc: &eframe::CreationContext<'_>,
+        runtime: runtime::AppRuntime,
         store: StateStore,
         ipc_rx: Option<Receiver<Option<PathBuf>>>,
         startup_open_path: Option<PathBuf>,
         startup_open: Option<StartupOpen>,
     ) -> Self {
         let app_started = Instant::now();
-        platform::install_app_fonts(&cc.egui_ctx);
-        ui::apply_app_theme(&cc.egui_ctx);
+        let egui_ctx = runtime.egui_ctx().clone();
+        let screen_renderer = runtime.screen_renderer();
+        platform::install_app_fonts(&egui_ctx);
+        ui::apply_app_theme(&egui_ctx);
         let startup_open_parts = startup_open.map(StartupOpen::into_parts);
         let (loader_tx, loader_rx, loader_generation, loader_pending, startup_open_trace) =
             match startup_open_parts {
@@ -263,22 +272,24 @@ impl SuiSuiViewApp {
             };
         let (adjacent_seed_tx, adjacent_seed_rx) = unbounded();
         let settings = store.settings().clone();
+        let fast_start_failure_notice = store.fast_start_failure_notice().cloned();
         let initial_window_size = store.window_placement().inner_size;
-        platform::apply_window_level(&cc.egui_ctx, settings.always_on_top);
+        platform::apply_window_level(&egui_ctx, settings.always_on_top);
         let mut app = Self {
-            egui_ctx: cc.egui_ctx.clone(),
+            egui_ctx: egui_ctx.clone(),
             store,
             settings: settings.clone(),
             settings_open: false,
             settings_section: settings::SettingsSection::default(),
             pending_gpu_acceleration: None,
+            fast_start_failure_notice,
             shortcut_capture: None,
             shortcut_conflict: None,
             shortcut_expanded_groups: HashSet::new(),
             about_open: false,
             about_section: about::AboutSection::default(),
             image_info: ImageInfoState::new(),
-            worker: PageWorker::new(cc.egui_ctx.clone()),
+            worker: PageWorker::new(egui_ctx.clone()),
             upscale_worker: None,
             loader_tx,
             loader_rx,
@@ -319,11 +330,8 @@ impl SuiSuiViewApp {
             auto_kind_hints: HashMap::new(),
             auto_kind_inflight: HashSet::new(),
             bookmark_thumbnails: None,
-            gpu_effects_available: cc.wgpu_render_state.is_some(),
-            gpu_target_format: cc
-                .wgpu_render_state
-                .as_ref()
-                .map(|render_state| render_state.target_format),
+            gpu_effects_available: screen_renderer.supports_wgsl_paint(),
+            gpu_target_format: screen_renderer.wgpu_target_format(),
             upscale_generation: 0,
             upscale_inflight: None,
             ai_upscale_queue: VecDeque::new(),
@@ -378,12 +386,9 @@ impl SuiSuiViewApp {
             #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
             let _ = (origin, started_at);
             app.set_status(app.i18n().text("status.opening"));
-            cc.egui_ctx.request_repaint();
+            egui_ctx.request_repaint();
         } else if let Some(path) = startup_open_path {
             app.open_path(path);
-        }
-        if let Some(render_state) = cc.wgpu_render_state.as_ref() {
-            perf::record_wgpu_render_state(render_state);
         }
         perf::record_app_new(app_started);
         app
@@ -1227,12 +1232,6 @@ impl SuiSuiViewApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
-    }
-}
-
-impl eframe::App for SuiSuiViewApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.update_frame(ctx);
     }
 }
 

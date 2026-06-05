@@ -1,5 +1,8 @@
 use super::ui::{dialog, icons, theme};
-use super::{platform, settings_bookmarks, settings_input, settings_performance, SuiSuiViewApp};
+use super::{
+    fast_start::{self, FastStartReportAction},
+    platform, settings_bookmarks, settings_input, settings_performance, SuiSuiViewApp,
+};
 use crate::core::i18n::I18n;
 use crate::core::state::{
     AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CpuScaleFilter, EdgePageAction,
@@ -82,6 +85,8 @@ impl SuiSuiViewApp {
         let mut open = self.settings_open;
         let mut draft = self.settings.clone();
         let mut changed = false;
+        let fast_start_failure_notice = self.fast_start_failure_notice.clone();
+        let mut fast_start_action = None;
         if draft.gpu_effect_mode != GpuEffectMode::Auto {
             draft.gpu_effect_mode = GpuEffectMode::Auto;
             changed = true;
@@ -168,6 +173,8 @@ impl SuiSuiViewApp {
                                             self.target_long_edge,
                                             self.visible_page_count(),
                                             &mut self.pending_gpu_acceleration,
+                                            fast_start_failure_notice.as_ref(),
+                                            &mut fast_start_action,
                                             &mut changed,
                                             i18n,
                                         );
@@ -225,6 +232,11 @@ impl SuiSuiViewApp {
             self.pending_gpu_acceleration = None;
         }
         self.show_gpu_acceleration_confirm_dialog(ctx, &mut draft, &mut changed);
+        if let (Some(notice), Some(action)) =
+            (fast_start_failure_notice.as_ref(), fast_start_action)
+        {
+            self.handle_fast_start_report_action(notice, action);
+        }
         if changed {
             draft.manual_cache_mb = draft.manual_cache_mb.clamp(64, 2048);
             draft.ai_upscale.ncnn.scale = draft.ai_upscale.ncnn.scale.clamp(2, 4);
@@ -604,6 +616,8 @@ fn show_rendering_settings(
     target_long_edge: u32,
     visible_pages: usize,
     pending_gpu_acceleration: &mut Option<bool>,
+    fast_start_failure_notice: Option<&crate::core::state::FastStartFailureNotice>,
+    fast_start_action: &mut Option<FastStartReportAction>,
     changed: &mut bool,
     i18n: I18n,
 ) {
@@ -802,6 +816,12 @@ fn show_rendering_settings(
                 RichText::new(i18n.text("settings.rendering.gpu_off_note"))
                     .size(12.0)
                     .color(theme::TEXT_MUTED),
+            );
+            fast_start::show_settings_status(
+                ui,
+                fast_start_failure_notice,
+                fast_start_action,
+                i18n,
             );
         },
     );
