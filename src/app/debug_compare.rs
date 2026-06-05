@@ -1,7 +1,7 @@
 use super::{
     gpu_paint::{GpuPaintRequest, GpuPaintSourceKey},
-    page_visual_size, texture_options_for_target, PageCacheKey, PageVisual, SuiSuiViewApp,
-    TextureCacheKey, TextureEntry,
+    page_visual_size, texture_options_for_target, PageCacheKey, PageRenderInfo, PageVisual,
+    SuiSuiViewApp, TextureCacheKey, TextureEntry,
 };
 use crate::core::effects::ViewEffects;
 use crate::core::source::SharedSource;
@@ -436,6 +436,7 @@ impl SuiSuiViewApp {
             effects: ViewEffects::default(),
             wgpu_upscale_method,
             wgpu_downscale_method: WgpuDownscaleMethod::Bilinear,
+            render_info: PageRenderInfo::from_page(self.current_page, best_key, &page, false),
         }
     }
 
@@ -507,6 +508,12 @@ impl SuiSuiViewApp {
             return PageVisual::Ready {
                 texture,
                 size: page_natural_size(&page),
+                render_info: Some(PageRenderInfo::from_page(
+                    self.current_page,
+                    best_key,
+                    &page,
+                    upscaled,
+                )),
             };
         }
 
@@ -532,6 +539,12 @@ impl SuiSuiViewApp {
         PageVisual::Ready {
             texture,
             size: page_natural_size(&page),
+            render_info: Some(PageRenderInfo::from_page(
+                self.current_page,
+                best_key,
+                &page,
+                upscaled,
+            )),
         }
     }
 

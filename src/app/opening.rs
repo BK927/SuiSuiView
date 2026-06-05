@@ -349,6 +349,7 @@ impl SuiSuiViewApp {
         self.opened_path = Some(opened_path);
         self.pan = Vec2::ZERO;
         self.effects = ViewEffects::default();
+        self.current_view_state = None;
         self.decoded_pages.clear();
         self.decoded_bytes = 0;
         self.page_metrics.clear();

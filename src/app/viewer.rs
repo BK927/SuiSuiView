@@ -1,6 +1,9 @@
 use super::gpu_paint::{GpuPaintRequest, GpuPaintSourceKey};
 use super::perf;
-use super::{ui, PageCacheKey, SuiSuiViewApp, TextureCacheKey, TextureEntry, BYTES_PER_RGBA_PIXEL};
+use super::{
+    gpu_visual_needs_wgsl, rect_target_size, ui, PageCacheKey, SuiSuiViewApp, TextureCacheKey,
+    TextureEntry, BYTES_PER_RGBA_PIXEL,
+};
 use crate::core::effects::{
     apply_effects_to_image, compose_images_horizontally, transformed_page_size, ViewEffects,
 };
@@ -23,8 +26,8 @@ mod transition;
 pub(in crate::app) use model::relative_difference;
 pub(in crate::app) use model::{
     double_spread_indices, ordered_spread_indices, page_visual_size,
-    smart_spread_indices_for_metrics, worker_center_page_for_mode, PageMetrics, PageVisual,
-    Transition, ViewMode,
+    smart_spread_indices_for_metrics, worker_center_page_for_mode, CurrentViewState, PageMetrics,
+    PageRenderInfo, PageVisual, Transition, ViewMode,
 };
 pub(in crate::app) use paint_helpers::texture_options_for_target;
 pub(in crate::app) use transition::{
@@ -185,7 +188,13 @@ impl SuiSuiViewApp {
                         best_key.target_long_edge,
                         false,
                     );
-                    return PageVisual::Ready { texture, size };
+                    return PageVisual::Ready {
+                        texture,
+                        size,
+                        render_info: Some(PageRenderInfo::from_page(
+                            index, best_key, page, upscaled,
+                        )),
+                    };
                 }
             }
         }
@@ -225,6 +234,7 @@ impl SuiSuiViewApp {
                 effects: self.effects,
                 wgpu_upscale_method,
                 wgpu_downscale_method: self.settings.wgpu_downscale_method,
+                render_info: PageRenderInfo::from_page(index, best_key, &page, upscaled),
             };
         }
         let image = if self.effects == ViewEffects::default() {
@@ -293,6 +303,7 @@ impl SuiSuiViewApp {
                 page.original_height as f32,
                 self.effects.transform,
             ),
+            render_info: Some(PageRenderInfo::from_page(index, best_key, &page, upscaled)),
         }
     }
 
@@ -323,6 +334,7 @@ impl SuiSuiViewApp {
         Some(PageVisual::Ready {
             texture,
             size: transformed_page_size(metrics.width, metrics.height, self.effects.transform),
+            render_info: None,
         })
     }
 
@@ -344,6 +356,7 @@ impl SuiSuiViewApp {
         self.show_context_menu(ctx, &response);
 
         if self.source.is_none() {
+            self.current_view_state = None;
             painter.text(
                 rect.center(),
                 Align2::CENTER_CENTER,
@@ -358,6 +371,7 @@ impl SuiSuiViewApp {
         self.handle_viewer_pointer(ui, &response);
 
         if self.debug_compare.enabled {
+            self.current_view_state = None;
             self.transition = None;
             self.paint_debug_compare(ctx, &painter, rect);
             return;
@@ -507,7 +521,14 @@ impl SuiSuiViewApp {
             let page_rect = Rect::from_min_size(Pos2::new(cursor.x, top), page_size);
 
             match visual {
-                PageVisual::Ready { texture, .. } => {
+                PageVisual::Ready {
+                    texture,
+                    render_info,
+                    ..
+                } => {
+                    if let Some(render_info) = render_info {
+                        self.record_current_view_state(CurrentViewState::from_cpu(render_info));
+                    }
                     painter.image(
                         texture.id(),
                         page_rect,
@@ -522,8 +543,26 @@ impl SuiSuiViewApp {
                     effects,
                     wgpu_upscale_method,
                     wgpu_downscale_method,
+                    render_info,
                     ..
                 } => {
+                    let target_size = rect_target_size(page_rect);
+                    let active_wgsl = gpu_visual_needs_wgsl(
+                        image_size,
+                        target_size,
+                        effects,
+                        wgpu_upscale_method,
+                        wgpu_downscale_method,
+                    );
+                    self.record_current_view_state(CurrentViewState::from_gpu(
+                        render_info,
+                        image_size,
+                        effects,
+                        target_size,
+                        wgpu_upscale_method,
+                        wgpu_downscale_method,
+                        active_wgsl,
+                    ));
                     if !self.paint_ready_gpu_visual(
                         ctx,
                         painter,
@@ -549,6 +588,7 @@ impl SuiSuiViewApp {
                     }
                 }
                 PageVisual::Loading { index } => {
+                    self.clear_current_view_state_for(index);
                     self.paint_placeholder(
                         painter,
                         page_rect,
@@ -558,6 +598,7 @@ impl SuiSuiViewApp {
                     );
                 }
                 PageVisual::Failed { index, message } => {
+                    self.clear_current_view_state_for(index);
                     self.paint_placeholder(
                         painter,
                         page_rect,
@@ -569,6 +610,18 @@ impl SuiSuiViewApp {
             }
 
             cursor.x += page_size.x + gap * scale;
+        }
+    }
+
+    fn record_current_view_state(&mut self, state: CurrentViewState) {
+        if state.page_index == self.current_page {
+            self.current_view_state = Some(state);
+        }
+    }
+
+    fn clear_current_view_state_for(&mut self, index: usize) {
+        if index == self.current_page {
+            self.current_view_state = None;
         }
     }
 }

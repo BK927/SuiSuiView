@@ -1,9 +1,11 @@
-use super::super::gpu_paint::GpuPaintSourceKey;
+use super::super::{gpu_paint::GpuPaintSourceKey, PageCacheKey};
 use crate::core::effects::ViewEffects;
+use crate::core::gpu_effect::output_size_for_effects;
 use crate::core::state::{
-    PageTransitionStyle, ReadingDirection, WgpuDownscaleMethod, WgpuUpscaleMethod,
+    CpuScaleFilter, PageTransitionStyle, ReadingDirection, WgpuDownscaleMethod, WgpuScaleDirection,
+    WgpuScalePlan, WgpuUpscaleMethod,
 };
-use crate::core::worker::PreparedPage;
+use crate::core::worker::{DecodeBackend, PreparedPage};
 use eframe::egui::{TextureHandle, Vec2};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -173,10 +175,146 @@ pub(in crate::app) struct Transition {
     pub(in crate::app) style: PageTransitionStyle,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) enum CpuScaleState {
+    Native,
+    Upscale(CpuScaleFilter),
+    Downscale(CpuScaleFilter),
+}
+
+impl CpuScaleState {
+    pub(in crate::app) fn label(self) -> String {
+        match self {
+            Self::Native => "native".to_owned(),
+            Self::Upscale(filter) => format!("up {}", filter.label()),
+            Self::Downscale(filter) => format!("down {}", filter.label()),
+        }
+    }
+
+    fn from_page(key: PageCacheKey, page: &PreparedPage) -> Self {
+        if page.display_width > page.original_width || page.display_height > page.original_height {
+            Self::Upscale(key.decode.cpu_upscale_filter)
+        } else if page.display_width < page.original_width
+            || page.display_height < page.original_height
+        {
+            Self::Downscale(key.decode.cpu_downscale_filter)
+        } else {
+            Self::Native
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) enum WgpuScaleState {
+    Inactive,
+    Native,
+    Upscale(WgpuUpscaleMethod),
+    Downscale(WgpuDownscaleMethod),
+}
+
+impl WgpuScaleState {
+    pub(in crate::app) fn label(self) -> String {
+        match self {
+            Self::Inactive => "inactive".to_owned(),
+            Self::Native => "native".to_owned(),
+            Self::Upscale(method) => format!("up {}", method.label()),
+            Self::Downscale(method) => format!("down {}", method.label()),
+        }
+    }
+
+    fn from_plan(active: bool, plan: WgpuScalePlan) -> Self {
+        if !active {
+            return Self::Inactive;
+        }
+        match plan.direction {
+            WgpuScaleDirection::Upscale => {
+                if plan.effective_upscale_method == WgpuUpscaleMethod::None {
+                    Self::Native
+                } else {
+                    Self::Upscale(plan.effective_upscale_method)
+                }
+            }
+            WgpuScaleDirection::Downscale => Self::Downscale(plan.effective_downscale_method),
+            WgpuScaleDirection::Native => Self::Native,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) struct PageRenderInfo {
+    pub(in crate::app) page_index: usize,
+    pub(in crate::app) decode_backend: DecodeBackend,
+    pub(in crate::app) cpu_scale: CpuScaleState,
+    pub(in crate::app) upscaled: bool,
+}
+
+impl PageRenderInfo {
+    pub(in crate::app) fn from_page(
+        page_index: usize,
+        key: PageCacheKey,
+        page: &PreparedPage,
+        upscaled: bool,
+    ) -> Self {
+        Self {
+            page_index,
+            decode_backend: page.decode_backend,
+            cpu_scale: CpuScaleState::from_page(key, page),
+            upscaled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) struct CurrentViewState {
+    pub(in crate::app) page_index: usize,
+    pub(in crate::app) decode_backend: DecodeBackend,
+    pub(in crate::app) cpu_scale: CpuScaleState,
+    pub(in crate::app) wgpu_scale: WgpuScaleState,
+    pub(in crate::app) upscaled: bool,
+}
+
+impl CurrentViewState {
+    pub(in crate::app) fn from_cpu(render: PageRenderInfo) -> Self {
+        Self {
+            page_index: render.page_index,
+            decode_backend: render.decode_backend,
+            cpu_scale: render.cpu_scale,
+            wgpu_scale: WgpuScaleState::Inactive,
+            upscaled: render.upscaled,
+        }
+    }
+
+    pub(in crate::app) fn from_gpu(
+        render: PageRenderInfo,
+        image_size: [usize; 2],
+        effects: ViewEffects,
+        target_size: [u32; 2],
+        wgpu_upscale_method: WgpuUpscaleMethod,
+        wgpu_downscale_method: WgpuDownscaleMethod,
+        active: bool,
+    ) -> Self {
+        let output_size = output_size_for_effects(image_size, effects);
+        let scale_plan = WgpuScalePlan::resolve(
+            output_size,
+            target_size,
+            wgpu_upscale_method,
+            wgpu_downscale_method,
+        );
+        Self {
+            page_index: render.page_index,
+            decode_backend: render.decode_backend,
+            cpu_scale: render.cpu_scale,
+            wgpu_scale: WgpuScaleState::from_plan(active, scale_plan),
+            upscaled: render.upscaled,
+        }
+    }
+}
+
 pub(in crate::app) enum PageVisual {
     Ready {
         texture: TextureHandle,
         size: Vec2,
+        render_info: Option<PageRenderInfo>,
     },
     ReadyGpu {
         source_key: GpuPaintSourceKey,
@@ -186,6 +324,7 @@ pub(in crate::app) enum PageVisual {
         effects: ViewEffects,
         wgpu_upscale_method: WgpuUpscaleMethod,
         wgpu_downscale_method: WgpuDownscaleMethod,
+        render_info: PageRenderInfo,
     },
     Loading {
         index: usize,

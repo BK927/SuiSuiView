@@ -481,16 +481,11 @@ fn show_view_state_card(ui: &mut egui::Ui, app: &SuiSuiViewApp, i18n: I18n) {
                 ),
                 (
                     &i18n.text("about.image.view.decode_mode"),
-                    app.settings.decode_mode.label_i18n(i18n),
+                    actual_decode_label(app, i18n),
                 ),
                 (
                     &i18n.text("about.image.view.resize_filter"),
-                    format!(
-                        "CPU up: {} / CPU down: {} / WGPU down: {}",
-                        app.settings.cpu_upscale_filter.label(),
-                        app.settings.cpu_downscale_filter.label(),
-                        app.settings.wgpu_downscale_method.label()
-                    ),
+                    actual_scaler_filter_label(app, i18n),
                 ),
                 (&i18n.text("about.image.view.ai"), ai_state_label(app, i18n)),
             ],
@@ -671,10 +666,33 @@ fn view_mode_label(mode: ViewMode, i18n: I18n) -> String {
     }
 }
 
+fn actual_decode_label(app: &SuiSuiViewApp, i18n: I18n) -> String {
+    app.current_view_state
+        .as_ref()
+        .map(|state| state.decode_backend.label().to_owned())
+        .unwrap_or_else(|| unknown(i18n))
+}
+
+fn actual_scaler_filter_label(app: &SuiSuiViewApp, i18n: I18n) -> String {
+    let Some(state) = app.current_view_state.as_ref() else {
+        return unknown(i18n);
+    };
+    format!(
+        "CPU: {} / WGPU: {}",
+        state.cpu_scale.label(),
+        state.wgpu_scale.label()
+    )
+}
+
 fn ai_state_label(app: &SuiSuiViewApp, i18n: I18n) -> String {
     match app.settings.ai_upscale.backend {
         AiUpscaleBackend::Off => AiUpscaleBackend::Off.label_i18n(i18n),
-        AiUpscaleBackend::RealEsrganNcnn if app.use_ai_upscaled_pages => {
+        AiUpscaleBackend::RealEsrganNcnn
+            if app
+                .current_view_state
+                .as_ref()
+                .is_some_and(|state| state.upscaled) =>
+        {
             i18n.text("about.image.ai.on_display")
         }
         AiUpscaleBackend::RealEsrganNcnn => i18n.text("about.image.ai.on_original"),

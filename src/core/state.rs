@@ -27,7 +27,9 @@ pub use input::{
     MouseBinding, MouseGesture,
 };
 pub use rendering::RendererMode;
-pub use scalers::{CpuScaleFilter, ResizeFilter, WgpuDownscaleMethod, WgpuScalePlan};
+pub use scalers::{
+    CpuScaleFilter, ResizeFilter, WgpuDownscaleMethod, WgpuScaleDirection, WgpuScalePlan,
+};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReadingDirection {

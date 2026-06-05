@@ -89,7 +89,8 @@ use viewer::{
 };
 pub(in crate::app) use viewer::{
     page_visual_size, texture_options_for_target, transition_screen_sign,
-    worker_center_page_for_mode, PageMetrics, PageVisual, Transition, ViewMode,
+    worker_center_page_for_mode, CurrentViewState, PageMetrics, PageRenderInfo, PageVisual,
+    Transition, ViewMode,
 };
 
 #[cfg(test)]
@@ -178,6 +179,7 @@ pub struct SuiSuiViewApp {
     manual_zoom: f32,
     effects: ViewEffects,
     target_long_edge: u32,
+    current_view_state: Option<CurrentViewState>,
     pan: Vec2,
     decoded_pages: LruCache<PageCacheKey, Arc<PreparedPage>>,
     decoded_bytes: usize,
@@ -313,6 +315,7 @@ impl SuiSuiViewApp {
             manual_zoom: 1.0,
             effects: ViewEffects::default(),
             target_long_edge: DEFAULT_TARGET_LONG_EDGE,
+            current_view_state: None,
             pan: Vec2::ZERO,
             decoded_pages: LruCache::new(NonZeroUsize::new(64).unwrap()),
             decoded_bytes: 0,
@@ -859,6 +862,7 @@ impl SuiSuiViewApp {
         self.pan = Vec2::ZERO;
         self.manual_zoom = 1.0;
         self.effects = ViewEffects::default();
+        self.current_view_state = None;
         self.edge_prompt = None;
         self.decoded_pages.clear();
         self.decoded_bytes = 0;

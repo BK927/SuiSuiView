@@ -365,6 +365,29 @@ pub enum DecodeBackend {
 }
 
 impl DecodeBackend {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ImageCrate => "image crate",
+            Self::JpegScaled => "JPEG scaled",
+            Self::BmpSampled => "BMP sampled",
+            Self::GifSampled => "GIF sampled",
+            Self::PngSampled => "PNG sampled",
+            Self::PngExactRows => "PNG exact rows",
+            Self::ZuneJpeg => "zune JPEG",
+            Self::PngCrate => "png crate",
+            Self::ZunePng => "zune PNG",
+            Self::ImageWebp => "image-webp",
+            Self::LibWebp => "libwebp",
+            Self::LibWebpScaled => "libwebp scaled",
+            Self::GifCrate => "gif crate",
+            Self::BmpFastPath => "BMP fast path",
+            Self::IcoFastPath => "ICO fast path",
+            Self::LibAvifDav1d => "libavif dav1d",
+            Self::ZunePsd => "zune PSD",
+            Self::PdfiumAi => "pdfium AI",
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ImageCrate => "image-crate",
