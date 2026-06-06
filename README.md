@@ -88,6 +88,8 @@ state file.
   EXIF orientation, embedded ICC conversion, prefetch, and cache memory.
 - Decoders: decode mode and per-format decoder choices. `기본값` is shown as
   selected text, with the resolved backend summarized beside each format.
+- File links: on Windows, register SuiSuiView as a Default Apps candidate for
+  selected image and comic file types.
 - View, keyboard, and mouse: large-image starting position, visible viewer UI,
   customizable keyboard shortcuts, double-click maximize, middle-click
   fullscreen, and wheel behavior.

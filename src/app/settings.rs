@@ -15,6 +15,8 @@ pub(super) enum SettingsSection {
     #[default]
     General,
     View,
+    #[cfg(target_os = "windows")]
+    FileAssociations,
     Rendering,
     Decoders,
     Bookmarks,
@@ -23,6 +25,19 @@ pub(super) enum SettingsSection {
 }
 
 impl SettingsSection {
+    #[cfg(target_os = "windows")]
+    const ALL: [Self; 8] = [
+        Self::General,
+        Self::View,
+        Self::FileAssociations,
+        Self::Rendering,
+        Self::Decoders,
+        Self::Bookmarks,
+        Self::Keyboard,
+        Self::Mouse,
+    ];
+
+    #[cfg(not(target_os = "windows"))]
     const ALL: [Self; 7] = [
         Self::General,
         Self::View,
@@ -37,6 +52,8 @@ impl SettingsSection {
         match self {
             Self::General => i18n.text("settings.section.general"),
             Self::View => i18n.text("settings.section.view"),
+            #[cfg(target_os = "windows")]
+            Self::FileAssociations => i18n.text("settings.section.file_associations"),
             Self::Rendering => i18n.text("settings.section.rendering"),
             Self::Decoders => i18n.text("settings.section.decoders"),
             Self::Bookmarks => i18n.text("settings.section.bookmarks"),
@@ -49,6 +66,8 @@ impl SettingsSection {
         match self {
             Self::General => i18n.text("settings.section.general.desc"),
             Self::View => i18n.text("settings.section.view.desc"),
+            #[cfg(target_os = "windows")]
+            Self::FileAssociations => i18n.text("settings.section.file_associations.desc"),
             Self::Rendering => i18n.text("settings.section.rendering.desc"),
             Self::Decoders => i18n.text("settings.section.decoders.desc"),
             Self::Bookmarks => i18n.text("settings.section.bookmarks.desc"),
@@ -61,6 +80,8 @@ impl SettingsSection {
         match self {
             Self::General => (icons::SETTINGS, icons::IconStyle::Regular),
             Self::View => (icons::EYE, icons::IconStyle::Regular),
+            #[cfg(target_os = "windows")]
+            Self::FileAssociations => (icons::DOCUMENT, icons::IconStyle::Regular),
             Self::Rendering => (icons::IMAGE_SPARKLE, icons::IconStyle::Regular),
             Self::Decoders => (icons::LOCK_OPEN, icons::IconStyle::Regular),
             Self::Bookmarks => (icons::BOOKMARK, icons::IconStyle::Regular),
@@ -163,6 +184,10 @@ impl SuiSuiViewApp {
                                             &mut changed,
                                             i18n,
                                         );
+                                    }
+                                    #[cfg(target_os = "windows")]
+                                    SettingsSection::FileAssociations => {
+                                        self.show_file_association_settings(ui, i18n);
                                     }
                                     SettingsSection::Rendering => {
                                         show_rendering_settings(
@@ -359,6 +384,9 @@ impl SuiSuiViewApp {
         let mut textures_invalidated = false;
 
         self.settings = settings;
+        if !self.settings.top_bar_items.compare && self.debug_compare.enabled {
+            self.set_debug_compare_enabled(false);
+        }
         self.store.update_settings(self.settings.clone());
         self.refresh_single_instance_listener();
         self.pending_state_save_at = None;

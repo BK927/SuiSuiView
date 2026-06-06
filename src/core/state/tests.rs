@@ -2,7 +2,7 @@ use super::scalers::WgpuScaleDirection;
 use super::{
     AppSettings, CacheMemoryMode, CpuScaleFilter, DecodeMode, DecoderPreference,
     DecoderPreferences, EdgePageAction, GpuEffectMode, PageTransitionStyle, PersistedState,
-    RendererMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod, WheelMode,
+    RendererMode, TopBarItems, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod, WheelMode,
     WindowPlacement, DEFAULT_MANUAL_CACHE_MB,
 };
 use crate::core::i18n::{I18n, Language, ResolvedLanguage};
@@ -37,6 +37,7 @@ fn settings_defaults_match_viewer_policy() {
     assert!(settings.show_toasts);
     assert!(settings.remember_recent_locations);
     assert!(!settings.single_instance);
+    assert_eq!(settings.top_bar_items, TopBarItems::default());
     assert_eq!(settings.image_edge_page_action, EdgePageAction::Wrap);
     assert_eq!(settings.archive_edge_page_action, EdgePageAction::Ask);
     assert_eq!(settings.edge_page_action, EdgePageAction::Stop);
@@ -67,6 +68,49 @@ fn settings_defaults_match_viewer_policy() {
     assert_eq!(settings.max_remembered_books, 30);
     assert!(settings.remember_archive_page_name);
     assert_eq!(settings.wheel_mode, WheelMode::PageTurn);
+}
+
+#[test]
+fn top_bar_items_default_to_visible_for_old_settings() {
+    let state: PersistedState =
+        serde_json::from_str(r#"{"version":4,"settings":{},"books":{}}"#).unwrap();
+
+    assert_eq!(state.settings.top_bar_items, TopBarItems::default());
+}
+
+#[test]
+fn top_bar_items_partial_json_defaults_missing_groups_to_visible() {
+    let state: PersistedState = serde_json::from_str(
+        r#"{"version":4,"settings":{"top_bar_items":{"compare":false}},"books":{}}"#,
+    )
+    .unwrap();
+
+    assert!(state.settings.top_bar_items.open);
+    assert!(state.settings.top_bar_items.page);
+    assert!(state.settings.top_bar_items.view);
+    assert!(state.settings.top_bar_items.adjust);
+    assert!(!state.settings.top_bar_items.compare);
+    assert!(state.settings.top_bar_items.bookmarks);
+}
+
+#[test]
+fn top_bar_items_round_trip() {
+    let settings = AppSettings {
+        top_bar_items: TopBarItems {
+            open: false,
+            page: true,
+            view: false,
+            adjust: true,
+            compare: false,
+            bookmarks: true,
+        },
+        ..AppSettings::default()
+    };
+
+    let json = serde_json::to_string(&settings).unwrap();
+    let round_trip: AppSettings = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_trip.top_bar_items, settings.top_bar_items);
 }
 
 #[test]

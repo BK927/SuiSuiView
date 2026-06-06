@@ -125,6 +125,35 @@ impl EdgePageAction {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopBarItems {
+    #[serde(default = "default_true")]
+    pub open: bool,
+    #[serde(default = "default_true")]
+    pub page: bool,
+    #[serde(default = "default_true")]
+    pub view: bool,
+    #[serde(default = "default_true")]
+    pub adjust: bool,
+    #[serde(default = "default_true")]
+    pub compare: bool,
+    #[serde(default = "default_true")]
+    pub bookmarks: bool,
+}
+
+impl Default for TopBarItems {
+    fn default() -> Self {
+        Self {
+            open: true,
+            page: true,
+            view: true,
+            adjust: true,
+            compare: true,
+            bookmarks: true,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CacheMemoryMode {
     #[default]
@@ -263,6 +292,8 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub top_bar_pinned: bool,
     #[serde(default)]
+    pub top_bar_items: TopBarItems,
+    #[serde(default)]
     pub show_filename_overlay: bool,
     #[serde(default = "default_true")]
     pub show_main_border: bool,
@@ -381,6 +412,7 @@ impl Default for AppSettings {
             single_instance: false,
             show_status_bar: false,
             top_bar_pinned: true,
+            top_bar_items: TopBarItems::default(),
             show_filename_overlay: false,
             show_main_border: true,
             show_page_arrows: true,

@@ -1,7 +1,7 @@
 use super::settings::{checkbox_with_help, setting_group};
 use super::SuiSuiViewApp;
 use crate::core::i18n::I18n;
-use crate::core::state::AppSettings;
+use crate::core::state::{AppSettings, TopBarItems};
 use eframe::egui;
 
 pub(in crate::app) fn show_view_settings(
@@ -39,6 +39,65 @@ pub(in crate::app) fn show_view_settings(
     ui.add_space(8.0);
     setting_group(
         ui,
+        &i18n.text("settings.view.top_bar_items.title"),
+        &i18n.text("settings.view.top_bar_items.desc"),
+        |ui| {
+            *changed |= top_bar_item_checkbox(
+                ui,
+                &mut draft.top_bar_items.open,
+                "settings.view.top_bar_items.open",
+                "settings.view.top_bar_items.open.help",
+                i18n,
+            );
+            *changed |= top_bar_item_checkbox(
+                ui,
+                &mut draft.top_bar_items.page,
+                "settings.view.top_bar_items.page",
+                "settings.view.top_bar_items.page.help",
+                i18n,
+            );
+            *changed |= top_bar_item_checkbox(
+                ui,
+                &mut draft.top_bar_items.view,
+                "settings.view.top_bar_items.view",
+                "settings.view.top_bar_items.view.help",
+                i18n,
+            );
+            *changed |= top_bar_item_checkbox(
+                ui,
+                &mut draft.top_bar_items.adjust,
+                "settings.view.top_bar_items.adjust",
+                "settings.view.top_bar_items.adjust.help",
+                i18n,
+            );
+            *changed |= top_bar_item_checkbox(
+                ui,
+                &mut draft.top_bar_items.compare,
+                "settings.view.top_bar_items.compare",
+                "settings.view.top_bar_items.compare.help",
+                i18n,
+            );
+            *changed |= top_bar_item_checkbox(
+                ui,
+                &mut draft.top_bar_items.bookmarks,
+                "settings.view.top_bar_items.bookmarks",
+                "settings.view.top_bar_items.bookmarks.help",
+                i18n,
+            );
+            ui.add_space(4.0);
+            if ui
+                .button(i18n.text("settings.view.top_bar_items.reset"))
+                .clicked()
+            {
+                draft.top_bar_items = TopBarItems::default();
+                *changed = true;
+            }
+        },
+    );
+
+    ui.add_space(8.0);
+    setting_group(
+        ui,
         &i18n.text("settings.view.viewer.title"),
         &i18n.text("settings.view.viewer.desc"),
         |ui| {
@@ -62,6 +121,16 @@ pub(in crate::app) fn show_view_settings(
             );
         },
     );
+}
+
+fn top_bar_item_checkbox(
+    ui: &mut egui::Ui,
+    value: &mut bool,
+    label_key: &str,
+    help_key: &str,
+    i18n: I18n,
+) -> bool {
+    checkbox_with_help(ui, value, &i18n.text(label_key), &i18n.text(help_key))
 }
 
 impl SuiSuiViewApp {

@@ -1,6 +1,7 @@
 use super::super::commands::AppCommand;
 use super::super::debug_compare::DebugCompareTarget;
 use super::super::{SuiSuiViewApp, ViewMode};
+use super::top_bar_groups::{visible_top_bar_groups, TopBarGroup};
 use super::{icons, path_labels, theme};
 use crate::core::effects::ImageFilter;
 use crate::core::i18n::I18n;
@@ -126,16 +127,21 @@ impl SuiSuiViewApp {
         let i18n = self.i18n();
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
         ui.horizontal_centered(|ui| {
-            self.show_open_group(ui);
-            toolbar_separator(ui);
-            self.show_page_group(ui);
-            toolbar_separator(ui);
-            self.show_view_group(ui);
-            self.show_correction_group(ctx, ui);
-            toolbar_separator(ui);
-            self.show_debug_compare_group(ui);
-            toolbar_separator(ui);
-            self.show_bookmark_group(ctx, ui);
+            let mut first_group = true;
+            for group in visible_top_bar_groups(self.settings.top_bar_items) {
+                if !first_group {
+                    toolbar_separator(ui);
+                }
+                match group {
+                    TopBarGroup::Open => self.show_open_group(ui),
+                    TopBarGroup::Page => self.show_page_group(ui),
+                    TopBarGroup::View => self.show_view_group(ui),
+                    TopBarGroup::Adjust => self.show_correction_group(ctx, ui),
+                    TopBarGroup::Compare => self.show_debug_compare_group(ui),
+                    TopBarGroup::Bookmarks => self.show_bookmark_group(ctx, ui),
+                }
+                first_group = false;
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(icon_button(icons::INFO, icons::IconStyle::Regular, 19.0))

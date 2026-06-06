@@ -35,6 +35,8 @@ mod context_menu;
 mod debug_compare;
 mod eframe_host;
 pub(crate) mod fast_start;
+#[cfg(target_os = "windows")]
+mod file_associations;
 mod gpu_paint;
 #[cfg(feature = "wgpu-fast-start")]
 pub(crate) mod handoff_preview;
@@ -145,6 +147,8 @@ pub struct SuiSuiViewApp {
     settings: AppSettings,
     settings_open: bool,
     settings_section: settings::SettingsSection,
+    #[cfg(target_os = "windows")]
+    file_association_selection: file_associations::FileAssociationSelection,
     pending_gpu_acceleration: Option<bool>,
     fast_start_failure_notice: Option<FastStartFailureNotice>,
     shortcut_capture: Option<settings_input::ShortcutCapture>,
@@ -271,6 +275,8 @@ impl SuiSuiViewApp {
             settings: settings.clone(),
             settings_open: false,
             settings_section: settings::SettingsSection::default(),
+            #[cfg(target_os = "windows")]
+            file_association_selection: file_associations::FileAssociationSelection::default(),
             pending_gpu_acceleration: None,
             fast_start_failure_notice,
             shortcut_capture: None,
