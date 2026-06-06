@@ -14,6 +14,8 @@ use zip::write::SimpleFileOptions;
 
 #[path = "make_perf_fixture/comic.rs"]
 mod comic;
+#[path = "make_perf_fixture/identity.rs"]
+mod identity;
 
 const DEFAULT_COUNT: usize = 20;
 const DEFAULT_MIN_LONG_EDGE: u32 = 4000;
@@ -107,6 +109,7 @@ enum FixtureProfile {
     Mixed,
     Comic,
     Animation,
+    Identity,
 }
 
 impl FixtureProfile {
@@ -115,7 +118,8 @@ impl FixtureProfile {
             "mixed" => Ok(Self::Mixed),
             "comic" => Ok(Self::Comic),
             "animation" => Ok(Self::Animation),
-            _ => Err("--profile must be one of: mixed, comic, animation".to_owned()),
+            "identity" => Ok(Self::Identity),
+            _ => Err("--profile must be one of: mixed, comic, animation, identity".to_owned()),
         }
     }
 }
@@ -131,6 +135,10 @@ fn main() -> Result<(), String> {
     }
     if args.profile == FixtureProfile::Animation {
         create_animation_fixtures(&args.out_dir)?;
+        return Ok(());
+    }
+    if args.profile == FixtureProfile::Identity {
+        identity::create(&args)?;
         return Ok(());
     }
 
@@ -217,7 +225,7 @@ impl Args {
                 "--profile" => {
                     let value = args
                         .next()
-                        .ok_or("--profile requires one of: mixed, comic")?;
+                        .ok_or("--profile requires one of: mixed, comic, animation, identity")?;
                     profile = FixtureProfile::parse(&value.to_string_lossy())?;
                 }
                 "--formats" => {
@@ -248,7 +256,7 @@ impl Args {
 fn print_help() {
     println!("make_perf_fixture --out perf-fixtures --count 50 --min-long-edge 4000");
     println!(
-        "  --profile mixed|comic|animation chooses random format stress, comic-like line art, or animated GIF/WebP"
+        "  --profile mixed|comic|animation|identity chooses random format stress, comic-like line art, animated GIF/WebP, or marker pages"
     );
     println!("  --seed-dir <path> uses downloaded/source images when available");
     println!("  --formats jpeg,png,webp,bmp,gif,ico,svg limits generated archive formats");
