@@ -97,7 +97,7 @@ a format is set to `기본값`:
 | AVIF | `libavif + dav1d` only when built with `native-avif` |
 | SVG | shown in settings as planned, but not enabled for viewing yet |
 | PSD | `zune-psd` composite/base image preview |
-| AI | PDFium first-page preview only when built with `native-ai` |
+| `.ai` | PDFium first-page preview only when built with `native-ai` |
 
 Optional native features are explicit build choices:
 
@@ -109,12 +109,13 @@ cargo run --release --features native-ai
 
 Native here means Rust calls an external C/assembly codec library through a Rust
 wrapper. `native-webp` uses libwebp, and `native-avif` uses libavif with dav1d.
-`native-ai` uses `pdfium-render` to call an app-local PDFium dynamic library.
-They are not enabled in the default build, and release bundles that enable them
-must carry the notices and update policy recorded in `THIRD_PARTY_NOTICES.txt`.
+`native-ai` uses `pdfium-render` to call an app-local PDFium dynamic library for
+PDF-compatible `.ai` previews. They are not enabled in the default build, and
+release bundles that enable them must carry the notices and update policy
+recorded in `THIRD_PARTY_NOTICES.txt`.
 
-For AI preview development builds, fetch a V8/XFA-free PDFium package and copy
-the platform library next to the executable:
+For Illustrator `.ai` preview development builds, fetch a V8/XFA-free PDFium
+package and copy the platform library next to the executable:
 
 ```powershell
 uv run python scripts\fetch_pdfium.py --platform windows-x64 --copy-to target\release
@@ -133,37 +134,8 @@ state file.
 
 - General: UI language, delete confirmation, ESC exit, always-on-top, and
   first/last page behavior.
-- Rendering: transition effect, CPU up/down scaler filters, GPU acceleration,
-  GPU upscaler, WGPU downscaler, EXIF orientation, embedded ICC conversion,
-  prefetch, and cache memory.
-  CPU preparation has separate upscaler and downscaler filters. The CPU
-  upscaler defaults to CatmullRom, and the CPU downscaler defaults to Hamming
-  for balanced preparation cost.
-  WGPU display downscaling is separate from CPU preparation. It applies when
-  the WGPU renderer shrinks a prepared texture for display, and it does not
-  change the prepared-page cache. Existing single-pass filters remain available,
-  and the WGPU default is Pyramid + Lanczos3 for quality-first shrink. That
-  default can cost more GPU time than simpler filters such as Hamming or
-  Bilinear.
-  WGPU downscaler choices include Hardware Mipmap Linear, Pyramid Box/Tent,
-  Pyramid + Hamming, Pyramid + Mitchell, Pyramid + Lanczos2, and Pyramid +
-  Lanczos3.
-  GPU upscaler `Auto` is content-aware only for enlargement: confident webtoon,
-  anime, and manga pages use Anime4K M, while photos and uncertain images keep
-  the FSR fallback. Manual zoom and Original size bypass display upscalers so
-  zoom inspection stays tied to source pixels.
-  Fit, Fit Width, and Fit Height prepare display-sized pages from the physical
-  viewport. The normal navigation/cache baseline remains 4096px and below, but
-  larger high-DPI or 5K/8K windows can request a larger fit-display target so
-  the image is not artificially capped on big screens. Those large fit targets
-  keep high-resolution exact work visible-page focused; Manual zoom and
-  Original size remain the source-pixel inspection paths.
-  When GPU acceleration is enabled, SuiSuiView uses the WGPU fast-start handoff
-  path by default. If that startup handoff fails, the app falls back to normal
-  mode, turns GPU acceleration off, and shows a report dialog with a diagnostic
-  log location.
-  GPU upscalers marked `(실험)` are selectable for local testing but are not
-  treated as stable defaults; SR Lab SPAN also requires a local manifest.
+- Rendering: transition effect, GPU acceleration, scaler/filter controls,
+  EXIF orientation, embedded ICC conversion, prefetch, and cache memory.
 - Decoders: decode mode and per-format decoder choices. `기본값` is shown as
   selected text, with the resolved backend summarized beside each format.
 - View, keyboard, and mouse: large-image starting position, visible viewer UI,
@@ -172,8 +144,8 @@ state file.
 
 The UI language can be set to system default, Korean, or English. UI text and
 state words such as Default, Off, and Experimental are localized, while
-algorithm, model, codec, library, and file-format names such as ArtCNN,
-libwebp, PDFium, JPEG, and ZIP/CBZ keep their English technical names.
+algorithm, codec, library, and file-format names such as libwebp, PDFium, JPEG,
+and ZIP/CBZ keep their English technical names.
 
 ## Bookmarks And State
 
@@ -211,17 +183,15 @@ standalone files.
 - [x] Native image and comic viewer.
 - [x] Folder, ZIP, and CBZ support.
 - [x] Path-independent ZIP/CBZ bookmarks.
-- [x] Large-image preview, cache, and display preparation policy.
-- [x] WGSL display effects and real-time upscaler candidates.
-- [x] Content-aware Auto display upscaling for drawn pages.
-- [x] Separate CPU/WGPU scaler controls with quality-first WGPU pyramid
-  downscaling.
-- [x] Per-format decoder benchmarks and user-selectable decoder settings.
-- [x] Current-page EXIF/file/color information panel.
-- [ ] CBR/RAR read-only archive support after backend and license review.
+- [x] Large-image preview, cache, and display preparation.
+- [x] Display effects, fit-mode upscaling, and user-selectable decoders.
+- [x] Current-page EXIF, file, and color information.
+- [ ] CBR/RAR and 7Z/CB7 read-only archive support.
+- [ ] Webtoon-style continuous vertical reading mode.
+- [ ] Thumbnail browser or folder overview for faster page and file jumping.
+- [ ] Modern format expansion, including JPEG XL, HEIC/HEIF, SVG, EXR/HDR,
+  and broader RAW preview support.
 - [ ] Printing, slideshow, and external editor workflows.
-- [ ] SR Lab research-model path for RFDN, RepRFN, and SPAN/SPANV2 after
-  redistributable weights, model conversion, and WGSL tiny-net runtime proof.
 
 <details>
 <summary>Keyboard And Mouse Reference</summary>
