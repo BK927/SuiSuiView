@@ -229,6 +229,23 @@ fn wgpu_scale_plan_activates_only_the_matching_direction() {
 }
 
 #[test]
+fn wgpu_scale_plan_uses_bilinear_for_mixed_axis_resize() {
+    assert_eq!(
+        WgpuScalePlan::resolve(
+            [1000, 1000],
+            [1200, 800],
+            WgpuUpscaleMethod::WgslFsr1EasuRcas,
+            WgpuDownscaleMethod::PyramidLanczos3
+        ),
+        WgpuScalePlan {
+            direction: WgpuScaleDirection::Mixed,
+            effective_upscale_method: WgpuUpscaleMethod::None,
+            effective_downscale_method: WgpuDownscaleMethod::Bilinear,
+        }
+    );
+}
+
+#[test]
 fn wgpu_scale_plan_keeps_upscalers_out_of_downscale_and_native_paths() {
     for method in [
         WgpuUpscaleMethod::WgslFsr1EasuRcas,

@@ -16,6 +16,7 @@ struct EffectParams {
     color_origin: [u32; 4],
     upscale: [u32; 4],
     opacity: [f32; 4],
+    display: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +101,12 @@ impl WgpuEffectScenario {
                 render_target_size[1].max(1) as f32,
                 0.0,
             ],
+            display: [
+                0.0,
+                0.0,
+                render_target_size[0].max(1) as f32,
+                render_target_size[1].max(1) as f32,
+            ],
         }
     }
 
@@ -119,6 +126,12 @@ impl WgpuEffectScenario {
                 render_target_size[0].max(1) as f32,
                 render_target_size[1].max(1) as f32,
                 0.0,
+            ],
+            display: [
+                0.0,
+                0.0,
+                render_target_size[0].max(1) as f32,
+                render_target_size[1].max(1) as f32,
             ],
         })
     }

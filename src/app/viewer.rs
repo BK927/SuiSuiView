@@ -523,7 +523,7 @@ impl SuiSuiViewApp {
                     render_info,
                     ..
                 } => {
-                    let target_size = rect_target_size(page_rect);
+                    let target_size = rect_target_size(page_rect, ctx.pixels_per_point());
                     let active_wgsl = gpu_visual_needs_wgsl(
                         image_size,
                         target_size,

@@ -208,6 +208,7 @@ impl CpuScaleState {
 pub(in crate::app) enum WgpuScaleState {
     Inactive,
     Native,
+    Mixed,
     Upscale(WgpuUpscaleMethod),
     Downscale(WgpuDownscaleMethod),
 }
@@ -217,6 +218,7 @@ impl WgpuScaleState {
         match self {
             Self::Inactive => "no WGPU scaling".to_owned(),
             Self::Native => "WGPU native-size draw".to_owned(),
+            Self::Mixed => "WGPU mixed-axis resize (bilinear)".to_owned(),
             Self::Upscale(method) => format!("WGPU upscale ({})", method.label()),
             Self::Downscale(method) => format!("WGPU downscale ({})", method.label()),
         }
@@ -235,6 +237,7 @@ impl WgpuScaleState {
                 }
             }
             WgpuScaleDirection::Downscale => Self::Downscale(plan.effective_downscale_method),
+            WgpuScaleDirection::Mixed => Self::Mixed,
             WgpuScaleDirection::Native => Self::Native,
         }
     }

@@ -16,6 +16,7 @@ pub(crate) struct EffectParams {
     color_origin: [u32; 4],
     upscale: [u32; 4],
     opacity: [f32; 4],
+    display: [f32; 4],
 }
 
 pub struct GpuEffectBench {
@@ -347,18 +348,48 @@ pub(crate) fn params_for_effects(
     target_size: [u32; 2],
     opacity: f32,
 ) -> EffectParams {
-    params_for_effects_with_shader_method(
+    params_for_effects_with_display(
+        source_size,
+        output_size,
+        effects,
+        wgpu_upscale_method,
+        wgpu_downscale_method,
+        output_origin,
+        target_size,
+        [0, 0],
+        target_size,
+        opacity,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn params_for_effects_with_display(
+    source_size: [usize; 2],
+    output_size: [usize; 2],
+    effects: ViewEffects,
+    wgpu_upscale_method: WgpuUpscaleMethod,
+    wgpu_downscale_method: WgpuDownscaleMethod,
+    output_origin: [u32; 2],
+    visible_target_size: [u32; 2],
+    sample_offset: [u32; 2],
+    full_target_size: [u32; 2],
+    opacity: f32,
+) -> EffectParams {
+    params_for_effects_with_shader_method_and_display(
         source_size,
         output_size,
         effects,
         wgpu_upscale_method.shader_method_id(),
         wgpu_downscale_method.shader_method_id(),
         output_origin,
-        target_size,
+        visible_target_size,
+        sample_offset,
+        full_target_size,
         opacity,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn params_for_effects_with_shader_method(
     source_size: [usize; 2],
     output_size: [usize; 2],
@@ -367,6 +398,33 @@ pub(crate) fn params_for_effects_with_shader_method(
     downscale_method_id: u32,
     output_origin: [u32; 2],
     target_size: [u32; 2],
+    opacity: f32,
+) -> EffectParams {
+    params_for_effects_with_shader_method_and_display(
+        source_size,
+        output_size,
+        effects,
+        shader_method_id,
+        downscale_method_id,
+        output_origin,
+        target_size,
+        [0, 0],
+        target_size,
+        opacity,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn params_for_effects_with_shader_method_and_display(
+    source_size: [usize; 2],
+    output_size: [usize; 2],
+    effects: ViewEffects,
+    shader_method_id: u32,
+    downscale_method_id: u32,
+    output_origin: [u32; 2],
+    visible_target_size: [u32; 2],
+    sample_offset: [u32; 2],
+    full_target_size: [u32; 2],
     opacity: f32,
 ) -> EffectParams {
     let filter = match effects.filter {
@@ -397,9 +455,15 @@ pub(crate) fn params_for_effects_with_shader_method(
         upscale: [shader_method_id, downscale_method_id, 0, 0],
         opacity: [
             opacity,
-            target_size[0].max(1) as f32,
-            target_size[1].max(1) as f32,
+            visible_target_size[0].max(1) as f32,
+            visible_target_size[1].max(1) as f32,
             0.0,
+        ],
+        display: [
+            sample_offset[0] as f32,
+            sample_offset[1] as f32,
+            full_target_size[0].max(1) as f32,
+            full_target_size[1].max(1) as f32,
         ],
     }
 }
@@ -409,6 +473,27 @@ pub(crate) fn params_for_hardware_mipmap_sample(
     source_size: [usize; 2],
     output_origin: [u32; 2],
     target_size: [u32; 2],
+    opacity: f32,
+    lod: f32,
+) -> EffectParams {
+    params_for_hardware_mipmap_sample_with_display(
+        source_size,
+        output_origin,
+        target_size,
+        [0, 0],
+        target_size,
+        opacity,
+        lod,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn params_for_hardware_mipmap_sample_with_display(
+    source_size: [usize; 2],
+    output_origin: [u32; 2],
+    visible_target_size: [u32; 2],
+    sample_offset: [u32; 2],
+    full_target_size: [u32; 2],
     opacity: f32,
     lod: f32,
 ) -> EffectParams {
@@ -424,9 +509,15 @@ pub(crate) fn params_for_hardware_mipmap_sample(
         upscale: [0, 0, 1, 0],
         opacity: [
             opacity,
-            target_size[0].max(1) as f32,
-            target_size[1].max(1) as f32,
+            visible_target_size[0].max(1) as f32,
+            visible_target_size[1].max(1) as f32,
             lod.max(0.0),
+        ],
+        display: [
+            sample_offset[0] as f32,
+            sample_offset[1] as f32,
+            full_target_size[0].max(1) as f32,
+            full_target_size[1].max(1) as f32,
         ],
     }
 }

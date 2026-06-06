@@ -150,7 +150,8 @@ state file.
   Lanczos3.
   GPU upscaler `Auto` is content-aware only for enlargement: confident webtoon,
   anime, and manga pages use Anime4K M, while photos and uncertain images keep
-  the FSR fallback.
+  the FSR fallback. Manual zoom and Original size bypass display upscalers so
+  zoom inspection stays tied to source pixels.
   When GPU acceleration is enabled, SuiSuiView uses the WGPU fast-start handoff
   path by default. If that startup handoff fails, the app falls back to normal
   mode, turns GPU acceleration off, and shows a report dialog with a diagnostic

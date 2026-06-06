@@ -4,6 +4,7 @@ struct Params {
     color_origin: vec4<u32>,
     upscale: vec4<u32>,
     opacity: vec4<f32>,
+    display: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -508,8 +509,8 @@ fn sample_display(sample_x: f32, sample_y: f32) -> vec4<f32> {
         return hardware_mipmap_sample(coord, params.opacity.w);
     }
     let target_is_smaller =
-        params.opacity.y < f32(params.source_output.z) ||
-        params.opacity.z < f32(params.source_output.w);
+        params.display.z < f32(params.source_output.z) ||
+        params.display.w < f32(params.source_output.w);
     if target_is_smaller && params.upscale.y != 0u {
         return downscale_effect_sample(coord, params.upscale.y);
     }
@@ -530,10 +531,10 @@ fn sample_display(sample_x: f32, sample_y: f32) -> vec4<f32> {
 
 @fragment
 fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let local_x = floor(max(position.x - f32(params.color_origin.z), 0.0));
-    let local_y = floor(max(position.y - f32(params.color_origin.w), 0.0));
-    let sample_x = (local_x + 0.5) * f32(params.source_output.z) / params.opacity.y - 0.5;
-    let sample_y = (local_y + 0.5) * f32(params.source_output.w) / params.opacity.z - 0.5;
+    let local_x = floor(max(position.x - f32(params.color_origin.z) + params.display.x, 0.0));
+    let local_y = floor(max(position.y - f32(params.color_origin.w) + params.display.y, 0.0));
+    let sample_x = (local_x + 0.5) * f32(params.source_output.z) / params.display.z - 0.5;
+    let sample_y = (local_y + 0.5) * f32(params.source_output.w) / params.display.w - 0.5;
     let color = sample_display(sample_x, sample_y);
     return vec4<f32>(color.rgb, color.a * params.opacity.x);
 }

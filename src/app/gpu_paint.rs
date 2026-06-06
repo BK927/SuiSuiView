@@ -2,13 +2,14 @@ use super::realtime_sr::RealtimeSrResources;
 use super::{PageCacheKey, SuiSuiViewApp};
 use crate::core::effects::ViewEffects;
 use crate::core::gpu_effect::{
-    output_size_for_effects, params_for_effects, params_for_effects_with_shader_method,
-    params_for_hardware_mipmap_sample,
+    output_size_for_effects, params_for_effects, params_for_effects_with_display,
+    params_for_effects_with_shader_method, params_for_hardware_mipmap_sample,
+    params_for_hardware_mipmap_sample_with_display,
 };
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
 use crate::core::state::{
-    GpuEffectMode, RendererMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod,
+    FitMode, GpuEffectMode, RendererMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod,
 };
 use eframe::egui::{self, PaintCallbackInfo, Rect};
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
@@ -59,7 +60,8 @@ impl SuiSuiViewApp {
     }
 
     pub(super) fn active_wgpu_upscale_method(&self) -> WgpuUpscaleMethod {
-        if !self.gpu_effects_available
+        if !fit_mode_allows_display_upscale(self.fit_mode)
+            || !self.gpu_effects_available
             || self.gpu_target_format.is_none()
             || matches!(self.settings.gpu_effect_mode, GpuEffectMode::CpuOnly)
             || !matches!(self.settings.renderer_mode, RendererMode::Wgpu)
@@ -138,6 +140,10 @@ impl SuiSuiViewApp {
             GpuOriginalInspectionCleanupCallback,
         ));
     }
+}
+
+fn fit_mode_allows_display_upscale(fit_mode: FitMode) -> bool {
+    !matches!(fit_mode, FitMode::Manual | FitMode::Original)
 }
 
 fn experimental_wgpu_upscale_method_override() -> Option<WgpuUpscaleMethod> {
@@ -247,6 +253,20 @@ struct GpuEffectCallback {
     ctx: egui::Context,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GpuDisplayRect {
+    origin: [u32; 2],
+    visible_size: [u32; 2],
+    sample_offset: [u32; 2],
+    full_size: [u32; 2],
+}
+
+impl GpuDisplayRect {
+    fn is_clipped(self) -> bool {
+        self.sample_offset != [0, 0] || self.visible_size != self.full_size
+    }
+}
+
 impl CallbackTrait for GpuEffectCallback {
     fn prepare(
         &self,
@@ -290,11 +310,11 @@ impl CallbackTrait for GpuEffectCallback {
         let _ = source_uploaded;
 
         let output_size = output_size_for_effects(self.image_size, self.effects);
-        let (origin, target_size) = viewport_rect(self.rect, screen_descriptor);
+        let display_rect = viewport_rect(self.rect, screen_descriptor);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let scale_plan = WgpuScalePlan::resolve(
             output_size,
-            target_size,
+            display_rect.full_size,
             self.wgpu_upscale_method,
             self.wgpu_downscale_method,
         );
@@ -313,8 +333,7 @@ impl CallbackTrait for GpuEffectCallback {
                 self.effects,
                 self.wgpu_upscale_method,
                 self.wgpu_downscale_method,
-                origin,
-                target_size,
+                display_rect,
                 self.opacity,
                 &self.ctx,
             );
@@ -329,8 +348,12 @@ impl CallbackTrait for GpuEffectCallback {
                 PerfField::Usize("height", self.image_size[1]),
                 PerfField::Usize("output_width", output_size[0]),
                 PerfField::Usize("output_height", output_size[1]),
-                PerfField::U32("target_width", target_size[0]),
-                PerfField::U32("target_height", target_size[1]),
+                PerfField::U32("target_width", display_rect.full_size[0]),
+                PerfField::U32("target_height", display_rect.full_size[1]),
+                PerfField::U32("visible_target_width", display_rect.visible_size[0]),
+                PerfField::U32("visible_target_height", display_rect.visible_size[1]),
+                PerfField::U32("sample_offset_x", display_rect.sample_offset[0]),
+                PerfField::U32("sample_offset_y", display_rect.sample_offset[1]),
                 PerfField::Bool("resources_created", resources_created),
                 PerfField::Bool("resources_recreated", resources_recreated),
                 PerfField::Bool("source_uploaded", source_uploaded),
@@ -631,14 +654,13 @@ impl GpuPaintResources {
         effects: ViewEffects,
         wgpu_upscale_method: WgpuUpscaleMethod,
         wgpu_downscale_method: WgpuDownscaleMethod,
-        origin: [u32; 2],
-        target_size: [u32; 2],
+        display_rect: GpuDisplayRect,
         opacity: f32,
         ctx: &egui::Context,
     ) -> GpuDrawState {
         let scale_plan = WgpuScalePlan::resolve(
             output_size,
-            target_size,
+            display_rect.full_size,
             wgpu_upscale_method,
             wgpu_downscale_method,
         );
@@ -669,18 +691,20 @@ impl GpuPaintResources {
                     effective_upscaler,
                     source_size,
                     output_size,
-                    target_size,
+                    display_rect.full_size,
                     intermediate.size,
                     "realtime_sr",
                 );
-                let params = params_for_effects(
+                let params = params_for_effects_with_display(
                     intermediate.size,
                     output_size_for_effects(intermediate.size, effects),
                     effects,
                     WgpuUpscaleMethod::None,
                     effective_downscaler,
-                    origin,
-                    target_size,
+                    display_rect.origin,
+                    display_rect.visible_size,
+                    display_rect.sample_offset,
+                    display_rect.full_size,
                     opacity,
                 );
                 return GpuDrawState::new(
@@ -697,9 +721,9 @@ impl GpuPaintResources {
                 output_size,
                 effects,
                 effective_upscaler,
-                target_size,
+                display_rect,
             );
-            self.ensure_intermediate_texture(device, intermediate_key, target_size);
+            self.ensure_intermediate_texture(device, intermediate_key, display_rect.visible_size);
             let intermediate = self
                 .intermediate_textures
                 .peek(&intermediate_key)
@@ -710,14 +734,16 @@ impl GpuPaintResources {
                 .mip_views
                 .first()
                 .expect("intermediate textures should expose a renderable mip 0 view");
-            let easu_params = params_for_effects(
+            let easu_params = params_for_effects_with_display(
                 source_size,
                 output_size,
                 effects,
                 effective_upscaler,
                 WgpuDownscaleMethod::Bilinear,
                 [0, 0],
-                target_size,
+                display_rect.visible_size,
+                display_rect.sample_offset,
+                display_rect.full_size,
                 1.0,
             );
             let easu_params_bind_group = self.params_bind_group_for(device, easu_params);
@@ -729,13 +755,19 @@ impl GpuPaintResources {
             );
 
             let rcas_params = params_for_effects_with_shader_method(
-                [target_size[0] as usize, target_size[1] as usize],
-                [target_size[0] as usize, target_size[1] as usize],
+                [
+                    display_rect.visible_size[0] as usize,
+                    display_rect.visible_size[1] as usize,
+                ],
+                [
+                    display_rect.visible_size[0] as usize,
+                    display_rect.visible_size[1] as usize,
+                ],
                 ViewEffects::default(),
                 rcas_method,
                 0,
-                origin,
-                target_size,
+                display_rect.origin,
+                display_rect.visible_size,
                 opacity,
             );
             let params_bind_group = self.params_bind_group_for(device, rcas_params);
@@ -743,8 +775,11 @@ impl GpuPaintResources {
                 effective_upscaler,
                 source_size,
                 output_size,
-                target_size,
-                [target_size[0] as usize, target_size[1] as usize],
+                display_rect.full_size,
+                [
+                    display_rect.visible_size[0] as usize,
+                    display_rect.visible_size[1] as usize,
+                ],
                 "easu_rcas",
             );
             return GpuDrawState::new(
@@ -763,13 +798,14 @@ impl GpuPaintResources {
                 source_size,
                 output_size,
                 effects,
-                origin,
-                target_size,
+                display_rect,
                 opacity,
             );
         }
 
-        if effective_downscaler.is_pyramid() && needs_multi_pass_downscale(output_size, target_size)
+        if effective_downscaler.is_pyramid()
+            && !display_rect.is_clipped()
+            && needs_multi_pass_downscale(output_size, display_rect.full_size)
         {
             return self.prepare_pyramid_downscale_draw_state(
                 device,
@@ -780,8 +816,8 @@ impl GpuPaintResources {
                 output_size,
                 effects,
                 effective_downscaler,
-                origin,
-                target_size,
+                display_rect.origin,
+                display_rect.visible_size,
                 opacity,
             );
         }
@@ -791,19 +827,23 @@ impl GpuPaintResources {
                 effective_upscaler,
                 source_size,
                 output_size,
-                target_size,
-                target_size.map(|dimension| dimension as usize),
+                display_rect.full_size,
+                display_rect
+                    .visible_size
+                    .map(|dimension| dimension as usize),
                 "single_pass",
             );
         }
-        let params = params_for_effects(
+        let params = params_for_effects_with_display(
             source_size,
             output_size,
             effects,
             effective_upscaler,
             effective_downscaler,
-            origin,
-            target_size,
+            display_rect.origin,
+            display_rect.visible_size,
+            display_rect.sample_offset,
+            display_rect.full_size,
             opacity,
         );
         GpuDrawState::new(
@@ -996,8 +1036,7 @@ impl GpuPaintResources {
         source_size: [usize; 2],
         output_size: [usize; 2],
         effects: ViewEffects,
-        origin: [u32; 2],
-        target_size: [u32; 2],
+        display_rect: GpuDisplayRect,
         opacity: f32,
     ) -> GpuDrawState {
         let mip_levels = mip_level_count(output_size);
@@ -1053,9 +1092,17 @@ impl GpuPaintResources {
             );
         }
 
-        let lod = downscale_lod(output_size, target_size).min(mip_levels.saturating_sub(1) as f32);
-        let params =
-            params_for_hardware_mipmap_sample(output_size, origin, target_size, opacity, lod);
+        let lod = downscale_lod(output_size, display_rect.full_size)
+            .min(mip_levels.saturating_sub(1) as f32);
+        let params = params_for_hardware_mipmap_sample_with_display(
+            output_size,
+            display_rect.origin,
+            display_rect.visible_size,
+            display_rect.sample_offset,
+            display_rect.full_size,
+            opacity,
+            lod,
+        );
         GpuDrawState::new(
             intermediate.bind_group.clone(),
             self.params_bind_group_for(device, params),
@@ -1476,34 +1523,39 @@ fn draw_id(
     hasher.finish()
 }
 
-fn viewport_rect(rect: Rect, screen_descriptor: &ScreenDescriptor) -> ([u32; 2], [u32; 2]) {
+fn viewport_rect(rect: Rect, screen_descriptor: &ScreenDescriptor) -> GpuDisplayRect {
     let screen_width = screen_descriptor.size_in_pixels[0] as i32;
     let screen_height = screen_descriptor.size_in_pixels[1] as i32;
-    let left = (screen_descriptor.pixels_per_point * rect.min.x)
-        .round()
-        .clamp(0.0, screen_width as f32) as u32;
-    let top = (screen_descriptor.pixels_per_point * rect.min.y)
-        .round()
-        .clamp(0.0, screen_height as f32) as u32;
-    let right_raw = (screen_descriptor.pixels_per_point * rect.max.x)
-        .round()
-        .clamp(0.0, screen_width as f32) as u32;
-    let bottom_raw = (screen_descriptor.pixels_per_point * rect.max.y)
-        .round()
-        .clamp(0.0, screen_height as f32) as u32;
+    let pixels_per_point = screen_descriptor.pixels_per_point;
+    let full_left = (pixels_per_point * rect.min.x).round() as i32;
+    let full_top = (pixels_per_point * rect.min.y).round() as i32;
+    let full_right = (pixels_per_point * rect.max.x).round() as i32;
+    let full_bottom = (pixels_per_point * rect.max.y).round() as i32;
+    let left = full_left.clamp(0, screen_width) as u32;
+    let top = full_top.clamp(0, screen_height) as u32;
+    let right_raw = full_right.clamp(0, screen_width) as u32;
+    let bottom_raw = full_bottom.clamp(0, screen_height) as u32;
     let right = right_raw
         .max(left.saturating_add(1))
         .min(screen_width as u32);
     let bottom = bottom_raw
         .max(top.saturating_add(1))
         .min(screen_height as u32);
-    (
-        [left, top],
-        [
+    GpuDisplayRect {
+        origin: [left, top],
+        visible_size: [
             right.saturating_sub(left).max(1),
             bottom.saturating_sub(top).max(1),
         ],
-    )
+        sample_offset: [
+            (left as i32).saturating_sub(full_left).max(0) as u32,
+            (top as i32).saturating_sub(full_top).max(0) as u32,
+        ],
+        full_size: [
+            full_right.saturating_sub(full_left).max(1) as u32,
+            full_bottom.saturating_sub(full_top).max(1) as u32,
+        ],
+    }
 }
 
 fn intermediate_texture_key(
@@ -1512,7 +1564,7 @@ fn intermediate_texture_key(
     output_size: [usize; 2],
     effects: ViewEffects,
     wgpu_upscale_method: WgpuUpscaleMethod,
-    target_size: [u32; 2],
+    display_rect: GpuDisplayRect,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     source_key.hash(&mut hasher);
@@ -1520,7 +1572,9 @@ fn intermediate_texture_key(
     output_size.hash(&mut hasher);
     effects.hash(&mut hasher);
     wgpu_upscale_method.token().hash(&mut hasher);
-    target_size.hash(&mut hasher);
+    display_rect.visible_size.hash(&mut hasher);
+    display_rect.sample_offset.hash(&mut hasher);
+    display_rect.full_size.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1758,6 +1812,53 @@ mod tests {
                 1.0,
             )
         );
+    }
+
+    #[test]
+    fn viewport_rect_keeps_full_target_for_oversized_clipped_rect() {
+        let screen = ScreenDescriptor {
+            size_in_pixels: [800, 600],
+            pixels_per_point: 1.0,
+        };
+        let rect = Rect::from_min_size(pos2(-200.0, -100.0), vec2(1000.0, 800.0));
+
+        assert_eq!(
+            viewport_rect(rect, &screen),
+            GpuDisplayRect {
+                origin: [0, 0],
+                visible_size: [800, 600],
+                sample_offset: [200, 100],
+                full_size: [1000, 800],
+            }
+        );
+    }
+
+    #[test]
+    fn viewport_rect_converts_points_to_physical_pixels() {
+        let screen = ScreenDescriptor {
+            size_in_pixels: [800, 600],
+            pixels_per_point: 1.5,
+        };
+        let rect = Rect::from_min_size(pos2(10.0, 20.0), vec2(200.0, 100.0));
+
+        assert_eq!(
+            viewport_rect(rect, &screen),
+            GpuDisplayRect {
+                origin: [15, 30],
+                visible_size: [300, 150],
+                sample_offset: [0, 0],
+                full_size: [300, 150],
+            }
+        );
+    }
+
+    #[test]
+    fn manual_and_original_modes_disable_display_upscalers() {
+        assert!(!fit_mode_allows_display_upscale(FitMode::Manual));
+        assert!(!fit_mode_allows_display_upscale(FitMode::Original));
+        assert!(fit_mode_allows_display_upscale(FitMode::FitPage));
+        assert!(fit_mode_allows_display_upscale(FitMode::FitWidth));
+        assert!(fit_mode_allows_display_upscale(FitMode::FitHeight));
     }
 
     #[test]
@@ -2011,8 +2112,12 @@ mod tests {
             ViewEffects::default(),
             WgpuUpscaleMethod::None,
             downscaler,
-            [0, 0],
-            [1024, 1024],
+            GpuDisplayRect {
+                origin: [0, 0],
+                visible_size: [1024, 1024],
+                sample_offset: [0, 0],
+                full_size: [1024, 1024],
+            },
             1.0,
             &egui::Context::default(),
         );

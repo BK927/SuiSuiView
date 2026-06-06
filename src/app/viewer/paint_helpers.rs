@@ -38,7 +38,7 @@ impl SuiSuiViewApp {
         request: GpuPaintRequest,
         tint: Color32,
     ) -> bool {
-        let target_size = rect_target_size(request.rect);
+        let target_size = rect_target_size(request.rect, ctx.pixels_per_point());
         if !gpu_visual_needs_wgsl(
             request.image_size,
             target_size,

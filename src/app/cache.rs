@@ -437,7 +437,10 @@ pub(in crate::app) fn should_allow_cpu_display_upscale(
     manual_zoom: f32,
     gpu_display_upscale_can_own_upscale: bool,
 ) -> bool {
-    let _ = (fit_mode, manual_zoom, gpu_display_upscale_can_own_upscale);
+    if matches!(fit_mode, FitMode::Manual | FitMode::Original) {
+        return false;
+    }
+    let _ = (manual_zoom, gpu_display_upscale_can_own_upscale);
     false
 }
 
@@ -459,10 +462,10 @@ pub(in crate::app) fn gpu_visual_needs_wgsl(
         || scale_plan.effective_downscale_method != WgpuDownscaleMethod::Bilinear
 }
 
-pub(in crate::app) fn rect_target_size(rect: Rect) -> [u32; 2] {
+pub(in crate::app) fn rect_target_size(rect: Rect, pixels_per_point: f32) -> [u32; 2] {
     [
-        rect.width().round().max(1.0) as u32,
-        rect.height().round().max(1.0) as u32,
+        (rect.width() * pixels_per_point).round().max(1.0) as u32,
+        (rect.height() * pixels_per_point).round().max(1.0) as u32,
     ]
 }
 

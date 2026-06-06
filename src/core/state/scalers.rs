@@ -256,6 +256,7 @@ impl WgpuDownscaleMethod {
 pub enum WgpuScaleDirection {
     Upscale,
     Downscale,
+    Mixed,
     Native,
 }
 
@@ -264,6 +265,7 @@ impl WgpuScaleDirection {
         match self {
             Self::Upscale => "upscale",
             Self::Downscale => "downscale",
+            Self::Mixed => "mixed",
             Self::Native => "native",
         }
     }
@@ -300,6 +302,13 @@ impl WgpuScalePlan {
                     .resolve_for_downscale(output_size, target_size),
             };
         }
+        if target_is_mixed(output_size, target_size) {
+            return Self {
+                direction: WgpuScaleDirection::Mixed,
+                effective_upscale_method: WgpuUpscaleMethod::None,
+                effective_downscale_method: WgpuDownscaleMethod::Bilinear,
+            };
+        }
         Self {
             direction: WgpuScaleDirection::Native,
             effective_upscale_method: WgpuUpscaleMethod::None,
@@ -309,9 +318,24 @@ impl WgpuScalePlan {
 }
 
 fn target_is_larger(output_size: [usize; 2], target_size: [u32; 2]) -> bool {
-    target_size[0] > output_size[0] as u32 || target_size[1] > output_size[1] as u32
+    let output_width = output_size[0] as u32;
+    let output_height = output_size[1] as u32;
+    (target_size[0] > output_width || target_size[1] > output_height)
+        && target_size[0] >= output_width
+        && target_size[1] >= output_height
 }
 
 fn target_is_smaller(output_size: [usize; 2], target_size: [u32; 2]) -> bool {
-    target_size[0] < output_size[0] as u32 || target_size[1] < output_size[1] as u32
+    let output_width = output_size[0] as u32;
+    let output_height = output_size[1] as u32;
+    (target_size[0] < output_width || target_size[1] < output_height)
+        && target_size[0] <= output_width
+        && target_size[1] <= output_height
+}
+
+fn target_is_mixed(output_size: [usize; 2], target_size: [u32; 2]) -> bool {
+    let output_width = output_size[0] as u32;
+    let output_height = output_size[1] as u32;
+    (target_size[0] > output_width && target_size[1] < output_height)
+        || (target_size[0] < output_width && target_size[1] > output_height)
 }
