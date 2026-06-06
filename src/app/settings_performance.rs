@@ -1,4 +1,4 @@
-use super::cache_budget_summary;
+use super::cache_budget_bytes;
 use super::settings::{checkbox_with_help, grid_label_with_help, info_icon, setting_group};
 use super::ui::theme;
 use crate::core::i18n::I18n;
@@ -236,8 +236,6 @@ pub(in crate::app) fn show_decoder_settings(
 pub(in crate::app) fn show_performance_settings(
     ui: &mut egui::Ui,
     draft: &mut AppSettings,
-    target_long_edge: u32,
-    visible_pages: usize,
     changed: &mut bool,
     i18n: I18n,
 ) {
@@ -296,37 +294,13 @@ pub(in crate::app) fn show_performance_settings(
                 });
             });
 
-            let summary = cache_budget_summary(draft, target_long_edge, visible_pages);
             ui.add_space(4.0);
             ui.label(
                 RichText::new(i18n.with_vars(
-                    "settings.performance.cpu_summary",
+                    "settings.performance.cache_summary",
                     &[
-                        ("cpu", format!("{:.0}", mib(summary.cpu_prepared_bytes))),
-                        (
-                            "worker",
-                            format!("{:.0}", mib(summary.worker_prefetch_bytes)),
-                        ),
-                    ],
-                ))
-                .size(12.0)
-                .color(theme::TEXT_MUTED),
-            );
-            ui.label(
-                RichText::new(i18n.with_vars(
-                    "settings.performance.gpu_summary",
-                    &[
-                        (
-                            "source",
-                            format!("{:.0}", mib(summary.gpu_source_texture_bytes)),
-                        ),
-                        (
-                            "intermediate",
-                            format!("{:.0}", mib(summary.gpu_intermediate_texture_bytes)),
-                        ),
-                        ("page", format!("{:.0}", mib(summary.estimated_page_bytes))),
-                        ("cpu_pages", summary.estimated_cpu_pages.to_string()),
-                        ("worker_pages", summary.estimated_worker_pages.to_string()),
+                        ("mode", draft.cache_memory_mode.label_i18n(i18n)),
+                        ("cache", format!("{:.0}", mib(cache_budget_bytes(draft)))),
                     ],
                 ))
                 .size(12.0)

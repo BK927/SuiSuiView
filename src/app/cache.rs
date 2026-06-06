@@ -1,6 +1,6 @@
 #[cfg(any(test, feature = "perf-dev", feature = "perf-diagnostics"))]
 use super::perf;
-use super::{gpu_paint, SuiSuiViewApp};
+use super::SuiSuiViewApp;
 use crate::core::effects::ViewEffects;
 use crate::core::state::{
     AppSettings, CacheMemoryMode, FitMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod,
@@ -568,40 +568,6 @@ const MIN_EXACT_PREFETCH_PIN_BYTES: usize = 128 * 1024 * 1024;
 const MAX_EXACT_PREFETCH_PIN_BYTES: usize = 192 * 1024 * 1024;
 const MAX_QUEUED_PINNED_PAGE_TURNS: usize = 24;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct CacheBudgetSummary {
-    pub(super) cpu_prepared_bytes: usize,
-    pub(super) worker_prefetch_bytes: usize,
-    pub(super) gpu_source_texture_bytes: usize,
-    pub(super) gpu_intermediate_texture_bytes: usize,
-    pub(super) estimated_page_bytes: usize,
-    pub(super) estimated_cpu_pages: usize,
-    pub(super) estimated_worker_pages: usize,
-}
-
-pub(super) fn cache_budget_summary(
-    settings: &AppSettings,
-    target_long_edge: u32,
-    visible_pages: usize,
-) -> CacheBudgetSummary {
-    let cpu_prepared_bytes = cache_budget_bytes(settings);
-    let estimated_page_bytes = estimated_page_bytes_for_target(target_long_edge);
-    let worker_prefetch_bytes =
-        worker_cache_budget_bytes_for(cpu_prepared_bytes, target_long_edge, visible_pages);
-    CacheBudgetSummary {
-        cpu_prepared_bytes,
-        worker_prefetch_bytes,
-        gpu_source_texture_bytes: gpu_paint::GPU_SOURCE_TEXTURE_BUDGET_BYTES,
-        gpu_intermediate_texture_bytes: gpu_paint::GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES,
-        estimated_page_bytes,
-        estimated_cpu_pages: estimated_page_capacity(cpu_prepared_bytes, estimated_page_bytes),
-        estimated_worker_pages: estimated_page_capacity(
-            worker_prefetch_bytes,
-            estimated_page_bytes,
-        ),
-    }
-}
-
 fn worker_cache_budget_bytes_for(
     cpu_budget_bytes: usize,
     target_long_edge: u32,
@@ -642,13 +608,6 @@ fn estimated_page_bytes_for_target(target_long_edge: u32) -> usize {
     let edge = clamp_target_long_edge(target_long_edge) as usize;
     edge.saturating_mul(edge)
         .saturating_mul(BYTES_PER_RGBA_PIXEL)
-}
-
-fn estimated_page_capacity(budget_bytes: usize, page_bytes: usize) -> usize {
-    if page_bytes == 0 {
-        return 0;
-    }
-    (budget_bytes / page_bytes).max(1)
 }
 
 fn full_quality_prefetch_indices(

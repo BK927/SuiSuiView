@@ -65,14 +65,13 @@ pub(in crate::app) use adjacent_seed::{AdjacentSeedCache, AdjacentSeedEvent, See
 #[cfg(test)]
 use cache::{
     automatic_cache_budget_bytes_for_total, best_page_key_excluding_preview_fallback_in_cache,
-    best_page_key_in_cache, cache_budget_bytes, final_quality_page_key_in_cache,
-    lower_resolution_page_keys, page_cache_state_from_hit, prepared_target_intent_for_view,
-    texture_cache_budget_bytes_for, touch_normal_navigation_page_keys,
+    best_page_key_in_cache, final_quality_page_key_in_cache, lower_resolution_page_keys,
+    page_cache_state_from_hit, prepared_target_intent_for_view, texture_cache_budget_bytes_for,
+    touch_normal_navigation_page_keys,
 };
 pub(in crate::app) use cache::{
-    cache_budget_summary, gpu_visual_needs_wgsl, rect_target_size,
-    should_allow_cpu_display_upscale, PageCacheKey, TextureCacheKey, TextureEntry, TextureSampling,
-    BYTES_PER_RGBA_PIXEL,
+    cache_budget_bytes, gpu_visual_needs_wgsl, rect_target_size, should_allow_cpu_display_upscale,
+    PageCacheKey, TextureCacheKey, TextureEntry, TextureSampling, BYTES_PER_RGBA_PIXEL,
 };
 pub(in crate::app) use navigation::EdgePrompt;
 pub(crate) use opening::{start_startup_open_loader, StartupOpen};
@@ -1801,23 +1800,6 @@ mod tests {
             super::automatic_cache_budget_bytes_for_total(64 * 1024 * 1024 * 1024),
             96 * 1024 * 1024
         );
-    }
-
-    #[test]
-    fn cache_budget_summary_uses_rgba_page_estimates() {
-        let settings = AppSettings {
-            cache_memory_mode: CacheMemoryMode::Manual,
-            manual_cache_mb: 160,
-            ..AppSettings::default()
-        };
-
-        let summary = super::cache_budget_summary(&settings, 2048, 1);
-
-        assert_eq!(summary.cpu_prepared_bytes, 160 * 1024 * 1024);
-        assert_eq!(summary.estimated_page_bytes, 2048 * 2048 * 4);
-        assert_eq!(summary.estimated_cpu_pages, 10);
-        assert_eq!(summary.worker_prefetch_bytes, 48 * 1024 * 1024);
-        assert_eq!(summary.estimated_worker_pages, 3);
     }
 
     #[test]

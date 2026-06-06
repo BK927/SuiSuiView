@@ -168,8 +168,6 @@ impl SuiSuiViewApp {
                                         show_rendering_settings(
                                             ui,
                                             &mut draft,
-                                            self.target_long_edge,
-                                            self.visible_page_count(),
                                             &mut self.pending_gpu_acceleration,
                                             fast_start_failure_notice.as_ref(),
                                             &mut fast_start_action,
@@ -578,8 +576,6 @@ fn show_general_settings(
 fn show_rendering_settings(
     ui: &mut egui::Ui,
     draft: &mut AppSettings,
-    target_long_edge: u32,
-    visible_pages: usize,
     pending_gpu_acceleration: &mut Option<bool>,
     fast_start_failure_notice: Option<&crate::core::state::FastStartFailureNotice>,
     fast_start_action: &mut Option<FastStartReportAction>,
@@ -821,14 +817,7 @@ fn show_rendering_settings(
     );
 
     ui.add_space(8.0);
-    settings_performance::show_performance_settings(
-        ui,
-        draft,
-        target_long_edge,
-        visible_pages,
-        changed,
-        i18n,
-    );
+    settings_performance::show_performance_settings(ui, draft, changed, i18n);
 }
 
 pub(in crate::app) fn setting_group(
