@@ -2,7 +2,10 @@ use super::cache_budget_summary;
 use super::settings::{checkbox_with_help, grid_label_with_help, info_icon, setting_group};
 use super::ui::theme;
 use crate::core::i18n::I18n;
-use crate::core::state::{AppSettings, CacheMemoryMode, DecodeMode, DecoderPreference};
+use crate::core::state::{
+    AppSettings, CacheMemoryMode, DecodeMode, DecoderPreference, MANUAL_CACHE_MB_MAX,
+    MANUAL_CACHE_MB_MIN,
+};
 use eframe::egui::{self, RichText};
 
 const JPEG_DECODER_OPTIONS: &[DecoderPreference] = &[
@@ -285,7 +288,7 @@ pub(in crate::app) fn show_performance_settings(
                     *changed |= ui
                         .add(
                             egui::DragValue::new(&mut draft.manual_cache_mb)
-                                .range(64..=2048)
+                                .range(MANUAL_CACHE_MB_MIN..=MANUAL_CACHE_MB_MAX)
                                 .speed(16)
                                 .suffix(" MB"),
                         )

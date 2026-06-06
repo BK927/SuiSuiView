@@ -1067,7 +1067,8 @@ mod tests {
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
         AppSettings, CacheMemoryMode, FitMode, KeyCode, KeyShortcut, PageTransitionStyle,
-        ReadingDirection, WgpuDownscaleMethod, WgpuUpscaleMethod,
+        ReadingDirection, WgpuDownscaleMethod, WgpuUpscaleMethod, MANUAL_CACHE_MB_MAX,
+        MANUAL_CACHE_MB_MIN,
     };
     use crate::core::worker::{
         DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PreparedPage,
@@ -1775,13 +1776,19 @@ mod tests {
     fn manual_cache_budget_is_clamped() {
         let mut settings = AppSettings {
             cache_memory_mode: CacheMemoryMode::Manual,
-            manual_cache_mb: 8,
+            manual_cache_mb: MANUAL_CACHE_MB_MIN - 1,
             ..AppSettings::default()
         };
 
-        assert_eq!(super::cache_budget_bytes(&settings), 64 * 1024 * 1024);
-        settings.manual_cache_mb = 4096;
-        assert_eq!(super::cache_budget_bytes(&settings), 2048 * 1024 * 1024);
+        assert_eq!(
+            super::cache_budget_bytes(&settings),
+            MANUAL_CACHE_MB_MIN as usize * 1024 * 1024
+        );
+        settings.manual_cache_mb = MANUAL_CACHE_MB_MAX + 1;
+        assert_eq!(
+            super::cache_budget_bytes(&settings),
+            MANUAL_CACHE_MB_MAX as usize * 1024 * 1024
+        );
     }
 
     #[test]

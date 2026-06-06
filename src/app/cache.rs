@@ -4,6 +4,7 @@ use super::{gpu_paint, SuiSuiViewApp};
 use crate::core::effects::ViewEffects;
 use crate::core::state::{
     AppSettings, CacheMemoryMode, FitMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod,
+    MANUAL_CACHE_MB_MAX, MANUAL_CACHE_MB_MIN,
 };
 use crate::core::worker::{
     clamp_target_long_edge, preview_prefetch_indices, CachedPageKey, DecodeOptions,
@@ -476,7 +477,11 @@ pub(in crate::app) fn cache_budget_bytes(settings: &AppSettings) -> usize {
     match settings.cache_memory_mode {
         CacheMemoryMode::Auto => automatic_cache_budget_bytes(),
         CacheMemoryMode::Manual => {
-            (settings.manual_cache_mb.clamp(64, 2048) as usize) * 1024 * 1024
+            (settings
+                .manual_cache_mb
+                .clamp(MANUAL_CACHE_MB_MIN, MANUAL_CACHE_MB_MAX) as usize)
+                * 1024
+                * 1024
         }
     }
 }

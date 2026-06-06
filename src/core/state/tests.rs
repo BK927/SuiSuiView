@@ -3,7 +3,7 @@ use super::{
     AppSettings, CacheMemoryMode, CpuScaleFilter, DecodeMode, DecoderPreference,
     DecoderPreferences, EdgePageAction, GpuEffectMode, PageTransitionStyle, PersistedState,
     RendererMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod, WheelMode,
-    WindowPlacement,
+    WindowPlacement, DEFAULT_MANUAL_CACHE_MB,
 };
 use crate::core::i18n::{I18n, Language, ResolvedLanguage};
 
@@ -59,7 +59,7 @@ fn settings_defaults_match_viewer_policy() {
         PageTransitionStyle::None
     );
     assert_eq!(settings.cache_memory_mode, CacheMemoryMode::Auto);
-    assert_eq!(settings.manual_cache_mb, 160);
+    assert_eq!(settings.manual_cache_mb, DEFAULT_MANUAL_CACHE_MB);
     assert!(settings.apply_exif_orientation);
     assert!(!settings.apply_embedded_icc);
     assert!(settings.auto_save_reading_position);
@@ -67,6 +67,19 @@ fn settings_defaults_match_viewer_policy() {
     assert_eq!(settings.max_remembered_books, 30);
     assert!(settings.remember_archive_page_name);
     assert_eq!(settings.wheel_mode, WheelMode::PageTurn);
+}
+
+#[test]
+fn settings_normalization_does_not_rewrite_manual_cache_mb() {
+    let mut settings = AppSettings {
+        cache_memory_mode: CacheMemoryMode::Manual,
+        manual_cache_mb: 4096,
+        ..AppSettings::default()
+    };
+
+    settings.normalize_product_choices();
+
+    assert_eq!(settings.manual_cache_mb, 4096);
 }
 
 #[test]

@@ -132,6 +132,10 @@ pub enum CacheMemoryMode {
     Manual,
 }
 
+pub const MANUAL_CACHE_MB_MIN: u32 = 64;
+pub const MANUAL_CACHE_MB_MAX: u32 = 2048;
+pub const DEFAULT_MANUAL_CACHE_MB: u32 = 160;
+
 impl CacheMemoryMode {
     pub fn label_i18n(self, i18n: I18n) -> String {
         match self {
@@ -753,7 +757,7 @@ fn default_archive_edge_page_action() -> EdgePageAction {
 }
 
 fn default_manual_cache_mb() -> u32 {
-    160
+    DEFAULT_MANUAL_CACHE_MB
 }
 
 fn default_cpu_upscale_filter() -> CpuScaleFilter {

@@ -236,7 +236,6 @@ impl SuiSuiViewApp {
             self.handle_fast_start_report_action(notice, action);
         }
         if changed {
-            draft.manual_cache_mb = draft.manual_cache_mb.clamp(64, 2048);
             self.apply_settings(ctx, draft);
         }
     }
