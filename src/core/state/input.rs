@@ -59,13 +59,12 @@ pub enum CommandId {
     CopyPageImage,
     CopyDisplayImage,
     CopyPath,
-    UpscaleCurrentPage,
     ToggleCurrentPageBookmark,
     ToggleBookmarkPopover,
 }
 
 impl CommandId {
-    pub const ALL: [Self; 58] = [
+    pub const ALL: [Self; 57] = [
         Self::OpenFile,
         Self::OpenFolder,
         Self::CloseBook,
@@ -121,7 +120,6 @@ impl CommandId {
         Self::CopyPageImage,
         Self::CopyDisplayImage,
         Self::CopyPath,
-        Self::UpscaleCurrentPage,
         Self::ToggleCurrentPageBookmark,
         Self::ToggleBookmarkPopover,
     ];
@@ -183,7 +181,6 @@ impl CommandId {
             Self::CopyPageImage => "현재 페이지 복사",
             Self::CopyDisplayImage => "현재 표시 복사",
             Self::CopyPath => "현재 경로 복사",
-            Self::UpscaleCurrentPage => "AI 업스케일",
             Self::ToggleCurrentPageBookmark => "현재 페이지 북마크",
             Self::ToggleBookmarkPopover => "북마크 열기",
         }
@@ -250,7 +247,6 @@ impl CommandId {
             Self::CopyPageImage => "label.command.copy_page",
             Self::CopyDisplayImage => "label.command.copy_display",
             Self::CopyPath => "label.command.copy_path",
-            Self::UpscaleCurrentPage => "label.command.ai_upscale",
             Self::ToggleCurrentPageBookmark => "label.command.bookmark_page",
             Self::ToggleBookmarkPopover => "label.command.bookmark_popover",
         }
@@ -308,8 +304,7 @@ impl CommandId {
             | Self::FilterNone
             | Self::FilterSmooth
             | Self::FilterSmoothSharpen
-            | Self::ToggleGamma
-            | Self::UpscaleCurrentPage => "영상 처리",
+            | Self::ToggleGamma => "영상 처리",
             Self::DeleteRecycle
             | Self::DeletePermanent
             | Self::CopyPageImage
@@ -371,8 +366,7 @@ impl CommandId {
             | Self::FilterNone
             | Self::FilterSmooth
             | Self::FilterSmoothSharpen
-            | Self::ToggleGamma
-            | Self::UpscaleCurrentPage => "label.command.group.processing",
+            | Self::ToggleGamma => "label.command.group.processing",
             Self::DeleteRecycle
             | Self::DeletePermanent
             | Self::CopyPageImage

@@ -27,7 +27,6 @@ full media-management suite.
 | Tunable decoders | Auto Fast uses the app default fast paths, compatibility mode keeps the broad `image` baseline, and custom mode lets you override per-format decoders. |
 | Tunable scaling | Separate CPU and WGPU scaler choices let display preparation stay light while GPU rendering can use quality-first downscaling. |
 | Safe viewing tools | Rotate, flip, invert, smooth, sharpen, and gamma effects are session-only and never rewrite the source image. |
-| Optional AI upscale | Real-ESRGAN ncnn-vulkan can be used for the current page when you provide your own local executable and models. |
 
 ## Quick Start
 
@@ -66,17 +65,17 @@ delete, copy, and window actions.
 | Recognized but not decoded yet | `.heic`, `.heif`, `.jxr`, RAW/DNG camera formats; SuiSuiView shows a format-specific message instead of opening them until a system-codec backend exists |
 
 Some formats are intentionally limited or blocked for commercial-distribution
-safety. CBR/RAR, ONNX/TensorRT AI backends, page-curl animation, printing,
-slideshow, external editor integration, and photo storage boxes are planned or
-under evaluation for later versions. BPG and full CLIP parsing are intentionally
-blocked for v1.
+safety. CBR/RAR, page-curl animation, printing, slideshow, external editor
+integration, and photo storage boxes are planned or under evaluation for later
+versions. BPG and full CLIP parsing are intentionally blocked for v1.
 
 PSD support is view-only. SuiSuiView reads the composite/base image preview
 through `zune-psd`; Photoshop layers, blend modes, masks, adjustment layers,
-smart objects, and layer effects are not reconstructed. AI support is also
-preview-only and requires a PDF-compatible `.ai` file plus a `native-ai` build
-with an app-local PDFium library beside the executable. Plain `.pdf`, EPS, PS,
-and non-PDF-compatible Illustrator data are not indexed as pages.
+smart objects, and layer effects are not reconstructed. Adobe Illustrator
+`.ai` support is also preview-only and requires a PDF-compatible `.ai` file
+plus a `native-ai` build with an app-local PDFium library beside the
+executable. Plain `.pdf`, EPS, PS, and non-PDF-compatible Illustrator data are
+not indexed as pages.
 
 ## Decoder Backends
 
@@ -136,7 +135,7 @@ state file.
   first/last page behavior.
 - Rendering: transition effect, CPU up/down scaler filters, GPU acceleration,
   GPU upscaler, WGPU downscaler, EXIF orientation, embedded ICC conversion,
-  prefetch, cache memory, and experimental Real-ESRGAN AI upscale settings.
+  prefetch, and cache memory.
   CPU preparation has separate upscaler and downscaler filters. The CPU
   upscaler defaults to CatmullRom, and the CPU downscaler defaults to Hamming
   for balanced preparation cost.
@@ -167,8 +166,7 @@ state file.
 The UI language can be set to system default, Korean, or English. UI text and
 state words such as Default, Off, and Experimental are localized, while
 algorithm, model, codec, library, and file-format names such as ArtCNN,
-Real-ESRGAN ncnn-vulkan, libwebp, PDFium, JPEG, and ZIP/CBZ keep their English
-technical names.
+libwebp, PDFium, JPEG, and ZIP/CBZ keep their English technical names.
 
 ## Bookmarks And State
 
@@ -207,7 +205,6 @@ standalone files.
 - [x] Folder, ZIP, and CBZ support.
 - [x] Path-independent ZIP/CBZ bookmarks.
 - [x] Large-image preview, cache, and display preparation policy.
-- [x] Optional Real-ESRGAN current-page upscale.
 - [x] WGSL display effects and real-time upscaler candidates.
 - [x] Content-aware Auto display upscaling for drawn pages.
 - [x] Separate CPU/WGPU scaler controls with quality-first WGPU pyramid
@@ -216,7 +213,6 @@ standalone files.
 - [x] Current-page EXIF/file/color information panel.
 - [ ] CBR/RAR read-only archive support after backend and license review.
 - [ ] Printing, slideshow, and external editor workflows.
-- [ ] Broader AI backend options after distribution review.
 - [ ] SR Lab research-model path for RFDN, RepRFN, and SPAN/SPANV2 after
   redistributable weights, model conversion, and WGSL tiny-net runtime proof.
 
@@ -268,12 +264,8 @@ standalone files.
 - `U`, `I`, `S`: change display filter.
 - `Ctrl+G`: toggle gamma correction.
 
-After configuring Real-ESRGAN in settings, use the `AI x4` toolbar button or
-the right-click `AI upscale` action to upscale the current page.
-
 The top-bar compare toggle can split the current page into A/B panes. Each side
-can use the app default, CPU scaler filters, a WGSL display upscaler, or a
-cached AI result.
+can use the app default, CPU scaler filters, or a WGSL display upscaler.
 
 ### Mouse
 

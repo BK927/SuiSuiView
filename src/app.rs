@@ -3,11 +3,9 @@ use crate::core::effects::ViewEffects;
 use crate::core::formats::OPENABLE_FILE_EXTENSIONS;
 use crate::core::source::{BookSource, SharedSource};
 use crate::core::state::{
-    AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, BookmarkInput, DecodeMode,
-    DecoderPreferences, FastStartFailureNotice, FitMode, ReadingDirection, StateStore,
-    WgpuUpscaleMethod,
+    AppSettings, BookmarkInput, DecodeMode, DecoderPreferences, FastStartFailureNotice, FitMode,
+    ReadingDirection, StateStore, WgpuUpscaleMethod,
 };
-use crate::core::upscale::{AiUpscaleWorker, UpscaleEvent, UpscaleRequest};
 use crate::core::worker::{
     DecodeOptions, DecodeStrategy, NavigationDirection, PageWorker, PreparedPage, WorkerEvent,
     WorkerOptions, DEFAULT_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
@@ -19,7 +17,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, RichText, Stroke, Vec2};
 use image_info::ImageInfoState;
 use lru::LruCache;
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -66,10 +64,10 @@ use crate::core::worker::preview_prefetch_indices;
 pub(in crate::app) use adjacent_seed::{AdjacentSeedCache, AdjacentSeedEvent, SeededPreparedPage};
 #[cfg(test)]
 use cache::{
-    automatic_cache_budget_bytes_for_total, best_page_key_at_or_below_in_cache,
-    best_page_key_excluding_preview_fallback_in_cache, best_page_key_in_cache, cache_budget_bytes,
-    final_quality_page_key_in_cache, lower_resolution_page_keys, page_cache_state_from_hit,
-    preferred_page_key_in_cache, texture_cache_budget_bytes_for, touch_normal_navigation_page_keys,
+    automatic_cache_budget_bytes_for_total, best_page_key_excluding_preview_fallback_in_cache,
+    best_page_key_in_cache, cache_budget_bytes, final_quality_page_key_in_cache,
+    lower_resolution_page_keys, page_cache_state_from_hit, texture_cache_budget_bytes_for,
+    touch_normal_navigation_page_keys,
 };
 pub(in crate::app) use cache::{
     cache_budget_summary, gpu_visual_needs_wgsl, rect_target_size,
@@ -184,9 +182,6 @@ pub struct SuiSuiViewApp {
     decoded_pages: LruCache<PageCacheKey, Arc<PreparedPage>>,
     decoded_bytes: usize,
     page_metrics: HashMap<usize, PageMetrics>,
-    upscaled_pages: LruCache<PageCacheKey, Arc<PreparedPage>>,
-    upscaled_bytes: usize,
-    use_ai_upscaled_pages: bool,
     page_errors: HashMap<usize, String>,
     textures: LruCache<TextureCacheKey, TextureEntry>,
     debug_compare: DebugCompareState,
@@ -199,12 +194,6 @@ pub struct SuiSuiViewApp {
     bookmark_thumbnails: Option<BookmarkThumbnails>,
     gpu_effects_available: bool,
     gpu_target_format: Option<wgpu::TextureFormat>,
-    upscale_worker: Option<AiUpscaleWorker>,
-    upscale_generation: u64,
-    upscale_inflight: Option<(u64, usize)>,
-    ai_upscale_queue: VecDeque<usize>,
-    ai_upscale_manual_requests: HashSet<usize>,
-    ai_upscale_failures: HashSet<PageCacheKey>,
     last_nav_direction: NavigationDirection,
     transition: Option<Transition>,
     pending_page_turn: Option<PendingPageTurn>,
@@ -292,7 +281,6 @@ impl SuiSuiViewApp {
             about_section: about::AboutSection::default(),
             image_info: ImageInfoState::new(),
             worker: PageWorker::new(egui_ctx.clone()),
-            upscale_worker: None,
             loader_tx,
             loader_rx,
             loader_pending,
@@ -320,9 +308,6 @@ impl SuiSuiViewApp {
             decoded_pages: LruCache::new(NonZeroUsize::new(64).unwrap()),
             decoded_bytes: 0,
             page_metrics: HashMap::new(),
-            upscaled_pages: LruCache::new(NonZeroUsize::new(8).unwrap()),
-            upscaled_bytes: 0,
-            use_ai_upscaled_pages: true,
             page_errors: HashMap::new(),
             textures: LruCache::new(NonZeroUsize::new(12).unwrap()),
             debug_compare: DebugCompareState::default(),
@@ -335,11 +320,6 @@ impl SuiSuiViewApp {
             bookmark_thumbnails: None,
             gpu_effects_available: screen_renderer.supports_wgsl_paint(),
             gpu_target_format: screen_renderer.wgpu_target_format(),
-            upscale_generation: 0,
-            upscale_inflight: None,
-            ai_upscale_queue: VecDeque::new(),
-            ai_upscale_manual_requests: HashSet::new(),
-            ai_upscale_failures: HashSet::new(),
             last_nav_direction: NavigationDirection::Forward,
             transition: None,
             pending_page_turn: None,
@@ -414,11 +394,6 @@ impl SuiSuiViewApp {
     fn ensure_bookmark_thumbnails(&mut self) -> &mut BookmarkThumbnails {
         self.bookmark_thumbnails
             .get_or_insert_with(|| BookmarkThumbnails::new(self.egui_ctx.clone()))
-    }
-
-    fn ensure_upscale_worker(&mut self) -> &AiUpscaleWorker {
-        self.upscale_worker
-            .get_or_insert_with(|| AiUpscaleWorker::new(self.egui_ctx.clone()))
     }
 
     fn set_status(&mut self, status: impl Into<String>) {
@@ -589,86 +564,6 @@ impl SuiSuiViewApp {
         self.debug_compare_inflight.clear();
     }
 
-    fn drain_upscale_events(&mut self) {
-        let events = self
-            .upscale_worker
-            .as_ref()
-            .map(|worker| {
-                let mut events = Vec::new();
-                while let Some(event) = worker.try_recv() {
-                    events.push(event);
-                }
-                events
-            })
-            .unwrap_or_default();
-        for event in events {
-            match event {
-                UpscaleEvent::Finished {
-                    generation,
-                    book_id,
-                    page_index,
-                    source_hash,
-                    decode,
-                    page,
-                } => {
-                    if self.book_id.as_deref() != Some(book_id.as_str())
-                        || !self.upscale_inflight.is_some_and(|(active, index)| {
-                            active == generation && index == page_index
-                        })
-                    {
-                        continue;
-                    }
-                    self.upscale_inflight = None;
-                    self.ai_upscale_manual_requests.remove(&page_index);
-                    let key = PageCacheKey {
-                        index: page_index,
-                        target_long_edge: page.target_long_edge,
-                        decode,
-                    };
-                    self.ai_upscale_failures.remove(&key);
-                    self.insert_upscaled_page(key, page);
-                    self.set_status(format!(
-                        "AI upscaled page {} ({})",
-                        page_index + 1,
-                        &source_hash[..12]
-                    ));
-                    self.refresh_ai_prefetch_queue();
-                }
-                UpscaleEvent::Failed {
-                    generation,
-                    book_id,
-                    page_index,
-                    target_long_edge,
-                    decode,
-                    message,
-                } => {
-                    if self.book_id.as_deref() != Some(book_id.as_str())
-                        || !self.upscale_inflight.is_some_and(|(active, index)| {
-                            active == generation && index == page_index
-                        })
-                    {
-                        continue;
-                    }
-                    self.upscale_inflight = None;
-                    let was_manual = self.ai_upscale_manual_requests.remove(&page_index);
-                    self.ai_upscale_failures.insert(PageCacheKey {
-                        index: page_index,
-                        target_long_edge,
-                        decode,
-                    });
-                    let message =
-                        format!("AI upscale failed for page {}: {message}", page_index + 1);
-                    if was_manual {
-                        self.notify(message);
-                    } else {
-                        self.set_status(message);
-                    }
-                    self.refresh_ai_prefetch_queue();
-                }
-            }
-        }
-    }
-
     fn target_is_relevant(&self, target_long_edge: u32) -> bool {
         (self.settings.progressive_preview_enabled && target_long_edge == PREVIEW_TARGET_LONG_EDGE)
             || target_long_edge == self.target_long_edge
@@ -821,7 +716,6 @@ impl SuiSuiViewApp {
             AppCommand::CopyPageImage => self.copy_current_page_image(),
             AppCommand::CopyDisplayImage => self.copy_current_spread_image(),
             AppCommand::CopyPath => self.copy_current_path(),
-            AppCommand::UpscaleCurrentPage => self.upscale_current_page(),
             AppCommand::ToggleCurrentPageBookmark => self.toggle_current_page_bookmark(),
             AppCommand::ToggleBookmarkPopover => self.toggle_bookmark_popover(ctx),
         }
@@ -867,8 +761,6 @@ impl SuiSuiViewApp {
         self.decoded_pages.clear();
         self.decoded_bytes = 0;
         self.page_metrics.clear();
-        self.upscaled_pages.clear();
-        self.upscaled_bytes = 0;
         self.textures.clear();
         self.clear_debug_compare_requests();
         self.clear_auto_kind_state();
@@ -876,11 +768,6 @@ impl SuiSuiViewApp {
             thumbnails.clear();
         }
         self.page_errors.clear();
-        self.upscale_generation = self.upscale_generation.wrapping_add(1);
-        self.upscale_inflight = None;
-        self.ai_upscale_queue.clear();
-        self.ai_upscale_manual_requests.clear();
-        self.ai_upscale_failures.clear();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         {
             self.page_turn_started_at = None;
@@ -1022,204 +909,6 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn upscale_current_page(&mut self) {
-        if self.settings.ai_upscale.backend != AiUpscaleBackend::RealEsrganNcnn {
-            self.notify("AI upscale is disabled in settings.");
-            return;
-        }
-        if self
-            .settings
-            .ai_upscale
-            .ncnn
-            .executable_path
-            .trim()
-            .is_empty()
-        {
-            self.notify("Set the Real-ESRGAN executable path in settings first.");
-            return;
-        }
-        if self.source.is_none() || self.book_id.is_none() {
-            self.notify("Open a book before using AI upscale.");
-            return;
-        }
-
-        let page_index = self.current_page;
-        if self.ai_page_has_prepared_result(page_index) {
-            self.set_status(format!(
-                "Page {} already has an AI upscale result.",
-                page_index + 1
-            ));
-            return;
-        }
-        if self
-            .upscale_inflight
-            .is_some_and(|(_generation, index)| index == page_index)
-        {
-            self.set_status(format!(
-                "AI upscale is already running for page {}.",
-                page_index + 1
-            ));
-            return;
-        }
-
-        self.ai_upscale_queue.retain(|queued| *queued != page_index);
-        let key = self.ai_page_key(page_index);
-        self.ai_upscale_failures.remove(&key);
-        self.ai_upscale_manual_requests.insert(page_index);
-        self.enqueue_ai_upscale_page(page_index, true);
-        self.pump_ai_upscale_queue();
-        if self
-            .upscale_inflight
-            .is_some_and(|(_generation, index)| index != page_index)
-        {
-            self.set_status(format!(
-                "AI upscale queued for page {} after the current job.",
-                page_index + 1
-            ));
-        }
-    }
-
-    fn refresh_ai_prefetch_queue(&mut self) {
-        let mode = self.settings.ai_upscale.prefetch_mode;
-        if mode == AiUpscalePrefetchMode::Off || !self.ai_upscale_can_run() {
-            self.clear_queued_ai_upscale_pages();
-            return;
-        }
-
-        let Some(source) = self.source.as_ref() else {
-            self.clear_queued_ai_upscale_pages();
-            return;
-        };
-        let desired_pages = ai_prefetch_pages_for(
-            self.current_page,
-            source.page_count(),
-            self.view_mode.step(),
-            self.last_nav_direction,
-            mode,
-        );
-        self.clear_queued_ai_upscale_pages();
-        for page_index in desired_pages {
-            self.enqueue_ai_upscale_page(page_index, false);
-        }
-        self.pump_ai_upscale_queue();
-    }
-
-    fn clear_queued_ai_upscale_pages(&mut self) {
-        for page_index in self.ai_upscale_queue.drain(..) {
-            self.ai_upscale_manual_requests.remove(&page_index);
-        }
-    }
-
-    fn ai_upscale_can_run(&self) -> bool {
-        self.settings.ai_upscale.backend == AiUpscaleBackend::RealEsrganNcnn
-            && !self
-                .settings
-                .ai_upscale
-                .ncnn
-                .executable_path
-                .trim()
-                .is_empty()
-            && self.source.is_some()
-            && self.book_id.is_some()
-    }
-
-    fn ai_page_key(&self, page_index: usize) -> PageCacheKey {
-        PageCacheKey {
-            index: page_index,
-            target_long_edge: self.target_long_edge,
-            decode: self.decode_options(),
-        }
-    }
-
-    fn ai_page_has_prepared_result(&self, page_index: usize) -> bool {
-        self.upscaled_pages
-            .peek(&self.ai_page_key(page_index))
-            .is_some()
-    }
-
-    fn ai_page_has_failed(&self, page_index: usize) -> bool {
-        self.ai_upscale_failures
-            .contains(&self.ai_page_key(page_index))
-    }
-
-    fn ai_page_is_pending(&self, page_index: usize) -> bool {
-        self.upscale_inflight
-            .is_some_and(|(_generation, index)| index == page_index)
-            || self
-                .ai_upscale_queue
-                .iter()
-                .any(|queued| *queued == page_index)
-    }
-
-    fn enqueue_ai_upscale_page(&mut self, page_index: usize, front: bool) {
-        let Some(source) = self.source.as_ref() else {
-            return;
-        };
-        if page_index >= source.page_count()
-            || self.ai_page_has_prepared_result(page_index)
-            || self.ai_page_has_failed(page_index)
-            || self.ai_page_is_pending(page_index)
-        {
-            return;
-        }
-        if front {
-            self.ai_upscale_queue.push_front(page_index);
-        } else {
-            self.ai_upscale_queue.push_back(page_index);
-        }
-    }
-
-    fn pump_ai_upscale_queue(&mut self) {
-        if self.upscale_inflight.is_some() {
-            return;
-        }
-        while let Some(page_index) = self.ai_upscale_queue.pop_front() {
-            if self.start_ai_upscale_page(page_index) {
-                return;
-            }
-        }
-    }
-
-    fn start_ai_upscale_page(&mut self, page_index: usize) -> bool {
-        if !self.ai_upscale_can_run()
-            || self.ai_page_has_prepared_result(page_index)
-            || self.ai_page_has_failed(page_index)
-        {
-            return false;
-        }
-        let Some(source) = self.source.as_ref().cloned() else {
-            return false;
-        };
-        let Some(book_id) = self.book_id.clone() else {
-            return false;
-        };
-        if page_index >= source.page_count() {
-            return false;
-        }
-
-        self.upscale_generation = self.upscale_generation.wrapping_add(1);
-        let generation = self.upscale_generation;
-        self.upscale_inflight = Some((generation, page_index));
-        let request = UpscaleRequest {
-            generation,
-            book_id,
-            source: source.clone(),
-            page_index,
-            page_name: source.page_name(page_index).map(str::to_owned),
-            target_long_edge: self.target_long_edge,
-            decode: self.decode_options(),
-            settings: self.settings.ai_upscale.ncnn.clone(),
-        };
-        self.ensure_upscale_worker().upscale(request);
-        let action = if page_index == self.current_page {
-            "AI upscaling"
-        } else {
-            "AI prefetching"
-        };
-        self.set_status(format!("{action} page {} in background...", page_index + 1));
-        true
-    }
-
     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
     fn drive_auto_page_turn_diagnostics(&mut self, ctx: &egui::Context) {
         let Some(driver) = self.auto_page_turn_driver.as_mut() else {
@@ -1251,10 +940,6 @@ impl Drop for SuiSuiViewApp {
             .bookmark_thumbnails
             .as_mut()
             .map_or(true, BookmarkThumbnails::request_shutdown);
-        let upscale_stopped = self
-            .upscale_worker
-            .as_mut()
-            .map_or(true, AiUpscaleWorker::request_shutdown);
         self.flush_deferred_state_save();
         perf::record_app_shutdown(
             shutdown_started,
@@ -1262,7 +947,6 @@ impl Drop for SuiSuiViewApp {
             page_worker_stopped,
             debug_compare_stopped,
             thumbnails_stopped,
-            upscale_stopped,
         );
         perf::flush();
     }
@@ -1351,32 +1035,6 @@ impl SuiSuiViewApp {
     }
 }
 
-fn ai_prefetch_pages_for(
-    current_page: usize,
-    page_count: usize,
-    step: usize,
-    direction: NavigationDirection,
-    mode: AiUpscalePrefetchMode,
-) -> Vec<usize> {
-    if page_count == 0 || mode == AiUpscalePrefetchMode::Off {
-        return Vec::new();
-    }
-
-    let current_page = current_page.min(page_count - 1);
-    let mut pages = vec![current_page];
-    if mode == AiUpscalePrefetchMode::CurrentAndNext {
-        let step = step.max(1);
-        let adjacent = match direction {
-            NavigationDirection::Forward => current_page.saturating_add(step),
-            NavigationDirection::Backward => current_page.saturating_sub(step),
-        };
-        if adjacent < page_count && adjacent != current_page {
-            pages.push(adjacent);
-        }
-    }
-    pages
-}
-
 fn delete_target_for(
     origin: OpenOrigin,
     source: &dyn BookSource,
@@ -1392,15 +1050,14 @@ fn delete_target_for(
 mod tests {
     use super::perf::PageCacheState;
     use super::{
-        adjacent_sibling_book_paths, adjacent_sibling_book_paths_ordered, ai_prefetch_pages_for,
-        apply_effects_to_image, best_page_key_at_or_below_in_cache,
+        adjacent_sibling_book_paths, adjacent_sibling_book_paths_ordered, apply_effects_to_image,
         best_page_key_excluding_preview_fallback_in_cache, best_page_key_in_cache,
         command_for_shortcut, delete_target_for, double_spread_indices,
         final_quality_page_key_in_cache, gpu_visual_needs_wgsl, korean_font_candidates,
         load_first_existing_font, lower_resolution_page_keys, ordered_spread_indices,
-        page_cache_state_from_hit, platform, preferred_page_key_in_cache, preview_prefetch_indices,
-        relative_difference, sanitize_font_name, should_allow_cpu_display_upscale,
-        sibling_book_path, smart_spread_indices_for_metrics, texture_cache_budget_bytes_for,
+        page_cache_state_from_hit, platform, preview_prefetch_indices, relative_difference,
+        sanitize_font_name, should_allow_cpu_display_upscale, sibling_book_path,
+        smart_spread_indices_for_metrics, texture_cache_budget_bytes_for,
         touch_normal_navigation_page_keys, transformed_page_size, transition_paint_params,
         transition_screen_sign, worker_center_page_for_mode, AppCommand, DeleteMode, ImageFilter,
         OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey, ViewEffects, ViewMode,
@@ -1408,8 +1065,8 @@ mod tests {
     };
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
-        AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, FitMode, KeyCode, KeyShortcut,
-        PageTransitionStyle, ReadingDirection, WgpuDownscaleMethod, WgpuUpscaleMethod,
+        AppSettings, CacheMemoryMode, FitMode, KeyCode, KeyShortcut, PageTransitionStyle,
+        ReadingDirection, WgpuDownscaleMethod, WgpuUpscaleMethod,
     };
     use crate::core::worker::{
         DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PreparedPage,
@@ -1826,7 +1483,7 @@ mod tests {
     }
 
     #[test]
-    fn page_cache_state_tracks_exact_preview_fallback_and_source() {
+    fn page_cache_state_tracks_exact_preview_and_fallback() {
         let requested = PageCacheKey {
             index: 3,
             target_long_edge: 2048,
@@ -1842,31 +1499,19 @@ mod tests {
         };
 
         assert_eq!(
-            page_cache_state_from_hit(Some(requested), requested, false),
+            page_cache_state_from_hit(Some(requested), requested),
             PageCacheState::DecodedExact
         );
         assert_eq!(
-            page_cache_state_from_hit(Some(preview), requested, false),
+            page_cache_state_from_hit(Some(preview), requested),
             PageCacheState::DecodedPreview
         );
         assert_eq!(
-            page_cache_state_from_hit(Some(fallback), requested, false),
+            page_cache_state_from_hit(Some(fallback), requested),
             PageCacheState::DecodedFallback
         );
         assert_eq!(
-            page_cache_state_from_hit(Some(requested), requested, true),
-            PageCacheState::UpscaledExact
-        );
-        assert_eq!(
-            page_cache_state_from_hit(Some(preview), requested, true),
-            PageCacheState::UpscaledPreview
-        );
-        assert_eq!(
-            page_cache_state_from_hit(Some(fallback), requested, true),
-            PageCacheState::UpscaledFallback
-        );
-        assert_eq!(
-            page_cache_state_from_hit(None, requested, false),
+            page_cache_state_from_hit(None, requested),
             PageCacheState::Miss
         );
     }
@@ -1881,7 +1526,6 @@ mod tests {
         let normal = TextureCacheKey {
             page,
             effects: ViewEffects::default(),
-            upscaled: false,
         };
         let inverted = TextureCacheKey {
             page,
@@ -1889,7 +1533,6 @@ mod tests {
                 invert_colors: true,
                 ..ViewEffects::default()
             },
-            upscaled: false,
         };
 
         assert_ne!(normal, inverted);
@@ -2019,7 +1662,6 @@ mod tests {
         let none = TextureCacheKey {
             page,
             effects: ViewEffects::default(),
-            upscaled: false,
         };
         let filtered = TextureCacheKey {
             page,
@@ -2027,68 +1669,9 @@ mod tests {
                 filter: ImageFilter::SmoothSharpen,
                 ..ViewEffects::default()
             },
-            upscaled: false,
         };
 
         assert_ne!(none, filtered);
-    }
-
-    #[test]
-    fn texture_cache_key_tracks_ai_upscaled_pages() {
-        let page = PageCacheKey {
-            index: 0,
-            target_long_edge: 1024,
-            decode: DecodeOptions::default(),
-        };
-        let base = TextureCacheKey {
-            page,
-            effects: ViewEffects::default(),
-            upscaled: false,
-        };
-        let ai = TextureCacheKey {
-            upscaled: true,
-            ..base
-        };
-
-        assert_ne!(base, ai);
-    }
-
-    #[test]
-    fn preferred_page_key_honors_ai_visibility_toggle() {
-        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
-        let key = PageCacheKey {
-            index: 0,
-            target_long_edge: 2048,
-            decode: DecodeOptions::default(),
-        };
-        cache.put(key, dummy_page(2048));
-
-        assert_eq!(preferred_page_key_in_cache(&cache, key, true), Some(key));
-        assert_eq!(preferred_page_key_in_cache(&cache, key, false), None);
-    }
-
-    #[test]
-    fn ai_page_key_lookup_avoids_larger_stale_targets() {
-        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
-        let small = PageCacheKey {
-            index: 0,
-            target_long_edge: 1024,
-            decode: DecodeOptions::default(),
-        };
-        let large = PageCacheKey {
-            target_long_edge: 4096,
-            ..small
-        };
-        cache.put(large, dummy_page(4096));
-
-        assert_eq!(best_page_key_at_or_below_in_cache(&cache, small), None);
-
-        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
-        cache.put(small, dummy_page(1024));
-        assert_eq!(
-            best_page_key_at_or_below_in_cache(&cache, large),
-            Some(small)
-        );
     }
 
     #[test]
@@ -2108,60 +1691,6 @@ mod tests {
         assert_eq!(
             texture_cache_budget_bytes_for(8192, 2, true),
             128 * 1024 * 1024
-        );
-    }
-
-    #[test]
-    fn ai_prefetch_pages_follow_mode_and_direction() {
-        assert_eq!(
-            ai_prefetch_pages_for(
-                5,
-                10,
-                1,
-                NavigationDirection::Forward,
-                AiUpscalePrefetchMode::Off
-            ),
-            Vec::<usize>::new()
-        );
-        assert_eq!(
-            ai_prefetch_pages_for(
-                5,
-                10,
-                1,
-                NavigationDirection::Forward,
-                AiUpscalePrefetchMode::CurrentOnly
-            ),
-            vec![5]
-        );
-        assert_eq!(
-            ai_prefetch_pages_for(
-                5,
-                10,
-                2,
-                NavigationDirection::Forward,
-                AiUpscalePrefetchMode::CurrentAndNext
-            ),
-            vec![5, 7]
-        );
-        assert_eq!(
-            ai_prefetch_pages_for(
-                5,
-                10,
-                2,
-                NavigationDirection::Backward,
-                AiUpscalePrefetchMode::CurrentAndNext
-            ),
-            vec![5, 3]
-        );
-        assert_eq!(
-            ai_prefetch_pages_for(
-                9,
-                10,
-                1,
-                NavigationDirection::Forward,
-                AiUpscalePrefetchMode::CurrentAndNext
-            ),
-            vec![9]
         );
     }
 
@@ -2321,8 +1850,8 @@ mod tests {
             WgpuDownscaleMethod::Bilinear,
         ));
         assert!(gpu_visual_needs_wgsl(
-            [2000, 3000],
-            [1000, 1500],
+            [800, 1200],
+            [1600, 2400],
             ViewEffects::default(),
             WgpuUpscaleMethod::WgslNisStyle,
             WgpuDownscaleMethod::Bilinear,

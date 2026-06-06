@@ -39,9 +39,6 @@ pub(super) enum PageCacheState {
     DecodedExact,
     DecodedPreview,
     DecodedFallback,
-    UpscaledExact,
-    UpscaledPreview,
-    UpscaledFallback,
     Miss,
 }
 
@@ -111,9 +108,6 @@ impl PageCacheState {
             Self::DecodedExact => "decoded_exact",
             Self::DecodedPreview => "decoded_preview",
             Self::DecodedFallback => "decoded_fallback",
-            Self::UpscaledExact => "upscaled_exact",
-            Self::UpscaledPreview => "upscaled_preview",
-            Self::UpscaledFallback => "upscaled_fallback",
             Self::Miss => "miss",
         }
     }
@@ -443,9 +437,6 @@ pub(super) struct AppCacheSnapshot {
     pub(super) decoded_pages: usize,
     pub(super) decoded_bytes: usize,
     pub(super) decoded_budget_bytes: usize,
-    pub(super) upscaled_pages: usize,
-    pub(super) upscaled_bytes: usize,
-    pub(super) upscaled_budget_bytes: usize,
     pub(super) textures: usize,
     pub(super) texture_bytes: usize,
 }
@@ -463,9 +454,6 @@ pub(super) fn record_app_cache_snapshot(snapshot: AppCacheSnapshot) {
             PerfField::Usize("decoded_pages", snapshot.decoded_pages),
             PerfField::Usize("decoded_bytes", snapshot.decoded_bytes),
             PerfField::Usize("decoded_budget_bytes", snapshot.decoded_budget_bytes),
-            PerfField::Usize("upscaled_pages", snapshot.upscaled_pages),
-            PerfField::Usize("upscaled_bytes", snapshot.upscaled_bytes),
-            PerfField::Usize("upscaled_budget_bytes", snapshot.upscaled_budget_bytes),
             PerfField::Usize("textures", snapshot.textures),
             PerfField::Usize("texture_bytes", snapshot.texture_bytes),
             PerfField::Usize("process_memory_bytes", process_memory_bytes),
@@ -494,12 +482,7 @@ pub(super) fn record_page_effects_cpu(started: Instant, page: usize, target_long
     );
 }
 
-pub(super) fn record_texture_load(
-    started: Instant,
-    page: usize,
-    target_long_edge: u32,
-    upscaled: bool,
-) {
+pub(super) fn record_texture_load(started: Instant, page: usize, target_long_edge: u32) {
     perf_trace::record_duration_if_at_least(
         "texture_load",
         started.elapsed(),
@@ -507,17 +490,11 @@ pub(super) fn record_texture_load(
         &[
             PerfField::Usize("page", page),
             PerfField::U32("target_long_edge", target_long_edge),
-            PerfField::Bool("upscaled", upscaled),
         ],
     );
 }
 
-pub(super) fn record_texture_prewarm(
-    started: Instant,
-    page: usize,
-    target_long_edge: u32,
-    upscaled: bool,
-) {
+pub(super) fn record_texture_prewarm(started: Instant, page: usize, target_long_edge: u32) {
     perf_trace::record_duration_if_at_least(
         "texture_prewarm",
         started.elapsed(),
@@ -525,7 +502,6 @@ pub(super) fn record_texture_prewarm(
         &[
             PerfField::Usize("page", page),
             PerfField::U32("target_long_edge", target_long_edge),
-            PerfField::Bool("upscaled", upscaled),
         ],
     );
 }
@@ -581,7 +557,6 @@ pub(super) fn record_app_shutdown(
     page_worker_stopped: bool,
     debug_compare_stopped: bool,
     thumbnails_stopped: bool,
-    upscale_stopped: bool,
 ) {
     perf_trace::record_duration(
         "app_shutdown",
@@ -591,7 +566,6 @@ pub(super) fn record_app_shutdown(
             PerfField::Bool("page_worker_stopped", page_worker_stopped),
             PerfField::Bool("debug_compare_stopped", debug_compare_stopped),
             PerfField::Bool("thumbnails_stopped", thumbnails_stopped),
-            PerfField::Bool("upscale_stopped", upscale_stopped),
         ],
     );
 }

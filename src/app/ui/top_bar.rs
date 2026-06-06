@@ -4,7 +4,7 @@ use super::super::{SuiSuiViewApp, ViewMode};
 use super::{icons, path_labels, theme};
 use crate::core::effects::ImageFilter;
 use crate::core::i18n::I18n;
-use crate::core::state::{AiUpscaleBackend, FitMode, PageTransitionStyle};
+use crate::core::state::{FitMode, PageTransitionStyle};
 use eframe::egui::{
     self, Align2, Button, Color32, FontId, Frame, Margin, RichText, Sense, Stroke, Vec2,
 };
@@ -359,29 +359,6 @@ impl SuiSuiViewApp {
             |ui| {
                 self.hold_top_bar_open_for_menu();
                 ui.set_min_width(220.0);
-                let ai_enabled =
-                    self.settings.ai_upscale.backend == AiUpscaleBackend::RealEsrganNcnn;
-                if ui
-                    .add_enabled(
-                        ai_enabled && self.source.is_some(),
-                        egui::Button::new("AI x4"),
-                    )
-                    .clicked()
-                {
-                    self.upscale_current_page();
-                    ui.close();
-                }
-                ui.add_enabled_ui(self.source.is_some(), |ui| {
-                    let mut use_ai = self.use_ai_upscaled_pages;
-                    if ui
-                        .checkbox(&mut use_ai, i18n.text("topbar.prefer_ai"))
-                        .changed()
-                    {
-                        self.set_use_ai_upscaled_pages(use_ai);
-                    }
-                });
-
-                ui.separator();
                 ui.label(i18n.text("topbar.transition"));
                 let active_transition = self.settings.effective_page_transition_style();
                 for style in PageTransitionStyle::ALL {
@@ -472,7 +449,6 @@ impl SuiSuiViewApp {
                 self.worker_options(),
             );
             self.persist_current_bookmark();
-            self.refresh_ai_prefetch_queue();
         }
     }
 }

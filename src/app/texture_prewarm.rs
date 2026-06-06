@@ -77,29 +77,18 @@ impl SuiSuiViewApp {
             target_long_edge: self.target_long_edge,
             decode: self.decode_options(),
         };
-        let (best_key, upscaled) =
-            if let Some(best_key) = self.preferred_upscaled_page_key(requested) {
-                (best_key, true)
-            } else if let Some(best_key) = self.final_quality_page_key(requested) {
-                (best_key, false)
-            } else {
-                return false;
-            };
+        let Some(best_key) = self.final_quality_page_key(requested) else {
+            return false;
+        };
         let texture_key = TextureCacheKey {
             page: best_key,
             effects: self.effects,
-            upscaled,
         };
         if self.textures.peek(&texture_key).is_some() {
             return false;
         }
 
-        let page = if upscaled {
-            self.upscaled_pages.get(&best_key)
-        } else {
-            self.decoded_pages.get(&best_key)
-        }
-        .cloned();
+        let page = self.decoded_pages.get(&best_key).cloned();
         let Some(page) = page else {
             return false;
         };
@@ -113,16 +102,14 @@ impl SuiSuiViewApp {
         let texture_started = Instant::now();
         let texture = ctx.load_texture(
             format!(
-                "page-{index}-{}-{}-{:?}",
-                best_key.target_long_edge,
-                if upscaled { "ai" } else { "base" },
-                self.effects
+                "page-{index}-{}-{:?}",
+                best_key.target_long_edge, self.effects
             ),
             ImageData::Color(image),
             texture_options_for_target(best_key.target_long_edge),
         );
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        perf::record_texture_prewarm(texture_started, index, best_key.target_long_edge, upscaled);
+        perf::record_texture_prewarm(texture_started, index, best_key.target_long_edge);
         self.textures
             .put(texture_key, TextureEntry { texture, byte_size });
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]

@@ -35,9 +35,6 @@ impl SuiSuiViewApp {
         self.drain_debug_compare_events();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("drain_debug_compare_events");
-        self.drain_upscale_events();
-        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        record_update_phase!("drain_upscale_events");
         self.run_pending_adjacent_seed_prefetch();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("run_pending_adjacent_seed_prefetch");

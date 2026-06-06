@@ -49,11 +49,10 @@ pub(in crate::app) enum DebugCompareTarget {
     WgslFsr1Style,
     WgslFsr1EasuRcas,
     WgslNisStyle,
-    AiResult,
 }
 
 impl DebugCompareTarget {
-    pub(in crate::app) const ALL: [Self; 13] = [
+    pub(in crate::app) const ALL: [Self; 12] = [
         Self::Current,
         Self::Bicubic,
         Self::Hamming,
@@ -66,7 +65,6 @@ impl DebugCompareTarget {
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
         Self::WgslNisStyle,
-        Self::AiResult,
     ];
 
     pub(in crate::app) fn label(self) -> &'static str {
@@ -83,7 +81,6 @@ impl DebugCompareTarget {
             Self::WgslFsr1Style => "WGSL FSR-style",
             Self::WgslFsr1EasuRcas => "WGSL FSR1 EASU+RCAS",
             Self::WgslNisStyle => "WGSL NIS-style",
-            Self::AiResult => "AI 결과",
         }
     }
 
@@ -101,7 +98,6 @@ impl DebugCompareTarget {
             | Self::WgslFsr1Style
             | Self::WgslFsr1EasuRcas
             | Self::WgslNisStyle => return Some(current),
-            Self::AiResult => return None,
         };
         Some(DecodeOptions {
             cpu_upscale_filter: scale_filter,
@@ -394,10 +390,7 @@ impl SuiSuiViewApp {
         if let Some(wgpu_upscale_method) = target.wgpu_upscale_method() {
             return self.compare_wgsl_visual(wgpu_upscale_method);
         }
-        match target {
-            DebugCompareTarget::AiResult => self.compare_ai_visual(ctx),
-            _ => self.compare_decoded_visual(ctx, target),
-        }
+        self.compare_decoded_visual(ctx, target)
     }
 
     fn compare_wgsl_visual(&mut self, wgpu_upscale_method: WgpuUpscaleMethod) -> PageVisual {
@@ -427,8 +420,6 @@ impl SuiSuiViewApp {
             source_key: GpuPaintSourceKey {
                 book: self.gpu_paint_book_key(),
                 page: best_key,
-                upscaled: false,
-                generation: 0,
             },
             image_size: page.image_size(),
             rgba: page.rgba.clone(),
@@ -436,23 +427,8 @@ impl SuiSuiViewApp {
             effects: ViewEffects::default(),
             wgpu_upscale_method,
             wgpu_downscale_method: WgpuDownscaleMethod::Bilinear,
-            render_info: PageRenderInfo::from_page(self.current_page, best_key, &page, false),
+            render_info: PageRenderInfo::from_page(self.current_page, best_key, &page),
         }
-    }
-
-    fn compare_ai_visual(&mut self, ctx: &egui::Context) -> PageVisual {
-        let requested = PageCacheKey {
-            index: self.current_page,
-            target_long_edge: self.target_long_edge,
-            decode: self.decode_options(),
-        };
-        let Some(best_key) = self.best_upscaled_page_key(requested) else {
-            return PageVisual::Failed {
-                index: self.current_page,
-                message: "AI 업스케일 결과가 없습니다. 보정 > AI x4로 먼저 생성하세요.".to_owned(),
-            };
-        };
-        self.compare_ready_visual(ctx, best_key, true)
     }
 
     fn compare_decoded_visual(
@@ -478,27 +454,19 @@ impl SuiSuiViewApp {
                 index: self.current_page,
             };
         };
-        self.compare_ready_visual(ctx, best_key, false)
+        self.compare_ready_visual(ctx, best_key)
     }
 
-    fn compare_ready_visual(
-        &mut self,
-        ctx: &egui::Context,
-        best_key: PageCacheKey,
-        upscaled: bool,
-    ) -> PageVisual {
+    fn compare_ready_visual(&mut self, ctx: &egui::Context, best_key: PageCacheKey) -> PageVisual {
         let texture_key = TextureCacheKey {
             page: best_key,
             effects: ViewEffects::default(),
-            upscaled,
         };
-        let page = if upscaled {
-            self.upscaled_pages.get(&best_key)
-        } else {
-            self.decoded_pages.get(&best_key)
-        }
-        .cloned()
-        .expect("compare page key should exist in cache");
+        let page = self
+            .decoded_pages
+            .get(&best_key)
+            .cloned()
+            .expect("compare page key should exist in cache");
 
         if let Some(texture) = self
             .textures
@@ -512,17 +480,14 @@ impl SuiSuiViewApp {
                     self.current_page,
                     best_key,
                     &page,
-                    upscaled,
                 )),
             };
         }
 
         let texture = ctx.load_texture(
             format!(
-                "compare-page-{}-{}-{}",
-                best_key.index,
-                best_key.target_long_edge,
-                if upscaled { "ai" } else { "base" }
+                "compare-page-{}-{}",
+                best_key.index, best_key.target_long_edge
             ),
             ImageData::Color(Arc::new(page.color_image())),
             texture_options_for_target(best_key.target_long_edge),
@@ -543,7 +508,6 @@ impl SuiSuiViewApp {
                 self.current_page,
                 best_key,
                 &page,
-                upscaled,
             )),
         }
     }
@@ -657,12 +621,5 @@ mod tests {
         assert!(lanczos.allow_display_upscale);
         assert!(lanczos.apply_exif_orientation);
         assert!(lanczos.apply_embedded_icc);
-    }
-
-    #[test]
-    fn ai_compare_target_uses_upscaled_cache_not_decode_options() {
-        assert!(DebugCompareTarget::AiResult
-            .decode_options(DecodeOptions::default())
-            .is_none());
     }
 }

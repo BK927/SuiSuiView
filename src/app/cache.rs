@@ -1,6 +1,6 @@
 #[cfg(any(test, feature = "perf-dev", feature = "perf-diagnostics"))]
 use super::perf;
-use super::{ai_prefetch_pages_for, gpu_paint, SuiSuiViewApp};
+use super::{gpu_paint, SuiSuiViewApp};
 use crate::core::effects::ViewEffects;
 use crate::core::state::{
     AppSettings, CacheMemoryMode, FitMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod,
@@ -28,7 +28,6 @@ pub(in crate::app) struct PageCacheKey {
 pub(in crate::app) struct TextureCacheKey {
     pub(in crate::app) page: PageCacheKey,
     pub(in crate::app) effects: ViewEffects,
-    pub(in crate::app) upscaled: bool,
 }
 
 pub(in crate::app) struct TextureEntry {
@@ -81,26 +80,6 @@ impl SuiSuiViewApp {
         self.decoded_bytes = self.decoded_bytes.saturating_add(page.byte_size);
     }
 
-    pub(in crate::app) fn insert_upscaled_page(
-        &mut self,
-        key: PageCacheKey,
-        page: Arc<crate::core::worker::PreparedPage>,
-    ) {
-        if self
-            .upscaled_pages
-            .get(&key)
-            .is_some_and(|cached| Arc::ptr_eq(cached, &page))
-        {
-            return;
-        }
-        if let Some((evicted_key, evicted_page)) = self.upscaled_pages.push(key, page.clone()) {
-            self.upscaled_bytes = self.upscaled_bytes.saturating_sub(evicted_page.byte_size);
-            self.drop_textures_for_page(evicted_key);
-        }
-        self.upscaled_bytes = self.upscaled_bytes.saturating_add(page.byte_size);
-        self.prune_upscaled_cache();
-    }
-
     pub(in crate::app) fn drop_textures_for_page(&mut self, page: PageCacheKey) {
         let stale_keys = self
             .textures
@@ -149,32 +128,6 @@ impl SuiSuiViewApp {
         }
     }
 
-    pub(in crate::app) fn prune_upscaled_cache(&mut self) {
-        let pinned = self.pinned_upscaled_page_indices();
-        let mut retained = Vec::new();
-        let max_pops = self.upscaled_pages.len();
-        let mut pops = 0usize;
-        let budget_bytes = upscaled_cache_budget_bytes_for(self.cpu_cache_budget_bytes());
-        while self.upscaled_bytes > budget_bytes && pops < max_pops {
-            let Some((key, page)) = self.upscaled_pages.pop_lru() else {
-                break;
-            };
-            pops += 1;
-
-            if pinned.contains(&key) {
-                retained.push((key, page));
-                continue;
-            }
-
-            self.upscaled_bytes = self.upscaled_bytes.saturating_sub(page.byte_size);
-            self.drop_textures_for_page(key);
-        }
-
-        for (key, page) in retained {
-            self.upscaled_pages.put(key, page);
-        }
-    }
-
     pub(in crate::app) fn prune_texture_cache(&mut self) {
         let budget_bytes = self.texture_cache_budget_bytes();
         let mut texture_bytes = self.texture_cache_bytes();
@@ -214,9 +167,6 @@ impl SuiSuiViewApp {
             decoded_pages: self.decoded_pages.len(),
             decoded_bytes: self.decoded_bytes,
             decoded_budget_bytes: self.cpu_cache_budget_bytes(),
-            upscaled_pages: self.upscaled_pages.len(),
-            upscaled_bytes: self.upscaled_bytes,
-            upscaled_budget_bytes: upscaled_cache_budget_bytes_for(self.cpu_cache_budget_bytes()),
             textures: self.textures.len(),
             texture_bytes: self.texture_cache_bytes(),
         });
@@ -370,22 +320,6 @@ impl SuiSuiViewApp {
         self.preview_pin_keys_for_indices(&indices, already_pinned, budget_bytes)
     }
 
-    fn pinned_upscaled_page_indices(&self) -> HashSet<PageCacheKey> {
-        let mut pinned = self.pin_keys_for_indices(&self.spread_indices(), self.target_long_edge);
-        if let Some(source) = self.source.as_ref() {
-            let mode = self.settings.ai_upscale.prefetch_mode;
-            let prefetch_pages = ai_prefetch_pages_for(
-                self.current_page,
-                source.page_count(),
-                self.view_mode.step(),
-                self.last_nav_direction,
-                mode,
-            );
-            pinned.extend(self.pin_keys_for_indices(&prefetch_pages, self.target_long_edge));
-        }
-        pinned
-    }
-
     fn pin_keys_for_indices(
         &self,
         indices: &[usize],
@@ -477,34 +411,15 @@ impl SuiSuiViewApp {
         final_quality_page_key_in_cache(&self.decoded_pages, requested)
     }
 
-    pub(in crate::app) fn best_upscaled_page_key(
-        &self,
-        requested: PageCacheKey,
-    ) -> Option<PageCacheKey> {
-        best_page_key_at_or_below_in_cache(&self.upscaled_pages, requested)
-    }
-
     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
     pub(in crate::app) fn page_turn_cache_state(
         &self,
         requested: PageCacheKey,
     ) -> perf::PageCacheState {
-        if let Some(key) = self.preferred_upscaled_page_key(requested) {
-            return page_cache_state_from_hit(Some(key), requested, true);
-        }
         if let Some(key) = self.final_quality_page_key(requested) {
-            return page_cache_state_from_hit(Some(key), requested, false);
+            return page_cache_state_from_hit(Some(key), requested);
         }
         perf::PageCacheState::Miss
-    }
-
-    pub(in crate::app) fn preferred_upscaled_page_key(
-        &self,
-        requested: PageCacheKey,
-    ) -> Option<PageCacheKey> {
-        self.use_ai_upscaled_pages
-            .then(|| best_page_key_at_or_below_in_cache(&self.upscaled_pages, requested))
-            .flatten()
     }
 }
 
@@ -571,7 +486,6 @@ pub(in crate::app) fn automatic_cache_budget_bytes_for_total(total_memory_bytes:
 pub(in crate::app) const BYTES_PER_RGBA_PIXEL: usize = 4;
 const MIN_WORKER_CACHE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_WORKER_CACHE_BYTES: usize = 48 * 1024 * 1024;
-const MAX_UPSCALED_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const MIN_TEXTURE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TEXTURE_CACHE_BYTES: usize = 128 * 1024 * 1024;
 const MIN_EXACT_PREFETCH_PIN_BYTES: usize = 128 * 1024 * 1024;
@@ -582,7 +496,6 @@ const MAX_QUEUED_PINNED_PAGE_TURNS: usize = 24;
 pub(super) struct CacheBudgetSummary {
     pub(super) cpu_prepared_bytes: usize,
     pub(super) worker_prefetch_bytes: usize,
-    pub(super) upscaled_bytes: usize,
     pub(super) gpu_source_texture_bytes: usize,
     pub(super) gpu_intermediate_texture_bytes: usize,
     pub(super) estimated_page_bytes: usize,
@@ -599,11 +512,9 @@ pub(super) fn cache_budget_summary(
     let estimated_page_bytes = estimated_page_bytes_for_target(target_long_edge);
     let worker_prefetch_bytes =
         worker_cache_budget_bytes_for(cpu_prepared_bytes, target_long_edge, visible_pages);
-    let upscaled_bytes = upscaled_cache_budget_bytes_for(cpu_prepared_bytes);
     CacheBudgetSummary {
         cpu_prepared_bytes,
         worker_prefetch_bytes,
-        upscaled_bytes,
         gpu_source_texture_bytes: gpu_paint::GPU_SOURCE_TEXTURE_BUDGET_BYTES,
         gpu_intermediate_texture_bytes: gpu_paint::GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES,
         estimated_page_bytes,
@@ -630,10 +541,6 @@ fn worker_cache_budget_bytes_for(
     (cpu_budget_bytes / 2)
         .max(cpu_bounded_goal)
         .clamp(MIN_WORKER_CACHE_BYTES, MAX_WORKER_CACHE_BYTES)
-}
-
-fn upscaled_cache_budget_bytes_for(cpu_budget_bytes: usize) -> usize {
-    (cpu_budget_bytes / 2).clamp(MIN_WORKER_CACHE_BYTES, MAX_UPSCALED_CACHE_BYTES)
 }
 
 pub(in crate::app) fn texture_cache_budget_bytes_for(
@@ -796,25 +703,6 @@ pub(in crate::app) fn final_quality_page_key_in_cache(
         .min_by_key(|key| key.target_long_edge)
 }
 
-pub(in crate::app) fn best_page_key_at_or_below_in_cache(
-    cache: &LruCache<PageCacheKey, Arc<crate::core::worker::PreparedPage>>,
-    requested: PageCacheKey,
-) -> Option<PageCacheKey> {
-    if cache.peek(&requested).is_some() {
-        return Some(requested);
-    }
-
-    cache
-        .iter()
-        .filter_map(|(key, _page)| {
-            (key.index == requested.index
-                && key.decode == requested.decode
-                && key.target_long_edge <= requested.target_long_edge)
-                .then_some(*key)
-        })
-        .max_by_key(|key| key.target_long_edge)
-}
-
 pub(in crate::app) fn lower_resolution_page_keys(
     cache: &LruCache<PageCacheKey, Arc<crate::core::worker::PreparedPage>>,
     inserted: PageCacheKey,
@@ -864,33 +752,15 @@ pub(in crate::app) fn touch_normal_navigation_page_keys(
 pub(in crate::app) fn page_cache_state_from_hit(
     hit: Option<PageCacheKey>,
     requested: PageCacheKey,
-    upscaled: bool,
 ) -> perf::PageCacheState {
     use std::cmp::Ordering;
 
     let Some(hit) = hit else {
         return perf::PageCacheState::Miss;
     };
-    match (
-        upscaled,
-        hit.target_long_edge.cmp(&requested.target_long_edge),
-    ) {
-        (true, Ordering::Equal) => perf::PageCacheState::UpscaledExact,
-        (true, Ordering::Less) => perf::PageCacheState::UpscaledPreview,
-        (true, Ordering::Greater) => perf::PageCacheState::UpscaledFallback,
-        (false, Ordering::Equal) => perf::PageCacheState::DecodedExact,
-        (false, Ordering::Less) => perf::PageCacheState::DecodedPreview,
-        (false, Ordering::Greater) => perf::PageCacheState::DecodedFallback,
+    match hit.target_long_edge.cmp(&requested.target_long_edge) {
+        Ordering::Equal => perf::PageCacheState::DecodedExact,
+        Ordering::Less => perf::PageCacheState::DecodedPreview,
+        Ordering::Greater => perf::PageCacheState::DecodedFallback,
     }
-}
-
-#[cfg(test)]
-pub(in crate::app) fn preferred_page_key_in_cache(
-    cache: &LruCache<PageCacheKey, Arc<crate::core::worker::PreparedPage>>,
-    requested: PageCacheKey,
-    enabled: bool,
-) -> Option<PageCacheKey> {
-    enabled
-        .then(|| best_page_key_in_cache(cache, requested))
-        .flatten()
 }

@@ -1175,10 +1175,6 @@ SuiSuiView may load an installed system font for CJK text fallback. Those
 system fonts are read from the user's operating system and are not
 redistributed by SuiSuiView.
 
-Real-ESRGAN ncnn-vulkan support is optional. SuiSuiView lets the user choose
-their own executable and model paths. SuiSuiView does not bundle Python,
-PyTorch, Real-ESRGAN binaries, ncnn binaries, or model files.
-
 Native WebP Codec
 -----------------
 

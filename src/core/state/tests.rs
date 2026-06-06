@@ -1,9 +1,9 @@
 use super::scalers::WgpuScaleDirection;
 use super::{
-    AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CacheMemoryMode, CpuScaleFilter,
-    DecodeMode, DecoderPreference, DecoderPreferences, EdgePageAction, GpuEffectMode,
-    PageTransitionStyle, PersistedState, RendererMode, WgpuDownscaleMethod, WgpuScalePlan,
-    WgpuUpscaleMethod, WheelMode, WindowPlacement,
+    AppSettings, CacheMemoryMode, CpuScaleFilter, DecodeMode, DecoderPreference,
+    DecoderPreferences, EdgePageAction, GpuEffectMode, PageTransitionStyle, PersistedState,
+    RendererMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod, WheelMode,
+    WindowPlacement,
 };
 use crate::core::i18n::{I18n, Language, ResolvedLanguage};
 
@@ -67,16 +67,6 @@ fn settings_defaults_match_viewer_policy() {
     assert_eq!(settings.max_remembered_books, 30);
     assert!(settings.remember_archive_page_name);
     assert_eq!(settings.wheel_mode, WheelMode::PageTurn);
-    assert_eq!(settings.ai_upscale.backend, AiUpscaleBackend::Off);
-    assert_eq!(
-        settings.ai_upscale.prefetch_mode,
-        AiUpscalePrefetchMode::Off
-    );
-    assert_eq!(
-        settings.ai_upscale.ncnn.model_name,
-        "realesrgan-x4plus-anime"
-    );
-    assert_eq!(settings.ai_upscale.ncnn.scale, 4);
 }
 
 #[test]
@@ -386,14 +376,6 @@ fn product_wgpu_upscale_methods_keep_experiments_separate() {
     assert_eq!(
         DecoderPreference::Default.label_i18n(I18n::resolved(ResolvedLanguage::EnUs)),
         "Default"
-    );
-    assert_eq!(
-        AiUpscaleBackend::Off.label_i18n(I18n::resolved(ResolvedLanguage::KoKr)),
-        "사용 안 함"
-    );
-    assert_eq!(
-        AiUpscaleBackend::Off.label_i18n(I18n::resolved(ResolvedLanguage::EnUs)),
-        "Off"
     );
     assert!(!WgpuUpscaleMethod::WgslSrLabSpanX2.is_benchmark_only());
     assert!(WgpuUpscaleMethod::GPU_METHODS.contains(&WgpuUpscaleMethod::WgslSrLabSpanX2));

@@ -304,7 +304,6 @@ pub(in crate::app) fn show_performance_settings(
                             "worker",
                             format!("{:.0}", mib(summary.worker_prefetch_bytes)),
                         ),
-                        ("ai", format!("{:.0}", mib(summary.upscaled_bytes))),
                     ],
                 ))
                 .size(12.0)

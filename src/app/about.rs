@@ -3,7 +3,6 @@ use super::ui::{dialog, icons, theme};
 use super::{SuiSuiViewApp, ViewMode};
 use crate::core::i18n::I18n;
 use crate::core::image_info::{ColorProfileInfo, ExifInfo, ImageExifTag, ImageInfo};
-use crate::core::state::AiUpscaleBackend;
 use eframe::egui::{self, RichText};
 use std::path::Path;
 
@@ -487,7 +486,6 @@ fn show_view_state_card(ui: &mut egui::Ui, app: &SuiSuiViewApp, i18n: I18n) {
                     &i18n.text("about.image.view.resize_filter"),
                     actual_scaler_filter_label(app, i18n),
                 ),
-                (&i18n.text("about.image.view.ai"), ai_state_label(app, i18n)),
             ],
         );
     });
@@ -682,19 +680,4 @@ fn actual_scaler_filter_label(app: &SuiSuiViewApp, i18n: I18n) -> String {
         state.cpu_scale.label(),
         state.wgpu_scale.label()
     )
-}
-
-fn ai_state_label(app: &SuiSuiViewApp, i18n: I18n) -> String {
-    match app.settings.ai_upscale.backend {
-        AiUpscaleBackend::Off => AiUpscaleBackend::Off.label_i18n(i18n),
-        AiUpscaleBackend::RealEsrganNcnn
-            if app
-                .current_view_state
-                .as_ref()
-                .is_some_and(|state| state.upscaled) =>
-        {
-            i18n.text("about.image.ai.on_display")
-        }
-        AiUpscaleBackend::RealEsrganNcnn => i18n.text("about.image.ai.on_original"),
-    }
 }

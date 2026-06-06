@@ -37,8 +37,6 @@ const SR_LAB_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_MANIFEST";
 pub(super) struct GpuPaintSourceKey {
     pub(super) book: u64,
     pub(super) page: PageCacheKey,
-    pub(super) upscaled: bool,
-    pub(super) generation: u64,
 }
 
 pub(super) struct GpuPaintRequest {
@@ -616,7 +614,6 @@ impl GpuPaintResources {
             &[
                 PerfField::Usize("width", width),
                 PerfField::Usize("height", height),
-                PerfField::Bool("upscaled", key.upscaled),
             ],
         );
         true
@@ -1739,8 +1736,6 @@ mod tests {
                 target_long_edge: 2048,
                 decode: DecodeOptions::default(),
             },
-            upscaled: false,
-            generation: 1,
         };
         let left = Rect::from_min_size(pos2(0.0, 0.0), vec2(640.0, 900.0));
         let right = Rect::from_min_size(pos2(640.0, 0.0), vec2(640.0, 900.0));
@@ -1978,8 +1973,6 @@ mod tests {
                     target_long_edge: source_size[0] as u32,
                     decode: DecodeOptions::default(),
                 },
-                upscaled: false,
-                generation: 1,
             };
             let rgba = smoke_rgba(source_size);
             resources.ensure_source_texture(device, queue, source_key, source_size, &rgba);

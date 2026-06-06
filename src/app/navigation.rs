@@ -496,7 +496,6 @@ impl SuiSuiViewApp {
             self.worker_options(),
         );
         self.persist_current_bookmark_deferred();
-        self.refresh_ai_prefetch_queue();
     }
 
     pub(in crate::app) fn active_page_transition_style(&self) -> PageTransitionStyle {
@@ -544,7 +543,6 @@ impl SuiSuiViewApp {
                 self.visible_page_count(),
                 self.worker_options(),
             );
-            self.refresh_ai_prefetch_queue();
         }
     }
 
@@ -563,7 +561,6 @@ impl SuiSuiViewApp {
             self.worker_options(),
         );
         self.persist_current_bookmark();
-        self.refresh_ai_prefetch_queue();
     }
 
     pub(in crate::app) fn toggle_double_mode(&mut self) {
@@ -588,19 +585,6 @@ impl SuiSuiViewApp {
             self.visible_page_count(),
             self.worker_options(),
         );
-        self.refresh_ai_prefetch_queue();
-    }
-
-    pub(in crate::app) fn set_use_ai_upscaled_pages(&mut self, enabled: bool) {
-        if self.use_ai_upscaled_pages == enabled {
-            return;
-        }
-        self.use_ai_upscaled_pages = enabled;
-        if enabled {
-            self.set_status(self.i18n().text("status.ai_result_enabled"));
-        } else {
-            self.set_status(self.i18n().text("status.ai_result_disabled"));
-        }
     }
 
     pub(in crate::app) fn update_effects(&mut self, update: impl FnOnce(&mut ViewEffects)) {

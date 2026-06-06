@@ -5,12 +5,10 @@ use super::{
 };
 use crate::core::i18n::I18n;
 use crate::core::state::{
-    AiUpscaleBackend, AiUpscalePrefetchMode, AppSettings, CpuScaleFilter, EdgePageAction,
-    GpuEffectMode, Language, PageTransitionStyle, RendererMode, WgpuDownscaleMethod,
-    WgpuUpscaleMethod,
+    AppSettings, CpuScaleFilter, EdgePageAction, GpuEffectMode, Language, PageTransitionStyle,
+    RendererMode, WgpuDownscaleMethod, WgpuUpscaleMethod,
 };
 use eframe::egui::{self, RichText};
-use rfd::FileDialog;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum SettingsSection {
@@ -239,10 +237,6 @@ impl SuiSuiViewApp {
         }
         if changed {
             draft.manual_cache_mb = draft.manual_cache_mb.clamp(64, 2048);
-            draft.ai_upscale.ncnn.scale = draft.ai_upscale.ncnn.scale.clamp(2, 4);
-            if draft.ai_upscale.ncnn.tile_size != 0 {
-                draft.ai_upscale.ncnn.tile_size = draft.ai_upscale.ncnn.tile_size.clamp(32, 2048);
-            }
             self.apply_settings(ctx, draft);
         }
     }
@@ -360,7 +354,6 @@ impl SuiSuiViewApp {
         let previous_preview = self.settings.progressive_preview_enabled;
         let previous_prefetch = self.settings.prefetch_enabled;
         let previous_cache_budget = self.cpu_cache_budget_bytes();
-        let previous_ai = self.settings.ai_upscale.clone();
         let previous_gpu_effect_mode = self.settings.gpu_effect_mode;
         let previous_wgpu_upscale_method = self.settings.wgpu_upscale_method;
         let previous_wgpu_downscale_method = self.settings.wgpu_downscale_method;
@@ -400,33 +393,11 @@ impl SuiSuiViewApp {
             if decode_changed {
                 self.page_metrics.clear();
             }
-            self.upscaled_pages.clear();
-            self.upscaled_bytes = 0;
             self.textures.clear();
             textures_invalidated = true;
             self.page_errors.clear();
-            self.ai_upscale_failures.clear();
         } else if previous_cache_budget != self.cpu_cache_budget_bytes() {
             self.prune_decoded_cache();
-            self.prune_upscaled_cache();
-        }
-
-        let ai_output_changed = previous_ai.backend != self.settings.ai_upscale.backend
-            || previous_ai.ncnn != self.settings.ai_upscale.ncnn;
-        let ai_prefetch_changed =
-            previous_ai.prefetch_mode != self.settings.ai_upscale.prefetch_mode;
-        if ai_output_changed {
-            self.upscaled_pages.clear();
-            self.upscaled_bytes = 0;
-            self.textures.clear();
-            textures_invalidated = true;
-            self.upscale_generation = self.upscale_generation.wrapping_add(1);
-            self.upscale_inflight = None;
-            self.clear_queued_ai_upscale_pages();
-            self.ai_upscale_manual_requests.clear();
-            self.ai_upscale_failures.clear();
-        } else if ai_prefetch_changed {
-            self.clear_queued_ai_upscale_pages();
         }
         if previous_gpu_effect_mode != self.settings.gpu_effect_mode
             || previous_wgpu_upscale_method != self.settings.wgpu_upscale_method
@@ -451,9 +422,6 @@ impl SuiSuiViewApp {
                 self.worker_options(),
             );
         }
-        if ai_output_changed || ai_prefetch_changed {
-            self.refresh_ai_prefetch_queue();
-        }
         if textures_invalidated {
             self.request_original_texture_only_decode_if_needed();
         }
@@ -461,9 +429,7 @@ impl SuiSuiViewApp {
             self.store
                 .prune_auto_bookmarks(self.settings.max_remembered_books);
         }
-        if !(ai_output_changed || ai_prefetch_changed) || self.upscale_inflight.is_none() {
-            self.set_status(self.i18n().text("status.settings_saved"));
-        }
+        self.set_status(self.i18n().text("status.settings_saved"));
     }
 }
 
@@ -863,221 +829,6 @@ fn show_rendering_settings(
         visible_pages,
         changed,
         i18n,
-    );
-
-    ui.add_space(8.0);
-    let ai_enabled = draft.ai_upscale.backend == AiUpscaleBackend::RealEsrganNcnn;
-    let ai_header = if ai_enabled {
-        i18n.with_vars(
-            "settings.rendering.ai_header_on",
-            &[
-                ("experimental", i18n.text("state.experimental")),
-                ("backend", draft.ai_upscale.backend.label_i18n(i18n)),
-                ("prefetch", draft.ai_upscale.prefetch_mode.label_i18n(i18n)),
-            ],
-        )
-    } else {
-        i18n.with_vars(
-            "settings.rendering.ai_header_off",
-            &[
-                ("experimental", i18n.text("state.experimental")),
-                ("off", i18n.text("state.off")),
-            ],
-        )
-    };
-    egui::CollapsingHeader::new(ai_header)
-        .default_open(ai_enabled)
-        .show(ui, |ui| {
-            show_ai_settings(ui, draft, changed, i18n);
-        });
-}
-
-fn show_ai_settings(ui: &mut egui::Ui, draft: &mut AppSettings, changed: &mut bool, i18n: I18n) {
-    setting_group(
-        ui,
-        "Real-ESRGAN ncnn-vulkan",
-        &i18n.text("settings.ai.desc"),
-        |ui| {
-            egui::Grid::new("settings_ai_backend_grid")
-                .num_columns(2)
-                .spacing([14.0, 8.0])
-                .show(ui, |ui| {
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.ai.backend"),
-                        &i18n.text("settings.ai.backend.help"),
-                    );
-                    egui::ComboBox::from_id_salt("ai_upscale_backend")
-                        .selected_text(draft.ai_upscale.backend.label_i18n(i18n))
-                        .show_ui(ui, |ui| {
-                            for backend in AiUpscaleBackend::ALL {
-                                *changed |= ui
-                                    .selectable_value(
-                                        &mut draft.ai_upscale.backend,
-                                        backend,
-                                        backend.label_i18n(i18n),
-                                    )
-                                    .changed();
-                            }
-                        });
-                    ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.ai.prefetch"),
-                        &i18n.text("settings.ai.prefetch.help"),
-                    );
-                    ui.add_enabled_ui(
-                        draft.ai_upscale.backend == AiUpscaleBackend::RealEsrganNcnn,
-                        |ui| {
-                            egui::ComboBox::from_id_salt("ai_upscale_prefetch")
-                                .selected_text(draft.ai_upscale.prefetch_mode.label_i18n(i18n))
-                                .show_ui(ui, |ui| {
-                                    for mode in AiUpscalePrefetchMode::ALL {
-                                        *changed |= ui
-                                            .selectable_value(
-                                                &mut draft.ai_upscale.prefetch_mode,
-                                                mode,
-                                                mode.label_i18n(i18n),
-                                            )
-                                            .changed();
-                                    }
-                                });
-                        },
-                    );
-                    ui.end_row();
-                });
-        },
-    );
-
-    let ai_enabled = draft.ai_upscale.backend == AiUpscaleBackend::RealEsrganNcnn;
-    if !ai_enabled {
-        ui.add_space(8.0);
-        ui.label(RichText::new(i18n.text("settings.ai.off_note")).color(theme::TEXT_MUTED));
-        return;
-    }
-
-    ui.add_space(8.0);
-    setting_group(
-        ui,
-        &i18n.text("settings.ai.details.title"),
-        &i18n.text("settings.ai.details.desc"),
-        |ui| {
-            egui::Grid::new("settings_ai_paths_grid")
-                .num_columns(2)
-                .spacing([14.0, 8.0])
-                .show(ui, |ui| {
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.ai.executable"),
-                        &i18n.text("settings.ai.executable.help"),
-                    );
-                    ui.horizontal(|ui| {
-                        let field_width = (ui.available_width() - 58.0).max(140.0);
-                        *changed |= ui
-                            .add(
-                                egui::TextEdit::singleline(
-                                    &mut draft.ai_upscale.ncnn.executable_path,
-                                )
-                                .desired_width(field_width),
-                            )
-                            .changed();
-                        if ui.button(i18n.text("common.browse")).clicked() {
-                            if let Some(path) = FileDialog::new()
-                                .add_filter("Real-ESRGAN", &["exe"])
-                                .pick_file()
-                            {
-                                draft.ai_upscale.ncnn.executable_path = path.display().to_string();
-                                *changed = true;
-                            }
-                        }
-                    });
-                    ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.ai.model"),
-                        &i18n.text("settings.ai.model.help"),
-                    );
-                    *changed |= ui
-                        .text_edit_singleline(&mut draft.ai_upscale.ncnn.model_name)
-                        .changed();
-                    ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.ai.model_folder"),
-                        &i18n.text("settings.ai.model_folder.help"),
-                    );
-                    ui.horizontal(|ui| {
-                        let field_width = (ui.available_width() - 58.0).max(140.0);
-                        *changed |= ui
-                            .add(
-                                egui::TextEdit::singleline(&mut draft.ai_upscale.ncnn.model_path)
-                                    .desired_width(field_width),
-                            )
-                            .changed();
-                        if ui.button(i18n.text("common.browse")).clicked() {
-                            if let Some(path) = FileDialog::new().pick_folder() {
-                                draft.ai_upscale.ncnn.model_path = path.display().to_string();
-                                *changed = true;
-                            }
-                        }
-                    });
-                    ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.ai.scale"),
-                        &i18n.text("settings.ai.scale.help"),
-                    );
-                    *changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut draft.ai_upscale.ncnn.scale)
-                                .range(2..=4)
-                                .speed(1),
-                        )
-                        .changed();
-                    ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.ai.tile"),
-                        &i18n.text("settings.ai.tile.help"),
-                    );
-                    *changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut draft.ai_upscale.ncnn.tile_size)
-                                .range(0..=2048)
-                                .speed(32),
-                        )
-                        .changed();
-                    ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.ai.output"),
-                        &i18n.text("settings.ai.output.help"),
-                    );
-                    egui::ComboBox::from_id_salt("ai_upscale_output")
-                        .selected_text(draft.ai_upscale.ncnn.output_format.as_str())
-                        .show_ui(ui, |ui| {
-                            for format in ["png", "jpg", "webp"] {
-                                if ui
-                                    .selectable_label(
-                                        draft.ai_upscale.ncnn.output_format == format,
-                                        format,
-                                    )
-                                    .clicked()
-                                {
-                                    draft.ai_upscale.ncnn.output_format = format.to_owned();
-                                    *changed = true;
-                                }
-                            }
-                        });
-                    ui.end_row();
-                });
-        },
     );
 }
 

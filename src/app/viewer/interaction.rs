@@ -119,7 +119,6 @@ impl SuiSuiViewApp {
             self.visible_page_count(),
             self.worker_options(),
         );
-        self.refresh_ai_prefetch_queue();
         self.request_adjacent_seed_prefetch();
         ctx.request_repaint();
     }

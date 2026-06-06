@@ -58,12 +58,8 @@ impl SuiSuiViewApp {
             target_long_edge,
             decode: self.decode_options(),
         };
-        let page = if let Some(best_key) = self.preferred_upscaled_page_key(key) {
-            self.upscaled_pages.peek(&best_key)?
-        } else {
-            let best_key = self.best_page_key(key)?;
-            self.decoded_pages.peek(&best_key)?
-        };
+        let best_key = self.best_page_key(key)?;
+        let page = self.decoded_pages.peek(&best_key)?;
         Some(apply_effects_to_image(&page.color_image(), self.effects))
     }
 
@@ -149,18 +145,13 @@ impl SuiSuiViewApp {
         if let Some(visual) = self.original_texture_only_visual(key) {
             return visual;
         }
-        let (best_key, upscaled) = if let Some(best_key) = self.preferred_upscaled_page_key(key) {
-            (best_key, true)
-        } else if let Some(best_key) = self.best_page_key(key) {
-            (best_key, false)
-        } else {
+        let Some(best_key) = self.best_page_key(key) else {
             return PageVisual::Loading { index };
         };
         let use_wgsl_effects = self.can_paint_wgsl_effects();
         let texture_key = TextureCacheKey {
             page: best_key,
             effects: self.effects,
-            upscaled,
         };
 
         if !use_wgsl_effects {
@@ -169,11 +160,7 @@ impl SuiSuiViewApp {
                 .get(&texture_key)
                 .map(|entry| entry.texture.clone())
             {
-                let page = if upscaled {
-                    self.upscaled_pages.get(&best_key)
-                } else {
-                    self.decoded_pages.get(&best_key)
-                };
+                let page = self.decoded_pages.get(&best_key);
                 if let Some(page) = page {
                     let size = transformed_page_size(
                         page.original_width as f32,
@@ -191,21 +178,17 @@ impl SuiSuiViewApp {
                     return PageVisual::Ready {
                         texture,
                         size,
-                        render_info: Some(PageRenderInfo::from_page(
-                            index, best_key, page, upscaled,
-                        )),
+                        render_info: Some(PageRenderInfo::from_page(index, best_key, page)),
                     };
                 }
             }
         }
 
-        let page = if upscaled {
-            self.upscaled_pages.get(&best_key)
-        } else {
-            self.decoded_pages.get(&best_key)
-        }
-        .cloned()
-        .expect("best page key should exist in decoded cache");
+        let page = self
+            .decoded_pages
+            .get(&best_key)
+            .cloned()
+            .expect("best page key should exist in decoded cache");
         if use_wgsl_effects {
             let wgpu_upscale_method =
                 self.content_aware_wgpu_upscale_method(best_key, self.active_wgpu_upscale_method());
@@ -221,8 +204,6 @@ impl SuiSuiViewApp {
                 source_key: GpuPaintSourceKey {
                     book: self.gpu_paint_book_key(),
                     page: best_key,
-                    upscaled,
-                    generation: if upscaled { self.upscale_generation } else { 0 },
                 },
                 image_size: page.image_size(),
                 rgba: page.rgba.clone(),
@@ -234,7 +215,7 @@ impl SuiSuiViewApp {
                 effects: self.effects,
                 wgpu_upscale_method,
                 wgpu_downscale_method: self.settings.wgpu_downscale_method,
-                render_info: PageRenderInfo::from_page(index, best_key, &page, upscaled),
+                render_info: PageRenderInfo::from_page(index, best_key, &page),
             };
         }
         let image = if self.effects == ViewEffects::default() {
@@ -258,17 +239,15 @@ impl SuiSuiViewApp {
             .saturating_mul(BYTES_PER_RGBA_PIXEL);
         let texture = ctx.load_texture(
             format!(
-                "page-{index}-{}-{}-{:?}",
-                best_key.target_long_edge,
-                if upscaled { "ai" } else { "base" },
-                self.effects
+                "page-{index}-{}-{:?}",
+                best_key.target_long_edge, self.effects
             ),
             ImageData::Color(image),
             texture_options_for_target(best_key.target_long_edge),
         );
         ctx.request_repaint_after(super::TEXTURE_PRESENT_REPAINT_DELAY);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        perf::record_texture_load(texture_started, index, best_key.target_long_edge, upscaled);
+        perf::record_texture_load(texture_started, index, best_key.target_long_edge);
         self.textures.put(
             texture_key,
             TextureEntry {
@@ -277,8 +256,7 @@ impl SuiSuiViewApp {
             },
         );
         self.prune_texture_cache();
-        let dropped_original =
-            !upscaled && self.drop_original_after_texture_upload_if_enabled(best_key);
+        let dropped_original = self.drop_original_after_texture_upload_if_enabled(best_key);
         #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
         let _ = dropped_original;
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -303,7 +281,7 @@ impl SuiSuiViewApp {
                 page.original_height as f32,
                 self.effects.transform,
             ),
-            render_info: Some(PageRenderInfo::from_page(index, best_key, &page, upscaled)),
+            render_info: Some(PageRenderInfo::from_page(index, best_key, &page)),
         }
     }
 
@@ -316,7 +294,6 @@ impl SuiSuiViewApp {
         let texture_key = TextureCacheKey {
             page: requested,
             effects: self.effects,
-            upscaled: false,
         };
         let texture = self
             .textures

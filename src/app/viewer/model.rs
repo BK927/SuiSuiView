@@ -245,7 +245,6 @@ pub(in crate::app) struct PageRenderInfo {
     pub(in crate::app) page_index: usize,
     pub(in crate::app) decode_backend: DecodeBackend,
     pub(in crate::app) cpu_scale: CpuScaleState,
-    pub(in crate::app) upscaled: bool,
 }
 
 impl PageRenderInfo {
@@ -253,13 +252,11 @@ impl PageRenderInfo {
         page_index: usize,
         key: PageCacheKey,
         page: &PreparedPage,
-        upscaled: bool,
     ) -> Self {
         Self {
             page_index,
             decode_backend: page.decode_backend,
             cpu_scale: CpuScaleState::from_page(key, page),
-            upscaled,
         }
     }
 }
@@ -270,7 +267,6 @@ pub(in crate::app) struct CurrentViewState {
     pub(in crate::app) decode_backend: DecodeBackend,
     pub(in crate::app) cpu_scale: CpuScaleState,
     pub(in crate::app) wgpu_scale: WgpuScaleState,
-    pub(in crate::app) upscaled: bool,
 }
 
 impl CurrentViewState {
@@ -280,7 +276,6 @@ impl CurrentViewState {
             decode_backend: render.decode_backend,
             cpu_scale: render.cpu_scale,
             wgpu_scale: WgpuScaleState::Inactive,
-            upscaled: render.upscaled,
         }
     }
 
@@ -305,7 +300,6 @@ impl CurrentViewState {
             decode_backend: render.decode_backend,
             cpu_scale: render.cpu_scale,
             wgpu_scale: WgpuScaleState::from_plan(active, scale_plan),
-            upscaled: render.upscaled,
         }
     }
 }

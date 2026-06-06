@@ -195,59 +195,6 @@ impl WheelMode {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AiUpscaleBackend {
-    #[default]
-    Off,
-    RealEsrganNcnn,
-}
-
-impl AiUpscaleBackend {
-    pub const ALL: [Self; 2] = [Self::Off, Self::RealEsrganNcnn];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Off => "사용 안 함",
-            Self::RealEsrganNcnn => "Real-ESRGAN ncnn-vulkan",
-        }
-    }
-
-    pub fn label_i18n(self, i18n: I18n) -> String {
-        match self {
-            Self::Off => i18n.text("state.off"),
-            Self::RealEsrganNcnn => self.label().to_owned(),
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AiUpscalePrefetchMode {
-    #[default]
-    Off,
-    CurrentOnly,
-    CurrentAndNext,
-}
-
-impl AiUpscalePrefetchMode {
-    pub const ALL: [Self; 3] = [Self::Off, Self::CurrentOnly, Self::CurrentAndNext];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Off => "사용 안 함",
-            Self::CurrentOnly => "현재 페이지만",
-            Self::CurrentAndNext => "현재+다음 1장",
-        }
-    }
-
-    pub fn label_i18n(self, i18n: I18n) -> String {
-        match self {
-            Self::Off => i18n.text("state.off"),
-            Self::CurrentOnly => i18n.text("state.current_only"),
-            Self::CurrentAndNext => i18n.text("state.current_and_next"),
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PageTransitionStyle {
     None,
     #[default]
@@ -287,55 +234,6 @@ impl PageTransitionStyle {
             Self::Push => i18n.text("label.transition.push"),
             Self::ZoomFade => i18n.text("label.transition.zoom_fade"),
             Self::BookFlip2d => i18n.text("label.transition.book_flip"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NcnnRealEsrganSettings {
-    #[serde(default)]
-    pub executable_path: String,
-    #[serde(default = "default_realesrgan_model_name")]
-    pub model_name: String,
-    #[serde(default)]
-    pub model_path: String,
-    #[serde(default = "default_realesrgan_scale")]
-    pub scale: u32,
-    #[serde(default)]
-    pub tile_size: u32,
-    #[serde(default = "default_realesrgan_output_format")]
-    pub output_format: String,
-}
-
-impl Default for NcnnRealEsrganSettings {
-    fn default() -> Self {
-        Self {
-            executable_path: String::new(),
-            model_name: default_realesrgan_model_name(),
-            model_path: String::new(),
-            scale: default_realesrgan_scale(),
-            tile_size: 0,
-            output_format: default_realesrgan_output_format(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AiUpscaleSettings {
-    #[serde(default)]
-    pub backend: AiUpscaleBackend,
-    #[serde(default)]
-    pub prefetch_mode: AiUpscalePrefetchMode,
-    #[serde(default)]
-    pub ncnn: NcnnRealEsrganSettings,
-}
-
-impl Default for AiUpscaleSettings {
-    fn default() -> Self {
-        Self {
-            backend: AiUpscaleBackend::Off,
-            prefetch_mode: AiUpscalePrefetchMode::Off,
-            ncnn: NcnnRealEsrganSettings::default(),
         }
     }
 }
@@ -432,9 +330,6 @@ pub struct AppSettings {
     pub key_bindings: Vec<KeyBinding>,
     #[serde(default = "default_mouse_bindings")]
     pub mouse_bindings: Vec<MouseBinding>,
-
-    #[serde(default)]
-    pub ai_upscale: AiUpscaleSettings,
 }
 
 impl AppSettings {
@@ -516,7 +411,6 @@ impl Default for AppSettings {
             remember_archive_page_name: true,
             key_bindings: default_key_bindings(),
             mouse_bindings: default_mouse_bindings(),
-            ai_upscale: AiUpscaleSettings::default(),
         }
     }
 }
@@ -876,16 +770,4 @@ fn default_wgpu_downscale_method() -> WgpuDownscaleMethod {
 
 fn default_max_remembered_books() -> usize {
     30
-}
-
-fn default_realesrgan_model_name() -> String {
-    "realesrgan-x4plus-anime".to_owned()
-}
-
-fn default_realesrgan_scale() -> u32 {
-    4
-}
-
-fn default_realesrgan_output_format() -> String {
-    "png".to_owned()
 }

@@ -45,7 +45,6 @@ pub(super) enum AppCommand {
     CopyPageImage,
     CopyDisplayImage,
     CopyPath,
-    UpscaleCurrentPage,
     ToggleCurrentPageBookmark,
     ToggleBookmarkPopover,
 }
@@ -151,7 +150,6 @@ pub(super) fn app_command_for_id(command: CommandId) -> Option<AppCommand> {
         CommandId::CopyPageImage => AppCommand::CopyPageImage,
         CommandId::CopyDisplayImage => AppCommand::CopyDisplayImage,
         CommandId::CopyPath => AppCommand::CopyPath,
-        CommandId::UpscaleCurrentPage => AppCommand::UpscaleCurrentPage,
         CommandId::ToggleCurrentPageBookmark => AppCommand::ToggleCurrentPageBookmark,
         CommandId::ToggleBookmarkPopover => AppCommand::ToggleBookmarkPopover,
     })

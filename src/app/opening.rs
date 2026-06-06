@@ -353,19 +353,12 @@ impl SuiSuiViewApp {
         self.decoded_pages.clear();
         self.decoded_bytes = 0;
         self.page_metrics.clear();
-        self.upscaled_pages.clear();
-        self.upscaled_bytes = 0;
         self.textures.clear();
         self.clear_auto_kind_state();
         if let Some(thumbnails) = self.bookmark_thumbnails.as_mut() {
             thumbnails.clear();
         }
         self.page_errors.clear();
-        self.upscale_generation = self.upscale_generation.wrapping_add(1);
-        self.upscale_inflight = None;
-        self.ai_upscale_queue.clear();
-        self.ai_upscale_manual_requests.clear();
-        self.ai_upscale_failures.clear();
         self.edge_prompt = None;
         self.transition = None;
         self.clear_pending_page_turns();
@@ -392,7 +385,6 @@ impl SuiSuiViewApp {
             ],
         ));
         self.persist_current_bookmark();
-        self.refresh_ai_prefetch_queue();
         self.request_adjacent_seed_prefetch();
     }
 }

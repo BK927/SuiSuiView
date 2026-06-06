@@ -17,7 +17,6 @@ pub mod quality;
 pub mod source;
 pub mod sr_lab;
 pub mod state;
-pub mod upscale;
 pub mod upscale_bench;
 pub mod upscale_quality;
 pub mod worker;

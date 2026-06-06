@@ -326,15 +326,6 @@ impl SuiSuiViewApp {
                     self.effects.transform.flip_horizontal,
                     AppCommand::ToggleFlipHorizontal,
                 );
-                ui.separator();
-                self.context_action(
-                    ui,
-                    ctx,
-                    &i18n.text("context.ai_upscale"),
-                    "",
-                    AppCommand::UpscaleCurrentPage,
-                    has_book,
-                );
             });
 
             ui.separator();

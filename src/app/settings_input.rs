@@ -602,7 +602,6 @@ const IMAGE_SHORTCUTS: &[CommandId] = &[
     CommandId::FilterSmooth,
     CommandId::FilterSmoothSharpen,
     CommandId::ToggleGamma,
-    CommandId::UpscaleCurrentPage,
 ];
 
 const ACTION_SHORTCUTS: &[CommandId] = &[

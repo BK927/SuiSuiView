@@ -76,7 +76,6 @@ impl SuiSuiViewApp {
         let texture_key = TextureCacheKey {
             page: source_key.page,
             effects,
-            upscaled: source_key.upscaled,
         };
         if let Some(texture) = self
             .textures
@@ -90,11 +89,8 @@ impl SuiSuiViewApp {
         let texture_byte_size = rgba.len();
         let texture = ctx.load_texture(
             format!(
-                "page-{}-{}-{}-{:?}",
-                source_key.page.index,
-                source_key.page.target_long_edge,
-                if source_key.upscaled { "ai" } else { "base" },
-                effects
+                "page-{}-{}-{:?}",
+                source_key.page.index, source_key.page.target_long_edge, effects
             ),
             ImageData::Color(image),
             texture_options_for_target(source_key.page.target_long_edge),
@@ -108,8 +104,7 @@ impl SuiSuiViewApp {
             },
         );
         self.prune_texture_cache();
-        let dropped_original = !source_key.upscaled
-            && self.drop_original_after_texture_upload_if_enabled(source_key.page);
+        let dropped_original = self.drop_original_after_texture_upload_if_enabled(source_key.page);
         #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
         let _ = dropped_original;
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]

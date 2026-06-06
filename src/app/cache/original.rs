@@ -96,18 +96,11 @@ impl SuiSuiViewApp {
             self.visible_page_count(),
             self.worker_options(),
         );
-        self.refresh_ai_prefetch_queue();
     }
 
     fn drop_original_inspection_cache_entries(&mut self) {
         for (key, byte_size) in drop_original_inspection_pages_from_cache(&mut self.decoded_pages) {
             self.decoded_bytes = self.decoded_bytes.saturating_sub(byte_size);
-            self.drop_textures_for_page(key);
-        }
-
-        for (key, byte_size) in drop_original_inspection_pages_from_cache(&mut self.upscaled_pages)
-        {
-            self.upscaled_bytes = self.upscaled_bytes.saturating_sub(byte_size);
             self.drop_textures_for_page(key);
         }
 
