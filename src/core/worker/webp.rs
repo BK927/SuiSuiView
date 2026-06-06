@@ -1,7 +1,7 @@
 use super::{
     clamp_target_long_edge, decoded_byte_size, display_dimensions_with_upscale,
     prepared_page_from_rgba, reject_oversized_dimensions, DecodeBackend, DecodeOptions,
-    PreparedPage, MAX_TARGET_LONG_EDGE,
+    PreparedPage,
 };
 use libwebp_sys::{
     VP8StatusCode, WebPBitstreamFeatures, WebPDecode, WebPDecoderConfig, WebPGetFeatures,
@@ -33,9 +33,6 @@ pub(super) fn prepare_image_with_scaled_libwebp(
     reject_oversized_dimensions(original_width, original_height)?;
 
     let target_long_edge = clamp_target_long_edge(target_long_edge);
-    if target_long_edge > MAX_TARGET_LONG_EDGE {
-        return Ok(None);
-    }
     let (display_width, display_height) = display_dimensions_with_upscale(
         original_width,
         original_height,

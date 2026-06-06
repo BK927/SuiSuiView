@@ -1,7 +1,7 @@
 use super::{PageCacheKey, TextureCacheKey, TextureEntry};
 use crate::app::perf;
 use crate::app::SuiSuiViewApp;
-use crate::core::worker::{PreparedPage, MAX_TARGET_LONG_EDGE};
+use crate::core::worker::{PreparedPage, PreparedTargetIntent, MAX_TARGET_LONG_EDGE};
 use eframe::egui;
 use lru::LruCache;
 use std::sync::Arc;
@@ -37,7 +37,7 @@ impl SuiSuiViewApp {
         }
 
         self.pending_original_inspection_cache_cleanup_at = None;
-        if self.target_long_edge > MAX_TARGET_LONG_EDGE {
+        if self.current_prepared_target_intent() != PreparedTargetIntent::NormalNavigation {
             return;
         }
 
@@ -45,7 +45,7 @@ impl SuiSuiViewApp {
         self.pending_gpu_original_inspection_cleanup = true;
         ctx.request_repaint();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        self.record_cache_snapshot("leave_original_inspection");
+        self.record_cache_snapshot("leave_high_target_display");
     }
 
     pub(in crate::app) fn drop_original_after_texture_upload_if_enabled(
@@ -53,6 +53,12 @@ impl SuiSuiViewApp {
         key: PageCacheKey,
     ) -> bool {
         if !perf::original_texture_only_enabled() {
+            return false;
+        }
+        if !self
+            .current_prepared_target_intent()
+            .is_original_inspection()
+        {
             return false;
         }
         if let Some(byte_size) =
@@ -67,6 +73,9 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn request_original_texture_only_decode_if_needed(&mut self) {
         if !perf::original_texture_only_enabled()
+            || !self
+                .current_prepared_target_intent()
+                .is_original_inspection()
             || self.target_long_edge <= MAX_TARGET_LONG_EDGE
             || self.source.is_none()
         {

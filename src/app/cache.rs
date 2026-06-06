@@ -7,8 +7,8 @@ use crate::core::state::{
 };
 use crate::core::worker::{
     clamp_target_long_edge, preview_prefetch_indices, CachedPageKey, DecodeOptions,
-    NavigationDirection, FULL_QUALITY_PREFETCH_BACKWARD_PAGES, FULL_QUALITY_PREFETCH_FORWARD_PAGES,
-    MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
+    NavigationDirection, PreparedTargetIntent, FULL_QUALITY_PREFETCH_BACKWARD_PAGES,
+    FULL_QUALITY_PREFETCH_FORWARD_PAGES, MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
 use eframe::egui::{Rect, TextureHandle};
 use lru::LruCache;
@@ -28,6 +28,7 @@ pub(in crate::app) struct PageCacheKey {
 pub(in crate::app) struct TextureCacheKey {
     pub(in crate::app) page: PageCacheKey,
     pub(in crate::app) effects: ViewEffects,
+    pub(in crate::app) sampling: TextureSampling,
 }
 
 pub(in crate::app) struct TextureEntry {
@@ -35,7 +36,55 @@ pub(in crate::app) struct TextureEntry {
     pub(in crate::app) byte_size: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(in crate::app) enum TextureSampling {
+    Linear,
+    Nearest,
+}
+
+impl TextureSampling {
+    pub(in crate::app) fn for_target_intent(intent: PreparedTargetIntent) -> Self {
+        if intent.is_original_inspection() {
+            Self::Nearest
+        } else {
+            Self::Linear
+        }
+    }
+}
+
 impl SuiSuiViewApp {
+    pub(in crate::app) fn current_prepared_target_intent(&self) -> PreparedTargetIntent {
+        self.prepared_target_intent_for_target(self.target_long_edge)
+    }
+
+    pub(in crate::app) fn prepared_target_intent_for_target(
+        &self,
+        target_long_edge: u32,
+    ) -> PreparedTargetIntent {
+        prepared_target_intent_for_view(self.fit_mode, self.manual_zoom, target_long_edge)
+    }
+
+    pub(in crate::app) fn texture_sampling_for_page_key(
+        &self,
+        key: PageCacheKey,
+    ) -> TextureSampling {
+        TextureSampling::for_target_intent(
+            self.prepared_target_intent_for_target(key.target_long_edge),
+        )
+    }
+
+    pub(in crate::app) fn schedule_high_target_cleanup_if_leaving_target_intent(
+        &mut self,
+        previous_intent: PreparedTargetIntent,
+    ) {
+        if previous_intent.keeps_exact_prefetch_lightweight()
+            && self.current_prepared_target_intent() == PreparedTargetIntent::NormalNavigation
+        {
+            let ctx = self.egui_ctx.clone();
+            self.schedule_original_inspection_cache_cleanup(&ctx);
+        }
+    }
+
     pub(in crate::app) fn app_cached_page_keys(&self) -> Vec<CachedPageKey> {
         self.decoded_pages
             .iter()
@@ -442,6 +491,25 @@ pub(in crate::app) fn should_allow_cpu_display_upscale(
     }
     let _ = (manual_zoom, gpu_display_upscale_can_own_upscale);
     false
+}
+
+pub(in crate::app) fn prepared_target_intent_for_view(
+    fit_mode: FitMode,
+    manual_zoom: f32,
+    target_long_edge: u32,
+) -> PreparedTargetIntent {
+    match fit_mode {
+        FitMode::Original => PreparedTargetIntent::OriginalInspection,
+        FitMode::Manual if manual_zoom >= 1.0 => PreparedTargetIntent::OriginalInspection,
+        FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight
+            if target_long_edge > MAX_TARGET_LONG_EDGE =>
+        {
+            PreparedTargetIntent::LargeFitDisplay
+        }
+        FitMode::Manual | FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight => {
+            PreparedTargetIntent::NormalNavigation
+        }
+    }
 }
 
 pub(in crate::app) fn gpu_visual_needs_wgsl(

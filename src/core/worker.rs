@@ -115,6 +115,23 @@ pub enum NavigationDirection {
     Backward,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PreparedTargetIntent {
+    NormalNavigation,
+    LargeFitDisplay,
+    OriginalInspection,
+}
+
+impl PreparedTargetIntent {
+    pub fn is_original_inspection(self) -> bool {
+        matches!(self, Self::OriginalInspection)
+    }
+
+    pub fn keeps_exact_prefetch_lightweight(self) -> bool {
+        matches!(self, Self::LargeFitDisplay | Self::OriginalInspection)
+    }
+}
+
 pub fn preview_prefetch_indices(
     center: usize,
     page_count: usize,
@@ -309,6 +326,7 @@ impl CachedPageKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerOptions {
     pub decode: DecodeOptions,
+    pub target_intent: PreparedTargetIntent,
     pub prefetch_enabled: bool,
     pub progressive_preview_enabled: bool,
     pub cache_bytes: usize,
@@ -319,6 +337,7 @@ impl Default for WorkerOptions {
     fn default() -> Self {
         Self {
             decode: DecodeOptions::default(),
+            target_intent: PreparedTargetIntent::NormalNavigation,
             prefetch_enabled: true,
             progressive_preview_enabled: true,
             cache_bytes: WORKER_CACHE_BYTES,
@@ -862,6 +881,7 @@ fn run_worker(
                 active_source.page_count(),
                 direction,
                 target_long_edge,
+                options.target_intent,
                 visible_pages,
                 options.prefetch_enabled,
                 options.progressive_preview_enabled,

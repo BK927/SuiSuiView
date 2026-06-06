@@ -1,10 +1,10 @@
 use crate::app::gpu_paint::{GpuPaintRequest, GpuPaintSourceKey};
 use crate::app::{
     gpu_visual_needs_wgsl, rect_target_size, SuiSuiViewApp, TextureCacheKey, TextureEntry,
+    TextureSampling,
 };
 use crate::core::effects::ViewEffects;
 use crate::core::state::{FitMode, LargeImageAnchor};
-use crate::core::worker::MAX_TARGET_LONG_EDGE;
 use eframe::egui::{
     self, Align2, Color32, ColorImage, FontId, ImageData, Pos2, Rect, Stroke, StrokeKind,
     TextureHandle, TextureOptions, Vec2,
@@ -76,6 +76,7 @@ impl SuiSuiViewApp {
         let texture_key = TextureCacheKey {
             page: source_key.page,
             effects,
+            sampling: self.texture_sampling_for_page_key(source_key.page),
         };
         if let Some(texture) = self
             .textures
@@ -93,7 +94,7 @@ impl SuiSuiViewApp {
                 source_key.page.index, source_key.page.target_long_edge, effects
             ),
             ImageData::Color(image),
-            texture_options_for_target(source_key.page.target_long_edge),
+            texture_options_for_sampling(texture_key.sampling),
         );
         ctx.request_repaint_after(super::super::TEXTURE_PRESENT_REPAINT_DELAY);
         self.textures.put(
@@ -166,18 +167,17 @@ fn source_pixel_scale(pixels_per_point: f32) -> f32 {
     1.0 / pixels_per_point.max(0.1)
 }
 
-pub(in crate::app) fn texture_options_for_target(target_long_edge: u32) -> TextureOptions {
-    if target_long_edge > MAX_TARGET_LONG_EDGE {
-        TextureOptions::NEAREST
-    } else {
-        TextureOptions::LINEAR
+pub(in crate::app) fn texture_options_for_sampling(sampling: TextureSampling) -> TextureOptions {
+    match sampling {
+        TextureSampling::Linear => TextureOptions::LINEAR,
+        TextureSampling::Nearest => TextureOptions::NEAREST,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{source_pixel_scale, texture_options_for_target};
-    use crate::core::worker::MAX_TARGET_LONG_EDGE;
+    use super::{source_pixel_scale, texture_options_for_sampling};
+    use crate::app::TextureSampling;
     use eframe::egui::TextureOptions;
 
     #[test]
@@ -189,11 +189,11 @@ mod tests {
     #[test]
     fn original_inspection_texture_uses_nearest_sampler() {
         assert_eq!(
-            texture_options_for_target(MAX_TARGET_LONG_EDGE + 1),
+            texture_options_for_sampling(TextureSampling::Nearest),
             TextureOptions::NEAREST
         );
         assert_eq!(
-            texture_options_for_target(MAX_TARGET_LONG_EDGE),
+            texture_options_for_sampling(TextureSampling::Linear),
             TextureOptions::LINEAR
         );
     }

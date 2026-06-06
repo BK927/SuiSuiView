@@ -504,38 +504,48 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn adjust_zoom(&mut self, factor: f32) {
         let previous_decode = self.decode_options();
+        let previous_intent = self.current_prepared_target_intent();
         self.clear_pending_page_turns();
         self.fit_mode = FitMode::Manual;
         self.manual_zoom = (self.manual_zoom * factor).clamp(0.1, 8.0);
-        self.request_page_if_decode_changed(previous_decode);
+        self.schedule_high_target_cleanup_if_leaving_target_intent(previous_intent);
+        self.request_page_if_decode_or_target_intent_changed(previous_decode, previous_intent);
         self.persist_current_bookmark();
     }
 
     pub(in crate::app) fn adjust_zoom_by_delta(&mut self, delta: f32) {
         let previous_decode = self.decode_options();
+        let previous_intent = self.current_prepared_target_intent();
         self.clear_pending_page_turns();
         self.fit_mode = FitMode::Manual;
         self.manual_zoom = (self.manual_zoom + delta).clamp(0.1, 8.0);
-        self.request_page_if_decode_changed(previous_decode);
+        self.schedule_high_target_cleanup_if_leaving_target_intent(previous_intent);
+        self.request_page_if_decode_or_target_intent_changed(previous_decode, previous_intent);
         self.persist_current_bookmark();
     }
 
     pub(in crate::app) fn set_fit_mode(&mut self, mode: FitMode) {
         let previous_decode = self.decode_options();
+        let previous_intent = self.current_prepared_target_intent();
         self.clear_pending_page_turns();
         self.fit_mode = mode;
         if mode == FitMode::Original {
             self.manual_zoom = 1.0;
         }
-        self.request_page_if_decode_changed(previous_decode);
+        self.schedule_high_target_cleanup_if_leaving_target_intent(previous_intent);
+        self.request_page_if_decode_or_target_intent_changed(previous_decode, previous_intent);
         self.persist_current_bookmark();
     }
 
-    pub(in crate::app) fn request_page_if_decode_changed(
+    fn request_page_if_decode_or_target_intent_changed(
         &mut self,
         previous_decode: DecodeOptions,
+        previous_intent: crate::core::worker::PreparedTargetIntent,
     ) {
-        if self.source.is_some() && previous_decode != self.decode_options() {
+        if self.source.is_some()
+            && (previous_decode != self.decode_options()
+                || previous_intent != self.current_prepared_target_intent())
+        {
             self.worker.set_page(
                 self.worker_center_page(),
                 self.last_nav_direction,

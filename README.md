@@ -152,6 +152,12 @@ state file.
   anime, and manga pages use Anime4K M, while photos and uncertain images keep
   the FSR fallback. Manual zoom and Original size bypass display upscalers so
   zoom inspection stays tied to source pixels.
+  Fit, Fit Width, and Fit Height prepare display-sized pages from the physical
+  viewport. The normal navigation/cache baseline remains 4096px and below, but
+  larger high-DPI or 5K/8K windows can request a larger fit-display target so
+  the image is not artificially capped on big screens. Those large fit targets
+  keep high-resolution exact work visible-page focused; Manual zoom and
+  Original size remain the source-pixel inspection paths.
   When GPU acceleration is enabled, SuiSuiView uses the WGPU fast-start handoff
   path by default. If that startup handoff fails, the app falls back to normal
   mode, turns GPU acceleration off, and shows a report dialog with a diagnostic

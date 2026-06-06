@@ -5,7 +5,7 @@ use crate::core::state::{
     CpuScaleFilter, PageTransitionStyle, ReadingDirection, WgpuDownscaleMethod, WgpuScaleDirection,
     WgpuScalePlan, WgpuUpscaleMethod,
 };
-use crate::core::worker::{DecodeBackend, PreparedPage};
+use crate::core::worker::{DecodeBackend, PreparedPage, PreparedTargetIntent};
 use eframe::egui::{TextureHandle, Vec2};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -246,6 +246,7 @@ impl WgpuScaleState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) struct PageRenderInfo {
     pub(in crate::app) page_index: usize,
+    pub(in crate::app) target_long_edge: u32,
     pub(in crate::app) decode_backend: DecodeBackend,
     pub(in crate::app) cpu_scale: CpuScaleState,
 }
@@ -258,6 +259,7 @@ impl PageRenderInfo {
     ) -> Self {
         Self {
             page_index,
+            target_long_edge: key.target_long_edge,
             decode_backend: page.decode_backend,
             cpu_scale: CpuScaleState::from_page(key, page),
         }
@@ -270,15 +272,20 @@ pub(in crate::app) struct CurrentViewState {
     pub(in crate::app) decode_backend: DecodeBackend,
     pub(in crate::app) cpu_scale: CpuScaleState,
     pub(in crate::app) wgpu_scale: WgpuScaleState,
+    pub(in crate::app) target_intent: PreparedTargetIntent,
 }
 
 impl CurrentViewState {
-    pub(in crate::app) fn from_cpu(render: PageRenderInfo) -> Self {
+    pub(in crate::app) fn from_cpu(
+        render: PageRenderInfo,
+        target_intent: PreparedTargetIntent,
+    ) -> Self {
         Self {
             page_index: render.page_index,
             decode_backend: render.decode_backend,
             cpu_scale: render.cpu_scale,
             wgpu_scale: WgpuScaleState::Inactive,
+            target_intent,
         }
     }
 
@@ -290,6 +297,7 @@ impl CurrentViewState {
         wgpu_upscale_method: WgpuUpscaleMethod,
         wgpu_downscale_method: WgpuDownscaleMethod,
         active: bool,
+        target_intent: PreparedTargetIntent,
     ) -> Self {
         let output_size = output_size_for_effects(image_size, effects);
         let scale_plan = WgpuScalePlan::resolve(
@@ -303,6 +311,7 @@ impl CurrentViewState {
             decode_backend: render.decode_backend,
             cpu_scale: render.cpu_scale,
             wgpu_scale: WgpuScaleState::from_plan(active, scale_plan),
+            target_intent,
         }
     }
 }

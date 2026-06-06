@@ -451,6 +451,10 @@ fn show_view_state_card(ui: &mut egui::Ui, app: &SuiSuiViewApp, i18n: I18n) {
                     app.fit_mode.label_i18n(i18n),
                 ),
                 (
+                    &i18n.text("about.image.view.target"),
+                    actual_target_intent_label(app, i18n),
+                ),
+                (
                     &i18n.text("about.image.view.reading"),
                     app.reading_direction.label_i18n(i18n),
                 ),
@@ -669,6 +673,25 @@ fn actual_decode_label(app: &SuiSuiViewApp, i18n: I18n) -> String {
         .as_ref()
         .map(|state| state.decode_backend.label().to_owned())
         .unwrap_or_else(|| unknown(i18n))
+}
+
+fn actual_target_intent_label(app: &SuiSuiViewApp, i18n: I18n) -> String {
+    use crate::core::worker::PreparedTargetIntent;
+
+    match app
+        .current_view_state
+        .as_ref()
+        .map(|state| state.target_intent)
+    {
+        Some(PreparedTargetIntent::NormalNavigation) => i18n.text("about.image.view.target.normal"),
+        Some(PreparedTargetIntent::LargeFitDisplay) => {
+            i18n.text("about.image.view.target.large_fit")
+        }
+        Some(PreparedTargetIntent::OriginalInspection) => {
+            i18n.text("about.image.view.target.original")
+        }
+        None => unknown(i18n),
+    }
 }
 
 fn actual_scaler_filter_label(app: &SuiSuiViewApp, i18n: I18n) -> String {

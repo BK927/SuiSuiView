@@ -1,6 +1,6 @@
 use super::perf;
 use super::{
-    texture_options_for_target, PageCacheKey, SuiSuiViewApp, TextureCacheKey, TextureEntry,
+    texture_options_for_sampling, PageCacheKey, SuiSuiViewApp, TextureCacheKey, TextureEntry,
 };
 use crate::core::effects::ViewEffects;
 use crate::core::state::WgpuUpscaleMethod;
@@ -83,6 +83,7 @@ impl SuiSuiViewApp {
         let texture_key = TextureCacheKey {
             page: best_key,
             effects: self.effects,
+            sampling: self.texture_sampling_for_page_key(best_key),
         };
         if self.textures.peek(&texture_key).is_some() {
             return false;
@@ -106,7 +107,7 @@ impl SuiSuiViewApp {
                 best_key.target_long_edge, self.effects
             ),
             ImageData::Color(image),
-            texture_options_for_target(best_key.target_long_edge),
+            texture_options_for_sampling(texture_key.sampling),
         );
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::record_texture_prewarm(texture_started, index, best_key.target_long_edge);

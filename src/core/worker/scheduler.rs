@@ -1,6 +1,6 @@
 use super::{
-    clamp_target_long_edge, is_original_inspection_target, preview_prefetch_indices,
-    NavigationDirection, FULL_QUALITY_PREFETCH_BACKWARD_PAGES, FULL_QUALITY_PREFETCH_FORWARD_PAGES,
+    clamp_target_long_edge, preview_prefetch_indices, NavigationDirection, PreparedTargetIntent,
+    FULL_QUALITY_PREFETCH_BACKWARD_PAGES, FULL_QUALITY_PREFETCH_FORWARD_PAGES,
     PREVIEW_PREFETCH_BACKWARD_PAGES, PREVIEW_PREFETCH_FORWARD_PAGES, PREVIEW_TARGET_LONG_EDGE,
 };
 use std::path::Path;
@@ -16,20 +16,20 @@ pub(super) fn prioritized_jobs(
     page_count: usize,
     direction: NavigationDirection,
     target_long_edge: u32,
+    target_intent: PreparedTargetIntent,
     visible_pages: usize,
     prefetch_enabled: bool,
     progressive_preview_enabled: bool,
 ) -> Vec<PageJob> {
     let target_long_edge = clamp_target_long_edge(target_long_edge);
-    let original_inspection = is_original_inspection_target(target_long_edge);
-    let full_indices = if original_inspection {
+    let full_indices = if target_intent.keeps_exact_prefetch_lightweight() {
         visible_indices(center, page_count, visible_pages)
     } else if prefetch_enabled {
         prioritized_indices(center, page_count, direction, visible_pages)
     } else {
         visible_indices(center, page_count, visible_pages)
     };
-    let preview_capacity = if original_inspection {
+    let preview_capacity = if target_intent.is_original_inspection() {
         0
     } else if progressive_preview_enabled
         && target_long_edge > PREVIEW_TARGET_LONG_EDGE
@@ -50,7 +50,7 @@ pub(super) fn prioritized_jobs(
         push_job(&mut jobs, index, target_long_edge);
     }
 
-    if !original_inspection
+    if !target_intent.is_original_inspection()
         && progressive_preview_enabled
         && target_long_edge > PREVIEW_TARGET_LONG_EDGE
     {
@@ -176,7 +176,7 @@ mod tests {
         prioritized_indices, prioritized_jobs, should_skip_ai_preview_or_prefetch, PageJob,
     };
     use crate::core::worker::{
-        NavigationDirection, MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
+        NavigationDirection, PreparedTargetIntent, MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
     };
 
     #[test]
@@ -206,7 +206,16 @@ mod tests {
     #[test]
     fn exact_jobs_precede_preview_jobs_for_visible_pages() {
         assert_eq!(
-            prioritized_jobs(5, 12, NavigationDirection::Forward, 2048, 2, true, true,),
+            prioritized_jobs(
+                5,
+                12,
+                NavigationDirection::Forward,
+                2048,
+                PreparedTargetIntent::NormalNavigation,
+                2,
+                true,
+                true,
+            ),
             vec![
                 PageJob {
                     index: 5,
@@ -288,6 +297,7 @@ mod tests {
                 12,
                 NavigationDirection::Forward,
                 PREVIEW_TARGET_LONG_EDGE,
+                PreparedTargetIntent::NormalNavigation,
                 2,
                 true,
                 true,
@@ -305,7 +315,16 @@ mod tests {
     #[test]
     fn preview_and_prefetch_can_be_disabled() {
         assert_eq!(
-            prioritized_jobs(5, 12, NavigationDirection::Forward, 2048, 2, false, false,),
+            prioritized_jobs(
+                5,
+                12,
+                NavigationDirection::Forward,
+                2048,
+                PreparedTargetIntent::NormalNavigation,
+                2,
+                false,
+                false,
+            ),
             vec![
                 PageJob {
                     index: 5,
@@ -327,6 +346,7 @@ mod tests {
                 12,
                 NavigationDirection::Forward,
                 MAX_TARGET_LONG_EDGE + 1,
+                PreparedTargetIntent::OriginalInspection,
                 2,
                 true,
                 true,
@@ -339,6 +359,68 @@ mod tests {
                 PageJob {
                     index: 6,
                     target_long_edge: MAX_TARGET_LONG_EDGE + 1
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn large_fit_display_keeps_high_target_jobs_visible_but_allows_preview_prefetch() {
+        assert_eq!(
+            prioritized_jobs(
+                5,
+                12,
+                NavigationDirection::Forward,
+                MAX_TARGET_LONG_EDGE + 512,
+                PreparedTargetIntent::LargeFitDisplay,
+                2,
+                true,
+                true,
+            ),
+            vec![
+                PageJob {
+                    index: 5,
+                    target_long_edge: MAX_TARGET_LONG_EDGE + 512
+                },
+                PageJob {
+                    index: 6,
+                    target_long_edge: MAX_TARGET_LONG_EDGE + 512
+                },
+                PageJob {
+                    index: 5,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 6,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 7,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 8,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 9,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 10,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 11,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 4,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
+                },
+                PageJob {
+                    index: 3,
+                    target_long_edge: PREVIEW_TARGET_LONG_EDGE
                 },
             ]
         );

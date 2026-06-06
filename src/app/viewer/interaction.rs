@@ -81,9 +81,11 @@ impl SuiSuiViewApp {
             return;
         }
 
+        let previous_intent = self.current_prepared_target_intent();
         let next = self.target_long_edge_for(ctx, viewport);
+        let next_intent = self.prepared_target_intent_for_target(next);
         let original_inspection_target =
-            next > MAX_TARGET_LONG_EDGE || self.target_long_edge > MAX_TARGET_LONG_EDGE;
+            previous_intent.is_original_inspection() || next_intent.is_original_inspection();
         if next == self.target_long_edge
             || (!original_inspection_target
                 && next.abs_diff(self.target_long_edge) < TARGET_EDGE_HYSTERESIS)
@@ -103,12 +105,12 @@ impl SuiSuiViewApp {
             return;
         }
 
-        let leaving_original_inspection =
-            self.target_long_edge > MAX_TARGET_LONG_EDGE && next <= MAX_TARGET_LONG_EDGE;
+        let leaving_high_target_intent = previous_intent.keeps_exact_prefetch_lightweight()
+            && !next_intent.keeps_exact_prefetch_lightweight();
         self.record_view_target_update(ctx, viewport, "apply", next);
         self.target_long_edge = next;
         self.pending_target_long_edge_increase = None;
-        if leaving_original_inspection {
+        if leaving_high_target_intent {
             self.schedule_original_inspection_cache_cleanup(ctx);
         }
         self.clear_pending_page_turns();
@@ -347,7 +349,12 @@ fn display_target_long_edge_for_view(
     };
     let raw = viewport_pixels * oversample * zoom_multiplier;
     let quantized = ((raw / 256.0).ceil() * 256.0) as u32;
-    clamp_navigation_target_long_edge(quantized)
+    match fit_mode {
+        FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight => {
+            clamp_target_long_edge(quantized)
+        }
+        FitMode::Manual | FitMode::Original => clamp_navigation_target_long_edge(quantized),
+    }
 }
 
 fn original_inspection_target_long_edge(
@@ -373,12 +380,11 @@ mod tests {
         zoom_delta_gesture, LARGE_TARGET_INCREASE_STABILITY_DELAY,
     };
     use crate::core::state::{FitMode, MouseGesture};
-    use crate::core::worker::MAX_TARGET_LONG_EDGE;
     use eframe::egui::Vec2;
     use std::time::Instant;
 
     #[test]
-    fn fit_modes_stay_on_navigation_target_cap() {
+    fn fit_modes_can_request_viewport_native_targets_above_navigation_cap() {
         assert_eq!(
             target_long_edge_for_view(
                 FitMode::FitPage,
@@ -387,7 +393,21 @@ mod tests {
                 1.0,
                 Some(8192),
             ),
-            MAX_TARGET_LONG_EDGE
+            10_240
+        );
+    }
+
+    #[test]
+    fn fit_modes_stay_unchanged_below_navigation_cap() {
+        assert_eq!(
+            target_long_edge_for_view(
+                FitMode::FitPage,
+                1.0,
+                Vec2::new(3600.0, 2100.0),
+                1.0,
+                Some(8192),
+            ),
+            3840
         );
     }
 

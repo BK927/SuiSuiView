@@ -66,12 +66,12 @@ pub(in crate::app) use adjacent_seed::{AdjacentSeedCache, AdjacentSeedEvent, See
 use cache::{
     automatic_cache_budget_bytes_for_total, best_page_key_excluding_preview_fallback_in_cache,
     best_page_key_in_cache, cache_budget_bytes, final_quality_page_key_in_cache,
-    lower_resolution_page_keys, page_cache_state_from_hit, texture_cache_budget_bytes_for,
-    touch_normal_navigation_page_keys,
+    lower_resolution_page_keys, page_cache_state_from_hit, prepared_target_intent_for_view,
+    texture_cache_budget_bytes_for, touch_normal_navigation_page_keys,
 };
 pub(in crate::app) use cache::{
     cache_budget_summary, gpu_visual_needs_wgsl, rect_target_size,
-    should_allow_cpu_display_upscale, PageCacheKey, TextureCacheKey, TextureEntry,
+    should_allow_cpu_display_upscale, PageCacheKey, TextureCacheKey, TextureEntry, TextureSampling,
     BYTES_PER_RGBA_PIXEL,
 };
 pub(in crate::app) use navigation::EdgePrompt;
@@ -86,7 +86,7 @@ use viewer::{
     smart_spread_indices_for_metrics, transition_paint_params,
 };
 pub(in crate::app) use viewer::{
-    page_visual_size, texture_options_for_target, transition_screen_sign,
+    page_visual_size, texture_options_for_sampling, transition_screen_sign,
     worker_center_page_for_mode, CurrentViewState, PageMetrics, PageRenderInfo, PageVisual,
     Transition, ViewMode,
 };
@@ -610,6 +610,7 @@ impl SuiSuiViewApp {
     fn worker_options(&self) -> WorkerOptions {
         WorkerOptions {
             decode: self.decode_options(),
+            target_intent: self.current_prepared_target_intent(),
             prefetch_enabled: self.settings.prefetch_enabled,
             progressive_preview_enabled: self.settings.progressive_preview_enabled,
             cache_bytes: self.worker_cache_budget_bytes(),
@@ -1055,13 +1056,13 @@ mod tests {
         command_for_shortcut, delete_target_for, double_spread_indices,
         final_quality_page_key_in_cache, gpu_visual_needs_wgsl, korean_font_candidates,
         load_first_existing_font, lower_resolution_page_keys, ordered_spread_indices,
-        page_cache_state_from_hit, platform, preview_prefetch_indices, relative_difference,
-        sanitize_font_name, should_allow_cpu_display_upscale, sibling_book_path,
-        smart_spread_indices_for_metrics, texture_cache_budget_bytes_for,
-        touch_normal_navigation_page_keys, transformed_page_size, transition_paint_params,
-        transition_screen_sign, worker_center_page_for_mode, AppCommand, DeleteMode, ImageFilter,
-        OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey, ViewEffects, ViewMode,
-        ViewTransform,
+        page_cache_state_from_hit, platform, prepared_target_intent_for_view,
+        preview_prefetch_indices, relative_difference, sanitize_font_name,
+        should_allow_cpu_display_upscale, sibling_book_path, smart_spread_indices_for_metrics,
+        texture_cache_budget_bytes_for, touch_normal_navigation_page_keys, transformed_page_size,
+        transition_paint_params, transition_screen_sign, worker_center_page_for_mode, AppCommand,
+        DeleteMode, ImageFilter, OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey,
+        TextureSampling, ViewEffects, ViewMode, ViewTransform,
     };
     use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
@@ -1526,6 +1527,7 @@ mod tests {
         let normal = TextureCacheKey {
             page,
             effects: ViewEffects::default(),
+            sampling: TextureSampling::Linear,
         };
         let inverted = TextureCacheKey {
             page,
@@ -1533,10 +1535,55 @@ mod tests {
                 invert_colors: true,
                 ..ViewEffects::default()
             },
+            sampling: TextureSampling::Linear,
         };
 
         assert_ne!(normal, inverted);
         assert_eq!(normal.page, inverted.page);
+    }
+
+    #[test]
+    fn texture_cache_key_tracks_sampling_without_changing_page_key() {
+        let page = PageCacheKey {
+            index: 1,
+            target_long_edge: 4096,
+            decode: DecodeOptions::default(),
+        };
+        let linear = TextureCacheKey {
+            page,
+            effects: ViewEffects::default(),
+            sampling: TextureSampling::Linear,
+        };
+        let nearest = TextureCacheKey {
+            page,
+            effects: ViewEffects::default(),
+            sampling: TextureSampling::Nearest,
+        };
+
+        assert_ne!(linear, nearest);
+        assert_eq!(linear.page, nearest.page);
+    }
+
+    #[test]
+    fn prepared_target_intent_splits_large_fit_from_original_inspection() {
+        use crate::core::worker::PreparedTargetIntent;
+
+        assert_eq!(
+            prepared_target_intent_for_view(FitMode::FitPage, 1.0, 3840),
+            PreparedTargetIntent::NormalNavigation
+        );
+        assert_eq!(
+            prepared_target_intent_for_view(FitMode::FitWidth, 1.0, 5120),
+            PreparedTargetIntent::LargeFitDisplay
+        );
+        assert_eq!(
+            prepared_target_intent_for_view(FitMode::Manual, 1.0, 3840),
+            PreparedTargetIntent::OriginalInspection
+        );
+        assert_eq!(
+            prepared_target_intent_for_view(FitMode::Original, 1.0, 3840),
+            PreparedTargetIntent::OriginalInspection
+        );
     }
 
     #[test]
@@ -1662,6 +1709,7 @@ mod tests {
         let none = TextureCacheKey {
             page,
             effects: ViewEffects::default(),
+            sampling: TextureSampling::Linear,
         };
         let filtered = TextureCacheKey {
             page,
@@ -1669,6 +1717,7 @@ mod tests {
                 filter: ImageFilter::SmoothSharpen,
                 ..ViewEffects::default()
             },
+            sampling: TextureSampling::Linear,
         };
 
         assert_ne!(none, filtered);

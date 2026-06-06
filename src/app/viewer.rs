@@ -29,7 +29,7 @@ pub(in crate::app) use model::{
     smart_spread_indices_for_metrics, worker_center_page_for_mode, CurrentViewState, PageMetrics,
     PageRenderInfo, PageVisual, Transition, ViewMode,
 };
-pub(in crate::app) use paint_helpers::texture_options_for_target;
+pub(in crate::app) use paint_helpers::texture_options_for_sampling;
 pub(in crate::app) use transition::{
     paint_book_flip_shadow, transition_paint_params, transition_screen_sign,
 };
@@ -149,9 +149,11 @@ impl SuiSuiViewApp {
             return PageVisual::Loading { index };
         };
         let use_wgsl_effects = self.can_paint_wgsl_effects();
+        let sampling = self.texture_sampling_for_page_key(best_key);
         let texture_key = TextureCacheKey {
             page: best_key,
             effects: self.effects,
+            sampling,
         };
 
         if !use_wgsl_effects {
@@ -243,7 +245,7 @@ impl SuiSuiViewApp {
                 best_key.target_long_edge, self.effects
             ),
             ImageData::Color(image),
-            texture_options_for_target(best_key.target_long_edge),
+            texture_options_for_sampling(sampling),
         );
         ctx.request_repaint_after(super::TEXTURE_PRESENT_REPAINT_DELAY);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -287,6 +289,9 @@ impl SuiSuiViewApp {
 
     fn original_texture_only_visual(&mut self, requested: PageCacheKey) -> Option<PageVisual> {
         if !perf::original_texture_only_enabled()
+            || !self
+                .current_prepared_target_intent()
+                .is_original_inspection()
             || requested.target_long_edge <= MAX_TARGET_LONG_EDGE
         {
             return None;
@@ -294,6 +299,7 @@ impl SuiSuiViewApp {
         let texture_key = TextureCacheKey {
             page: requested,
             effects: self.effects,
+            sampling: self.texture_sampling_for_page_key(requested),
         };
         let texture = self
             .textures
@@ -504,7 +510,12 @@ impl SuiSuiViewApp {
                     ..
                 } => {
                     if let Some(render_info) = render_info {
-                        self.record_current_view_state(CurrentViewState::from_cpu(render_info));
+                        let target_intent =
+                            self.prepared_target_intent_for_target(render_info.target_long_edge);
+                        self.record_current_view_state(CurrentViewState::from_cpu(
+                            render_info,
+                            target_intent,
+                        ));
                     }
                     painter.image(
                         texture.id(),
@@ -531,6 +542,8 @@ impl SuiSuiViewApp {
                         wgpu_upscale_method,
                         wgpu_downscale_method,
                     );
+                    let target_intent =
+                        self.prepared_target_intent_for_target(render_info.target_long_edge);
                     self.record_current_view_state(CurrentViewState::from_gpu(
                         render_info,
                         image_size,
@@ -539,6 +552,7 @@ impl SuiSuiViewApp {
                         wgpu_upscale_method,
                         wgpu_downscale_method,
                         active_wgsl,
+                        target_intent,
                     ));
                     if !self.paint_ready_gpu_visual(
                         ctx,

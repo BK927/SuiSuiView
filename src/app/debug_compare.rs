@@ -1,6 +1,6 @@
 use super::{
     gpu_paint::{GpuPaintRequest, GpuPaintSourceKey},
-    page_visual_size, texture_options_for_target, PageCacheKey, PageRenderInfo, PageVisual,
+    page_visual_size, texture_options_for_sampling, PageCacheKey, PageRenderInfo, PageVisual,
     SuiSuiViewApp, TextureCacheKey, TextureEntry,
 };
 use crate::core::effects::ViewEffects;
@@ -461,6 +461,7 @@ impl SuiSuiViewApp {
         let texture_key = TextureCacheKey {
             page: best_key,
             effects: ViewEffects::default(),
+            sampling: self.texture_sampling_for_page_key(best_key),
         };
         let page = self
             .decoded_pages
@@ -490,7 +491,7 @@ impl SuiSuiViewApp {
                 best_key.index, best_key.target_long_edge
             ),
             ImageData::Color(Arc::new(page.color_image())),
-            texture_options_for_target(best_key.target_long_edge),
+            texture_options_for_sampling(texture_key.sampling),
         );
         self.textures.put(
             texture_key,
