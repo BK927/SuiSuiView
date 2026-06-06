@@ -61,71 +61,21 @@ delete, copy, and window actions.
 | Tier | Formats |
 | --- | --- |
 | Built in | Folders, single images, `.zip`, `.cbz`, `.jpg`, `.jpeg`, `.jpe`, `.jfif`, `.png`, `.apng`, `.webp`, `.bmp`, `.dib`, `.gif`, `.tif`, `.tiff`, `.tga`, `.pnm`, `.pbm`, `.pgm`, `.ppm`, `.ico`, `.qoi`, `.psd` |
-| Experimental recognized | `.dds`, `.exr`, `.hdr`, `.rgbe`, `.jxl`, `.svg`, `.svgz`; `.avif` is indexed only in `native-avif` builds; `.ai` is indexed only in `native-ai` builds |
-| Recognized but not decoded yet | `.heic`, `.heif`, `.jxr`, RAW/DNG camera formats; SuiSuiView shows a format-specific message instead of opening them until a system-codec backend exists |
+| Optional or experimental | `.dds`, `.exr`, `.hdr`, `.rgbe`, `.jxl`, `.svg`, `.svgz`, `.avif`, `.ai` |
+| Recognized but not opened yet | `.heic`, `.heif`, `.jxr`, RAW/DNG camera formats |
 
-Some formats are intentionally limited or blocked for commercial-distribution
-safety. CBR/RAR, page-curl animation, printing, slideshow, external editor
-integration, and photo storage boxes are planned or under evaluation for later
-versions. BPG and full CLIP parsing are intentionally blocked for v1.
+Some recognized formats are preview-only or available only in optional builds.
+PSD and PDF-compatible `.ai` files show flattened previews only. Unsupported
+formats show a clear message instead of opening.
 
-PSD support is view-only. SuiSuiView reads the composite/base image preview
-through `zune-psd`; Photoshop layers, blend modes, masks, adjustment layers,
-smart objects, and layer effects are not reconstructed. Adobe Illustrator
-`.ai` support is also preview-only and requires a PDF-compatible `.ai` file
-plus a `native-ai` build with an app-local PDFium library beside the
-executable. Plain `.pdf`, EPS, PS, and non-PDF-compatible Illustrator data are
-not indexed as pages.
+## Decoder Settings
 
-## Decoder Backends
+Auto Fast selects the app's validated fast paths and falls back when needed.
+Compatibility mode keeps the conservative baseline, and Custom mode lets you
+override individual formats from Settings.
 
-The default build keeps native codec risk low: it uses Rust fast paths where
-they have been validated, and falls back to the broad `image` crate decoder when
-a selected backend cannot decode a page.
-
-Auto Fast uses these default decoder paths. Custom mode uses the same path when
-a format is set to `기본값`:
-
-| Format | Default backend |
-| --- | --- |
-| JPEG | target-aware scaled JPEG when useful, then `zune-jpeg` |
-| PNG | large-page sampled PNG when useful, then the `png` crate |
-| WebP | `image` baseline for still images, `image-webp` first-frame decode for animated WebP; `libwebp` for still images when built with `native-webp` |
-| GIF | large static GIF sampling when useful, then the `gif` crate first-frame path |
-| BMP | sampled BMP when useful, then direct 24/32-bit BMP fast path |
-| ICO | `image` baseline by default, with an explicit ICO fast-path option |
-| AVIF | `libavif + dav1d` only when built with `native-avif` |
-| SVG | shown in settings as planned, but not enabled for viewing yet |
-| PSD | `zune-psd` composite/base image preview |
-| `.ai` | PDFium first-page preview only when built with `native-ai` |
-
-Optional native features are explicit build choices:
-
-```powershell
-cargo run --release --features native-webp
-uv run --with meson --with ninja cargo run --release --features native-avif
-cargo run --release --features native-ai
-```
-
-Native here means Rust calls an external C/assembly codec library through a Rust
-wrapper. `native-webp` uses libwebp, and `native-avif` uses libavif with dav1d.
-`native-ai` uses `pdfium-render` to call an app-local PDFium dynamic library for
-PDF-compatible `.ai` previews. They are not enabled in the default build, and
-release bundles that enable them must carry the notices and update policy
-recorded in `THIRD_PARTY_NOTICES.txt`.
-
-For Illustrator `.ai` preview development builds, fetch a V8/XFA-free PDFium
-package and copy the platform library next to the executable:
-
-```powershell
-uv run python scripts\fetch_pdfium.py --platform windows-x64 --copy-to target\release
-```
-
-For release packaging, pass the expected archive checksum with `--sha256`; the
-script also prints the downloaded archive checksum for provenance records.
-
-Benchmark-only native candidates such as TurboJPEG remain out of the production
-settings.
+Optional builds can enable extra WebP, AVIF, and PDF-compatible `.ai` preview
+backends. They are off by default.
 
 ## Settings
 
@@ -144,8 +94,7 @@ state file.
 
 The UI language can be set to system default, Korean, or English. UI text and
 state words such as Default, Off, and Experimental are localized, while
-algorithm, codec, library, and file-format names such as libwebp, PDFium, JPEG,
-and ZIP/CBZ keep their English technical names.
+technical names such as JPEG and ZIP/CBZ stay in English.
 
 ## Bookmarks And State
 
@@ -188,8 +137,8 @@ standalone files.
 - [x] Current-page EXIF, file, and color information.
 - [ ] CBR/RAR and 7Z/CB7 read-only archive support.
 - [ ] Webtoon-style continuous vertical reading mode.
-- [ ] Thumbnail browser or folder overview for faster page and file jumping.
-- [ ] Modern format expansion, including JPEG XL, HEIC/HEIF, SVG, EXR/HDR,
+- [ ] Folder and page thumbnail overview for faster navigation.
+- [ ] Modern format expansion, including JPEG XL, HEIC/HEIF, SVG, JPEG XR,
   and broader RAW preview support.
 - [ ] Printing, slideshow, and external editor workflows.
 
