@@ -61,11 +61,11 @@ impl SettingsSection {
         match self {
             Self::General => (icons::SETTINGS, icons::IconStyle::Regular),
             Self::View => (icons::EYE, icons::IconStyle::Regular),
-            Self::Rendering => (icons::WAND, icons::IconStyle::Regular),
-            Self::Decoders => (icons::DOCUMENT, icons::IconStyle::Regular),
+            Self::Rendering => (icons::IMAGE_SPARKLE, icons::IconStyle::Regular),
+            Self::Decoders => (icons::LOCK_OPEN, icons::IconStyle::Regular),
             Self::Bookmarks => (icons::BOOKMARK, icons::IconStyle::Regular),
-            Self::Keyboard => (icons::DOCUMENT, icons::IconStyle::Regular),
-            Self::Mouse => (icons::PIN, icons::IconStyle::Regular),
+            Self::Keyboard => (icons::KEYBOARD, icons::IconStyle::Regular),
+            Self::Mouse => (icons::CURSOR_CLICK, icons::IconStyle::Regular),
         }
     }
 }
