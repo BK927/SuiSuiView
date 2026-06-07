@@ -140,6 +140,7 @@ standalone files.
 - [ ] CBR/RAR and 7Z/CB7 read-only archive support.
 - [ ] Webtoon-style continuous vertical reading mode.
 - [ ] Folder and page thumbnail overview for faster navigation.
+- [ ] Smarter Auto upscaler selection for content-aware fit-mode enlargement.
 - [ ] Modern format expansion, including JPEG XL, HEIC/HEIF, SVG, JPEG XR,
   and broader RAW preview support.
 - [ ] Printing, slideshow, and external editor workflows.
