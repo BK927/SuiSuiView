@@ -645,6 +645,39 @@ impl WgpuUpscaleMethod {
         )
     }
 
+    pub fn is_cunny(self) -> bool {
+        matches!(
+            self,
+            Self::CunnyVeryfastNvl
+                | Self::CunnyVeryfastSoft
+                | Self::CunnyFasterNvl
+                | Self::CunnyFasterSoft
+                | Self::CunnyFasterDs
+                | Self::CunnyFastNvl
+                | Self::CunnyFastSoft
+                | Self::CunnyFastDs
+                | Self::Cunny2x12Soft
+                | Self::Cunny2x12Ds
+                | Self::Cunny3x12Nvl
+                | Self::Cunny3x12Soft
+                | Self::Cunny3x12Ds
+                | Self::Cunny4x12Nvl
+                | Self::Cunny4x12Soft
+                | Self::Cunny4x12Ds
+                | Self::Cunny4x16Nvl
+                | Self::Cunny4x16Soft
+                | Self::Cunny4x16Ds
+                | Self::Cunny4x24Nvl
+                | Self::Cunny4x24Soft
+                | Self::Cunny4x24Ds
+                | Self::Cunny4x32Nvl
+                | Self::Cunny4x32Soft
+                | Self::Cunny4x32Ds
+                | Self::Cunny8x32Nvl
+                | Self::Cunny8x32Ds
+        )
+    }
+
     pub fn resolve_for_upscale(self) -> Option<Self> {
         match self {
             Self::Auto => Some(Self::WgslFsr1EasuRcas),

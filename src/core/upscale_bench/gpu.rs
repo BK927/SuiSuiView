@@ -171,8 +171,8 @@ impl GpuUpscaleBench {
         } else {
             None
         };
-        let cunny = if wants_group(method, is_cunny_method) {
-            CunnyBench::try_new(&device).await
+        let cunny = if method.is_some_and(WgpuUpscaleMethod::is_cunny) {
+            CunnyBench::try_new(&device, method).await
         } else {
             None
         };
@@ -534,39 +534,6 @@ fn is_acnet_method(method: WgpuUpscaleMethod) -> bool {
             | WgpuUpscaleMethod::WgslAcnetF8B4BoxLuma
             | WgpuUpscaleMethod::WgslAcnetF8B4HdnLuma
             | WgpuUpscaleMethod::WgslAcnetF8B4BoxHdnLuma
-    )
-}
-
-fn is_cunny_method(method: WgpuUpscaleMethod) -> bool {
-    matches!(
-        method,
-        WgpuUpscaleMethod::CunnyVeryfastNvl
-            | WgpuUpscaleMethod::CunnyVeryfastSoft
-            | WgpuUpscaleMethod::CunnyFasterNvl
-            | WgpuUpscaleMethod::CunnyFasterSoft
-            | WgpuUpscaleMethod::CunnyFasterDs
-            | WgpuUpscaleMethod::CunnyFastNvl
-            | WgpuUpscaleMethod::CunnyFastSoft
-            | WgpuUpscaleMethod::CunnyFastDs
-            | WgpuUpscaleMethod::Cunny2x12Soft
-            | WgpuUpscaleMethod::Cunny2x12Ds
-            | WgpuUpscaleMethod::Cunny3x12Nvl
-            | WgpuUpscaleMethod::Cunny3x12Soft
-            | WgpuUpscaleMethod::Cunny3x12Ds
-            | WgpuUpscaleMethod::Cunny4x12Nvl
-            | WgpuUpscaleMethod::Cunny4x12Soft
-            | WgpuUpscaleMethod::Cunny4x12Ds
-            | WgpuUpscaleMethod::Cunny4x16Nvl
-            | WgpuUpscaleMethod::Cunny4x16Soft
-            | WgpuUpscaleMethod::Cunny4x16Ds
-            | WgpuUpscaleMethod::Cunny4x24Nvl
-            | WgpuUpscaleMethod::Cunny4x24Soft
-            | WgpuUpscaleMethod::Cunny4x24Ds
-            | WgpuUpscaleMethod::Cunny4x32Nvl
-            | WgpuUpscaleMethod::Cunny4x32Soft
-            | WgpuUpscaleMethod::Cunny4x32Ds
-            | WgpuUpscaleMethod::Cunny8x32Nvl
-            | WgpuUpscaleMethod::Cunny8x32Ds
     )
 }
 

@@ -161,7 +161,7 @@ fn resize_color_image(image: &ColorImage, output_size: [usize; 2]) -> Result<Col
 fn color_image_to_rgba(image: &ColorImage) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(image.pixels.len() * 4);
     for pixel in &image.pixels {
-        bytes.extend_from_slice(&[pixel.r(), pixel.g(), pixel.b(), pixel.a()]);
+        bytes.extend_from_slice(&pixel.to_srgba_unmultiplied());
     }
     bytes
 }

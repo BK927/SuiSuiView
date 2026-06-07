@@ -182,10 +182,11 @@ fn weighted_average_pixel(image: &ColorImage, x: usize, y: usize) -> Color32 {
                 1
             };
             let pixel = image.pixels[yy * width + xx];
-            r += pixel.r() as u32 * weight;
-            g += pixel.g() as u32 * weight;
-            b += pixel.b() as u32 * weight;
-            a += pixel.a() as u32 * weight;
+            let [pr, pg, pb, pa] = pixel.to_srgba_unmultiplied();
+            r += pr as u32 * weight;
+            g += pg as u32 * weight;
+            b += pb as u32 * weight;
+            a += pa as u32 * weight;
             total += weight;
         }
     }
@@ -204,17 +205,28 @@ fn rcas_sharpen_pixel(image: &ColorImage, x: usize, y: usize) -> Color32 {
     let right = image.pixels[y * width + (x + 1).min(width - 1)];
     let up = image.pixels[y.saturating_sub(1) * width + x];
     let down = image.pixels[(y + 1).min(height - 1) * width + x];
+    let [center_r, center_g, center_b, center_a] = center.to_srgba_unmultiplied();
+    let [left_r, left_g, left_b, _] = left.to_srgba_unmultiplied();
+    let [right_r, right_g, right_b, _] = right.to_srgba_unmultiplied();
+    let [up_r, up_g, up_b, _] = up.to_srgba_unmultiplied();
+    let [down_r, down_g, down_b, _] = down.to_srgba_unmultiplied();
 
-    let min_luma = luma(left)
-        .min(luma(right))
-        .min(luma(up))
-        .min(luma(down))
-        .min(luma(center));
-    let max_luma = luma(left)
-        .max(luma(right))
-        .max(luma(up))
-        .max(luma(down))
-        .max(luma(center));
+    let center_luma = luma_rgb(center_r, center_g, center_b);
+    let left_luma = luma_rgb(left_r, left_g, left_b);
+    let right_luma = luma_rgb(right_r, right_g, right_b);
+    let up_luma = luma_rgb(up_r, up_g, up_b);
+    let down_luma = luma_rgb(down_r, down_g, down_b);
+
+    let min_luma = left_luma
+        .min(right_luma)
+        .min(up_luma)
+        .min(down_luma)
+        .min(center_luma);
+    let max_luma = left_luma
+        .max(right_luma)
+        .max(up_luma)
+        .max(down_luma)
+        .max(center_luma);
     let contrast = ((max_luma - min_luma) / 255.0).clamp(0.0, 1.0);
     let amount = 0.18 + (1.0 - contrast) * 0.22;
 
@@ -226,26 +238,28 @@ fn rcas_sharpen_pixel(image: &ColorImage, x: usize, y: usize) -> Color32 {
     };
 
     Color32::from_rgba_unmultiplied(
-        sharpen(center.r(), left.r(), right.r(), up.r(), down.r()),
-        sharpen(center.g(), left.g(), right.g(), up.g(), down.g()),
-        sharpen(center.b(), left.b(), right.b(), up.b(), down.b()),
-        center.a(),
+        sharpen(center_r, left_r, right_r, up_r, down_r),
+        sharpen(center_g, left_g, right_g, up_g, down_g),
+        sharpen(center_b, left_b, right_b, up_b, down_b),
+        center_a,
     )
 }
 
-fn luma(pixel: Color32) -> f32 {
-    pixel.r() as f32 * 0.299 + pixel.g() as f32 * 0.587 + pixel.b() as f32 * 0.114
+fn luma_rgb(r: u8, g: u8, b: u8) -> f32 {
+    r as f32 * 0.299 + g as f32 * 0.587 + b as f32 * 0.114
 }
 
 fn sharpen_pixel(original: Color32, blurred: Color32) -> Color32 {
     fn channel(original: u8, blurred: u8) -> u8 {
         (original as f32 * 1.55 - blurred as f32 * 0.55).clamp(0.0, 255.0) as u8
     }
+    let [original_r, original_g, original_b, original_a] = original.to_srgba_unmultiplied();
+    let [blurred_r, blurred_g, blurred_b, _] = blurred.to_srgba_unmultiplied();
     Color32::from_rgba_unmultiplied(
-        channel(original.r(), blurred.r()),
-        channel(original.g(), blurred.g()),
-        channel(original.b(), blurred.b()),
-        original.a(),
+        channel(original_r, blurred_r),
+        channel(original_g, blurred_g),
+        channel(original_b, blurred_b),
+        original_a,
     )
 }
 
@@ -254,9 +268,7 @@ fn adjust_gamma_and_invert(image: &ColorImage, gamma: bool, invert: bool) -> Col
         .pixels
         .iter()
         .map(|pixel| {
-            let mut r = pixel.r();
-            let mut g = pixel.g();
-            let mut b = pixel.b();
+            let [mut r, mut g, mut b, a] = pixel.to_srgba_unmultiplied();
             if gamma {
                 r = gamma_channel(r);
                 g = gamma_channel(g);
@@ -267,7 +279,7 @@ fn adjust_gamma_and_invert(image: &ColorImage, gamma: bool, invert: bool) -> Col
                 g = 255 - g;
                 b = 255 - b;
             }
-            Color32::from_rgba_unmultiplied(r, g, b, pixel.a())
+            Color32::from_rgba_unmultiplied(r, g, b, a)
         })
         .collect();
     ColorImage::new(image.size, pixels)
@@ -332,4 +344,52 @@ pub fn compose_images_horizontally(images: &[ColorImage], gap: usize) -> Option<
         cursor_x += image.size[0] + gap;
     }
     Some(ColorImage::new([width, height], pixels))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_effects_to_image, gamma_channel, ImageFilter, ViewEffects};
+    use eframe::egui::{Color32, ColorImage};
+
+    #[test]
+    fn smooth_uses_unmultiplied_channels_for_transparent_pixels() {
+        let pixel = Color32::from_rgba_unmultiplied(255, 0, 0, 128);
+        let image = ColorImage::new([2, 2], vec![pixel; 4]);
+
+        let output = apply_effects_to_image(
+            &image,
+            ViewEffects {
+                filter: ImageFilter::Smooth,
+                ..ViewEffects::default()
+            },
+        );
+
+        assert_eq!(output.pixels[0].to_srgba_unmultiplied(), [255, 0, 0, 128]);
+    }
+
+    #[test]
+    fn gamma_invert_uses_unmultiplied_channels_for_transparent_pixels() {
+        let image = ColorImage::new(
+            [1, 1],
+            vec![Color32::from_rgba_unmultiplied(64, 0, 255, 128)],
+        );
+
+        let output = apply_effects_to_image(
+            &image,
+            ViewEffects {
+                gamma: true,
+                invert_colors: true,
+                ..ViewEffects::default()
+            },
+        );
+
+        let expected = Color32::from_rgba_unmultiplied(
+            255 - gamma_channel(64),
+            255 - gamma_channel(0),
+            0,
+            128,
+        );
+
+        assert_eq!(output.pixels[0], expected);
+    }
 }

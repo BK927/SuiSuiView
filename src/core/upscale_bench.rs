@@ -176,7 +176,9 @@ pub(crate) fn gpu_methods_for_filter(
             .iter()
             .copied()
             .filter(|method| {
-                !method.is_artcnn() && !matches!(method, WgpuUpscaleMethod::WgslSrLabSpanX2)
+                !method.is_artcnn()
+                    && !method.is_cunny()
+                    && !matches!(method, WgpuUpscaleMethod::WgslSrLabSpanX2)
             })
             .collect(),
     }
@@ -656,14 +658,20 @@ mod tests {
     }
 
     #[test]
-    fn default_gpu_bench_methods_skip_hidden_artcnn_matrix() {
+    fn default_gpu_bench_methods_skip_heavy_explicit_matrices() {
         let default_methods = gpu_methods_for_filter(None);
 
         assert!(!default_methods.contains(&WgpuUpscaleMethod::WgslArtcnnC4F16));
         assert!(!default_methods.contains(&WgpuUpscaleMethod::WgslArtcnnC4F32Ds));
+        assert!(!default_methods.contains(&WgpuUpscaleMethod::CunnyVeryfastSoft));
+        assert!(!default_methods.contains(&WgpuUpscaleMethod::Cunny8x32Ds));
         assert_eq!(
             gpu_methods_for_filter(Some(WgpuUpscaleMethod::WgslArtcnnC4F16)),
             vec![WgpuUpscaleMethod::WgslArtcnnC4F16]
+        );
+        assert_eq!(
+            gpu_methods_for_filter(Some(WgpuUpscaleMethod::CunnyVeryfastSoft)),
+            vec![WgpuUpscaleMethod::CunnyVeryfastSoft]
         );
     }
 

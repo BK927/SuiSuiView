@@ -454,7 +454,7 @@ fn image_filter_type(resize_filter: ResizeFilter) -> FilterType {
 fn color_image_to_rgba(image: &ColorImage) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(image.pixels.len() * 4);
     for pixel in &image.pixels {
-        bytes.extend_from_slice(&[pixel.r(), pixel.g(), pixel.b(), pixel.a()]);
+        bytes.extend_from_slice(&pixel.to_srgba_unmultiplied());
     }
     bytes
 }

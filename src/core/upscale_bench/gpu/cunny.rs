@@ -44,9 +44,12 @@ struct CunnyPassSpec {
 }
 
 impl CunnyBench {
-    pub(super) async fn try_new(device: &wgpu::Device) -> Option<Self> {
+    pub(super) async fn try_new(
+        device: &wgpu::Device,
+        method_filter: Option<WgpuUpscaleMethod>,
+    ) -> Option<Self> {
         device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let bench = Self::new(device);
+        let bench = Self::new(device, method_filter);
         match device.pop_error_scope().await {
             Some(error) => {
                 eprintln!("CuNNy NVL bench candidates disabled: {error}");
@@ -56,7 +59,7 @@ impl CunnyBench {
         }
     }
 
-    fn new(device: &wgpu::Device) -> Self {
+    fn new(device: &wgpu::Device, method_filter: Option<WgpuUpscaleMethod>) -> Self {
         let mut layout_entries = Vec::with_capacity(1 + CUNNY_INPUT_SLOTS + CUNNY_OUTPUT_SLOTS + 2);
         layout_entries.push(texture_entry(0));
         for slot in 0..CUNNY_INPUT_SLOTS {
@@ -86,8 +89,7 @@ impl CunnyBench {
             push_constant_ranges: &[],
         });
 
-        let variants = CUNNY_VARIANTS
-            .iter()
+        let variants = cunny_variant_sources(method_filter)
             .map(|variant| {
                 let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some(variant.name),
@@ -612,6 +614,14 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 27] = [
         pass_specs: &CUNNY_8X32_NVL_PASSES,
     },
 ];
+
+fn cunny_variant_sources(
+    method_filter: Option<WgpuUpscaleMethod>,
+) -> impl Iterator<Item = &'static CunnyVariantSource> {
+    CUNNY_VARIANTS
+        .iter()
+        .filter(move |variant| method_filter.map_or(true, |method| variant.method == method))
+}
 
 const CUNNY_VERYFAST_NVL_ENTRY_POINTS: [&str; 4] = [
     "cunny_veryfast_nvl_pass_0",
@@ -1473,4 +1483,28 @@ fn create_intermediate_texture(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
         view_formats: &[],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cunny_variant_sources, CUNNY_VARIANTS};
+    use crate::core::state::WgpuUpscaleMethod;
+
+    #[test]
+    fn filtered_cunny_sources_select_only_requested_variant() {
+        let variants =
+            cunny_variant_sources(Some(WgpuUpscaleMethod::CunnyVeryfastSoft)).collect::<Vec<_>>();
+
+        assert_eq!(variants.len(), 1);
+        assert_eq!(variants[0].method, WgpuUpscaleMethod::CunnyVeryfastSoft);
+        assert_eq!(variants[0].entry_points.len(), 4);
+    }
+
+    #[test]
+    fn unfiltered_cunny_sources_keep_full_matrix_available() {
+        let variants = cunny_variant_sources(None).collect::<Vec<_>>();
+
+        assert_eq!(variants.len(), CUNNY_VARIANTS.len());
+        assert!(variants.iter().all(|variant| variant.method.is_cunny()));
+    }
 }

@@ -533,7 +533,7 @@ pub(crate) fn output_size_for_effects(size: [usize; 2], effects: ViewEffects) ->
 pub(crate) fn color_image_to_rgba(image: &ColorImage) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(image.pixels.len() * 4);
     for pixel in &image.pixels {
-        bytes.extend_from_slice(&[pixel.r(), pixel.g(), pixel.b(), pixel.a()]);
+        bytes.extend_from_slice(&pixel.to_srgba_unmultiplied());
     }
     bytes
 }
@@ -585,8 +585,9 @@ pub struct ImageDiff {
 
 #[cfg(test)]
 mod tests {
-    use super::{align_to, output_size_for_effects};
+    use super::{align_to, color_image_to_rgba, output_size_for_effects};
     use crate::core::effects::{ViewEffects, ViewTransform};
+    use eframe::egui::{Color32, ColorImage};
 
     #[test]
     fn gpu_output_size_matches_rotation() {
@@ -614,5 +615,15 @@ mod tests {
         assert_eq!(align_to(1, 256), 256);
         assert_eq!(align_to(256, 256), 256);
         assert_eq!(align_to(257, 256), 512);
+    }
+
+    #[test]
+    fn color_image_to_rgba_returns_unmultiplied_channels() {
+        let image = ColorImage::new(
+            [1, 1],
+            vec![Color32::from_rgba_unmultiplied(255, 0, 0, 128)],
+        );
+
+        assert_eq!(color_image_to_rgba(&image), vec![255, 0, 0, 128]);
     }
 }
