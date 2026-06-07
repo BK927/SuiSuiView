@@ -1,3 +1,4 @@
+use super::super::viewer::{CpuScaleState, CurrentViewState, WgpuScaleState};
 use super::super::SuiSuiViewApp;
 use super::{icons, theme};
 use crate::core::i18n::I18n;
@@ -9,8 +10,9 @@ use eframe::egui::{self, RichText};
 impl SuiSuiViewApp {
     pub(in crate::app::ui) fn show_scale_group(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let i18n = self.i18n();
-        let summary = top_bar_scaler_summary(&self.settings, i18n);
-        ui.menu_button(icons::icon_text(icons::IMAGE_SPARKLE, &summary), |ui| {
+        let current_view = self.current_view_state;
+        let summary = top_bar_scaler_summary(current_view.as_ref(), i18n);
+        ui.menu_button(icons::icon_text(icons::OPTIONS, &summary), |ui| {
             self.hold_top_bar_open_for_menu();
             ui.set_min_width(320.0);
             self.show_cpu_filter_row(
@@ -46,7 +48,7 @@ impl SuiSuiViewApp {
             .on_disabled_hover_text(i18n.text("topbar.scale.wgpu_disabled"));
         })
         .response
-        .on_hover_text(top_bar_scaler_tooltip(&self.settings, i18n));
+        .on_hover_text(top_bar_scaler_tooltip(current_view.as_ref(), i18n));
     }
 
     fn show_cpu_filter_row(
@@ -120,61 +122,40 @@ impl SuiSuiViewApp {
     }
 }
 
-fn top_bar_scaler_summary(settings: &AppSettings, i18n: I18n) -> String {
-    let mut summary = format!(
-        "{}: C {}/{}",
-        i18n.text("topbar.scale"),
-        compact_cpu_filter_label(settings.cpu_upscale_filter),
-        compact_cpu_filter_label(settings.cpu_downscale_filter)
-    );
-    if matches!(settings.renderer_mode, RendererMode::Wgpu) {
-        summary.push_str(&format!(
-            " | G {}/{}",
-            compact_wgpu_upscale_label(wgpu_upscale_menu_current(settings)),
-            compact_wgpu_downscale_label(settings.wgpu_downscale_method)
-        ));
+fn top_bar_scaler_summary(current_view: Option<&CurrentViewState>, i18n: I18n) -> String {
+    let Some(current_view) = current_view else {
+        return i18n.text("topbar.scale");
+    };
+    let mut parts = Vec::new();
+    if let Some(cpu_label) = compact_cpu_scale_state_label(current_view.cpu_scale) {
+        parts.push(cpu_label);
     }
-    summary
+    if let Some(wgpu_label) = compact_wgpu_scale_state_label(current_view.wgpu_scale) {
+        parts.push(wgpu_label);
+    }
+    if parts.is_empty() {
+        return i18n.text("topbar.scale");
+    }
+    format!("{}: {}", i18n.text("topbar.scale"), parts.join(" | "))
 }
 
-fn top_bar_scaler_tooltip(settings: &AppSettings, i18n: I18n) -> String {
-    let mut lines = vec![
+fn top_bar_scaler_tooltip(current_view: Option<&CurrentViewState>, i18n: I18n) -> String {
+    let Some(current_view) = current_view else {
+        return i18n.text("topbar.scale.current_unknown");
+    };
+    [
         format!(
             "{}: {}",
-            i18n.text("topbar.scale.cpu_up"),
-            settings.cpu_upscale_filter.label()
+            i18n.text("topbar.scale.current_prepare"),
+            current_view.cpu_scale.label()
         ),
         format!(
             "{}: {}",
-            i18n.text("topbar.scale.cpu_down"),
-            settings.cpu_downscale_filter.label()
+            i18n.text("topbar.scale.current_display"),
+            current_view.wgpu_scale.label()
         ),
-    ];
-    if matches!(settings.renderer_mode, RendererMode::Wgpu) {
-        lines.push(format!(
-            "{}: {}",
-            i18n.text("topbar.scale.wgpu_up"),
-            wgpu_upscale_menu_current(settings).settings_label_i18n(i18n)
-        ));
-        lines.push(format!(
-            "{}: {}",
-            i18n.text("topbar.scale.wgpu_down"),
-            settings.wgpu_downscale_method.label()
-        ));
-    } else {
-        lines.push(i18n.text("topbar.scale.wgpu_disabled"));
-        lines.push(format!(
-            "{}: {}",
-            i18n.text("topbar.scale.wgpu_up_saved"),
-            settings.wgpu_upscale_method.label_i18n(i18n)
-        ));
-        lines.push(format!(
-            "{}: {}",
-            i18n.text("topbar.scale.wgpu_down_saved"),
-            settings.wgpu_downscale_method.label()
-        ));
-    }
-    lines.join("\n")
+    ]
+    .join("\n")
 }
 
 fn cpu_filter_candidates(
@@ -236,6 +217,31 @@ fn wgpu_upscale_menu_current(settings: &AppSettings) -> WgpuUpscaleMethod {
         WgpuUpscaleMethod::Auto
     } else {
         settings.wgpu_upscale_method
+    }
+}
+
+fn compact_cpu_scale_state_label(state: CpuScaleState) -> Option<String> {
+    match state {
+        CpuScaleState::Native => None,
+        CpuScaleState::Upscale(filter) => {
+            Some(format!("C up {}", compact_cpu_filter_label(filter)))
+        }
+        CpuScaleState::Downscale(filter) => {
+            Some(format!("C down {}", compact_cpu_filter_label(filter)))
+        }
+    }
+}
+
+fn compact_wgpu_scale_state_label(state: WgpuScaleState) -> Option<String> {
+    match state {
+        WgpuScaleState::Inactive | WgpuScaleState::Native => None,
+        WgpuScaleState::Mixed => Some("G mixed Linear".to_owned()),
+        WgpuScaleState::Upscale(method) => {
+            Some(format!("G up {}", compact_wgpu_upscale_label(method)))
+        }
+        WgpuScaleState::Downscale(method) => {
+            Some(format!("G down {}", compact_wgpu_downscale_label(method)))
+        }
     }
 }
 
@@ -301,10 +307,12 @@ mod tests {
     use super::{
         cpu_filter_candidates, top_bar_scaler_summary, unique_candidates, wgpu_upscale_menu_current,
     };
+    use crate::app::viewer::{CpuScaleState, CurrentViewState, WgpuScaleState};
     use crate::core::i18n::{I18n, ResolvedLanguage};
     use crate::core::state::{
         AppSettings, CpuScaleFilter, RendererMode, WgpuDownscaleMethod, WgpuUpscaleMethod,
     };
+    use crate::core::worker::{DecodeBackend, PreparedTargetIntent};
 
     #[test]
     fn quick_candidates_deduplicate_and_append_current() {
@@ -328,40 +336,32 @@ mod tests {
     }
 
     #[test]
-    fn scaler_summary_differs_between_wgpu_on_and_off() {
+    fn scaler_summary_uses_current_view_state() {
         let i18n = I18n::resolved(ResolvedLanguage::EnUs);
-        let off = AppSettings::default();
-        let on = AppSettings {
-            renderer_mode: RendererMode::Wgpu,
-            wgpu_upscale_method: WgpuUpscaleMethod::Auto,
-            wgpu_downscale_method: WgpuDownscaleMethod::PyramidLanczos3,
-            ..AppSettings::default()
-        };
+        let state = test_view_state(
+            CpuScaleState::Downscale(CpuScaleFilter::Hamming),
+            WgpuScaleState::Downscale(WgpuDownscaleMethod::PyramidLanczos3),
+        );
 
         assert_eq!(
-            top_bar_scaler_summary(&off, i18n),
-            "Scale: C Catmull/Hamming"
-        );
-        assert_eq!(
-            top_bar_scaler_summary(&on, i18n),
-            "Scale: C Catmull/Hamming | G Auto/Py+Lz3"
+            top_bar_scaler_summary(Some(&state), i18n),
+            "Scale: C down Hamming | G down Py+Lz3"
         );
     }
 
     #[test]
-    fn wgpu_off_summary_does_not_imply_gpu_scaler_is_active() {
+    fn scaler_summary_falls_back_to_plain_label_when_current_state_is_unknown() {
         let i18n = I18n::resolved(ResolvedLanguage::EnUs);
-        let settings = AppSettings {
-            renderer_mode: RendererMode::LowMemoryGlow,
-            wgpu_upscale_method: WgpuUpscaleMethod::Auto,
-            wgpu_downscale_method: WgpuDownscaleMethod::PyramidLanczos3,
-            ..AppSettings::default()
-        };
 
-        assert_eq!(
-            top_bar_scaler_summary(&settings, i18n),
-            "Scale: C Catmull/Hamming"
-        );
+        assert_eq!(top_bar_scaler_summary(None, i18n), "Scale");
+    }
+
+    #[test]
+    fn wgpu_inactive_summary_does_not_imply_gpu_scaler_is_active() {
+        let i18n = I18n::resolved(ResolvedLanguage::EnUs);
+        let state = test_view_state(CpuScaleState::Native, WgpuScaleState::Inactive);
+
+        assert_eq!(top_bar_scaler_summary(Some(&state), i18n), "Scale");
     }
 
     #[test]
@@ -376,5 +376,15 @@ mod tests {
             wgpu_upscale_menu_current(&settings),
             WgpuUpscaleMethod::Auto
         );
+    }
+
+    fn test_view_state(cpu_scale: CpuScaleState, wgpu_scale: WgpuScaleState) -> CurrentViewState {
+        CurrentViewState {
+            page_index: 0,
+            decode_backend: DecodeBackend::ImageCrate,
+            cpu_scale,
+            wgpu_scale,
+            target_intent: PreparedTargetIntent::NormalNavigation,
+        }
     }
 }

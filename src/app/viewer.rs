@@ -26,8 +26,8 @@ mod transition;
 pub(in crate::app) use model::relative_difference;
 pub(in crate::app) use model::{
     double_spread_indices, ordered_spread_indices, page_visual_size,
-    smart_spread_indices_for_metrics, worker_center_page_for_mode, CurrentViewState, PageMetrics,
-    PageRenderInfo, PageVisual, Transition, ViewMode,
+    smart_spread_indices_for_metrics, worker_center_page_for_mode, CpuScaleState, CurrentViewState,
+    PageMetrics, PageRenderInfo, PageVisual, Transition, ViewMode, WgpuScaleState,
 };
 pub(in crate::app) use paint_helpers::texture_options_for_sampling;
 pub(in crate::app) use transition::{
