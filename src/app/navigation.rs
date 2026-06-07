@@ -653,20 +653,33 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn open_sibling_book(&mut self, direction: isize) {
         let direction = normalize_sibling_book_direction(direction);
-        if self.should_defer_sibling_book_turn() {
+        if self.should_queue_sibling_book_turn() {
             self.queue_sibling_book_turn(direction);
             return;
         }
         self.open_sibling_book_now(direction);
     }
 
-    fn should_defer_sibling_book_turn(&self) -> bool {
+    fn should_queue_sibling_book_turn(&self) -> bool {
+        !self.queued_sibling_book_turns.is_empty()
+            || self.loader_pending
+            || self.sibling_book_visual_pending
+    }
+
+    fn sibling_book_turn_in_progress(&self) -> bool {
         self.loader_pending || self.sibling_book_visual_pending || self.sibling_book_hold_active()
     }
 
     pub(in crate::app) fn sibling_book_hold_active(&self) -> bool {
         self.sibling_book_visual_hold_until
             .is_some_and(|until| Instant::now() < until)
+    }
+
+    pub(in crate::app) fn sibling_book_transition_stabilizing(&self) -> bool {
+        self.loader_pending
+            || self.sibling_book_visual_pending
+            || self.sibling_book_hold_active()
+            || !self.queued_sibling_book_turns.is_empty()
     }
 
     fn queue_sibling_book_turn(&mut self, direction: isize) {
@@ -676,11 +689,11 @@ impl SuiSuiViewApp {
             .request_repaint_after(SIBLING_BOOK_TURN_REPAINT_DELAY);
     }
 
-    pub(in crate::app) fn drive_queued_sibling_book_after_paint(&mut self, ctx: &egui::Context) {
+    pub(in crate::app) fn drive_queued_sibling_book_turn(&mut self, ctx: &egui::Context) {
         if self.queued_sibling_book_turns.is_empty() {
             return;
         }
-        if self.should_defer_sibling_book_turn() {
+        if self.sibling_book_turn_in_progress() {
             ctx.request_repaint_after(SIBLING_BOOK_TURN_REPAINT_DELAY);
             return;
         }
@@ -688,7 +701,7 @@ impl SuiSuiViewApp {
             return;
         };
         self.open_sibling_book_now(direction);
-        if !self.queued_sibling_book_turns.is_empty() || self.should_defer_sibling_book_turn() {
+        if !self.queued_sibling_book_turns.is_empty() || self.sibling_book_turn_in_progress() {
             ctx.request_repaint_after(SIBLING_BOOK_TURN_REPAINT_DELAY);
         }
     }

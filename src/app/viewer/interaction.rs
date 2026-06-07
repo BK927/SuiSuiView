@@ -333,7 +333,7 @@ fn zoom_delta_gesture(zoom_delta: f32) -> Option<MouseGesture> {
     }
 }
 
-fn target_long_edge_for_view(
+pub(in crate::app) fn target_long_edge_for_view(
     fit_mode: FitMode,
     manual_zoom: f32,
     page_viewport: Vec2,
@@ -442,13 +442,13 @@ fn original_inspection_target_long_edge(
 }
 
 #[derive(Debug, Clone, Copy)]
-struct OriginalPageSize {
-    width: f32,
-    height: f32,
+pub(in crate::app) struct OriginalPageSize {
+    pub(in crate::app) width: f32,
+    pub(in crate::app) height: f32,
 }
 
 impl OriginalPageSize {
-    fn long_edge(self) -> f32 {
+    pub(in crate::app) fn long_edge(self) -> f32 {
         self.width.max(self.height)
     }
 }

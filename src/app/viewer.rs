@@ -23,6 +23,7 @@ mod model;
 mod paint_helpers;
 mod transition;
 
+pub(in crate::app) use interaction::{target_long_edge_for_view, OriginalPageSize};
 #[cfg(test)]
 pub(in crate::app) use model::relative_difference;
 pub(in crate::app) use model::{
@@ -36,7 +37,7 @@ pub(in crate::app) use transition::{
 };
 
 const TRANSITION_MS: f32 = 120.0;
-const SPREAD_GAP_POINTS: f32 = 14.0;
+pub(in crate::app) const SPREAD_GAP_POINTS: f32 = 14.0;
 const TARGET_EDGE_HYSTERESIS: u32 = 512;
 const WGPU_PRESENT_CONFIRM_REPAINT_DELAY: Duration = Duration::from_millis(16);
 const WGPU_SIBLING_VISIBLE_HOLD: Duration = Duration::from_millis(260);
@@ -327,6 +328,7 @@ impl SuiSuiViewApp {
         let available = ui.available_size();
         let (rect, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
+        self.last_viewer_size_points = Some(rect.size());
         self.paint_pending_gpu_original_inspection_cleanup(&painter, rect);
 
         painter.rect_filled(rect, 0.0, ui::theme::VIEWER_BG);
@@ -352,7 +354,9 @@ impl SuiSuiViewApp {
             return;
         }
 
-        self.update_target_long_edge(ctx, rect.size());
+        if !self.loader_pending {
+            self.update_target_long_edge(ctx, rect.size());
+        }
         self.handle_viewer_pointer(ui, &response);
 
         if self.debug_compare.enabled {
@@ -547,8 +551,7 @@ impl SuiSuiViewApp {
                     ..
                 } => {
                     let target_size = rect_target_size(page_rect, ctx.pixels_per_point());
-                    let force_texture_fallback =
-                        self.sibling_book_visual_pending || self.sibling_book_hold_active();
+                    let force_texture_fallback = self.sibling_book_transition_stabilizing();
                     let active_wgsl = !force_texture_fallback
                         && gpu_visual_needs_wgsl(
                             image_size,

@@ -25,6 +25,8 @@ const REQUEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_APP_HANDOFF";
 const HANDOFF_DELAY_ENV: &str = "SUISUIVIEW_HANDOFF_DELAY_MS";
 const FAIL_STAGE_ENV: &str = "SUISUIVIEW_HANDOFF_FAIL_STAGE";
 const DEFAULT_HANDOFF_DELAY: Duration = Duration::from_millis(900);
+#[cfg(target_os = "windows")]
+static TITLE_SYNC_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub(crate) struct HandoffPreviewOptions {
     pub(crate) store: StateStore,
@@ -734,6 +736,7 @@ fn sync_visible_window_title(_window: &winit::window::Window) {}
 
 #[cfg(target_os = "windows")]
 fn schedule_process_visible_window_title(title: String) {
+    let generation = next_title_sync_generation();
     set_process_visible_window_title(&title);
     std::thread::Builder::new()
         .name("suisuiview-handoff-title-sync".to_owned())
@@ -744,6 +747,9 @@ fn schedule_process_visible_window_title(title: String) {
                 Duration::from_millis(900),
             ] {
                 std::thread::sleep(delay);
+                if !title_sync_generation_matches(generation) {
+                    break;
+                }
                 set_process_visible_window_title(&title);
             }
         })
@@ -752,6 +758,20 @@ fn schedule_process_visible_window_title(title: String) {
 
 #[cfg(not(target_os = "windows"))]
 fn schedule_process_visible_window_title(_title: String) {}
+
+#[cfg(target_os = "windows")]
+fn next_title_sync_generation() -> u64 {
+    use std::sync::atomic::Ordering;
+
+    TITLE_SYNC_GENERATION.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+#[cfg(target_os = "windows")]
+fn title_sync_generation_matches(generation: u64) -> bool {
+    use std::sync::atomic::Ordering;
+
+    TITLE_SYNC_GENERATION.load(Ordering::Relaxed) == generation
+}
 
 #[cfg(target_os = "windows")]
 fn set_process_visible_window_title(title: &str) {

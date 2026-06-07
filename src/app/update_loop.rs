@@ -58,6 +58,9 @@ impl SuiSuiViewApp {
         }
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("handle_keyboard");
+        self.drive_queued_sibling_book_turn(ctx);
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        record_update_phase!("drive_queued_sibling_book_before_viewer");
         self.maintain_native_window_state(ctx);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("maintain_native_window_state");
@@ -89,7 +92,7 @@ impl SuiSuiViewApp {
         self.show_bookmark_popover(ctx);
         self.show_edge_prompt(ctx);
         self.drive_queued_page_turn_after_paint(ctx);
-        self.drive_queued_sibling_book_after_paint(ctx);
+        self.drive_queued_sibling_book_turn(ctx);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("post_viewer");
         self.prewarm_neighbor_textures(ctx);

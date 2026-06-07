@@ -1,14 +1,17 @@
 use super::{
     adjacent_sibling_book_paths_ordered, image_header,
     opening::{open_origin_for_source_kind, reading_position_for_open, selected_open_page},
-    perf, OpenOrigin, PageCacheKey, PageMetrics, SuiSuiViewApp,
+    perf,
+    viewer::{target_long_edge_for_view, OriginalPageSize},
+    OpenOrigin, PageCacheKey, PageMetrics, SuiSuiViewApp,
 };
 use crate::core::source::{classify_path, open_source_from_path, BookSource, SharedSource};
-use crate::core::state::StateStore;
+use crate::core::state::{FitMode, StateStore};
 use crate::core::worker::{
     prepare_image_with_options, DecodeOptions, NavigationDirection, PreparedPage,
     MAX_TARGET_LONG_EDGE,
 };
+use eframe::egui::Vec2;
 use image::ImageReader;
 use std::fs;
 use std::io::Cursor;
@@ -30,6 +33,14 @@ pub(in crate::app) struct SeededPreparedPage {
     pub(in crate::app) index: usize,
     pub(in crate::app) key: PageCacheKey,
     pub(in crate::app) page: Arc<PreparedPage>,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::app) struct SeedTargetView {
+    pub(in crate::app) fit_mode: FitMode,
+    pub(in crate::app) manual_zoom: f32,
+    pub(in crate::app) page_viewport: Vec2,
+    pub(in crate::app) pixels_per_point: f32,
 }
 
 pub(in crate::app) struct AdjacentSeedEvent {
@@ -181,6 +192,7 @@ impl SuiSuiViewApp {
         let store = self.store.clone();
         let resume_by_file_identity = self.settings.resume_by_file_identity;
         let large_source_guard = perf::adjacent_seed_memory_guard_enabled();
+        let seed_target_view = self.seed_target_view_for_open(None);
         let tx = self.adjacent_seed_tx.clone();
         let seed_order = self.last_nav_direction;
         let ctx = self.egui_ctx.clone();
@@ -216,6 +228,7 @@ impl SuiSuiViewApp {
                         &generation_token,
                         generation,
                         large_source_guard,
+                        seed_target_view,
                     );
                     let success = cache.is_some();
                     perf::record_adjacent_seed_prefetch_prepare(
@@ -257,6 +270,7 @@ impl SuiSuiViewApp {
                     target_long_edge,
                     decode,
                     large_source_guard,
+                    seed_target_view,
                 );
                 perf::record_adjacent_seed_prefetch_prepare(
                     followup_started,
@@ -351,6 +365,7 @@ pub(in crate::app) fn prepare_seeded_first_page(
     target_long_edge: u32,
     decode: DecodeOptions,
     large_source_guard: bool,
+    target_view: Option<SeedTargetView>,
 ) -> Option<SeededPreparedPage> {
     let page_count = source.page_count();
     if page_count == 0 {
@@ -364,6 +379,7 @@ pub(in crate::app) fn prepare_seeded_first_page(
     if large_source_guard && should_skip_memory_aware_adjacent_seed(&bytes) {
         return None;
     }
+    let target_long_edge = seed_target_long_edge_from_view(&bytes, target_long_edge, target_view);
     let page = Arc::new(prepare_image_with_options(&bytes, target_long_edge, decode).ok()?);
     Some(SeededPreparedPage {
         index,
@@ -382,6 +398,7 @@ pub(in crate::app) fn prepare_seeded_followup_page(
     target_long_edge: u32,
     decode: DecodeOptions,
     large_source_guard: bool,
+    target_view: Option<SeedTargetView>,
 ) -> Option<SeededPreparedPage> {
     if target_long_edge > ADJACENT_SEED_FOLLOWUP_MAX_TARGET_LONG_EDGE {
         return None;
@@ -390,8 +407,14 @@ pub(in crate::app) fn prepare_seeded_followup_page(
     if index >= source.page_count() {
         return None;
     }
-    let page =
-        prepare_seeded_first_page(source, index, target_long_edge, decode, large_source_guard)?;
+    let page = prepare_seeded_first_page(
+        source,
+        index,
+        target_long_edge,
+        decode,
+        large_source_guard,
+        target_view,
+    )?;
     if page.page.byte_size > ADJACENT_SEED_FOLLOWUP_MAX_BYTES {
         return None;
     }
@@ -410,6 +433,7 @@ pub(in crate::app) fn prepare_adjacent_seed_cache(
     generation_token: &AtomicU64,
     generation: u64,
     large_source_guard: bool,
+    target_view: Option<SeedTargetView>,
 ) -> Option<AdjacentSeedCache> {
     if !adjacent_seed_generation_matches(generation_token, generation) {
         return None;
@@ -443,6 +467,7 @@ pub(in crate::app) fn prepare_adjacent_seed_cache(
         target_long_edge,
         decode,
         large_source_guard,
+        target_view,
     )?;
     if !adjacent_seed_generation_matches(generation_token, generation) {
         return None;
@@ -513,6 +538,29 @@ fn source_dimensions_from_bytes(bytes: &[u8]) -> Option<(u32, u32)> {
             .into_dimensions()
             .ok()
     })
+}
+
+fn seed_target_long_edge_from_view(
+    bytes: &[u8],
+    fallback_target_long_edge: u32,
+    target_view: Option<SeedTargetView>,
+) -> u32 {
+    let Some(target_view) = target_view else {
+        return fallback_target_long_edge;
+    };
+    let Some((width, height)) = source_dimensions_from_bytes(bytes) else {
+        return fallback_target_long_edge;
+    };
+    target_long_edge_for_view(
+        target_view.fit_mode,
+        target_view.manual_zoom,
+        target_view.page_viewport,
+        target_view.pixels_per_point,
+        &[OriginalPageSize {
+            width: width as f32,
+            height: height as f32,
+        }],
+    )
 }
 
 #[cfg(test)]

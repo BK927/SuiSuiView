@@ -55,6 +55,7 @@ impl SuiSuiViewApp {
                 request.image_size,
                 &request.rgba,
                 request.effects,
+                !force_texture_fallback,
             );
             painter.image(
                 texture.id(),
@@ -75,6 +76,7 @@ impl SuiSuiViewApp {
         image_size: [usize; 2],
         rgba: &[u8],
         effects: ViewEffects,
+        request_present_repaint: bool,
     ) -> TextureHandle {
         let texture_key = TextureCacheKey {
             page: source_key.page,
@@ -99,7 +101,9 @@ impl SuiSuiViewApp {
             ImageData::Color(image),
             texture_options_for_sampling(texture_key.sampling),
         );
-        ctx.request_repaint_after(super::super::TEXTURE_PRESENT_REPAINT_DELAY);
+        if request_present_repaint {
+            ctx.request_repaint_after(super::super::TEXTURE_PRESENT_REPAINT_DELAY);
+        }
         self.textures.put(
             texture_key,
             TextureEntry {

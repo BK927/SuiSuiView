@@ -1,6 +1,8 @@
 use super::{
-    adjacent_seed::prepare_seeded_first_page, perf, PendingBookmarkJump, SeededPreparedPage,
-    SuiSuiViewApp,
+    adjacent_seed::{prepare_seeded_first_page, SeedTargetView},
+    perf,
+    viewer::SPREAD_GAP_POINTS,
+    PendingBookmarkJump, SeededPreparedPage, SuiSuiViewApp,
 };
 use crate::core::effects::ViewEffects;
 use crate::core::formats::unsupported_message_for_extension;
@@ -130,6 +132,7 @@ pub(crate) fn start_startup_open_loader(path: PathBuf, store: &StateStore) -> Op
                     target_long_edge,
                     decode,
                     false,
+                    None,
                 );
                 perf::record_startup_seed_prepare(
                     started,
@@ -232,6 +235,7 @@ impl SuiSuiViewApp {
                 let store = self.store.clone();
                 let settings = self.settings.clone();
                 let seed_target_long_edge = open_seed_target_long_edge(self.target_long_edge);
+                let seed_target_view = self.seed_target_view_for_open(view_fallback);
                 let decode = startup_decode_options(&settings);
                 let resume_by_file_identity = settings.resume_by_file_identity;
                 let pending_bookmark_jump = self.pending_bookmark_jump.clone();
@@ -269,6 +273,7 @@ impl SuiSuiViewApp {
                                 seed_target_long_edge,
                                 decode,
                                 false,
+                                seed_target_view,
                             );
                             perf::record_startup_seed_prepare(
                                 started,
@@ -471,6 +476,25 @@ impl SuiSuiViewApp {
             fit_mode: self.fit_mode,
             manual_zoom: self.manual_zoom,
         }
+    }
+
+    pub(in crate::app) fn seed_target_view_for_open(
+        &self,
+        view_fallback: Option<OpenViewFallback>,
+    ) -> Option<SeedTargetView> {
+        let viewport = self.last_viewer_size_points?;
+        let page_viewport = if self.view_mode.step() <= 1 {
+            viewport
+        } else {
+            Vec2::new((viewport.x - SPREAD_GAP_POINTS).max(1.0) * 0.5, viewport.y)
+        };
+        let fallback = view_fallback.unwrap_or_else(|| self.open_view_fallback());
+        Some(SeedTargetView {
+            fit_mode: fallback.fit_mode,
+            manual_zoom: fallback.manual_zoom,
+            page_viewport,
+            pixels_per_point: self.egui_ctx.pixels_per_point(),
+        })
     }
 }
 
