@@ -1,3 +1,4 @@
+#[cfg(not(test))]
 use directories::ProjectDirs;
 use eframe::egui::ColorImage;
 use std::fs;
@@ -17,6 +18,11 @@ impl BookmarkThumbnailDiskEntry {
             .join(&key[..2])
             .join(format!("{key}.png"));
         Self { key, path }
+    }
+
+    #[cfg(test)]
+    pub(super) fn path_for_test(&self) -> &Path {
+        &self.path
     }
 }
 
@@ -89,10 +95,19 @@ fn decode_thumbnail_png(bytes: &[u8]) -> Result<ColorImage, String> {
     Ok(ColorImage::from_rgba_unmultiplied(size, &image.into_raw()))
 }
 
+#[cfg(not(test))]
 fn bookmark_thumbnail_cache_dir() -> PathBuf {
     ProjectDirs::from("", "", "SuiSuiView")
         .map(|dirs| dirs.cache_dir().join("bookmark-thumbnails"))
         .unwrap_or_else(|| PathBuf::from("SuiSuiView-bookmark-thumbnails-cache"))
+}
+
+#[cfg(test)]
+fn bookmark_thumbnail_cache_dir() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "suisuiview-bookmark-thumbnails-test-{}",
+        std::process::id()
+    ))
 }
 
 fn prune_bookmark_thumbnail_cache() -> Result<(), String> {

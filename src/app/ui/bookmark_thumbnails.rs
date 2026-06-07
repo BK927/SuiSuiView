@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 const THUMBNAIL_CACHE_LIMIT: usize = 64;
 const MAX_THUMBNAIL_UPLOADS_PER_FRAME: usize = 4;
 const MAX_THUMBNAIL_EVENTS_PER_FRAME: usize = 32;
-const THUMBNAIL_DISK_CACHE_VERSION: &str = "suisuiview:bookmark-thumbnail-v1";
+const THUMBNAIL_DISK_CACHE_VERSION: &str = "suisuiview:bookmark-thumbnail-v2";
 const FAILED_THUMBNAIL_RETRY_AFTER: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -26,12 +26,20 @@ pub(super) struct BookmarkThumbnailKey {
     pub(super) known_path: Option<String>,
     pub(super) page: usize,
     pub(super) page_name: Option<String>,
-    pub(super) decode: DecodeOptions,
 }
 
 struct BookmarkThumbnailEntry {
     texture: TextureHandle,
     original_size: Vec2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) enum BookmarkThumbnailFailure {
+    MissingSource,
+    SourceOpenFailed,
+    PageMissing,
+    ReadFailed,
+    DecodeFailed,
 }
 
 pub(in crate::app) enum BookmarkThumbnailState {
@@ -46,7 +54,8 @@ pub(in crate::app) enum BookmarkThumbnailState {
 pub(super) enum BookmarkThumbnailCommand {
     Request {
         key: BookmarkThumbnailKey,
-        source: ThumbnailSource,
+        source: Option<ThumbnailSource>,
+        decode: DecodeOptions,
     },
     Shutdown,
 }
@@ -59,6 +68,7 @@ pub(super) enum BookmarkThumbnailEvent {
     },
     Failed {
         key: BookmarkThumbnailKey,
+        reason: BookmarkThumbnailFailure,
     },
 }
 
@@ -67,7 +77,7 @@ pub(in crate::app) struct BookmarkThumbnails {
     event_rx: Receiver<BookmarkThumbnailEvent>,
     entries: LruCache<BookmarkThumbnailKey, BookmarkThumbnailEntry>,
     inflight: HashSet<BookmarkThumbnailKey>,
-    failed: HashMap<BookmarkThumbnailKey, Instant>,
+    failed: HashMap<BookmarkThumbnailKey, (Instant, BookmarkThumbnailFailure)>,
     shutdown_requested: Arc<AtomicBool>,
     stopped_rx: Receiver<()>,
     join: Option<JoinHandle<()>>,
@@ -138,9 +148,9 @@ impl BookmarkThumbnails {
                     );
                     uploads += 1;
                 }
-                BookmarkThumbnailEvent::Failed { key } => {
+                BookmarkThumbnailEvent::Failed { key, reason } => {
                     self.inflight.remove(&key);
-                    self.failed.insert(key, Instant::now());
+                    self.failed.insert(key, (Instant::now(), reason));
                 }
             }
         }
@@ -158,50 +168,68 @@ impl BookmarkThumbnails {
         page_name: Option<&str>,
         decode: DecodeOptions,
     ) -> BookmarkThumbnailState {
-        let known_path = known_path
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .map(str::to_owned);
-        let page_name = page_name
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(str::to_owned);
-        let key = BookmarkThumbnailKey {
-            book_id: book_id.to_owned(),
-            known_path: known_path.clone(),
-            page,
-            page_name,
-            decode,
-        };
+        let key = BookmarkThumbnailKey::new(book_id, known_path, page, page_name);
         if let Some(entry) = self.entries.get(&key) {
             return BookmarkThumbnailState::Ready {
                 texture: entry.texture.clone(),
                 original_size: entry.original_size,
             };
         }
-        if let Some(failed_at) = self.failed.get(&key).copied() {
+        if let Some((failed_at, _reason)) = self.failed.get(&key).copied() {
             if failed_at.elapsed() < FAILED_THUMBNAIL_RETRY_AFTER {
                 return BookmarkThumbnailState::Failed;
             }
             self.failed.remove(&key);
         }
-        let Some(source) = thumbnail_source(source, known_path.as_deref()) else {
-            return BookmarkThumbnailState::Failed;
-        };
-        if self.inflight.insert(key.clone())
-            && self
-                .command_tx
-                .send(BookmarkThumbnailCommand::Request {
-                    key: key.clone(),
-                    source,
-                })
-                .is_err()
-        {
-            self.inflight.remove(&key);
-            self.failed.insert(key, Instant::now());
+        let source = thumbnail_source(source, key.known_path.as_deref());
+        if let Err(_reason) = self.enqueue_request(key, source, decode) {
             return BookmarkThumbnailState::Failed;
         }
         BookmarkThumbnailState::Loading
+    }
+
+    pub(in crate::app) fn prewarm(
+        &mut self,
+        source: Option<SharedSource>,
+        book_id: &str,
+        known_path: Option<&str>,
+        page: usize,
+        page_name: Option<&str>,
+        decode: DecodeOptions,
+    ) {
+        let key = BookmarkThumbnailKey::new(book_id, known_path, page, page_name);
+        if self.entries.contains(&key) {
+            return;
+        }
+        self.failed.remove(&key);
+        let source = thumbnail_source(source, key.known_path.as_deref());
+        let _ = self.enqueue_request(key, source, decode);
+    }
+
+    fn enqueue_request(
+        &mut self,
+        key: BookmarkThumbnailKey,
+        source: Option<ThumbnailSource>,
+        decode: DecodeOptions,
+    ) -> Result<(), BookmarkThumbnailFailure> {
+        if !self.inflight.insert(key.clone()) {
+            return Ok(());
+        }
+        if self
+            .command_tx
+            .send(BookmarkThumbnailCommand::Request {
+                key: key.clone(),
+                source,
+                decode,
+            })
+            .is_err()
+        {
+            self.inflight.remove(&key);
+            let reason = BookmarkThumbnailFailure::SourceOpenFailed;
+            self.failed.insert(key, (Instant::now(), reason));
+            return Err(reason);
+        }
+        Ok(())
     }
 
     pub(in crate::app) fn request_shutdown(&mut self) -> bool {
@@ -233,8 +261,17 @@ impl BookmarkThumbnails {
 }
 
 impl BookmarkThumbnailKey {
+    fn new(book_id: &str, known_path: Option<&str>, page: usize, page_name: Option<&str>) -> Self {
+        Self {
+            book_id: book_id.to_owned(),
+            known_path: normalized_key_part(known_path),
+            page,
+            page_name: normalized_key_part(page_name),
+        }
+    }
+
     fn texture_label(&self) -> String {
-        format!("bookmark-thumb-{}", bookmark_thumbnail_request_key(self))
+        format!("bookmark-thumb-{}", bookmark_thumbnail_identity_key(self))
     }
 }
 
@@ -244,28 +281,21 @@ impl Drop for BookmarkThumbnails {
     }
 }
 
-fn bookmark_thumbnail_request_key(key: &BookmarkThumbnailKey) -> String {
+fn bookmark_thumbnail_identity_key(key: &BookmarkThumbnailKey) -> String {
     let mut hasher = blake3::Hasher::new();
-    hash_thumbnail_request(&mut hasher, key);
+    hash_thumbnail_identity(&mut hasher, key);
     hasher.finalize().to_hex().to_string()
 }
 
-pub(super) fn bookmark_thumbnail_cache_key(
-    key: &BookmarkThumbnailKey,
-    page: usize,
-    source_fingerprint: &str,
-) -> String {
+pub(super) fn bookmark_thumbnail_cache_key(key: &BookmarkThumbnailKey) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(THUMBNAIL_DISK_CACHE_VERSION.as_bytes());
     hasher.update(&[0]);
-    hash_thumbnail_request(&mut hasher, key);
-    hasher.update(&page.to_le_bytes());
-    hasher.update(&[0]);
-    hasher.update(source_fingerprint.as_bytes());
+    hash_thumbnail_identity(&mut hasher, key);
     hasher.finalize().to_hex().to_string()
 }
 
-fn hash_thumbnail_request(hasher: &mut blake3::Hasher, key: &BookmarkThumbnailKey) {
+fn hash_thumbnail_identity(hasher: &mut blake3::Hasher, key: &BookmarkThumbnailKey) {
     hasher.update(key.book_id.as_bytes());
     hasher.update(&[0]);
     hasher.update(key.known_path.as_deref().unwrap_or_default().as_bytes());
@@ -274,8 +304,13 @@ fn hash_thumbnail_request(hasher: &mut blake3::Hasher, key: &BookmarkThumbnailKe
     hasher.update(&[0]);
     hasher.update(key.page_name.as_deref().unwrap_or_default().as_bytes());
     hasher.update(&[0]);
-    hasher.update(key.decode.cache_token().as_bytes());
-    hasher.update(&[0]);
+}
+
+fn normalized_key_part(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 pub(in crate::app) fn thumbnail_tint_for_state(state: &BookmarkThumbnailState) -> Color32 {
@@ -290,10 +325,9 @@ pub(in crate::app) fn thumbnail_tint_for_state(state: &BookmarkThumbnailState) -
 mod tests {
     use super::{bookmark_thumbnail_cache_key, BookmarkThumbnailKey};
     use crate::app::ui::bookmark_thumbnail_worker::thumbnail_source;
-    use crate::core::worker::{DecodeOptions, DecodeStrategy};
 
     #[test]
-    fn thumbnail_key_tracks_book_path_page_name_and_decode() {
+    fn thumbnail_key_tracks_book_path_and_page_name() {
         let base = sample_key();
         let other_page = BookmarkThumbnailKey {
             page: 2,
@@ -307,38 +341,34 @@ mod tests {
             page_name: Some("other/page.png".to_owned()),
             ..base.clone()
         };
-        let other_decode = BookmarkThumbnailKey {
-            decode: DecodeOptions {
-                strategy: DecodeStrategy::ImageCrate,
-                ..DecodeOptions::default()
-            },
-            ..base.clone()
-        };
 
         assert_ne!(base, other_page);
         assert_ne!(base, other_path);
         assert_ne!(base, other_page_name);
-        assert_ne!(base, other_decode);
     }
 
     #[test]
-    fn cache_key_tracks_page_name_decode_and_source_fingerprint() {
+    fn cache_key_uses_stable_bookmark_identity() {
         let key = sample_key();
-        let base = bookmark_thumbnail_cache_key(&key, 1, "fingerprint-a");
-        let other_fingerprint = bookmark_thumbnail_cache_key(&key, 1, "fingerprint-b");
-        let other_page = bookmark_thumbnail_cache_key(&key, 2, "fingerprint-a");
-        let other_name = bookmark_thumbnail_cache_key(
-            &BookmarkThumbnailKey {
-                page_name: Some("chapter/other.png".to_owned()),
-                ..key
-            },
-            1,
-            "fingerprint-a",
-        );
+        let base = bookmark_thumbnail_cache_key(&key);
+        let same = bookmark_thumbnail_cache_key(&key);
+        let other_page = bookmark_thumbnail_cache_key(&BookmarkThumbnailKey {
+            page: 2,
+            ..key.clone()
+        });
+        let other_name = bookmark_thumbnail_cache_key(&BookmarkThumbnailKey {
+            page_name: Some("chapter/other.png".to_owned()),
+            ..key.clone()
+        });
+        let other_path = bookmark_thumbnail_cache_key(&BookmarkThumbnailKey {
+            known_path: Some("C:/other/book.cbz".to_owned()),
+            ..key
+        });
 
-        assert_ne!(base, other_fingerprint);
+        assert_eq!(base, same);
         assert_ne!(base, other_page);
         assert_ne!(base, other_name);
+        assert_ne!(base, other_path);
     }
 
     #[test]
@@ -352,7 +382,6 @@ mod tests {
             known_path: Some("C:/books/book.cbz".to_owned()),
             page: 1,
             page_name: Some("chapter/page.png".to_owned()),
-            decode: DecodeOptions::default(),
         }
     }
 }

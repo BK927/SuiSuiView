@@ -153,8 +153,19 @@ impl SuiSuiViewApp {
             .as_ref()
             .and_then(|source| source.page_name(page))
             .map(str::to_owned);
+        let prewarm_source = self.source.clone();
+        let prewarm_path = source_path.to_string_lossy().to_string();
+        let decode = self.decode_options();
         self.store
-            .upsert_page_bookmark(&book_id, &source_path, page, title, page_name);
+            .upsert_page_bookmark(&book_id, &source_path, page, title, page_name.clone());
+        self.ensure_bookmark_thumbnails().prewarm(
+            prewarm_source,
+            &book_id,
+            Some(prewarm_path.as_str()),
+            page,
+            page_name.as_deref(),
+            decode,
+        );
         self.bookmark_rows.clear();
         self.notify(i18n.with_vars("bookmark.added", &[("page", (page + 1).to_string())]));
     }
