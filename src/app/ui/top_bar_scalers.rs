@@ -12,7 +12,7 @@ impl SuiSuiViewApp {
         let i18n = self.i18n();
         let current_view = self.current_view_state;
         let summary = top_bar_scaler_summary(current_view.as_ref(), i18n);
-        ui.menu_button(icons::icon_text(icons::OPTIONS, &summary), |ui| {
+        ui.menu_button(icons::icon_text(icons::RESIZE_SMALL, &summary), |ui| {
             self.hold_top_bar_open_for_menu();
             ui.set_min_width(320.0);
             self.show_cpu_filter_row(
@@ -134,9 +134,9 @@ fn top_bar_scaler_summary(current_view: Option<&CurrentViewState>, i18n: I18n) -
         parts.push(wgpu_label);
     }
     if parts.is_empty() {
-        return i18n.text("topbar.scale");
+        return "Native".to_owned();
     }
-    format!("{}: {}", i18n.text("topbar.scale"), parts.join(" | "))
+    parts.join(" | ")
 }
 
 fn top_bar_scaler_tooltip(current_view: Option<&CurrentViewState>, i18n: I18n) -> String {
@@ -223,11 +223,8 @@ fn wgpu_upscale_menu_current(settings: &AppSettings) -> WgpuUpscaleMethod {
 fn compact_cpu_scale_state_label(state: CpuScaleState) -> Option<String> {
     match state {
         CpuScaleState::Native => None,
-        CpuScaleState::Upscale(filter) => {
-            Some(format!("C up {}", compact_cpu_filter_label(filter)))
-        }
-        CpuScaleState::Downscale(filter) => {
-            Some(format!("C down {}", compact_cpu_filter_label(filter)))
+        CpuScaleState::Upscale(filter) | CpuScaleState::Downscale(filter) => {
+            Some(scale_filter_label(filter))
         }
     }
 }
@@ -235,47 +232,14 @@ fn compact_cpu_scale_state_label(state: CpuScaleState) -> Option<String> {
 fn compact_wgpu_scale_state_label(state: WgpuScaleState) -> Option<String> {
     match state {
         WgpuScaleState::Inactive | WgpuScaleState::Native => None,
-        WgpuScaleState::Mixed => Some("G mixed Linear".to_owned()),
-        WgpuScaleState::Upscale(method) => {
-            Some(format!("G up {}", compact_wgpu_upscale_label(method)))
-        }
-        WgpuScaleState::Downscale(method) => {
-            Some(format!("G down {}", compact_wgpu_downscale_label(method)))
-        }
+        WgpuScaleState::Mixed => Some("Bilinear".to_owned()),
+        WgpuScaleState::Upscale(method) => Some(compact_wgpu_upscale_label(method)),
+        WgpuScaleState::Downscale(method) => Some(method.label().to_owned()),
     }
 }
 
-fn compact_cpu_filter_label(filter: CpuScaleFilter) -> &'static str {
-    match filter {
-        CpuScaleFilter::Nearest => "Near",
-        CpuScaleFilter::Box => "Box",
-        CpuScaleFilter::Bilinear => "Linear",
-        CpuScaleFilter::Hamming => "Hamming",
-        CpuScaleFilter::CatmullRom => "Catmull",
-        CpuScaleFilter::Mitchell => "Mitchell",
-        CpuScaleFilter::Gaussian => "Gauss",
-        CpuScaleFilter::Lanczos2 => "Lz2",
-        CpuScaleFilter::Lanczos3 => "Lz3",
-    }
-}
-
-fn compact_wgpu_downscale_label(method: WgpuDownscaleMethod) -> &'static str {
-    match method {
-        WgpuDownscaleMethod::Nearest => "Near",
-        WgpuDownscaleMethod::Bilinear => "Linear",
-        WgpuDownscaleMethod::Box => "Box",
-        WgpuDownscaleMethod::Hamming => "Hamming",
-        WgpuDownscaleMethod::CatmullRom => "Catmull",
-        WgpuDownscaleMethod::Mitchell => "Mitchell",
-        WgpuDownscaleMethod::Lanczos2 => "Lz2",
-        WgpuDownscaleMethod::Lanczos3 => "Lz3",
-        WgpuDownscaleMethod::HardwareMipmapLinear => "Mipmap",
-        WgpuDownscaleMethod::PyramidBoxTent => "Py+Box",
-        WgpuDownscaleMethod::PyramidHamming => "Py+Ham",
-        WgpuDownscaleMethod::PyramidMitchell => "Py+Mit",
-        WgpuDownscaleMethod::PyramidLanczos2 => "Py+Lz2",
-        WgpuDownscaleMethod::PyramidLanczos3 => "Py+Lz3",
-    }
+fn scale_filter_label(filter: CpuScaleFilter) -> String {
+    filter.label().replace(" / Area", "")
 }
 
 fn compact_wgpu_upscale_label(method: WgpuUpscaleMethod) -> String {
@@ -345,7 +309,7 @@ mod tests {
 
         assert_eq!(
             top_bar_scaler_summary(Some(&state), i18n),
-            "Scale: C down Hamming | G down Py+Lz3"
+            "Hamming | Pyramid + Lanczos3"
         );
     }
 
@@ -361,7 +325,7 @@ mod tests {
         let i18n = I18n::resolved(ResolvedLanguage::EnUs);
         let state = test_view_state(CpuScaleState::Native, WgpuScaleState::Inactive);
 
-        assert_eq!(top_bar_scaler_summary(Some(&state), i18n), "Scale");
+        assert_eq!(top_bar_scaler_summary(Some(&state), i18n), "Native");
     }
 
     #[test]
