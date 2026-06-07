@@ -8,7 +8,8 @@ use crate::core::source::{
     classify_path, open_source_from_path, BookSource, SharedSource, SourceKind,
 };
 use crate::core::state::{
-    AppSettings, DecodeMode, DecoderPreferences, StateStore, WindowPlacement,
+    AppSettings, DecodeMode, DecoderPreferences, FitMode, ReadingDirection, ReadingPosition,
+    StateStore, WindowPlacement,
 };
 use crate::core::worker::{
     clamp_navigation_target_long_edge, DecodeOptions, DecodeStrategy, NavigationDirection,
@@ -42,8 +43,23 @@ pub(in crate::app) struct LoaderEvent {
     pub(in crate::app) path: PathBuf,
     pub(in crate::app) origin: OpenOrigin,
     pub(in crate::app) initial_direction: NavigationDirection,
+    pub(in crate::app) view_fallback: Option<OpenViewFallback>,
     pub(in crate::app) result: Result<(SharedSource, Option<usize>), String>,
     pub(in crate::app) seeded_page: Option<SeededPreparedPage>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::app) struct OpenViewFallback {
+    pub(in crate::app) reading_direction: ReadingDirection,
+    pub(in crate::app) fit_mode: FitMode,
+    pub(in crate::app) manual_zoom: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ResolvedOpenView {
+    reading_direction: ReadingDirection,
+    fit_mode: FitMode,
+    manual_zoom: f32,
 }
 
 pub(crate) struct StartupOpen {
@@ -113,7 +129,7 @@ pub(crate) fn start_startup_open_loader(path: PathBuf, store: &StateStore) -> Op
                     page_index,
                     target_long_edge,
                     decode,
-                    true,
+                    false,
                 );
                 perf::record_startup_seed_prepare(
                     started,
@@ -129,6 +145,7 @@ pub(crate) fn start_startup_open_loader(path: PathBuf, store: &StateStore) -> Op
                 path: load_path,
                 origin,
                 initial_direction: NavigationDirection::Forward,
+                view_fallback: None,
                 result,
                 seeded_page,
             });
@@ -157,7 +174,18 @@ impl SuiSuiViewApp {
     ) {
         self.pending_bookmark_jump = None;
         self.clear_adjacent_seed_cache();
-        self.open_path_inner(path, initial_direction);
+        self.open_path_inner(path, initial_direction, None);
+    }
+
+    pub(in crate::app) fn open_sibling_path_with_initial_direction(
+        &mut self,
+        path: PathBuf,
+        initial_direction: NavigationDirection,
+    ) {
+        let view_fallback = Some(self.open_view_fallback());
+        self.pending_bookmark_jump = None;
+        self.clear_adjacent_seed_cache();
+        self.open_path_inner(path, initial_direction, view_fallback);
     }
 
     pub(in crate::app) fn open_path_for_bookmark(
@@ -173,13 +201,14 @@ impl SuiSuiViewApp {
             page,
         });
         self.clear_adjacent_seed_cache();
-        self.open_path_inner(path, NavigationDirection::Forward);
+        self.open_path_inner(path, NavigationDirection::Forward, None);
     }
 
     pub(in crate::app) fn open_path_inner(
         &mut self,
         path: PathBuf,
         initial_direction: NavigationDirection,
+        view_fallback: Option<OpenViewFallback>,
     ) {
         let source_kind = classify_path(&path);
         match source_kind {
@@ -239,7 +268,7 @@ impl SuiSuiViewApp {
                                 page_index,
                                 seed_target_long_edge,
                                 decode,
-                                true,
+                                false,
                             );
                             perf::record_startup_seed_prepare(
                                 started,
@@ -255,6 +284,7 @@ impl SuiSuiViewApp {
                             path: load_path,
                             origin,
                             initial_direction,
+                            view_fallback,
                             result,
                             seeded_page,
                         });
@@ -308,6 +338,7 @@ impl SuiSuiViewApp {
                     event.path,
                     event.seeded_page,
                     event.initial_direction,
+                    event.view_fallback,
                 ),
                 Err(message) => {
                     if self
@@ -340,6 +371,7 @@ impl SuiSuiViewApp {
         opened_path: PathBuf,
         seeded_page: Option<SeededPreparedPage>,
         initial_direction: NavigationDirection,
+        view_fallback: Option<OpenViewFallback>,
     ) {
         let book_id = source.book_id().to_owned();
         let page_count = source.page_count();
@@ -352,22 +384,17 @@ impl SuiSuiViewApp {
             &opened_path,
             self.settings.resume_by_file_identity,
         );
-        self.reading_direction = reading_position
-            .as_ref()
-            .map(|position| position.reading_direction)
-            .unwrap_or_default();
+        let resolved_view = resolve_open_view(
+            reading_position.as_ref(),
+            view_fallback,
+            self.settings.remember_zoom_per_book,
+        );
+        self.reading_direction = resolved_view.reading_direction;
         self.view_mode = self
             .view_mode
             .with_reading_direction(self.reading_direction);
-        self.fit_mode = reading_position
-            .as_ref()
-            .map(|position| position.fit_mode)
-            .unwrap_or_default();
-        self.manual_zoom = reading_position
-            .as_ref()
-            .and_then(|position| position.manual_zoom)
-            .filter(|_| self.settings.remember_zoom_per_book)
-            .unwrap_or(1.0);
+        self.fit_mode = resolved_view.fit_mode;
+        self.manual_zoom = resolved_view.manual_zoom;
 
         let pending_page = self
             .pending_bookmark_jump
@@ -395,6 +422,8 @@ impl SuiSuiViewApp {
         self.open_origin = Some(origin);
         self.opened_path = Some(opened_path);
         self.sibling_book_visual_pending = true;
+        self.sibling_book_wgpu_present_wait = None;
+        self.sibling_book_visual_hold_until = None;
         self.pan = Vec2::ZERO;
         self.effects = ViewEffects::default();
         self.current_view_state = None;
@@ -434,6 +463,14 @@ impl SuiSuiViewApp {
         ));
         self.persist_current_bookmark();
         self.request_adjacent_seed_prefetch();
+    }
+
+    pub(in crate::app) fn open_view_fallback(&self) -> OpenViewFallback {
+        OpenViewFallback {
+            reading_direction: self.reading_direction,
+            fit_mode: self.fit_mode,
+            manual_zoom: self.manual_zoom,
+        }
     }
 }
 
@@ -540,10 +577,43 @@ pub(in crate::app) fn page_index_for_name(
     (0..source.page_count()).find(|index| source.page_name(*index) == Some(page_name))
 }
 
+fn resolve_open_view(
+    reading_position: Option<&ReadingPosition>,
+    view_fallback: Option<OpenViewFallback>,
+    remember_zoom_per_book: bool,
+) -> ResolvedOpenView {
+    match reading_position {
+        Some(position) => ResolvedOpenView {
+            reading_direction: position.reading_direction,
+            fit_mode: position.fit_mode,
+            manual_zoom: if remember_zoom_per_book {
+                position.manual_zoom.unwrap_or(1.0)
+            } else {
+                1.0
+            },
+        },
+        None => view_fallback.map_or_else(
+            || ResolvedOpenView {
+                reading_direction: ReadingDirection::default(),
+                fit_mode: FitMode::default(),
+                manual_zoom: 1.0,
+            },
+            |fallback| ResolvedOpenView {
+                reading_direction: fallback.reading_direction,
+                fit_mode: fallback.fit_mode,
+                manual_zoom: fallback.manual_zoom,
+            },
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{open_seed_target_long_edge, startup_seed_target_long_edge};
-    use crate::core::state::WindowPlacement;
+    use super::{
+        open_seed_target_long_edge, resolve_open_view, startup_seed_target_long_edge,
+        OpenViewFallback,
+    };
+    use crate::core::state::{FitMode, ReadingDirection, ReadingPosition, WindowPlacement};
     use crate::core::worker::{
         DEFAULT_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE,
     };
@@ -599,5 +669,57 @@ mod tests {
             open_seed_target_long_edge(MAX_TARGET_LONG_EDGE + 2048),
             MAX_TARGET_LONG_EDGE
         );
+    }
+
+    #[test]
+    fn sibling_open_view_fallback_preserves_fit_width_without_saved_position() {
+        let resolved = resolve_open_view(
+            None,
+            Some(OpenViewFallback {
+                reading_direction: ReadingDirection::LeftToRight,
+                fit_mode: FitMode::FitWidth,
+                manual_zoom: 1.75,
+            }),
+            true,
+        );
+
+        assert_eq!(resolved.reading_direction, ReadingDirection::LeftToRight);
+        assert_eq!(resolved.fit_mode, FitMode::FitWidth);
+        assert_eq!(resolved.manual_zoom, 1.75);
+    }
+
+    #[test]
+    fn saved_reading_position_wins_over_sibling_view_fallback() {
+        let saved = ReadingPosition {
+            last_page: 3,
+            last_page_name: None,
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: Some(1.25),
+            updated_at: 10,
+        };
+
+        let resolved = resolve_open_view(
+            Some(&saved),
+            Some(OpenViewFallback {
+                reading_direction: ReadingDirection::LeftToRight,
+                fit_mode: FitMode::FitWidth,
+                manual_zoom: 2.0,
+            }),
+            true,
+        );
+
+        assert_eq!(resolved.reading_direction, ReadingDirection::RightToLeft);
+        assert_eq!(resolved.fit_mode, FitMode::FitPage);
+        assert_eq!(resolved.manual_zoom, 1.25);
+    }
+
+    #[test]
+    fn direct_open_without_saved_position_keeps_default_view() {
+        let resolved = resolve_open_view(None, None, true);
+
+        assert_eq!(resolved.reading_direction, ReadingDirection::default());
+        assert_eq!(resolved.fit_mode, FitMode::default());
+        assert_eq!(resolved.manual_zoom, 1.0);
     }
 }

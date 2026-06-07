@@ -36,16 +36,19 @@ impl SuiSuiViewApp {
         ctx: &egui::Context,
         painter: &egui::Painter,
         request: GpuPaintRequest,
+        force_texture_fallback: bool,
         tint: Color32,
     ) -> bool {
         let target_size = rect_target_size(request.rect, ctx.pixels_per_point());
-        if !gpu_visual_needs_wgsl(
-            request.image_size,
-            target_size,
-            request.effects,
-            request.wgpu_upscale_method,
-            request.wgpu_downscale_method,
-        ) {
+        if force_texture_fallback
+            || !gpu_visual_needs_wgsl(
+                request.image_size,
+                target_size,
+                request.effects,
+                request.wgpu_upscale_method,
+                request.wgpu_downscale_method,
+            )
+        {
             let texture = self.texture_for_gpu_fallback(
                 ctx,
                 request.source_key,

@@ -205,6 +205,8 @@ pub struct SuiSuiViewApp {
     page_turn_paint_hold: bool,
     queued_sibling_book_turns: VecDeque<isize>,
     sibling_book_visual_pending: bool,
+    sibling_book_wgpu_present_wait: Option<(u64, usize)>,
+    sibling_book_visual_hold_until: Option<Instant>,
     pending_target_long_edge_increase: Option<(u32, Instant)>,
     pending_original_inspection_cache_cleanup_at: Option<Instant>,
     pending_gpu_original_inspection_cleanup: bool,
@@ -336,6 +338,8 @@ impl SuiSuiViewApp {
             page_turn_paint_hold: false,
             queued_sibling_book_turns: VecDeque::new(),
             sibling_book_visual_pending: false,
+            sibling_book_wgpu_present_wait: None,
+            sibling_book_visual_hold_until: None,
             pending_target_long_edge_increase: None,
             pending_original_inspection_cache_cleanup_at: None,
             pending_gpu_original_inspection_cleanup: false,
@@ -796,6 +800,8 @@ impl SuiSuiViewApp {
         self.transition = None;
         self.clear_pending_sibling_book_turns();
         self.sibling_book_visual_pending = false;
+        self.sibling_book_wgpu_present_wait = None;
+        self.sibling_book_visual_hold_until = None;
         self.clear_adjacent_seed_cache();
         self.set_status(status);
     }
@@ -1977,6 +1983,15 @@ mod tests {
             sibling_book_path(&dir.join("book-1.cbz"), -1),
             Some(dir.join("book-10"))
         );
+    }
+
+    #[test]
+    fn sibling_book_path_does_not_guess_when_current_is_missing() {
+        let dir = temp_test_dir("siblings-missing-current");
+        fs::create_dir_all(dir.join("book-2")).unwrap();
+        fs::write(dir.join("book-1.cbz"), b"placeholder").unwrap();
+
+        assert_eq!(sibling_book_path(&dir.join("missing.cbz"), 1), None);
     }
 
     #[test]

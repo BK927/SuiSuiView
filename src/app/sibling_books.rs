@@ -9,7 +9,7 @@ pub(in crate::app) fn sibling_book_path(current: &Path, direction: isize) -> Opt
     if entries.len() <= 1 {
         return None;
     }
-    let current_index = sibling_book_current_index(&entries, current);
+    let current_index = sibling_book_current_index(&entries, current)?;
     let next_index = if direction >= 0 {
         (current_index + 1) % entries.len()
     } else {
@@ -35,7 +35,9 @@ pub(in crate::app) fn adjacent_sibling_book_paths_ordered(
     if entries.len() <= 1 {
         return Vec::new();
     }
-    let current_index = sibling_book_current_index(&entries, current);
+    let Some(current_index) = sibling_book_current_index(&entries, current) else {
+        return Vec::new();
+    };
     let mut siblings = Vec::with_capacity(2);
     let ordered_directions = match first_direction {
         NavigationDirection::Forward => [(1, "next"), (-1, "previous")],
@@ -80,15 +82,16 @@ fn sibling_book_entries(current: &Path) -> Option<Vec<PathBuf>> {
     Some(entries)
 }
 
-fn sibling_book_current_index(entries: &[PathBuf], current: &Path) -> usize {
+fn sibling_book_current_index(entries: &[PathBuf], current: &Path) -> Option<usize> {
     entries
         .iter()
         .position(|path| same_path(path, current))
-        .unwrap_or_else(|| {
+        .or_else(|| entries.iter().position(|path| path == current))
+        .or_else(|| {
+            let current_name = current.file_name()?;
             entries
                 .iter()
-                .position(|path| path == current)
-                .unwrap_or_default()
+                .position(|path| path.file_name().is_some_and(|name| name == current_name))
         })
 }
 

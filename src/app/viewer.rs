@@ -14,6 +14,7 @@ use eframe::egui::{
     Vec2,
 };
 use std::sync::Arc;
+use std::time::Duration;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::time::Instant;
 
@@ -37,6 +38,8 @@ pub(in crate::app) use transition::{
 const TRANSITION_MS: f32 = 120.0;
 const SPREAD_GAP_POINTS: f32 = 14.0;
 const TARGET_EDGE_HYSTERESIS: u32 = 512;
+const WGPU_PRESENT_CONFIRM_REPAINT_DELAY: Duration = Duration::from_millis(16);
+const WGPU_SIBLING_VISIBLE_HOLD: Duration = Duration::from_millis(260);
 
 struct SpreadPaint<'a> {
     viewport: Rect,
@@ -499,6 +502,8 @@ impl SuiSuiViewApp {
 
         let mut spread_contains_current = false;
         let mut spread_fully_drawn = true;
+        let mut spread_uses_wgpu_paint_callback = false;
+        let mut spread_needs_sibling_visible_hold = false;
         for (index, visual, size) in pages {
             if index == self.current_page {
                 spread_contains_current = true;
@@ -542,13 +547,16 @@ impl SuiSuiViewApp {
                     ..
                 } => {
                     let target_size = rect_target_size(page_rect, ctx.pixels_per_point());
-                    let active_wgsl = gpu_visual_needs_wgsl(
-                        image_size,
-                        target_size,
-                        effects,
-                        wgpu_upscale_method,
-                        wgpu_downscale_method,
-                    );
+                    let force_texture_fallback =
+                        self.sibling_book_visual_pending || self.sibling_book_hold_active();
+                    let active_wgsl = !force_texture_fallback
+                        && gpu_visual_needs_wgsl(
+                            image_size,
+                            target_size,
+                            effects,
+                            wgpu_upscale_method,
+                            wgpu_downscale_method,
+                        );
                     let target_intent =
                         self.prepared_target_intent_for_target(render_info.target_long_edge);
                     self.record_current_view_state(CurrentViewState::from_gpu(
@@ -561,7 +569,7 @@ impl SuiSuiViewApp {
                         active_wgsl,
                         target_intent,
                     ));
-                    if !self.paint_ready_gpu_visual(
+                    let gpu_painted = self.paint_ready_gpu_visual(
                         ctx,
                         painter,
                         GpuPaintRequest {
@@ -574,8 +582,10 @@ impl SuiSuiViewApp {
                             wgpu_downscale_method,
                             opacity: request.alpha,
                         },
+                        force_texture_fallback,
                         tint,
-                    ) {
+                    );
+                    if !gpu_painted {
                         spread_fully_drawn = false;
                         self.paint_placeholder(
                             painter,
@@ -584,6 +594,10 @@ impl SuiSuiViewApp {
                             Color32::from_gray(120),
                             tint,
                         );
+                    } else if active_wgsl {
+                        spread_uses_wgpu_paint_callback = true;
+                    } else if force_texture_fallback {
+                        spread_needs_sibling_visible_hold = true;
                     }
                 }
                 PageVisual::Loading { index } => {
@@ -612,8 +626,40 @@ impl SuiSuiViewApp {
             cursor.x += page_size.x + gap * scale;
         }
         if spread_contains_current && spread_fully_drawn {
-            self.mark_current_book_visual_painted();
+            self.mark_current_book_visual_painted_after_spread(
+                ctx,
+                spread_uses_wgpu_paint_callback,
+                spread_needs_sibling_visible_hold,
+            );
         }
+    }
+
+    fn mark_current_book_visual_painted_after_spread(
+        &mut self,
+        ctx: &egui::Context,
+        uses_wgpu_paint_callback: bool,
+        needs_sibling_visible_hold: bool,
+    ) {
+        if !self.sibling_book_visual_pending {
+            return;
+        }
+        if !uses_wgpu_paint_callback {
+            if needs_sibling_visible_hold {
+                self.mark_current_book_visual_painted_with_hold(WGPU_SIBLING_VISIBLE_HOLD);
+            } else {
+                self.mark_current_book_visual_painted();
+            }
+            return;
+        }
+
+        let wait_key = (self.gpu_paint_book_key(), self.current_page);
+        if self.sibling_book_wgpu_present_wait == Some(wait_key) {
+            self.mark_current_book_visual_painted_with_hold(WGPU_SIBLING_VISIBLE_HOLD);
+            return;
+        }
+
+        self.sibling_book_wgpu_present_wait = Some(wait_key);
+        ctx.request_repaint_after(WGPU_PRESENT_CONFIRM_REPAINT_DELAY);
     }
 
     fn record_current_view_state(&mut self, state: CurrentViewState) {

@@ -56,6 +56,9 @@ responsiveness.
 Right-click opens a context menu with common open, navigation, view, processing,
 delete, copy, and window actions.
 
+When `[` or `]` opens a neighboring book, the current view mode carries over if
+that book does not already have a saved reading position.
+
 ## Supported Files
 
 | Tier | Formats |
@@ -169,7 +172,8 @@ standalone files.
 - `Shift+PgDn` / `Shift+PgUp`: force a one-page move in two-page mode.
 - `Ctrl+Alt+PgDn` / `Ctrl+Alt+PgUp`: random page.
 - `]` / `[`: open the next or previous folder, ZIP, or CBZ beside the current
-  book.
+  book. The current view mode carries over when the target book has no saved
+  reading position.
 
 ### View
 

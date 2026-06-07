@@ -414,10 +414,20 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn clear_pending_sibling_book_turns(&mut self) {
         self.queued_sibling_book_turns.clear();
+        self.sibling_book_wgpu_present_wait = None;
+        self.sibling_book_visual_hold_until = None;
     }
 
     pub(in crate::app) fn mark_current_book_visual_painted(&mut self) {
         self.sibling_book_visual_pending = false;
+        self.sibling_book_wgpu_present_wait = None;
+        self.sibling_book_visual_hold_until = None;
+    }
+
+    pub(in crate::app) fn mark_current_book_visual_painted_with_hold(&mut self, hold: Duration) {
+        self.sibling_book_visual_pending = false;
+        self.sibling_book_wgpu_present_wait = None;
+        self.sibling_book_visual_hold_until = Some(Instant::now() + hold);
     }
 
     fn request_pending_page_turn_work(&mut self) {
@@ -651,7 +661,12 @@ impl SuiSuiViewApp {
     }
 
     fn should_defer_sibling_book_turn(&self) -> bool {
-        self.loader_pending || self.sibling_book_visual_pending
+        self.loader_pending || self.sibling_book_visual_pending || self.sibling_book_hold_active()
+    }
+
+    pub(in crate::app) fn sibling_book_hold_active(&self) -> bool {
+        self.sibling_book_visual_hold_until
+            .is_some_and(|until| Instant::now() < until)
     }
 
     fn queue_sibling_book_turn(&mut self, direction: isize) {
@@ -692,6 +707,7 @@ impl SuiSuiViewApp {
                 let path = cache.path;
                 let seeded_page = cache.seeded_page;
                 let seeded_followup_page = cache.seeded_followup_page;
+                let view_fallback = Some(self.open_view_fallback());
 
                 perf::record_adjacent_seed_prefetch_hit(true, target_long_edge);
                 self.pending_bookmark_jump = None;
@@ -709,6 +725,7 @@ impl SuiSuiViewApp {
                     path,
                     Some(seeded_page),
                     navigation_direction_for_sibling(direction),
+                    view_fallback,
                 );
                 self.insert_seeded_page_if_matching_target(seeded_followup_page);
                 return;
@@ -719,7 +736,10 @@ impl SuiSuiViewApp {
             self.set_status(self.i18n().text("status.no_sibling_book"));
             return;
         };
-        self.open_path_with_initial_direction(next, navigation_direction_for_sibling(direction));
+        self.open_sibling_path_with_initial_direction(
+            next,
+            navigation_direction_for_sibling(direction),
+        );
     }
 
     pub(in crate::app) fn current_book_reference_path(&self) -> Option<PathBuf> {
