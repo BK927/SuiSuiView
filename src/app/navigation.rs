@@ -1,6 +1,7 @@
 use super::{
     edge_prompt_button, perf, sibling_book_path, transition_screen_sign, ui,
     worker_center_page_for_mode, OpenOrigin, PageCacheKey, SuiSuiViewApp, Transition, ViewMode,
+    SIBLING_BOOK_TURN_REPAINT_DELAY,
 };
 use crate::core::effects::ViewEffects;
 use crate::core::state::{
@@ -13,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_QUEUED_PAGE_TURNS: usize = 128;
 const MAX_QUEUED_WORKER_VISIBLE_PAGES: usize = 25;
+const MAX_QUEUED_SIBLING_BOOK_TURNS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) struct EdgePrompt {
@@ -410,6 +412,14 @@ impl SuiSuiViewApp {
         }
     }
 
+    pub(in crate::app) fn clear_pending_sibling_book_turns(&mut self) {
+        self.queued_sibling_book_turns.clear();
+    }
+
+    pub(in crate::app) fn mark_current_book_visual_painted(&mut self) {
+        self.sibling_book_visual_pending = false;
+    }
+
     fn request_pending_page_turn_work(&mut self) {
         let Some(pending) = self.pending_page_turn else {
             return;
@@ -632,6 +642,43 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn open_sibling_book(&mut self, direction: isize) {
+        let direction = normalize_sibling_book_direction(direction);
+        if self.should_defer_sibling_book_turn() {
+            self.queue_sibling_book_turn(direction);
+            return;
+        }
+        self.open_sibling_book_now(direction);
+    }
+
+    fn should_defer_sibling_book_turn(&self) -> bool {
+        self.loader_pending || self.sibling_book_visual_pending
+    }
+
+    fn queue_sibling_book_turn(&mut self, direction: isize) {
+        self.edge_prompt = None;
+        push_queued_sibling_book_turn(&mut self.queued_sibling_book_turns, direction);
+        self.egui_ctx
+            .request_repaint_after(SIBLING_BOOK_TURN_REPAINT_DELAY);
+    }
+
+    pub(in crate::app) fn drive_queued_sibling_book_after_paint(&mut self, ctx: &egui::Context) {
+        if self.queued_sibling_book_turns.is_empty() {
+            return;
+        }
+        if self.should_defer_sibling_book_turn() {
+            ctx.request_repaint_after(SIBLING_BOOK_TURN_REPAINT_DELAY);
+            return;
+        }
+        let Some(direction) = self.queued_sibling_book_turns.pop_front() else {
+            return;
+        };
+        self.open_sibling_book_now(direction);
+        if !self.queued_sibling_book_turns.is_empty() || self.should_defer_sibling_book_turn() {
+            ctx.request_repaint_after(SIBLING_BOOK_TURN_REPAINT_DELAY);
+        }
+    }
+
+    fn open_sibling_book_now(&mut self, direction: isize) {
         let Some(current) = self.current_book_reference_path() else {
             self.set_status(self.i18n().text("status.no_current_book"));
             return;
@@ -699,5 +746,58 @@ fn navigation_direction_for_sibling(direction: isize) -> NavigationDirection {
         NavigationDirection::Backward
     } else {
         NavigationDirection::Forward
+    }
+}
+
+fn normalize_sibling_book_direction(direction: isize) -> isize {
+    if direction < 0 {
+        -1
+    } else {
+        1
+    }
+}
+
+fn push_queued_sibling_book_turn(queue: &mut std::collections::VecDeque<isize>, direction: isize) {
+    if queue.len() >= MAX_QUEUED_SIBLING_BOOK_TURNS {
+        return;
+    }
+    queue.push_back(normalize_sibling_book_direction(direction));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        normalize_sibling_book_direction, push_queued_sibling_book_turn,
+        MAX_QUEUED_SIBLING_BOOK_TURNS,
+    };
+    use std::collections::VecDeque;
+
+    #[test]
+    fn sibling_book_direction_normalizes_to_step() {
+        assert_eq!(normalize_sibling_book_direction(-4), -1);
+        assert_eq!(normalize_sibling_book_direction(0), 1);
+        assert_eq!(normalize_sibling_book_direction(3), 1);
+    }
+
+    #[test]
+    fn queued_sibling_book_turns_preserve_mixed_order() {
+        let mut queue = VecDeque::new();
+
+        push_queued_sibling_book_turn(&mut queue, 1);
+        push_queued_sibling_book_turn(&mut queue, -1);
+        push_queued_sibling_book_turn(&mut queue, 1);
+
+        assert_eq!(queue.into_iter().collect::<Vec<_>>(), vec![1, -1, 1]);
+    }
+
+    #[test]
+    fn queued_sibling_book_turns_are_capped() {
+        let mut queue = VecDeque::new();
+
+        for _ in 0..MAX_QUEUED_SIBLING_BOOK_TURNS + 8 {
+            push_queued_sibling_book_turn(&mut queue, 1);
+        }
+
+        assert_eq!(queue.len(), MAX_QUEUED_SIBLING_BOOK_TURNS);
     }
 }

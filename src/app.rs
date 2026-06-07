@@ -17,7 +17,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, RichText, Stroke, Vec2};
 use image_info::ImageInfoState;
 use lru::LruCache;
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -102,6 +102,7 @@ use commands::command_for_shortcut;
 use platform::{korean_font_candidates, load_first_existing_font, sanitize_font_name};
 const STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
 pub(in crate::app) const TEXTURE_PRESENT_REPAINT_DELAY: Duration = Duration::from_millis(16);
+pub(in crate::app) const SIBLING_BOOK_TURN_REPAINT_DELAY: Duration = Duration::from_millis(16);
 
 #[derive(Debug, Clone)]
 struct PendingBookmarkJump {
@@ -202,6 +203,8 @@ pub struct SuiSuiViewApp {
     pending_page_turn: Option<PendingPageTurn>,
     queued_page_turns: Option<QueuedPageTurns>,
     page_turn_paint_hold: bool,
+    queued_sibling_book_turns: VecDeque<isize>,
+    sibling_book_visual_pending: bool,
     pending_target_long_edge_increase: Option<(u32, Instant)>,
     pending_original_inspection_cache_cleanup_at: Option<Instant>,
     pending_gpu_original_inspection_cleanup: bool,
@@ -331,6 +334,8 @@ impl SuiSuiViewApp {
             pending_page_turn: None,
             queued_page_turns: None,
             page_turn_paint_hold: false,
+            queued_sibling_book_turns: VecDeque::new(),
+            sibling_book_visual_pending: false,
             pending_target_long_edge_increase: None,
             pending_original_inspection_cache_cleanup_at: None,
             pending_gpu_original_inspection_cleanup: false,
@@ -789,6 +794,8 @@ impl SuiSuiViewApp {
             self.open_to_first_visible_trace = None;
         }
         self.transition = None;
+        self.clear_pending_sibling_book_turns();
+        self.sibling_book_visual_pending = false;
         self.clear_adjacent_seed_cache();
         self.set_status(status);
     }

@@ -89,6 +89,7 @@ impl SuiSuiViewApp {
         self.show_bookmark_popover(ctx);
         self.show_edge_prompt(ctx);
         self.drive_queued_page_turn_after_paint(ctx);
+        self.drive_queued_sibling_book_after_paint(ctx);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("post_viewer");
         self.prewarm_neighbor_textures(ctx);

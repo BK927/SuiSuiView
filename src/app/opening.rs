@@ -146,6 +146,7 @@ pub(crate) fn start_startup_open_loader(path: PathBuf, store: &StateStore) -> Op
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn open_path(&mut self, path: PathBuf) {
+        self.clear_pending_sibling_book_turns();
         self.open_path_with_initial_direction(path, NavigationDirection::Forward);
     }
 
@@ -165,6 +166,7 @@ impl SuiSuiViewApp {
         book_id: String,
         page: usize,
     ) {
+        self.clear_pending_sibling_book_turns();
         self.pending_bookmark_jump = Some(PendingBookmarkJump {
             book_id,
             path: path.clone(),
@@ -267,6 +269,8 @@ impl SuiSuiViewApp {
                         {
                             self.open_to_first_visible_trace = None;
                         }
+                        self.sibling_book_visual_pending = false;
+                        self.clear_pending_sibling_book_turns();
                         self.notify(format!("Could not start source loader: {error}"));
                     }
                 }
@@ -317,6 +321,8 @@ impl SuiSuiViewApp {
                     {
                         self.open_to_first_visible_trace = None;
                     }
+                    self.sibling_book_visual_pending = false;
+                    self.clear_pending_sibling_book_turns();
                     self.notify(format!(
                         "Could not open {}: {message}",
                         event.path.display()
@@ -388,6 +394,7 @@ impl SuiSuiViewApp {
         self.source = Some(source.clone());
         self.open_origin = Some(origin);
         self.opened_path = Some(opened_path);
+        self.sibling_book_visual_pending = true;
         self.pan = Vec2::ZERO;
         self.effects = ViewEffects::default();
         self.current_view_state = None;

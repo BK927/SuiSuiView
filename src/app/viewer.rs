@@ -466,7 +466,7 @@ impl SuiSuiViewApp {
         for index in request.indices {
             let visual = self.page_visual(ctx, *index, request.target_long_edge);
             let size = page_visual_size(&visual);
-            pages.push((visual, size));
+            pages.push((*index, visual, size));
         }
 
         let gap = if pages.len() > 1 {
@@ -474,11 +474,14 @@ impl SuiSuiViewApp {
         } else {
             0.0
         };
-        let natural_width = pages.iter().map(|(_visual, size)| size.x).sum::<f32>()
+        let natural_width = pages
+            .iter()
+            .map(|(_index, _visual, size)| size.x)
+            .sum::<f32>()
             + gap * pages.len().saturating_sub(1) as f32;
         let natural_height = pages
             .iter()
-            .map(|(_visual, size)| size.y)
+            .map(|(_index, _visual, size)| size.y)
             .fold(1.0_f32, |left, right| left.max(right));
         let scale = self.scale_for(
             request.viewport.size(),
@@ -494,7 +497,12 @@ impl SuiSuiViewApp {
         );
         let tint = Color32::from_white_alpha((request.alpha.clamp(0.0, 1.0) * 255.0) as u8);
 
-        for (visual, size) in pages {
+        let mut spread_contains_current = false;
+        let mut spread_fully_drawn = true;
+        for (index, visual, size) in pages {
+            if index == self.current_page {
+                spread_contains_current = true;
+            }
             let page_size = Vec2::new(
                 size.x * scale * request.scale.x,
                 size.y * scale * request.scale.y,
@@ -568,6 +576,7 @@ impl SuiSuiViewApp {
                         },
                         tint,
                     ) {
+                        spread_fully_drawn = false;
                         self.paint_placeholder(
                             painter,
                             page_rect,
@@ -578,6 +587,7 @@ impl SuiSuiViewApp {
                     }
                 }
                 PageVisual::Loading { index } => {
+                    spread_fully_drawn = false;
                     self.clear_current_view_state_for(index);
                     self.paint_placeholder(
                         painter,
@@ -600,6 +610,9 @@ impl SuiSuiViewApp {
             }
 
             cursor.x += page_size.x + gap * scale;
+        }
+        if spread_contains_current && spread_fully_drawn {
+            self.mark_current_book_visual_painted();
         }
     }
 

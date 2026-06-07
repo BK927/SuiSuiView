@@ -171,17 +171,21 @@ impl SuiSuiViewApp {
             self.manual_zoom,
             page_viewport,
             ctx.pixels_per_point(),
-            self.visible_original_long_edge(),
+            &self.visible_original_page_sizes(),
         )
     }
 
-    fn visible_original_long_edge(&self) -> Option<u32> {
-        let mut longest = 0.0_f32;
-        for index in self.spread_indices() {
-            let metrics = self.page_metrics.get(&index)?;
-            longest = longest.max(metrics.width.max(metrics.height));
-        }
-        (longest > 0.0).then(|| longest.ceil() as u32)
+    fn visible_original_page_sizes(&self) -> Vec<OriginalPageSize> {
+        self.spread_indices()
+            .into_iter()
+            .filter_map(|index| {
+                let metrics = self.page_metrics.get(&index)?;
+                Some(OriginalPageSize {
+                    width: metrics.width,
+                    height: metrics.height,
+                })
+            })
+            .collect()
     }
 
     fn page_viewport_count_for_target(&self) -> usize {
@@ -334,11 +338,16 @@ fn target_long_edge_for_view(
     manual_zoom: f32,
     page_viewport: Vec2,
     pixels_per_point: f32,
-    original_long_edge: Option<u32>,
+    original_pages: &[OriginalPageSize],
 ) -> u32 {
-    let display_target =
-        display_target_long_edge_for_view(fit_mode, manual_zoom, page_viewport, pixels_per_point);
-    original_inspection_target_long_edge(fit_mode, manual_zoom, original_long_edge)
+    let display_target = display_target_long_edge_for_view(
+        fit_mode,
+        manual_zoom,
+        page_viewport,
+        pixels_per_point,
+        original_pages,
+    );
+    original_inspection_target_long_edge(fit_mode, manual_zoom, original_pages)
         .map_or(display_target, |original_target| {
             original_target.max(display_target)
         })
@@ -349,6 +358,7 @@ fn display_target_long_edge_for_view(
     manual_zoom: f32,
     page_viewport: Vec2,
     pixels_per_point: f32,
+    original_pages: &[OriginalPageSize],
 ) -> u32 {
     let base_points = match fit_mode {
         FitMode::FitWidth => page_viewport.x,
@@ -366,18 +376,56 @@ fn display_target_long_edge_for_view(
     };
     let raw = viewport_pixels * oversample * zoom_multiplier;
     let quantized = ((raw / 256.0).ceil() * 256.0) as u32;
-    match fit_mode {
+    let viewport_target = match fit_mode {
         FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight => {
             clamp_target_long_edge(quantized)
         }
         FitMode::Manual | FitMode::Original => clamp_navigation_target_long_edge(quantized),
+    };
+    fit_axis_target_long_edge(fit_mode, page_viewport, pixels_per_point, original_pages)
+        .map_or(viewport_target, |axis_target| {
+            viewport_target.max(axis_target)
+        })
+}
+
+fn fit_axis_target_long_edge(
+    fit_mode: FitMode,
+    page_viewport: Vec2,
+    pixels_per_point: f32,
+    original_pages: &[OriginalPageSize],
+) -> Option<u32> {
+    let target_axis_pixels = match fit_mode {
+        FitMode::FitWidth => page_viewport.x * pixels_per_point,
+        FitMode::FitHeight => page_viewport.y * pixels_per_point,
+        FitMode::FitPage | FitMode::Manual | FitMode::Original => return None,
     }
+    .max(1.0);
+
+    original_pages
+        .iter()
+        .filter_map(|size| {
+            let source_axis = match fit_mode {
+                FitMode::FitWidth => size.width,
+                FitMode::FitHeight => size.height,
+                FitMode::FitPage | FitMode::Manual | FitMode::Original => return None,
+            }
+            .max(1.0);
+            let source_long_edge = size.long_edge().max(1.0);
+            let prepared_axis = quantize_display_axis(target_axis_pixels, source_axis);
+            let target = (source_long_edge * prepared_axis / source_axis).ceil() as u32;
+            Some(clamp_target_long_edge(target))
+        })
+        .max()
+}
+
+fn quantize_display_axis(axis_pixels: f32, source_axis: f32) -> f32 {
+    ((axis_pixels.max(1.0) / 256.0).ceil() * 256.0).min(source_axis.max(1.0))
 }
 
 fn original_inspection_target_long_edge(
     fit_mode: FitMode,
     manual_zoom: f32,
-    original_long_edge: Option<u32>,
+    original_pages: &[OriginalPageSize],
 ) -> Option<u32> {
     let needs_original_pixels = match fit_mode {
         FitMode::Original => true,
@@ -387,14 +435,29 @@ fn original_inspection_target_long_edge(
     if !needs_original_pixels {
         return None;
     }
-    original_long_edge.map(clamp_target_long_edge)
+    original_pages
+        .iter()
+        .map(|size| clamp_target_long_edge(size.long_edge().ceil() as u32))
+        .max()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OriginalPageSize {
+    width: f32,
+    height: f32,
+}
+
+impl OriginalPageSize {
+    fn long_edge(self) -> f32 {
+        self.width.max(self.height)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         ctrl_wheel_gesture, should_defer_large_normal_target_increase, target_long_edge_for_view,
-        zoom_delta_gesture, LARGE_TARGET_INCREASE_STABILITY_DELAY,
+        zoom_delta_gesture, OriginalPageSize, LARGE_TARGET_INCREASE_STABILITY_DELAY,
     };
     use crate::core::state::{FitMode, MouseGesture};
     use eframe::egui::Vec2;
@@ -408,7 +471,7 @@ mod tests {
                 1.0,
                 Vec2::new(10_000.0, 10_000.0),
                 1.0,
-                Some(8192),
+                &[page_size(8192.0, 8192.0)],
             ),
             10_240
         );
@@ -422,9 +485,51 @@ mod tests {
                 1.0,
                 Vec2::new(3600.0, 2100.0),
                 1.0,
-                Some(8192),
+                &[page_size(8192.0, 8192.0)],
             ),
             3840
+        );
+    }
+
+    #[test]
+    fn fit_width_preserves_webtoon_source_width_when_viewport_is_wider() {
+        assert_eq!(
+            target_long_edge_for_view(
+                FitMode::FitWidth,
+                1.0,
+                Vec2::new(1200.0, 1600.0),
+                1.0,
+                &[page_size(800.0, 20_000.0)],
+            ),
+            20_000
+        );
+    }
+
+    #[test]
+    fn fit_width_uses_display_width_for_high_resolution_webtoon() {
+        assert_eq!(
+            target_long_edge_for_view(
+                FitMode::FitWidth,
+                1.0,
+                Vec2::new(1200.0, 1600.0),
+                1.0,
+                &[page_size(1600.0, 20_000.0)],
+            ),
+            16_000
+        );
+    }
+
+    #[test]
+    fn fit_height_uses_display_height_for_wide_panorama() {
+        assert_eq!(
+            target_long_edge_for_view(
+                FitMode::FitHeight,
+                1.0,
+                Vec2::new(1600.0, 1200.0),
+                1.0,
+                &[page_size(20_000.0, 1600.0)],
+            ),
+            16_000
         );
     }
 
@@ -436,7 +541,7 @@ mod tests {
                 1.0,
                 Vec2::new(1200.0, 1600.0),
                 1.0,
-                Some(8192),
+                &[page_size(8192.0, 8192.0)],
             ),
             8192
         );
@@ -450,7 +555,7 @@ mod tests {
                 1.1,
                 Vec2::new(1200.0, 1600.0),
                 1.0,
-                Some(8192),
+                &[page_size(8192.0, 8192.0)],
             ),
             8192
         );
@@ -459,7 +564,7 @@ mod tests {
     #[test]
     fn original_mode_without_metrics_uses_display_target() {
         assert_eq!(
-            target_long_edge_for_view(FitMode::Original, 1.0, Vec2::new(1200.0, 1600.0), 1.0, None,),
+            target_long_edge_for_view(FitMode::Original, 1.0, Vec2::new(1200.0, 1600.0), 1.0, &[],),
             2560
         );
     }
@@ -560,5 +665,9 @@ mod tests {
             ctrl_wheel_gesture(-120.0, 1.1),
             Some(MouseGesture::CtrlWheelDown)
         );
+    }
+
+    fn page_size(width: f32, height: f32) -> OriginalPageSize {
+        OriginalPageSize { width, height }
     }
 }
