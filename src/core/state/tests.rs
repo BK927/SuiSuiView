@@ -1,9 +1,10 @@
 use super::scalers::WgpuScaleDirection;
 use super::{
-    AppSettings, CacheMemoryMode, CpuScaleFilter, DecodeMode, DecoderPreference,
-    DecoderPreferences, EdgePageAction, GpuEffectMode, PageTransitionStyle, PersistedState,
-    RendererMode, TopBarItems, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod, WheelMode,
-    WindowPlacement, DEFAULT_MANUAL_CACHE_MB,
+    default_top_bar_cpu_scale_filters, default_top_bar_wgpu_downscale_methods,
+    default_top_bar_wgpu_upscale_methods, AppSettings, CacheMemoryMode, CpuScaleFilter, DecodeMode,
+    DecoderPreference, DecoderPreferences, EdgePageAction, GpuEffectMode, PageTransitionStyle,
+    PersistedState, RendererMode, TopBarItems, WgpuDownscaleMethod, WgpuScalePlan,
+    WgpuUpscaleMethod, WheelMode, WindowPlacement, DEFAULT_MANUAL_CACHE_MB,
 };
 use crate::core::i18n::{I18n, Language, ResolvedLanguage};
 
@@ -38,6 +39,18 @@ fn settings_defaults_match_viewer_policy() {
     assert!(settings.remember_recent_locations);
     assert!(!settings.single_instance);
     assert_eq!(settings.top_bar_items, TopBarItems::default());
+    assert_eq!(
+        settings.top_bar_cpu_scale_filters,
+        default_top_bar_cpu_scale_filters()
+    );
+    assert_eq!(
+        settings.top_bar_wgpu_upscale_methods,
+        default_top_bar_wgpu_upscale_methods()
+    );
+    assert_eq!(
+        settings.top_bar_wgpu_downscale_methods,
+        default_top_bar_wgpu_downscale_methods()
+    );
     assert_eq!(settings.image_edge_page_action, EdgePageAction::Wrap);
     assert_eq!(settings.archive_edge_page_action, EdgePageAction::Ask);
     assert_eq!(settings.edge_page_action, EdgePageAction::Stop);
@@ -111,6 +124,57 @@ fn top_bar_items_round_trip() {
     let round_trip: AppSettings = serde_json::from_str(&json).unwrap();
 
     assert_eq!(round_trip.top_bar_items, settings.top_bar_items);
+}
+
+#[test]
+fn top_bar_scaler_candidates_default_for_old_settings() {
+    let state: PersistedState =
+        serde_json::from_str(r#"{"version":4,"settings":{},"books":{}}"#).unwrap();
+
+    assert_eq!(
+        state.settings.top_bar_cpu_scale_filters,
+        default_top_bar_cpu_scale_filters()
+    );
+    assert_eq!(
+        state.settings.top_bar_wgpu_upscale_methods,
+        default_top_bar_wgpu_upscale_methods()
+    );
+    assert_eq!(
+        state.settings.top_bar_wgpu_downscale_methods,
+        default_top_bar_wgpu_downscale_methods()
+    );
+}
+
+#[test]
+fn top_bar_scaler_candidates_round_trip() {
+    let settings = AppSettings {
+        top_bar_cpu_scale_filters: vec![CpuScaleFilter::Nearest, CpuScaleFilter::Lanczos3],
+        top_bar_wgpu_upscale_methods: vec![
+            WgpuUpscaleMethod::Auto,
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2M,
+        ],
+        top_bar_wgpu_downscale_methods: vec![
+            WgpuDownscaleMethod::Bilinear,
+            WgpuDownscaleMethod::PyramidLanczos3,
+        ],
+        ..AppSettings::default()
+    };
+
+    let json = serde_json::to_string(&settings).unwrap();
+    let round_trip: AppSettings = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(
+        round_trip.top_bar_cpu_scale_filters,
+        settings.top_bar_cpu_scale_filters
+    );
+    assert_eq!(
+        round_trip.top_bar_wgpu_upscale_methods,
+        settings.top_bar_wgpu_upscale_methods
+    );
+    assert_eq!(
+        round_trip.top_bar_wgpu_downscale_methods,
+        settings.top_bar_wgpu_downscale_methods
+    );
 }
 
 #[test]

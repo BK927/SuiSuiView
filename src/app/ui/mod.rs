@@ -11,6 +11,7 @@ mod status;
 pub(in crate::app) mod theme;
 mod top_bar;
 mod top_bar_groups;
+mod top_bar_scalers;
 
 pub(in crate::app) use bookmark_rows::{BookmarkFilter, BookmarkRowsCache};
 pub(in crate::app) use bookmark_thumbnails::BookmarkThumbnails;

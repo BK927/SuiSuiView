@@ -1,7 +1,11 @@
 use super::settings::{checkbox_with_help, setting_group};
 use super::SuiSuiViewApp;
 use crate::core::i18n::I18n;
-use crate::core::state::{AppSettings, TopBarItems};
+use crate::core::state::{
+    AppSettings, CpuScaleFilter, TopBarItems, WgpuDownscaleMethod, WgpuUpscaleMethod,
+    DEFAULT_TOP_BAR_CPU_SCALE_FILTERS, DEFAULT_TOP_BAR_WGPU_DOWNSCALE_METHODS,
+    DEFAULT_TOP_BAR_WGPU_UPSCALE_METHODS,
+};
 use eframe::egui;
 
 pub(in crate::app) fn show_view_settings(
@@ -98,6 +102,49 @@ pub(in crate::app) fn show_view_settings(
     ui.add_space(8.0);
     setting_group(
         ui,
+        &i18n.text("settings.view.top_bar_scalers.title"),
+        &i18n.text("settings.view.top_bar_scalers.desc"),
+        |ui| {
+            show_quick_scaler_candidates(
+                ui,
+                &i18n.text("settings.view.top_bar_scalers.cpu"),
+                &mut draft.top_bar_cpu_scale_filters,
+                CpuScaleFilter::ALL,
+                &DEFAULT_TOP_BAR_CPU_SCALE_FILTERS,
+                |filter| filter.label().to_owned(),
+                changed,
+                i18n,
+            );
+            ui.separator();
+            show_quick_scaler_candidates(
+                ui,
+                &i18n.text("settings.view.top_bar_scalers.wgpu_up"),
+                &mut draft.top_bar_wgpu_upscale_methods,
+                WgpuUpscaleMethod::SETTINGS_CHOICES
+                    .into_iter()
+                    .filter(|method| *method != WgpuUpscaleMethod::None),
+                &DEFAULT_TOP_BAR_WGPU_UPSCALE_METHODS,
+                |method| method.settings_label_i18n(i18n),
+                changed,
+                i18n,
+            );
+            ui.separator();
+            show_quick_scaler_candidates(
+                ui,
+                &i18n.text("settings.view.top_bar_scalers.wgpu_down"),
+                &mut draft.top_bar_wgpu_downscale_methods,
+                WgpuDownscaleMethod::ALL,
+                &DEFAULT_TOP_BAR_WGPU_DOWNSCALE_METHODS,
+                |method| method.label().to_owned(),
+                changed,
+                i18n,
+            );
+        },
+    );
+
+    ui.add_space(8.0);
+    setting_group(
+        ui,
         &i18n.text("settings.view.viewer.title"),
         &i18n.text("settings.view.viewer.desc"),
         |ui| {
@@ -131,6 +178,53 @@ fn top_bar_item_checkbox(
     i18n: I18n,
 ) -> bool {
     checkbox_with_help(ui, value, &i18n.text(label_key), &i18n.text(help_key))
+}
+
+fn show_quick_scaler_candidates<T, I>(
+    ui: &mut egui::Ui,
+    title: &str,
+    selected: &mut Vec<T>,
+    choices: I,
+    defaults: &[T],
+    label: impl Fn(T) -> String,
+    changed: &mut bool,
+    i18n: I18n,
+) where
+    T: Copy + Eq,
+    I: IntoIterator<Item = T>,
+{
+    ui.horizontal_wrapped(|ui| {
+        ui.label(title);
+        if ui
+            .small_button(i18n.text("settings.view.top_bar_scalers.defaults"))
+            .clicked()
+        {
+            *selected = defaults.to_vec();
+            *changed = true;
+        }
+        if ui
+            .small_button(i18n.text("settings.view.top_bar_scalers.clear"))
+            .clicked()
+        {
+            selected.clear();
+            *changed = true;
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        for choice in choices {
+            let mut enabled = selected.contains(&choice);
+            if ui.checkbox(&mut enabled, label(choice)).changed() {
+                if enabled {
+                    if !selected.contains(&choice) {
+                        selected.push(choice);
+                    }
+                } else {
+                    selected.retain(|candidate| *candidate != choice);
+                }
+                *changed = true;
+            }
+        }
+    });
 }
 
 impl SuiSuiViewApp {

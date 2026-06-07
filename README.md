@@ -90,7 +90,7 @@ state file.
   selected text, with the resolved backend summarized beside each format.
 - File links: on Windows, register SuiSuiView as a Default Apps candidate for
   selected image and comic file types.
-- View, keyboard, and mouse: large-image starting position, visible viewer UI,
+- View, keyboard, and mouse: visible viewer UI, top-bar scaler quick picks,
   customizable keyboard shortcuts, double-click maximize, middle-click
   fullscreen, and wheel behavior.
 

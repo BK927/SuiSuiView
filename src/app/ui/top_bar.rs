@@ -135,7 +135,7 @@ impl SuiSuiViewApp {
                 match group {
                     TopBarGroup::Open => self.show_open_group(ui),
                     TopBarGroup::Page => self.show_page_group(ui),
-                    TopBarGroup::View => self.show_view_group(ui),
+                    TopBarGroup::View => self.show_view_group(ctx, ui),
                     TopBarGroup::Adjust => self.show_correction_group(ctx, ui),
                     TopBarGroup::Compare => self.show_debug_compare_group(ui),
                     TopBarGroup::Bookmarks => self.show_bookmark_group(ctx, ui),
@@ -191,7 +191,7 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn hold_top_bar_open_for_menu(&mut self) {
+    pub(in crate::app::ui) fn hold_top_bar_open_for_menu(&mut self) {
         self.top_bar_auto_hide_until = Some(Instant::now() + TOP_BAR_MENU_HOLD_DELAY);
     }
 
@@ -303,7 +303,7 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn show_view_group(&mut self, ui: &mut egui::Ui) {
+    fn show_view_group(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let i18n = self.i18n();
         let label = format!(
             "{}: {}",
@@ -356,6 +356,7 @@ impl SuiSuiViewApp {
                 }
             });
         });
+        self.show_scale_group(ctx, ui);
     }
 
     fn show_correction_group(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {

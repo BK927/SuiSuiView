@@ -31,6 +31,28 @@ pub use scalers::{
     CpuScaleFilter, ResizeFilter, WgpuDownscaleMethod, WgpuScaleDirection, WgpuScalePlan,
 };
 
+pub const DEFAULT_TOP_BAR_CPU_SCALE_FILTERS: [CpuScaleFilter; 5] = [
+    CpuScaleFilter::Nearest,
+    CpuScaleFilter::Bilinear,
+    CpuScaleFilter::Hamming,
+    CpuScaleFilter::CatmullRom,
+    CpuScaleFilter::Lanczos3,
+];
+pub const DEFAULT_TOP_BAR_WGPU_UPSCALE_METHODS: [WgpuUpscaleMethod; 4] = [
+    WgpuUpscaleMethod::Auto,
+    WgpuUpscaleMethod::WgslBilinear,
+    WgpuUpscaleMethod::WgslFsr1EasuRcas,
+    WgpuUpscaleMethod::WgslAnime4kV32CnnX2M,
+];
+pub const DEFAULT_TOP_BAR_WGPU_DOWNSCALE_METHODS: [WgpuDownscaleMethod; 6] = [
+    WgpuDownscaleMethod::Bilinear,
+    WgpuDownscaleMethod::Hamming,
+    WgpuDownscaleMethod::Lanczos3,
+    WgpuDownscaleMethod::HardwareMipmapLinear,
+    WgpuDownscaleMethod::PyramidHamming,
+    WgpuDownscaleMethod::PyramidLanczos3,
+];
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReadingDirection {
     LeftToRight,
@@ -293,6 +315,12 @@ pub struct AppSettings {
     pub top_bar_pinned: bool,
     #[serde(default)]
     pub top_bar_items: TopBarItems,
+    #[serde(default = "default_top_bar_cpu_scale_filters")]
+    pub top_bar_cpu_scale_filters: Vec<CpuScaleFilter>,
+    #[serde(default = "default_top_bar_wgpu_upscale_methods")]
+    pub top_bar_wgpu_upscale_methods: Vec<WgpuUpscaleMethod>,
+    #[serde(default = "default_top_bar_wgpu_downscale_methods")]
+    pub top_bar_wgpu_downscale_methods: Vec<WgpuDownscaleMethod>,
     #[serde(default)]
     pub show_filename_overlay: bool,
     #[serde(default = "default_true")]
@@ -413,6 +441,9 @@ impl Default for AppSettings {
             show_status_bar: false,
             top_bar_pinned: true,
             top_bar_items: TopBarItems::default(),
+            top_bar_cpu_scale_filters: default_top_bar_cpu_scale_filters(),
+            top_bar_wgpu_upscale_methods: default_top_bar_wgpu_upscale_methods(),
+            top_bar_wgpu_downscale_methods: default_top_bar_wgpu_downscale_methods(),
             show_filename_overlay: false,
             show_main_border: true,
             show_page_arrows: true,
@@ -802,6 +833,18 @@ fn default_cpu_downscale_filter() -> CpuScaleFilter {
 
 fn default_wgpu_downscale_method() -> WgpuDownscaleMethod {
     WgpuDownscaleMethod::PyramidLanczos3
+}
+
+pub fn default_top_bar_cpu_scale_filters() -> Vec<CpuScaleFilter> {
+    DEFAULT_TOP_BAR_CPU_SCALE_FILTERS.to_vec()
+}
+
+pub fn default_top_bar_wgpu_upscale_methods() -> Vec<WgpuUpscaleMethod> {
+    DEFAULT_TOP_BAR_WGPU_UPSCALE_METHODS.to_vec()
+}
+
+pub fn default_top_bar_wgpu_downscale_methods() -> Vec<WgpuDownscaleMethod> {
+    DEFAULT_TOP_BAR_WGPU_DOWNSCALE_METHODS.to_vec()
 }
 
 fn default_max_remembered_books() -> usize {
