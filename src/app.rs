@@ -103,6 +103,7 @@ use platform::{korean_font_candidates, load_first_existing_font, sanitize_font_n
 const STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
 pub(in crate::app) const TEXTURE_PRESENT_REPAINT_DELAY: Duration = Duration::from_millis(16);
 pub(in crate::app) const SIBLING_BOOK_TURN_REPAINT_DELAY: Duration = Duration::from_millis(16);
+const WORKER_EVENT_DRAIN_BUDGET: Duration = Duration::from_millis(4);
 
 #[derive(Debug, Clone)]
 struct PendingBookmarkJump {
@@ -159,6 +160,7 @@ pub struct SuiSuiViewApp {
     about_section: about::AboutSection,
     image_info: ImageInfoState,
     worker: PageWorker,
+    deferred_worker_events: VecDeque<WorkerEvent>,
     loader_tx: Sender<LoaderEvent>,
     loader_rx: Receiver<LoaderEvent>,
     loader_pending: bool,
@@ -293,6 +295,7 @@ impl SuiSuiViewApp {
             about_section: about::AboutSection::default(),
             image_info: ImageInfoState::new(),
             worker: PageWorker::new(egui_ctx.clone()),
+            deferred_worker_events: VecDeque::new(),
             loader_tx,
             loader_rx,
             loader_pending,
@@ -525,64 +528,126 @@ impl SuiSuiViewApp {
     }
 
     fn drain_worker_events(&mut self) {
+        let started = Instant::now();
+        let mut pending = std::mem::take(&mut self.deferred_worker_events);
         while let Some(event) = self.worker.try_recv() {
-            match event {
-                WorkerEvent::PageReady {
-                    book_id,
-                    index,
-                    decode,
-                    page,
-                } if self.book_id.as_deref() == Some(book_id.as_str())
-                    && decode == self.decode_options()
-                    && self.target_is_relevant(page.target_long_edge) =>
-                {
-                    let key = PageCacheKey {
-                        index,
-                        target_long_edge: page.target_long_edge,
-                        decode,
-                    };
-                    self.page_errors.remove(&key);
-                    if let Some(notice) = page.notice.as_ref() {
-                        self.set_status(notice.clone());
-                    }
-                    self.page_metrics
-                        .insert(index, PageMetrics::from_page(&page));
-                    self.insert_prepared_page(key, page.clone());
-                    self.maybe_enqueue_auto_kind(key, page);
-                    if !self.original_inspection_cache_cleanup_pending() {
-                        self.prune_decoded_cache();
-                    }
-                    self.commit_pending_page_turn_if_ready();
-                    if self.spread_indices().contains(&index) {
-                        self.egui_ctx
-                            .request_repaint_after(TEXTURE_PRESENT_REPAINT_DELAY);
-                    }
-                    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-                    self.record_cache_snapshot("page_ready");
-                }
-                WorkerEvent::PageFailed {
-                    book_id,
-                    index,
-                    target_long_edge,
-                    decode,
-                    message,
-                } if self.book_id.as_deref() == Some(book_id.as_str())
-                    && decode == self.decode_options()
-                    && self.target_is_relevant(target_long_edge) =>
-                {
-                    self.page_errors.insert(
-                        PageCacheKey {
-                            index,
-                            target_long_edge,
-                            decode,
-                        },
-                        message,
-                    );
-                    self.commit_pending_page_turn_if_ready();
-                }
-                _ => {}
+            pending.push_back(event);
+        }
+        if pending.is_empty() {
+            return;
+        }
+
+        let mut decoded_cache_changed = false;
+        let mut remaining = VecDeque::with_capacity(pending.len());
+        while let Some(event) = pending.pop_front() {
+            if self.worker_event_targets_current_spread(&event) {
+                decoded_cache_changed |= self.handle_worker_event(event);
+            } else {
+                remaining.push_back(event);
             }
         }
+
+        while let Some(event) = remaining.pop_front() {
+            if started.elapsed() >= WORKER_EVENT_DRAIN_BUDGET {
+                self.deferred_worker_events.push_back(event);
+                self.deferred_worker_events.extend(remaining);
+                self.egui_ctx
+                    .request_repaint_after(TEXTURE_PRESENT_REPAINT_DELAY);
+                break;
+            }
+            decoded_cache_changed |= self.handle_worker_event(event);
+        }
+
+        if decoded_cache_changed && !self.original_inspection_cache_cleanup_pending() {
+            self.prune_decoded_cache();
+        }
+    }
+
+    fn worker_event_targets_current_spread(&self, event: &WorkerEvent) -> bool {
+        match event {
+            WorkerEvent::PageReady {
+                book_id,
+                index,
+                decode,
+                page,
+            } => {
+                self.book_id.as_deref() == Some(book_id.as_str())
+                    && *decode == self.decode_options()
+                    && self.target_is_relevant(page.target_long_edge)
+                    && self.spread_indices().contains(index)
+            }
+            WorkerEvent::PageFailed {
+                book_id,
+                index,
+                target_long_edge,
+                decode,
+                ..
+            } => {
+                self.book_id.as_deref() == Some(book_id.as_str())
+                    && *decode == self.decode_options()
+                    && self.target_is_relevant(*target_long_edge)
+                    && self.spread_indices().contains(index)
+            }
+        }
+    }
+
+    fn handle_worker_event(&mut self, event: WorkerEvent) -> bool {
+        let mut decoded_cache_changed = false;
+        match event {
+            WorkerEvent::PageReady {
+                book_id,
+                index,
+                decode,
+                page,
+            } if self.book_id.as_deref() == Some(book_id.as_str())
+                && decode == self.decode_options()
+                && self.target_is_relevant(page.target_long_edge) =>
+            {
+                let key = PageCacheKey {
+                    index,
+                    target_long_edge: page.target_long_edge,
+                    decode,
+                };
+                self.page_errors.remove(&key);
+                if let Some(notice) = page.notice.as_ref() {
+                    self.set_status(notice.clone());
+                }
+                self.page_metrics
+                    .insert(index, PageMetrics::from_page(&page));
+                self.insert_prepared_page(key, page.clone());
+                decoded_cache_changed = true;
+                self.maybe_enqueue_auto_kind(key, page);
+                self.commit_pending_page_turn_if_ready();
+                if self.spread_indices().contains(&index) {
+                    self.egui_ctx
+                        .request_repaint_after(TEXTURE_PRESENT_REPAINT_DELAY);
+                }
+                #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+                self.record_cache_snapshot("page_ready");
+            }
+            WorkerEvent::PageFailed {
+                book_id,
+                index,
+                target_long_edge,
+                decode,
+                message,
+            } if self.book_id.as_deref() == Some(book_id.as_str())
+                && decode == self.decode_options()
+                && self.target_is_relevant(target_long_edge) =>
+            {
+                self.page_errors.insert(
+                    PageCacheKey {
+                        index,
+                        target_long_edge,
+                        decode,
+                    },
+                    message,
+                );
+                self.commit_pending_page_turn_if_ready();
+            }
+            _ => {}
+        }
+        decoded_cache_changed
     }
 
     fn clear_debug_compare_requests(&mut self) {

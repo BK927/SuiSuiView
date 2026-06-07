@@ -432,6 +432,7 @@ impl SuiSuiViewApp {
         self.pan = Vec2::ZERO;
         self.effects = ViewEffects::default();
         self.current_view_state = None;
+        self.deferred_worker_events.clear();
         self.decoded_pages.clear();
         self.decoded_bytes = 0;
         self.page_metrics.clear();
@@ -467,7 +468,9 @@ impl SuiSuiViewApp {
             ],
         ));
         self.persist_current_bookmark();
-        self.request_adjacent_seed_prefetch();
+        if self.queued_sibling_book_turns.is_empty() {
+            self.request_adjacent_seed_prefetch();
+        }
     }
 
     pub(in crate::app) fn open_view_fallback(&self) -> OpenViewFallback {

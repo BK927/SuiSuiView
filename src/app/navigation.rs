@@ -667,7 +667,7 @@ impl SuiSuiViewApp {
     }
 
     fn sibling_book_turn_in_progress(&self) -> bool {
-        self.loader_pending || self.sibling_book_visual_pending || self.sibling_book_hold_active()
+        self.loader_pending || self.sibling_book_visual_pending
     }
 
     pub(in crate::app) fn sibling_book_hold_active(&self) -> bool {
