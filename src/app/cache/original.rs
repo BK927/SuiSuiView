@@ -84,15 +84,12 @@ impl SuiSuiViewApp {
 
         let decode = self.decode_options();
         let missing_visible_original = self.spread_indices().iter().any(|index| {
-            !self.page_errors.contains_key(index)
-                && self
-                    .decoded_pages
-                    .peek(&PageCacheKey {
-                        index: *index,
-                        target_long_edge: self.target_long_edge,
-                        decode,
-                    })
-                    .is_none()
+            let key = PageCacheKey {
+                index: *index,
+                target_long_edge: self.target_long_edge,
+                decode,
+            };
+            !self.page_errors.contains_key(&key) && self.decoded_pages.peek(&key).is_none()
         });
         if !missing_visible_original {
             return;

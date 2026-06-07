@@ -185,7 +185,7 @@ pub struct SuiSuiViewApp {
     decoded_pages: LruCache<PageCacheKey, Arc<PreparedPage>>,
     decoded_bytes: usize,
     page_metrics: HashMap<usize, PageMetrics>,
-    page_errors: HashMap<usize, String>,
+    page_errors: HashMap<PageCacheKey, String>,
     textures: LruCache<TextureCacheKey, TextureEntry>,
     debug_compare: DebugCompareState,
     debug_compare_worker: Option<DebugCompareWorker>,
@@ -210,6 +210,7 @@ pub struct SuiSuiViewApp {
     window_position_checked: bool,
     window_last_native_pixels_per_point: Option<f32>,
     window_size_save_block_until: Option<Instant>,
+    view_target_update_block_until: Option<Instant>,
     window_dpi_size_guard: Option<window::WindowDpiSizeGuard>,
     window_stable_inner_size: Option<[f32; 2]>,
     window_title: Option<WindowTitleSnapshot>,
@@ -338,6 +339,7 @@ impl SuiSuiViewApp {
             window_position_checked: false,
             window_last_native_pixels_per_point: None,
             window_size_save_block_until: None,
+            view_target_update_block_until: None,
             window_dpi_size_guard: None,
             window_stable_inner_size: initial_window_size,
             window_title: None,
@@ -523,12 +525,12 @@ impl SuiSuiViewApp {
                     && decode == self.decode_options()
                     && self.target_is_relevant(page.target_long_edge) =>
                 {
-                    self.page_errors.remove(&index);
                     let key = PageCacheKey {
                         index,
                         target_long_edge: page.target_long_edge,
                         decode,
                     };
+                    self.page_errors.remove(&key);
                     if let Some(notice) = page.notice.as_ref() {
                         self.set_status(notice.clone());
                     }
@@ -557,7 +559,14 @@ impl SuiSuiViewApp {
                     && decode == self.decode_options()
                     && self.target_is_relevant(target_long_edge) =>
                 {
-                    self.page_errors.insert(index, message);
+                    self.page_errors.insert(
+                        PageCacheKey {
+                            index,
+                            target_long_edge,
+                            decode,
+                        },
+                        message,
+                    );
                     self.commit_pending_page_turn_if_ready();
                 }
                 _ => {}

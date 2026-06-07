@@ -81,6 +81,10 @@ impl SuiSuiViewApp {
             return;
         }
 
+        if self.view_target_update_is_blocked(ctx) {
+            return;
+        }
+
         let previous_intent = self.current_prepared_target_intent();
         let next = self.target_long_edge_for(ctx, viewport);
         let next_intent = self.prepared_target_intent_for_target(next);
@@ -141,6 +145,19 @@ impl SuiSuiViewApp {
             viewport.y.round().max(1.0) as u32,
             (ctx.pixels_per_point() * 1000.0).round().max(1.0) as u32,
         );
+    }
+
+    fn view_target_update_is_blocked(&mut self, ctx: &egui::Context) -> bool {
+        let Some(block_until) = self.view_target_update_block_until else {
+            return false;
+        };
+        let now = Instant::now();
+        if now < block_until {
+            ctx.request_repaint_after(block_until.saturating_duration_since(now));
+            return true;
+        }
+        self.view_target_update_block_until = None;
+        false
     }
 
     fn target_long_edge_for(&self, ctx: &egui::Context, viewport: Vec2) -> u32 {

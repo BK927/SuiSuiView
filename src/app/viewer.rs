@@ -130,13 +130,6 @@ impl SuiSuiViewApp {
         index: usize,
         target_long_edge: u32,
     ) -> PageVisual {
-        if let Some(error) = self.page_errors.get(&index) {
-            return PageVisual::Failed {
-                index,
-                message: error.clone(),
-            };
-        }
-
         let key = PageCacheKey {
             index,
             target_long_edge,
@@ -146,6 +139,12 @@ impl SuiSuiViewApp {
             return visual;
         }
         let Some(best_key) = self.best_page_key(key) else {
+            if let Some(error) = self.page_errors.get(&key) {
+                return PageVisual::Failed {
+                    index,
+                    message: error.clone(),
+                };
+            }
             return PageVisual::Loading { index };
         };
         let use_wgsl_effects = self.can_paint_wgsl_effects();

@@ -198,6 +198,12 @@ impl SuiSuiViewApp {
                 let tx = self.loader_tx.clone();
                 let ctx = self.egui_ctx.clone();
                 let load_path = path.clone();
+                let store = self.store.clone();
+                let settings = self.settings.clone();
+                let seed_target_long_edge = open_seed_target_long_edge(self.target_long_edge);
+                let decode = startup_decode_options(&settings);
+                let resume_by_file_identity = settings.resume_by_file_identity;
+                let pending_bookmark_jump = self.pending_bookmark_jump.clone();
                 self.set_status(self.i18n().text("status.opening"));
 
                 let spawn_result = thread::Builder::new()
@@ -207,13 +213,48 @@ impl SuiSuiViewApp {
                         let result =
                             open_source_from_path(&load_path).map_err(|error| error.to_string());
                         perf::record_open_source(started, origin.perf_label(), result.is_ok());
+                        let seeded_page = result.as_ref().ok().and_then(|(source, forced_page)| {
+                            let reading_position = reading_position_for_open(
+                                &store,
+                                source.as_ref(),
+                                origin,
+                                &load_path,
+                                resume_by_file_identity,
+                            );
+                            let pending_page = pending_bookmark_jump
+                                .as_ref()
+                                .filter(|pending| pending.book_id == source.book_id())
+                                .map(|pending| pending.page);
+                            let page_index = selected_open_page(
+                                source.as_ref(),
+                                *forced_page,
+                                reading_position.as_ref(),
+                                pending_page,
+                            );
+                            let started = Instant::now();
+                            let seeded = prepare_seeded_first_page(
+                                source.as_ref(),
+                                page_index,
+                                seed_target_long_edge,
+                                decode,
+                                true,
+                            );
+                            perf::record_startup_seed_prepare(
+                                started,
+                                origin.perf_label(),
+                                page_index,
+                                seed_target_long_edge,
+                                seeded.is_some(),
+                            );
+                            seeded
+                        });
                         let _ = tx.send(LoaderEvent {
                             generation,
                             path: load_path,
                             origin,
                             initial_direction,
                             result,
-                            seeded_page: None,
+                            seeded_page,
                         });
                         ctx.request_repaint();
                     });
@@ -424,6 +465,10 @@ fn startup_seed_target_long_edge(placement: &WindowPlacement) -> u32 {
     clamp_navigation_target_long_edge(quantized)
 }
 
+fn open_seed_target_long_edge(current_target_long_edge: u32) -> u32 {
+    clamp_navigation_target_long_edge(current_target_long_edge)
+}
+
 fn startup_decode_options(settings: &AppSettings) -> DecodeOptions {
     let strategy = match settings.decode_mode {
         DecodeMode::AutoFast => DecodeStrategy::Auto,
@@ -490,9 +535,11 @@ pub(in crate::app) fn page_index_for_name(
 
 #[cfg(test)]
 mod tests {
-    use super::startup_seed_target_long_edge;
+    use super::{open_seed_target_long_edge, startup_seed_target_long_edge};
     use crate::core::state::WindowPlacement;
-    use crate::core::worker::DEFAULT_TARGET_LONG_EDGE;
+    use crate::core::worker::{
+        DEFAULT_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE,
+    };
 
     #[test]
     fn startup_seed_target_keeps_default_floor_for_normal_windows() {
@@ -530,6 +577,20 @@ mod tests {
         assert_eq!(
             startup_seed_target_long_edge(&placement),
             DEFAULT_TARGET_LONG_EDGE
+        );
+    }
+
+    #[test]
+    fn open_seed_target_uses_current_navigation_target() {
+        assert_eq!(open_seed_target_long_edge(3072), 3072);
+    }
+
+    #[test]
+    fn open_seed_target_stays_in_navigation_range() {
+        assert_eq!(open_seed_target_long_edge(512), MIN_TARGET_LONG_EDGE);
+        assert_eq!(
+            open_seed_target_long_edge(MAX_TARGET_LONG_EDGE + 2048),
+            MAX_TARGET_LONG_EDGE
         );
     }
 }

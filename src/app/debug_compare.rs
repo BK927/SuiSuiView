@@ -230,7 +230,7 @@ impl SuiSuiViewApp {
                     if let Some(notice) = page.notice.as_ref() {
                         self.set_status(notice.clone());
                     }
-                    self.page_errors.remove(&event.page_index);
+                    self.page_errors.remove(&key);
                     self.insert_prepared_page(key, page);
                     self.prune_decoded_cache();
                 }

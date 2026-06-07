@@ -440,14 +440,12 @@ impl SuiSuiViewApp {
         }
         let decode = self.decode_options();
         indices.iter().all(|index| {
-            self.page_errors.contains_key(index)
-                || self
-                    .final_quality_page_key(PageCacheKey {
-                        index: *index,
-                        target_long_edge: self.target_long_edge,
-                        decode,
-                    })
-                    .is_some()
+            let key = PageCacheKey {
+                index: *index,
+                target_long_edge: self.target_long_edge,
+                decode,
+            };
+            self.page_errors.contains_key(&key) || self.final_quality_page_key(key).is_some()
         })
     }
 

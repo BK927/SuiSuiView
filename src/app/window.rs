@@ -9,16 +9,13 @@ const SCALE_CHANGE_EPSILON: f32 = 0.01;
 const DPI_ARTIFACT_RATIO_TOLERANCE: f32 = 0.08;
 const DPI_ARTIFACT_MIN_DELTA_POINTS: f32 = 48.0;
 const DPI_SIZE_GUARD_DURATION: Duration = Duration::from_millis(2_000);
-const DPI_SIZE_RESTORE_RETRY_INTERVAL: Duration = Duration::from_millis(150);
-const DPI_SIZE_RESTORE_MAX_ATTEMPTS: u8 = 3;
+const DPI_VIEW_TARGET_STABILITY_DELAY: Duration = Duration::from_millis(250);
 
 pub(in crate::app) struct WindowDpiSizeGuard {
     previous_scale: f32,
     current_scale: f32,
     stable_size: [f32; 2],
     expires_at: Instant,
-    restore_attempts: u8,
-    last_restore_at: Option<Instant>,
 }
 
 impl SuiSuiViewApp {
@@ -115,7 +112,7 @@ impl SuiSuiViewApp {
         if let Some(inner_rect) = inner_rect {
             let size = inner_rect.size();
             if size.x.is_finite() && size.y.is_finite() && size.x > 0.0 && size.y > 0.0 {
-                self.restore_dpi_artifact_size_if_needed(ctx, size, now);
+                self.suspend_dpi_artifact_size_save_if_needed(size, now);
                 placement.inner_size = Some(self.inner_size_for_persistence(size, now));
             }
         }
@@ -138,6 +135,10 @@ impl SuiSuiViewApp {
             Some(current_scale),
         ) {
             self.window_size_save_block_until = Some(now + DPI_SIZE_GUARD_DURATION);
+            self.view_target_update_block_until = Some(now + DPI_VIEW_TARGET_STABILITY_DELAY);
+            self.pending_target_long_edge_increase = None;
+            self.egui_ctx
+                .request_repaint_after(DPI_VIEW_TARGET_STABILITY_DELAY);
             if let Some(previous_scale) = self.window_last_native_pixels_per_point {
                 self.window_dpi_size_guard =
                     self.window_stable_inner_size
@@ -146,20 +147,13 @@ impl SuiSuiViewApp {
                             current_scale,
                             stable_size,
                             expires_at: now + DPI_SIZE_GUARD_DURATION,
-                            restore_attempts: 0,
-                            last_restore_at: None,
                         });
             }
         }
         self.window_last_native_pixels_per_point = Some(current_scale);
     }
 
-    fn restore_dpi_artifact_size_if_needed(
-        &mut self,
-        ctx: &egui::Context,
-        current_size: Vec2,
-        now: Instant,
-    ) {
+    fn suspend_dpi_artifact_size_save_if_needed(&mut self, current_size: Vec2, now: Instant) {
         if self.window_dpi_size_guard.as_ref().is_some_and(|guard| {
             now > guard.expires_at || size_close_to(guard.stable_size, current_size)
         }) {
@@ -179,18 +173,6 @@ impl SuiSuiViewApp {
             return;
         }
 
-        let may_retry = guard
-            .last_restore_at
-            .is_none_or(|last| now.duration_since(last) >= DPI_SIZE_RESTORE_RETRY_INTERVAL);
-        if guard.restore_attempts < DPI_SIZE_RESTORE_MAX_ATTEMPTS && may_retry {
-            let restore_size = Vec2::new(guard.stable_size[0], guard.stable_size[1]);
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(restore_size));
-            guard.restore_attempts += 1;
-            guard.last_restore_at = Some(now);
-            if guard.restore_attempts < DPI_SIZE_RESTORE_MAX_ATTEMPTS {
-                ctx.request_repaint_after(DPI_SIZE_RESTORE_RETRY_INTERVAL);
-            }
-        }
         self.window_size_save_block_until = Some(guard.expires_at);
     }
 
