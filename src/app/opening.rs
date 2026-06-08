@@ -46,6 +46,7 @@ pub(in crate::app) struct LoaderEvent {
     pub(in crate::app) origin: OpenOrigin,
     pub(in crate::app) initial_direction: NavigationDirection,
     pub(in crate::app) view_fallback: Option<OpenViewFallback>,
+    pub(in crate::app) explicit_page: Option<usize>,
     pub(in crate::app) result: Result<(SharedSource, Option<usize>), String>,
     pub(in crate::app) seeded_page: Option<SeededPreparedPage>,
 }
@@ -121,6 +122,7 @@ pub(crate) fn start_startup_open_loader(path: PathBuf, store: &StateStore) -> Op
                 );
                 let page_index = selected_open_page(
                     source.as_ref(),
+                    None,
                     *forced_page,
                     reading_position.as_ref(),
                     None,
@@ -149,6 +151,7 @@ pub(crate) fn start_startup_open_loader(path: PathBuf, store: &StateStore) -> Op
                 origin,
                 initial_direction: NavigationDirection::Forward,
                 view_fallback: None,
+                explicit_page: None,
                 result,
                 seeded_page,
             });
@@ -177,7 +180,7 @@ impl SuiSuiViewApp {
     ) {
         self.pending_bookmark_jump = None;
         self.clear_adjacent_seed_cache();
-        self.open_path_inner(path, initial_direction, None);
+        self.open_path_inner(path, initial_direction, None, None);
     }
 
     pub(in crate::app) fn open_sibling_path_with_initial_direction(
@@ -188,7 +191,7 @@ impl SuiSuiViewApp {
         let view_fallback = Some(self.open_view_fallback());
         self.pending_bookmark_jump = None;
         self.clear_adjacent_seed_cache();
-        self.open_path_inner(path, initial_direction, view_fallback);
+        self.open_path_inner(path, initial_direction, view_fallback, None);
     }
 
     pub(in crate::app) fn open_path_for_bookmark(
@@ -204,7 +207,19 @@ impl SuiSuiViewApp {
             page,
         });
         self.clear_adjacent_seed_cache();
-        self.open_path_inner(path, NavigationDirection::Forward, None);
+        self.open_path_inner(path, NavigationDirection::Forward, None, None);
+    }
+
+    pub(in crate::app) fn open_path_with_explicit_page(
+        &mut self,
+        path: PathBuf,
+        initial_direction: NavigationDirection,
+        explicit_page: Option<usize>,
+        view_fallback: Option<OpenViewFallback>,
+    ) {
+        self.pending_bookmark_jump = None;
+        self.clear_adjacent_seed_cache();
+        self.open_path_inner(path, initial_direction, view_fallback, explicit_page);
     }
 
     pub(in crate::app) fn open_path_inner(
@@ -212,6 +227,7 @@ impl SuiSuiViewApp {
         path: PathBuf,
         initial_direction: NavigationDirection,
         view_fallback: Option<OpenViewFallback>,
+        explicit_page: Option<usize>,
     ) {
         let source_kind = classify_path(&path);
         match source_kind {
@@ -262,6 +278,7 @@ impl SuiSuiViewApp {
                                 .map(|pending| pending.page);
                             let page_index = selected_open_page(
                                 source.as_ref(),
+                                explicit_page,
                                 *forced_page,
                                 reading_position.as_ref(),
                                 pending_page,
@@ -290,6 +307,7 @@ impl SuiSuiViewApp {
                             origin,
                             initial_direction,
                             view_fallback,
+                            explicit_page,
                             result,
                             seeded_page,
                         });
@@ -344,6 +362,7 @@ impl SuiSuiViewApp {
                     event.seeded_page,
                     event.initial_direction,
                     event.view_fallback,
+                    event.explicit_page,
                 ),
                 Err(message) => {
                     if self
@@ -377,6 +396,7 @@ impl SuiSuiViewApp {
         seeded_page: Option<SeededPreparedPage>,
         initial_direction: NavigationDirection,
         view_fallback: Option<OpenViewFallback>,
+        explicit_page: Option<usize>,
     ) {
         let book_id = source.book_id().to_owned();
         let page_count = source.page_count();
@@ -410,6 +430,7 @@ impl SuiSuiViewApp {
         let forced_page = forced_page.or_else(perf::forced_start_page_index);
         self.current_page = selected_open_page(
             source.as_ref(),
+            explicit_page,
             forced_page,
             reading_position.as_ref(),
             pending_page,
@@ -575,6 +596,7 @@ pub(in crate::app) fn reading_position_for_open(
 
 pub(in crate::app) fn selected_open_page(
     source: &dyn BookSource,
+    explicit_page: Option<usize>,
     forced_page: Option<usize>,
     reading_position: Option<&crate::core::state::ReadingPosition>,
     pending_page: Option<usize>,
@@ -590,7 +612,8 @@ pub(in crate::app) fn selected_open_page(
             .and_then(|page_name| page_index_for_name(source, page_name))
             .or(Some(position.last_page))
     });
-    pending_page
+    explicit_page
+        .or(pending_page)
         .or(forced_page)
         .or(bookmarked_page)
         .unwrap_or_default()
@@ -637,13 +660,15 @@ fn resolve_open_view(
 #[cfg(test)]
 mod tests {
     use super::{
-        open_seed_target_long_edge, resolve_open_view, startup_seed_target_long_edge,
-        OpenViewFallback,
+        open_seed_target_long_edge, resolve_open_view, selected_open_page,
+        startup_seed_target_long_edge, OpenViewFallback,
     };
+    use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{FitMode, ReadingDirection, ReadingPosition, WindowPlacement};
     use crate::core::worker::{
         DEFAULT_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE,
     };
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn startup_seed_target_keeps_default_floor_for_normal_windows() {
@@ -748,5 +773,108 @@ mod tests {
         assert_eq!(resolved.reading_direction, ReadingDirection::default());
         assert_eq!(resolved.fit_mode, FitMode::default());
         assert_eq!(resolved.manual_zoom, 1.0);
+    }
+
+    #[test]
+    fn selected_open_page_prefers_explicit_page_over_saved_position() {
+        let source = TestSource::new(5);
+        let saved = reading_position(3, None);
+
+        assert_eq!(
+            selected_open_page(&source, Some(1), None, Some(&saved), None),
+            1
+        );
+    }
+
+    #[test]
+    fn selected_open_page_clamps_explicit_page_to_page_count() {
+        let source = TestSource::new(2);
+        let saved = reading_position(0, None);
+
+        assert_eq!(
+            selected_open_page(&source, Some(9), None, Some(&saved), None),
+            1
+        );
+    }
+
+    #[test]
+    fn selected_open_page_keeps_bookmark_jump_before_forced_page() {
+        let source = TestSource::with_names(vec!["001.jpg", "002.jpg", "003.jpg", "004.jpg"]);
+        let saved = reading_position(0, Some("003.jpg"));
+
+        assert_eq!(
+            selected_open_page(&source, None, Some(1), Some(&saved), Some(3)),
+            3
+        );
+    }
+
+    #[test]
+    fn selected_open_page_keeps_forced_page_before_saved_position() {
+        let source = TestSource::new(5);
+        let saved = reading_position(4, None);
+
+        assert_eq!(
+            selected_open_page(&source, None, Some(2), Some(&saved), None),
+            2
+        );
+    }
+
+    fn reading_position(last_page: usize, last_page_name: Option<&str>) -> ReadingPosition {
+        ReadingPosition {
+            last_page,
+            last_page_name: last_page_name.map(str::to_owned),
+            reading_direction: ReadingDirection::default(),
+            fit_mode: FitMode::default(),
+            manual_zoom: None,
+            updated_at: 0,
+        }
+    }
+
+    struct TestSource {
+        source_path: PathBuf,
+        page_names: Vec<String>,
+    }
+
+    impl TestSource {
+        fn new(page_count: usize) -> Self {
+            Self::with_names(
+                (0..page_count)
+                    .map(|index| format!("{index}.jpg"))
+                    .collect(),
+            )
+        }
+
+        fn with_names(page_names: Vec<impl Into<String>>) -> Self {
+            Self {
+                source_path: PathBuf::from("book"),
+                page_names: page_names.into_iter().map(Into::into).collect(),
+            }
+        }
+    }
+
+    impl BookSource for TestSource {
+        fn title(&self) -> &str {
+            "test"
+        }
+
+        fn source_path(&self) -> &Path {
+            &self.source_path
+        }
+
+        fn book_id(&self) -> &str {
+            "test"
+        }
+
+        fn page_count(&self) -> usize {
+            self.page_names.len()
+        }
+
+        fn page_name(&self, index: usize) -> Option<&str> {
+            self.page_names.get(index).map(String::as_str)
+        }
+
+        fn read_page(&self, _index: usize) -> Result<Vec<u8>, SourceError> {
+            Ok(Vec::new())
+        }
     }
 }

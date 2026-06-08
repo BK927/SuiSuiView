@@ -324,6 +324,7 @@ impl SuiSuiViewApp {
         );
         let selected_page = selected_open_page(
             cache.source.as_ref(),
+            None,
             cache.forced_page,
             reading_position.as_ref(),
             None,
@@ -454,6 +455,7 @@ pub(in crate::app) fn prepare_adjacent_seed_cache(
     );
     let seed_page = selected_open_page(
         source.as_ref(),
+        None,
         forced_page,
         reading_position.as_ref(),
         None,

@@ -739,6 +739,7 @@ impl SuiSuiViewApp {
                     Some(seeded_page),
                     navigation_direction_for_sibling(direction),
                     view_fallback,
+                    None,
                 );
                 self.insert_seeded_page_if_matching_target(seeded_followup_page);
                 return;

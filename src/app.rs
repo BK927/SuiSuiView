@@ -10,15 +10,14 @@ use crate::core::worker::{
     DecodeOptions, DecodeStrategy, NavigationDirection, PageWorker, PreparedPage, WorkerEvent,
     WorkerOptions, DEFAULT_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
-use commands::{collect_keyboard_commands, AppCommand, DeleteMode};
+use commands::{collect_keyboard_commands, AppCommand};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use debug_compare::{DebugCompareState, DebugCompareWorker};
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Stroke, Vec2};
 use image_info::ImageInfoState;
 use lru::LruCache;
-use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+use rfd::FileDialog;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
@@ -33,6 +32,7 @@ mod cache;
 mod commands;
 mod context_menu;
 mod debug_compare;
+mod deletion;
 mod eframe_host;
 pub(crate) mod fast_start;
 #[cfg(target_os = "windows")]
@@ -883,64 +883,6 @@ impl SuiSuiViewApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(self.maximized));
     }
 
-    fn delete_current_file(&mut self, mode: DeleteMode) {
-        let Some(target) = self.current_delete_target() else {
-            self.notify("No current file to delete.");
-            return;
-        };
-
-        let title = match mode {
-            DeleteMode::Recycle => "Move file to Recycle Bin?",
-            DeleteMode::Permanent => "Permanently delete file?",
-        };
-        let description = match mode {
-            DeleteMode::Recycle => format!("{}", target.display()),
-            DeleteMode::Permanent => format!("This cannot be undone.\n\n{}", target.display()),
-        };
-        let level = match mode {
-            DeleteMode::Recycle => MessageLevel::Warning,
-            DeleteMode::Permanent => MessageLevel::Error,
-        };
-        let confirmed = mode == DeleteMode::Recycle && !self.settings.confirm_delete
-            || MessageDialog::new()
-                .set_level(level)
-                .set_title(title)
-                .set_description(description)
-                .set_buttons(MessageButtons::YesNo)
-                .show()
-                == MessageDialogResult::Yes;
-
-        if !confirmed {
-            self.set_status("Delete cancelled.");
-            return;
-        }
-
-        if !self.worker.clear_book_blocking() {
-            self.notify(
-                "Background decode is still finishing; deletion was not attempted. Try again soon.",
-            );
-            return;
-        }
-        self.clear_local_book_state("Closing current book before deleting file...");
-        let result = match mode {
-            DeleteMode::Recycle => trash::delete(&target).map_err(|error| error.to_string()),
-            DeleteMode::Permanent => fs::remove_file(&target).map_err(|error| error.to_string()),
-        };
-
-        self.notify(match result {
-            Ok(()) => match mode {
-                DeleteMode::Recycle => format!("Moved to Recycle Bin: {}", target.display()),
-                DeleteMode::Permanent => format!("Permanently deleted: {}", target.display()),
-            },
-            Err(error) => format!("Could not delete {}: {error}", target.display()),
-        });
-    }
-
-    fn current_delete_target(&self) -> Option<PathBuf> {
-        let source = self.source.as_ref()?;
-        delete_target_for(self.open_origin?, source.as_ref(), self.current_page)
-    }
-
     fn open_current_in_file_manager(&mut self) {
         let Some(target) = self.current_file_manager_target() else {
             self.notify("No current file to reveal.");
@@ -1130,35 +1072,23 @@ impl SuiSuiViewApp {
     }
 }
 
-fn delete_target_for(
-    origin: OpenOrigin,
-    source: &dyn BookSource,
-    current_page: usize,
-) -> Option<PathBuf> {
-    match origin {
-        OpenOrigin::ZipCbz => Some(source.source_path().to_path_buf()),
-        OpenOrigin::Folder | OpenOrigin::SingleImage => source.page_file_path(current_page),
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::commands::DeleteMode;
     use super::perf::PageCacheState;
     use super::{
         adjacent_sibling_book_paths, adjacent_sibling_book_paths_ordered, apply_effects_to_image,
         best_page_key_excluding_preview_fallback_in_cache, best_page_key_in_cache,
-        command_for_shortcut, delete_target_for, double_spread_indices,
-        final_quality_page_key_in_cache, gpu_visual_needs_wgsl, korean_font_candidates,
-        load_first_existing_font, lower_resolution_page_keys, ordered_spread_indices,
-        page_cache_state_from_hit, platform, prepared_target_intent_for_view,
-        preview_prefetch_indices, relative_difference, sanitize_font_name,
-        should_allow_cpu_display_upscale, sibling_book_path, smart_spread_indices_for_metrics,
-        texture_cache_budget_bytes_for, touch_normal_navigation_page_keys, transformed_page_size,
-        transition_paint_params, transition_screen_sign, worker_center_page_for_mode, AppCommand,
-        DeleteMode, ImageFilter, OpenOrigin, PageCacheKey, PageMetrics, TextureCacheKey,
-        TextureSampling, ViewEffects, ViewMode, ViewTransform,
+        command_for_shortcut, double_spread_indices, final_quality_page_key_in_cache,
+        gpu_visual_needs_wgsl, korean_font_candidates, load_first_existing_font,
+        lower_resolution_page_keys, ordered_spread_indices, page_cache_state_from_hit, platform,
+        prepared_target_intent_for_view, preview_prefetch_indices, relative_difference,
+        sanitize_font_name, should_allow_cpu_display_upscale, sibling_book_path,
+        smart_spread_indices_for_metrics, texture_cache_budget_bytes_for,
+        touch_normal_navigation_page_keys, transformed_page_size, transition_paint_params,
+        transition_screen_sign, worker_center_page_for_mode, AppCommand, ImageFilter, PageCacheKey,
+        PageMetrics, TextureCacheKey, TextureSampling, ViewEffects, ViewMode, ViewTransform,
     };
-    use crate::core::source::{BookSource, SourceError};
     use crate::core::state::{
         AppSettings, CacheMemoryMode, FitMode, KeyCode, KeyShortcut, PageTransitionStyle,
         ReadingDirection, WgpuDownscaleMethod, WgpuUpscaleMethod, MANUAL_CACHE_MB_MAX,
@@ -2001,29 +1931,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn delete_target_uses_archive_for_zip_and_page_file_for_folders() {
-        let archive = PathBuf::from("book.cbz");
-        let page = PathBuf::from("page-001.jpg");
-        let source = FakeSource {
-            source_path: archive.clone(),
-            page_file: Some(page.clone()),
-        };
-
-        assert_eq!(
-            delete_target_for(OpenOrigin::ZipCbz, &source, 0),
-            Some(archive)
-        );
-        assert_eq!(
-            delete_target_for(OpenOrigin::Folder, &source, 0),
-            Some(page.clone())
-        );
-        assert_eq!(
-            delete_target_for(OpenOrigin::SingleImage, &source, 0),
-            Some(page)
-        );
-    }
-
     #[cfg(target_os = "windows")]
     #[test]
     fn explorer_select_args_keep_switch_and_path_separate() {
@@ -2125,41 +2032,6 @@ mod tests {
             decode_backend: DecodeBackend::ImageCrate,
             notice: None,
         })
-    }
-
-    struct FakeSource {
-        source_path: PathBuf,
-        page_file: Option<PathBuf>,
-    }
-
-    impl BookSource for FakeSource {
-        fn title(&self) -> &str {
-            "fake"
-        }
-
-        fn source_path(&self) -> &Path {
-            &self.source_path
-        }
-
-        fn book_id(&self) -> &str {
-            "fake"
-        }
-
-        fn page_count(&self) -> usize {
-            1
-        }
-
-        fn page_name(&self, _index: usize) -> Option<&str> {
-            Some("page-001.jpg")
-        }
-
-        fn page_file_path(&self, _index: usize) -> Option<PathBuf> {
-            self.page_file.clone()
-        }
-
-        fn read_page(&self, _index: usize) -> Result<Vec<u8>, SourceError> {
-            Ok(Vec::new())
-        }
     }
 
     fn temp_test_dir(name: &str) -> PathBuf {
