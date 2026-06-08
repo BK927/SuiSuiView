@@ -55,19 +55,123 @@ pub(super) enum DeleteMode {
     Permanent,
 }
 
-pub(super) fn collect_keyboard_commands(
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum KeyboardAction {
+    Command(AppCommand),
+    Release(NavigationRelease),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NavigationRelease {
+    PageTurn,
+    SiblingBook,
+}
+
+pub(super) fn collect_keyboard_actions(
     input: &egui::InputState,
     settings: &AppSettings,
-) -> Vec<AppCommand> {
-    let mut commands = Vec::new();
+) -> Vec<KeyboardAction> {
+    let mut actions = Vec::new();
+    for event in &input.events {
+        match event {
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                let Some(key) = key_code_from_egui(*key) else {
+                    continue;
+                };
+                collect_shortcut_commands(
+                    shortcut_from_parts(key, *modifiers),
+                    settings,
+                    &mut actions,
+                );
+            }
+            egui::Event::Key {
+                key,
+                pressed: false,
+                ..
+            } => {
+                let Some(key) = key_code_from_egui(*key) else {
+                    continue;
+                };
+                collect_release_actions(key, settings, &mut actions);
+            }
+            egui::Event::Text(text)
+                if text == "*"
+                    && modifiers_match(input.modifiers, KeyShortcut::new(KeyCode::Asterisk)) =>
+            {
+                collect_shortcut_commands(
+                    KeyShortcut::new(KeyCode::Asterisk),
+                    settings,
+                    &mut actions,
+                );
+            }
+            _ => {}
+        }
+    }
+    actions
+}
+
+fn collect_shortcut_commands(
+    shortcut: KeyShortcut,
+    settings: &AppSettings,
+    actions: &mut Vec<KeyboardAction>,
+) {
     for binding in &settings.key_bindings {
-        if shortcut_pressed(input, binding.shortcut) {
+        if binding.shortcut == shortcut {
             if let Some(command) = app_command_for_id(binding.command) {
-                commands.push(command);
+                actions.push(KeyboardAction::Command(command));
             }
         }
     }
-    commands
+}
+
+fn collect_release_actions(
+    key: KeyCode,
+    settings: &AppSettings,
+    actions: &mut Vec<KeyboardAction>,
+) {
+    let mut page_turn = false;
+    let mut sibling_book = false;
+    for binding in &settings.key_bindings {
+        if binding.shortcut.key != key {
+            continue;
+        }
+        match release_for_command(binding.command) {
+            Some(NavigationRelease::PageTurn) => page_turn = true,
+            Some(NavigationRelease::SiblingBook) => sibling_book = true,
+            None => {}
+        }
+    }
+
+    if page_turn {
+        actions.push(KeyboardAction::Release(NavigationRelease::PageTurn));
+    }
+    if sibling_book {
+        actions.push(KeyboardAction::Release(NavigationRelease::SiblingBook));
+    }
+}
+
+fn release_for_command(command: CommandId) -> Option<NavigationRelease> {
+    Some(match command {
+        CommandId::NextPage
+        | CommandId::PreviousPage
+        | CommandId::MoveForward10
+        | CommandId::MoveBackward10
+        | CommandId::MoveForward100
+        | CommandId::MoveBackward100
+        | CommandId::ForceNextPage
+        | CommandId::ForcePreviousPage
+        | CommandId::Home
+        | CommandId::End
+        | CommandId::RandomForward
+        | CommandId::RandomBackward => NavigationRelease::PageTurn,
+        CommandId::NextBook | CommandId::PreviousBook => NavigationRelease::SiblingBook,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -171,20 +275,6 @@ pub(super) fn shortcut_from_input_event(
     }
 }
 
-pub(super) fn shortcut_pressed(input: &egui::InputState, shortcut: KeyShortcut) -> bool {
-    if shortcut.key == KeyCode::Asterisk {
-        return input.events.iter().any(|event| {
-            matches!(event, egui::Event::Text(text) if text == "*")
-                && modifiers_match(input.modifiers, shortcut)
-        });
-    }
-
-    let Some(key) = key_code_to_egui(shortcut.key) else {
-        return false;
-    };
-    input.key_pressed(key) && modifiers_match(input.modifiers, shortcut)
-}
-
 pub(super) fn key_code_from_egui(key: Key) -> Option<KeyCode> {
     Some(match key {
         Key::F1 => KeyCode::F1,
@@ -250,71 +340,6 @@ pub(super) fn key_code_from_egui(key: Key) -> Option<KeyCode> {
     })
 }
 
-fn key_code_to_egui(key: KeyCode) -> Option<Key> {
-    Some(match key {
-        KeyCode::F1 => Key::F1,
-        KeyCode::F2 => Key::F2,
-        KeyCode::F3 => Key::F3,
-        KeyCode::F4 => Key::F4,
-        KeyCode::F5 => Key::F5,
-        KeyCode::F11 => Key::F11,
-        KeyCode::A => Key::A,
-        KeyCode::B => Key::B,
-        KeyCode::C => Key::C,
-        KeyCode::E => Key::E,
-        KeyCode::F => Key::F,
-        KeyCode::G => Key::G,
-        KeyCode::I => Key::I,
-        KeyCode::K => Key::K,
-        KeyCode::L => Key::L,
-        KeyCode::M => Key::M,
-        KeyCode::N => Key::N,
-        KeyCode::O => Key::O,
-        KeyCode::P => Key::P,
-        KeyCode::Q => Key::Q,
-        KeyCode::R => Key::R,
-        KeyCode::S => Key::S,
-        KeyCode::T => Key::T,
-        KeyCode::U => Key::U,
-        KeyCode::W => Key::W,
-        KeyCode::X => Key::X,
-        KeyCode::Z => Key::Z,
-        KeyCode::Escape => Key::Escape,
-        KeyCode::Enter => Key::Enter,
-        KeyCode::Space => Key::Space,
-        KeyCode::Backspace => Key::Backspace,
-        KeyCode::Delete => Key::Delete,
-        KeyCode::Insert => Key::Insert,
-        KeyCode::Tab => Key::Tab,
-        KeyCode::PageDown => Key::PageDown,
-        KeyCode::PageUp => Key::PageUp,
-        KeyCode::ArrowDown => Key::ArrowDown,
-        KeyCode::ArrowLeft => Key::ArrowLeft,
-        KeyCode::ArrowRight => Key::ArrowRight,
-        KeyCode::ArrowUp => Key::ArrowUp,
-        KeyCode::Home => Key::Home,
-        KeyCode::End => Key::End,
-        KeyCode::OpenBracket => Key::OpenBracket,
-        KeyCode::CloseBracket => Key::CloseBracket,
-        KeyCode::Backtick => Key::Backtick,
-        KeyCode::Slash => Key::Slash,
-        KeyCode::Plus => Key::Plus,
-        KeyCode::Equals => Key::Equals,
-        KeyCode::Minus => Key::Minus,
-        KeyCode::Num0 => Key::Num0,
-        KeyCode::Num1 => Key::Num1,
-        KeyCode::Num2 => Key::Num2,
-        KeyCode::Num3 => Key::Num3,
-        KeyCode::Num4 => Key::Num4,
-        KeyCode::Num5 => Key::Num5,
-        KeyCode::Num6 => Key::Num6,
-        KeyCode::Num7 => Key::Num7,
-        KeyCode::Num8 => Key::Num8,
-        KeyCode::Num9 => Key::Num9,
-        KeyCode::Asterisk => return None,
-    })
-}
-
 fn shortcut_from_parts(key: KeyCode, modifiers: egui::Modifiers) -> KeyShortcut {
     KeyShortcut {
         key,
@@ -333,7 +358,7 @@ fn modifiers_match(modifiers: egui::Modifiers, shortcut: KeyShortcut) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::state::{default_key_bindings, default_mouse_bindings};
+    use crate::core::state::{default_key_bindings, default_mouse_bindings, KeyBinding};
 
     #[test]
     fn default_shortcuts_match_existing_core_commands() {
@@ -375,5 +400,116 @@ mod tests {
             command_for_mouse_gesture(MouseGesture::WheelDown, &settings),
             Some(AppCommand::NextPage)
         );
+    }
+
+    #[test]
+    fn keyboard_actions_keep_repeat_page_turn_commands() {
+        let settings = AppSettings {
+            key_bindings: default_key_bindings(),
+            ..AppSettings::default()
+        };
+        let input = input_with_events(vec![key_event(
+            Key::ArrowRight,
+            true,
+            true,
+            egui::Modifiers::default(),
+        )]);
+
+        assert_eq!(
+            collect_keyboard_actions(&input, &settings),
+            vec![KeyboardAction::Command(AppCommand::NextPage)]
+        );
+    }
+
+    #[test]
+    fn keyboard_actions_release_page_turn_keys() {
+        let settings = AppSettings {
+            key_bindings: default_key_bindings(),
+            ..AppSettings::default()
+        };
+        let input = input_with_events(vec![key_event(
+            Key::ArrowRight,
+            false,
+            false,
+            egui::Modifiers::default(),
+        )]);
+
+        assert_eq!(
+            collect_keyboard_actions(&input, &settings),
+            vec![KeyboardAction::Release(NavigationRelease::PageTurn)]
+        );
+    }
+
+    #[test]
+    fn keyboard_actions_release_navigation_keys_without_matching_modifiers() {
+        let settings = AppSettings {
+            key_bindings: vec![KeyBinding {
+                command: CommandId::MoveForward10,
+                shortcut: KeyShortcut::ctrl(KeyCode::PageDown),
+            }],
+            ..AppSettings::default()
+        };
+        let input = input_with_events(vec![key_event(
+            Key::PageDown,
+            false,
+            false,
+            egui::Modifiers::default(),
+        )]);
+
+        assert_eq!(
+            collect_keyboard_actions(&input, &settings),
+            vec![KeyboardAction::Release(NavigationRelease::PageTurn)]
+        );
+    }
+
+    #[test]
+    fn keyboard_actions_release_sibling_book_keys() {
+        let settings = AppSettings {
+            key_bindings: default_key_bindings(),
+            ..AppSettings::default()
+        };
+        let input = input_with_events(vec![key_event(
+            Key::CloseBracket,
+            false,
+            false,
+            egui::Modifiers::default(),
+        )]);
+
+        assert_eq!(
+            collect_keyboard_actions(&input, &settings),
+            vec![KeyboardAction::Release(NavigationRelease::SiblingBook)]
+        );
+    }
+
+    #[test]
+    fn keyboard_actions_ignore_unbound_key_release() {
+        let settings = AppSettings {
+            key_bindings: default_key_bindings(),
+            ..AppSettings::default()
+        };
+        let input = input_with_events(vec![key_event(
+            Key::G,
+            false,
+            false,
+            egui::Modifiers::default(),
+        )]);
+
+        assert!(collect_keyboard_actions(&input, &settings).is_empty());
+    }
+
+    fn input_with_events(events: Vec<egui::Event>) -> egui::InputState {
+        let mut input = egui::InputState::default();
+        input.events = events;
+        input
+    }
+
+    fn key_event(key: Key, pressed: bool, repeat: bool, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat,
+            modifiers,
+        }
     }
 }

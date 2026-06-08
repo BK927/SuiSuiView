@@ -12,9 +12,9 @@ use eframe::egui::{self, Color32, Pos2, RichText, Stroke, Vec2};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const MAX_QUEUED_PAGE_TURNS: usize = 128;
+const MAX_QUEUED_PAGE_TURNS: usize = 1;
 const MAX_QUEUED_WORKER_VISIBLE_PAGES: usize = 25;
-const MAX_QUEUED_SIBLING_BOOK_TURNS: usize = 64;
+const MAX_QUEUED_SIBLING_BOOK_TURNS: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) struct EdgePrompt {
@@ -335,26 +335,7 @@ impl SuiSuiViewApp {
             }
         }
 
-        match self.queued_page_turns.as_mut() {
-            Some(queued) if queued.direction == direction => {
-                queued.remaining = queued
-                    .remaining
-                    .saturating_add(1)
-                    .min(MAX_QUEUED_PAGE_TURNS);
-            }
-            Some(queued) if queued.remaining > 1 => {
-                queued.remaining -= 1;
-            }
-            Some(_) => {
-                self.queued_page_turns = None;
-            }
-            None => {
-                self.queued_page_turns = Some(super::QueuedPageTurns {
-                    direction,
-                    remaining: 1,
-                });
-            }
-        }
+        push_queued_page_turn(&mut self.queued_page_turns, direction);
         self.request_pending_page_turn_work();
         self.egui_ctx
             .request_repaint_after(Duration::from_millis(16));
@@ -412,10 +393,18 @@ impl SuiSuiViewApp {
         }
     }
 
+    pub(in crate::app) fn clear_queued_page_turns(&mut self) {
+        self.queued_page_turns = None;
+    }
+
     pub(in crate::app) fn clear_pending_sibling_book_turns(&mut self) {
         self.queued_sibling_book_turns.clear();
         self.sibling_book_wgpu_present_wait = None;
         self.sibling_book_visual_hold_until = None;
+    }
+
+    pub(in crate::app) fn clear_queued_sibling_book_turns(&mut self) {
+        self.queued_sibling_book_turns.clear();
     }
 
     pub(in crate::app) fn mark_current_book_visual_painted(&mut self) {
@@ -791,6 +780,32 @@ fn normalize_sibling_book_direction(direction: isize) -> isize {
     }
 }
 
+fn push_queued_page_turn(
+    queue: &mut Option<super::QueuedPageTurns>,
+    direction: NavigationDirection,
+) {
+    match queue.as_mut() {
+        Some(queued) if queued.direction == direction => {
+            queued.remaining = queued
+                .remaining
+                .saturating_add(1)
+                .min(MAX_QUEUED_PAGE_TURNS);
+        }
+        Some(queued) if queued.remaining > 1 => {
+            queued.remaining -= 1;
+        }
+        Some(_) => {
+            *queue = None;
+        }
+        None => {
+            *queue = Some(super::QueuedPageTurns {
+                direction,
+                remaining: 1,
+            });
+        }
+    }
+}
+
 fn push_queued_sibling_book_turn(queue: &mut std::collections::VecDeque<isize>, direction: isize) {
     if queue.len() >= MAX_QUEUED_SIBLING_BOOK_TURNS {
         return;
@@ -800,10 +815,12 @@ fn push_queued_sibling_book_turn(queue: &mut std::collections::VecDeque<isize>, 
 
 #[cfg(test)]
 mod tests {
+    use super::super::QueuedPageTurns;
     use super::{
-        normalize_sibling_book_direction, push_queued_sibling_book_turn,
-        MAX_QUEUED_SIBLING_BOOK_TURNS,
+        normalize_sibling_book_direction, push_queued_page_turn, push_queued_sibling_book_turn,
+        MAX_QUEUED_PAGE_TURNS, MAX_QUEUED_SIBLING_BOOK_TURNS,
     };
+    use crate::core::worker::NavigationDirection;
     use std::collections::VecDeque;
 
     #[test]
@@ -814,14 +831,14 @@ mod tests {
     }
 
     #[test]
-    fn queued_sibling_book_turns_preserve_mixed_order() {
+    fn queued_sibling_book_turns_keep_single_reserved_turn() {
         let mut queue = VecDeque::new();
 
         push_queued_sibling_book_turn(&mut queue, 1);
         push_queued_sibling_book_turn(&mut queue, -1);
         push_queued_sibling_book_turn(&mut queue, 1);
 
-        assert_eq!(queue.into_iter().collect::<Vec<_>>(), vec![1, -1, 1]);
+        assert_eq!(queue.into_iter().collect::<Vec<_>>(), vec![1]);
     }
 
     #[test]
@@ -833,5 +850,34 @@ mod tests {
         }
 
         assert_eq!(queue.len(), MAX_QUEUED_SIBLING_BOOK_TURNS);
+    }
+
+    #[test]
+    fn queued_page_turns_are_capped() {
+        let mut queue = None;
+
+        for _ in 0..MAX_QUEUED_PAGE_TURNS + 8 {
+            push_queued_page_turn(&mut queue, NavigationDirection::Forward);
+        }
+
+        assert_eq!(
+            queue,
+            Some(QueuedPageTurns {
+                direction: NavigationDirection::Forward,
+                remaining: MAX_QUEUED_PAGE_TURNS,
+            })
+        );
+    }
+
+    #[test]
+    fn opposite_page_turn_clears_single_queued_turn() {
+        let mut queue = Some(QueuedPageTurns {
+            direction: NavigationDirection::Forward,
+            remaining: 1,
+        });
+
+        push_queued_page_turn(&mut queue, NavigationDirection::Backward);
+
+        assert_eq!(queue, None);
     }
 }
