@@ -10,7 +10,7 @@ use crate::core::worker::{
     DecodeOptions, DecodeStrategy, NavigationDirection, PageWorker, PreparedPage, WorkerEvent,
     WorkerOptions, DEFAULT_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
-use commands::{collect_keyboard_commands, AppCommand};
+use commands::{collect_keyboard_actions, AppCommand, KeyboardAction, NavigationRelease};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use debug_compare::{DebugCompareState, DebugCompareWorker};
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Stroke, Vec2};
@@ -677,6 +677,7 @@ impl SuiSuiViewApp {
         DecodeOptions {
             strategy,
             decoder_preferences,
+            fast_sampled_scaled_decode: self.settings.fast_sampled_scaled_decode,
             cpu_upscale_filter: self.settings.cpu_upscale_filter,
             cpu_downscale_filter: self.settings.cpu_downscale_filter,
             allow_display_upscale: self.should_allow_display_upscale(),
@@ -723,9 +724,19 @@ impl SuiSuiViewApp {
             self.edge_prompt = None;
             return;
         }
-        let commands = ctx.input(|input| collect_keyboard_commands(input, &self.settings));
-        for command in commands {
-            self.apply_command(ctx, command);
+        let actions = ctx.input(|input| collect_keyboard_actions(input, &self.settings));
+        for action in actions {
+            match action {
+                KeyboardAction::Command(command) => self.apply_command(ctx, command),
+                KeyboardAction::Release(release) => self.apply_navigation_key_release(release),
+            }
+        }
+    }
+
+    fn apply_navigation_key_release(&mut self, release: NavigationRelease) {
+        match release {
+            NavigationRelease::PageTurn => self.clear_queued_page_turns(),
+            NavigationRelease::SiblingBook => self.clear_queued_sibling_book_turns(),
         }
     }
 

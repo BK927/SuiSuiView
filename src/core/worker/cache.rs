@@ -207,11 +207,21 @@ mod tests {
                 ..DecodeOptions::default()
             },
         );
+        let conservative_prepare = page_cache_key(
+            "book",
+            1,
+            2048,
+            DecodeOptions {
+                fast_sampled_scaled_decode: false,
+                ..DecodeOptions::default()
+            },
+        );
 
         assert_ne!(normal, exif);
         assert_ne!(normal, icc);
         assert_ne!(normal, lanczos);
         assert_ne!(normal, upscaled);
+        assert_ne!(normal, conservative_prepare);
 
         let zune_jpeg = page_cache_key(
             "book",

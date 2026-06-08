@@ -575,6 +575,7 @@ fn startup_decode_options(settings: &AppSettings) -> DecodeOptions {
     DecodeOptions {
         strategy,
         decoder_preferences,
+        fast_sampled_scaled_decode: settings.fast_sampled_scaled_decode,
         cpu_upscale_filter: settings.cpu_upscale_filter,
         cpu_downscale_filter: settings.cpu_downscale_filter,
         allow_display_upscale: false,

@@ -1,4 +1,4 @@
-use super::super::viewer::{CpuScaleState, CurrentViewState, WgpuScaleState};
+use super::super::viewer::{CurrentViewState, PrepareScaleState, WgpuScaleState};
 use super::super::SuiSuiViewApp;
 use super::{icons, theme};
 use crate::core::i18n::I18n;
@@ -127,8 +127,8 @@ fn top_bar_scaler_summary(current_view: Option<&CurrentViewState>, i18n: I18n) -
         return i18n.text("topbar.scale");
     };
     let mut parts = Vec::new();
-    if let Some(cpu_label) = compact_cpu_scale_state_label(current_view.cpu_scale) {
-        parts.push(cpu_label);
+    if let Some(prepare_label) = compact_prepare_scale_state_label(current_view.prepare_scale) {
+        parts.push(prepare_label);
     }
     if let Some(wgpu_label) = compact_wgpu_scale_state_label(current_view.wgpu_scale) {
         parts.push(wgpu_label);
@@ -147,7 +147,7 @@ fn top_bar_scaler_tooltip(current_view: Option<&CurrentViewState>, i18n: I18n) -
         format!(
             "{}: {}",
             i18n.text("topbar.scale.current_prepare"),
-            current_view.cpu_scale.label()
+            current_view.prepare_scale.label()
         ),
         format!(
             "{}: {}",
@@ -220,12 +220,13 @@ fn wgpu_upscale_menu_current(settings: &AppSettings) -> WgpuUpscaleMethod {
     }
 }
 
-fn compact_cpu_scale_state_label(state: CpuScaleState) -> Option<String> {
+fn compact_prepare_scale_state_label(state: PrepareScaleState) -> Option<String> {
     match state {
-        CpuScaleState::Native => None,
-        CpuScaleState::Upscale(filter) | CpuScaleState::Downscale(filter) => {
+        PrepareScaleState::Native => None,
+        PrepareScaleState::CpuUpscale(filter) | PrepareScaleState::CpuDownscale(filter) => {
             Some(scale_filter_label(filter))
         }
+        PrepareScaleState::FastSampledScaledDownscale(backend) => Some(backend.label().to_owned()),
     }
 }
 
@@ -271,7 +272,7 @@ mod tests {
     use super::{
         cpu_filter_candidates, top_bar_scaler_summary, unique_candidates, wgpu_upscale_menu_current,
     };
-    use crate::app::viewer::{CpuScaleState, CurrentViewState, WgpuScaleState};
+    use crate::app::viewer::{CurrentViewState, PrepareScaleState, WgpuScaleState};
     use crate::core::i18n::{I18n, ResolvedLanguage};
     use crate::core::state::{
         AppSettings, CpuScaleFilter, RendererMode, WgpuDownscaleMethod, WgpuUpscaleMethod,
@@ -303,7 +304,7 @@ mod tests {
     fn scaler_summary_uses_current_view_state() {
         let i18n = I18n::resolved(ResolvedLanguage::EnUs);
         let state = test_view_state(
-            CpuScaleState::Downscale(CpuScaleFilter::Hamming),
+            PrepareScaleState::CpuDownscale(CpuScaleFilter::Hamming),
             WgpuScaleState::Downscale(WgpuDownscaleMethod::PyramidLanczos3),
         );
 
@@ -311,6 +312,17 @@ mod tests {
             top_bar_scaler_summary(Some(&state), i18n),
             "Hamming | Pyramid + Lanczos3"
         );
+    }
+
+    #[test]
+    fn scaler_summary_names_fast_prepare_backend() {
+        let i18n = I18n::resolved(ResolvedLanguage::EnUs);
+        let state = test_view_state(
+            PrepareScaleState::FastSampledScaledDownscale(DecodeBackend::PngSampled),
+            WgpuScaleState::Inactive,
+        );
+
+        assert_eq!(top_bar_scaler_summary(Some(&state), i18n), "PNG sampled");
     }
 
     #[test]
@@ -323,7 +335,7 @@ mod tests {
     #[test]
     fn wgpu_inactive_summary_does_not_imply_gpu_scaler_is_active() {
         let i18n = I18n::resolved(ResolvedLanguage::EnUs);
-        let state = test_view_state(CpuScaleState::Native, WgpuScaleState::Inactive);
+        let state = test_view_state(PrepareScaleState::Native, WgpuScaleState::Inactive);
 
         assert_eq!(top_bar_scaler_summary(Some(&state), i18n), "Native");
     }
@@ -342,11 +354,14 @@ mod tests {
         );
     }
 
-    fn test_view_state(cpu_scale: CpuScaleState, wgpu_scale: WgpuScaleState) -> CurrentViewState {
+    fn test_view_state(
+        prepare_scale: PrepareScaleState,
+        wgpu_scale: WgpuScaleState,
+    ) -> CurrentViewState {
         CurrentViewState {
             page_index: 0,
             decode_backend: DecodeBackend::ImageCrate,
-            cpu_scale,
+            prepare_scale,
             wgpu_scale,
             target_intent: PreparedTargetIntent::NormalNavigation,
         }

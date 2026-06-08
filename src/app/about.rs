@@ -700,7 +700,7 @@ fn actual_scaler_filter_label(app: &SuiSuiViewApp, i18n: I18n) -> String {
     };
     format!(
         "Prepare: {} / Display: {}",
-        state.cpu_scale.label(),
+        state.prepare_scale.label(),
         state.wgpu_scale.label()
     )
 }

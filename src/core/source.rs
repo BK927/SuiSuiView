@@ -26,6 +26,9 @@ pub trait BookSource: Send + Sync {
     fn page_byte_size(&self, _index: usize) -> Option<u64> {
         None
     }
+    fn page_read_hint(&self, index: usize) -> Option<PageReadHint> {
+        self.page_byte_size(index).map(PageReadHint::file)
+    }
     fn read_page_prefix(&self, index: usize, max_bytes: usize) -> Result<Vec<u8>, SourceError> {
         let mut bytes = self.read_page(index)?;
         bytes.truncate(max_bytes);
@@ -39,6 +42,143 @@ pub trait BookSource: Send + Sync {
             .map(|name| format!("{}::{name}", self.source_path().display()))
     }
     fn read_page(&self, index: usize) -> Result<Vec<u8>, SourceError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageReadHint {
+    pub source_kind: PageReadSourceKind,
+    pub compression_method: PageReadCompression,
+    pub compressed_size: Option<u64>,
+    pub uncompressed_size: Option<u64>,
+}
+
+impl PageReadHint {
+    pub fn unknown() -> Self {
+        Self {
+            source_kind: PageReadSourceKind::Unknown,
+            compression_method: PageReadCompression::Unknown,
+            compressed_size: None,
+            uncompressed_size: None,
+        }
+    }
+
+    pub fn file(byte_size: u64) -> Self {
+        Self {
+            source_kind: PageReadSourceKind::File,
+            compression_method: PageReadCompression::None,
+            compressed_size: Some(byte_size),
+            uncompressed_size: Some(byte_size),
+        }
+    }
+
+    fn zip(
+        compression_method: zip::CompressionMethod,
+        compressed_size: u64,
+        uncompressed_size: u64,
+    ) -> Self {
+        Self {
+            source_kind: PageReadSourceKind::ZipCbz,
+            compression_method: PageReadCompression::from_zip(compression_method),
+            compressed_size: Some(compressed_size),
+            uncompressed_size: Some(uncompressed_size),
+        }
+    }
+
+    pub fn compression_state(self) -> &'static str {
+        match self.compression_method {
+            PageReadCompression::None => "uncompressed",
+            PageReadCompression::Stored => "stored",
+            PageReadCompression::Unknown => "unknown",
+            _ => "compressed",
+        }
+    }
+
+    pub fn compression_ratio_milli(self) -> usize {
+        let Some(compressed_size) = self.compressed_size else {
+            return 0;
+        };
+        let Some(uncompressed_size) = self.uncompressed_size else {
+            return 0;
+        };
+        if uncompressed_size == 0 {
+            return 0;
+        }
+        let ratio =
+            u128::from(compressed_size).saturating_mul(1000) / u128::from(uncompressed_size);
+        usize::try_from(ratio).unwrap_or(usize::MAX)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageReadSourceKind {
+    File,
+    ZipCbz,
+    Unknown,
+}
+
+impl PageReadSourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::ZipCbz => "zip_cbz",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageReadCompression {
+    None,
+    Stored,
+    Deflated,
+    Deflate64,
+    Bzip2,
+    Aes,
+    Zstd,
+    Lzma,
+    Xz,
+    Other,
+    Unknown,
+}
+
+impl PageReadCompression {
+    fn from_zip(method: zip::CompressionMethod) -> Self {
+        if method == zip::CompressionMethod::STORE {
+            Self::Stored
+        } else if method == zip::CompressionMethod::DEFLATE {
+            Self::Deflated
+        } else if method == zip::CompressionMethod::DEFLATE64 {
+            Self::Deflate64
+        } else if method == zip::CompressionMethod::BZIP2 {
+            Self::Bzip2
+        } else if method == zip::CompressionMethod::AES {
+            Self::Aes
+        } else if method == zip::CompressionMethod::ZSTD {
+            Self::Zstd
+        } else if method == zip::CompressionMethod::LZMA {
+            Self::Lzma
+        } else if method == zip::CompressionMethod::XZ {
+            Self::Xz
+        } else {
+            Self::Other
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Stored => "stored",
+            Self::Deflated => "deflated",
+            Self::Deflate64 => "deflate64",
+            Self::Bzip2 => "bzip2",
+            Self::Aes => "aes",
+            Self::Zstd => "zstd",
+            Self::Lzma => "lzma",
+            Self::Xz => "xz",
+            Self::Other => "other",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -296,6 +436,7 @@ struct ZipPage {
     name: String,
     zip_index: usize,
     crc32: u32,
+    compression_method: zip::CompressionMethod,
     uncompressed_size: u64,
     compressed_size: u64,
 }
@@ -323,6 +464,7 @@ impl ZipCbzSource {
                 name,
                 zip_index: index,
                 crc32: file.crc32(),
+                compression_method: file.compression(),
                 uncompressed_size: file.size(),
                 compressed_size: file.compressed_size(),
             });
@@ -374,6 +516,16 @@ impl BookSource for ZipCbzSource {
 
     fn page_byte_size(&self, index: usize) -> Option<u64> {
         self.pages.get(index).map(|page| page.uncompressed_size)
+    }
+
+    fn page_read_hint(&self, index: usize) -> Option<PageReadHint> {
+        self.pages.get(index).map(|page| {
+            PageReadHint::zip(
+                page.compression_method,
+                page.compressed_size,
+                page.uncompressed_size,
+            )
+        })
     }
 
     fn read_page(&self, index: usize) -> Result<Vec<u8>, SourceError> {

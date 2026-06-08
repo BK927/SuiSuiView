@@ -28,8 +28,8 @@ pub(in crate::app) use interaction::{target_long_edge_for_view, OriginalPageSize
 pub(in crate::app) use model::relative_difference;
 pub(in crate::app) use model::{
     double_spread_indices, ordered_spread_indices, page_visual_size,
-    smart_spread_indices_for_metrics, worker_center_page_for_mode, CpuScaleState, CurrentViewState,
-    PageMetrics, PageRenderInfo, PageVisual, Transition, ViewMode, WgpuScaleState,
+    smart_spread_indices_for_metrics, worker_center_page_for_mode, CurrentViewState, PageMetrics,
+    PageRenderInfo, PageVisual, PrepareScaleState, Transition, ViewMode, WgpuScaleState,
 };
 pub(in crate::app) use paint_helpers::texture_options_for_sampling;
 pub(in crate::app) use transition::{
@@ -223,12 +223,22 @@ impl SuiSuiViewApp {
                 render_info: PageRenderInfo::from_page(index, best_key, &page),
             };
         }
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let color_image_started = Instant::now();
+        let base_image = page.color_image();
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        perf::record_color_image_prepare(
+            color_image_started,
+            index,
+            best_key.target_long_edge,
+            self.effects != ViewEffects::default(),
+        );
         let image = if self.effects == ViewEffects::default() {
-            Arc::new(page.color_image())
+            Arc::new(base_image)
         } else {
             #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
             let effects_started = Instant::now();
-            let image = Arc::new(apply_effects_to_image(&page.color_image(), self.effects));
+            let image = Arc::new(apply_effects_to_image(&base_image, self.effects));
             #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
             perf::record_page_effects_cpu(effects_started, index, best_key.target_long_edge);
             image

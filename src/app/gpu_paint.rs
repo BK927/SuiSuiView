@@ -594,6 +594,8 @@ impl GpuPaintResources {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let write_started = Instant::now();
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -613,8 +615,19 @@ impl GpuPaintResources {
                 depth_or_array_layers: 1,
             },
         );
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        record_gpu_texture_upload_stage("gpu_texture_write", write_started, width, height);
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let bind_group_started = Instant::now();
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = Arc::new(self.texture_bind_group_for(device, &view));
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        record_gpu_texture_upload_stage(
+            "gpu_texture_bind_group",
+            bind_group_started,
+            width,
+            height,
+        );
         if let Some((_old_key, old_texture)) = self.source_textures.push(
             key,
             GpuSourceTexture {
@@ -1423,6 +1436,24 @@ impl GpuPaintResources {
                 .saturating_sub(draw_state.intermediate_byte_size);
         }
     }
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+fn record_gpu_texture_upload_stage(
+    event: &'static str,
+    started: Instant,
+    width: usize,
+    height: usize,
+) {
+    perf_trace::record_duration_if_at_least(
+        event,
+        started.elapsed(),
+        Duration::from_millis(1),
+        &[
+            PerfField::Usize("width", width),
+            PerfField::Usize("height", height),
+        ],
+    );
 }
 
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]

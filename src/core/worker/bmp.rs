@@ -1,6 +1,6 @@
 use super::{
     clamp_target_long_edge, decoded_byte_size, display_dimensions, prepared_page_from_rgba,
-    reject_oversized_original, sampled_source_index, DecodeBackend, PreparedPage,
+    reject_oversized_original, sampled_index_map, DecodeBackend, PreparedPage,
     BMP_SAMPLED_MIN_RATIO,
 };
 
@@ -114,9 +114,17 @@ fn sample_bmp_to_rgba(
     let source_height = header.height as usize;
     let display_width = display_width as usize;
     let display_height = display_height as usize;
+    let x_offsets = sampled_index_map(display_width, source_width)
+        .into_iter()
+        .map(|source_x| source_x.saturating_mul(bytes_per_pixel))
+        .collect::<Vec<_>>();
+    let y_indices = sampled_index_map(display_height, source_height);
+    let output_stride = display_width
+        .checked_mul(4)
+        .ok_or_else(|| "BMP output row size overflows memory limits".to_owned())?;
 
     for out_y in 0..display_height {
-        let source_y = sampled_source_index(out_y, display_height, source_height);
+        let source_y = y_indices[out_y];
         let row_y = if header.top_down {
             source_y
         } else {
@@ -126,21 +134,31 @@ fn sample_bmp_to_rgba(
             .pixel_offset
             .checked_add(row_y.saturating_mul(header.row_stride))
             .ok_or_else(|| "BMP row offset overflows memory limits".to_owned())?;
+        let row_end = row_start
+            .checked_add(header.row_stride)
+            .ok_or_else(|| "BMP row end overflows memory limits".to_owned())?;
+        let output_start = out_y
+            .checked_mul(output_stride)
+            .ok_or_else(|| "BMP output offset overflows memory limits".to_owned())?;
+        let output_end = output_start + output_stride;
+        if row_end > bytes.len() || output_end > raw.len() {
+            return Err("BMP pixel data ended unexpectedly".to_owned());
+        }
 
-        for out_x in 0..display_width {
-            let source_x = sampled_source_index(out_x, display_width, source_width);
-            let source_offset = row_start
-                .checked_add(source_x.saturating_mul(bytes_per_pixel))
-                .ok_or_else(|| "BMP pixel offset overflows memory limits".to_owned())?;
-            if source_offset + bytes_per_pixel > bytes.len() {
-                return Err("BMP pixel data ended unexpectedly".to_owned());
+        let row = &bytes[row_start..row_end];
+        let output = &mut raw[output_start..output_end];
+        match header.bits_per_pixel {
+            24 | 32 => {
+                for (&source_offset, rgba) in x_offsets.iter().zip(output.chunks_exact_mut(4)) {
+                    rgba.copy_from_slice(&[
+                        row[source_offset + 2],
+                        row[source_offset + 1],
+                        row[source_offset],
+                        255,
+                    ]);
+                }
             }
-
-            let target_offset = (out_y * display_width + out_x) * 4;
-            raw[target_offset] = bytes[source_offset + 2];
-            raw[target_offset + 1] = bytes[source_offset + 1];
-            raw[target_offset + 2] = bytes[source_offset];
-            raw[target_offset + 3] = 255;
+            _ => return Err("Unsupported BMP bit depth reached sampled path".to_owned()),
         }
     }
 

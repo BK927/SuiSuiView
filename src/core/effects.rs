@@ -83,17 +83,26 @@ pub fn apply_effects_to_image(image: &ColorImage, effects: ViewEffects) -> Color
 }
 
 fn transform_image(image: &ColorImage, transform: ViewTransform) -> ColorImage {
-    if transform == ViewTransform::default() {
-        return image.clone();
-    }
-
     let [width, height] = image.size;
     let rotation = transform.rotation_quadrants % 4;
-    let output_size = if rotation % 2 == 1 {
-        [height, width]
-    } else {
-        [width, height]
+    let pixels = match (rotation, transform.flip_horizontal, transform.flip_vertical) {
+        (0, false, false) => return image.clone(),
+        (0, true, false) => return ColorImage::new(image.size, flip_pixels_horizontal(image)),
+        (0, false, true) => return ColorImage::new(image.size, flip_pixels_vertical(image)),
+        (2, false, false) => return ColorImage::new(image.size, rotate_pixels_180(image)),
+        (1, false, false) => rotate_pixels_90(image),
+        (3, false, false) => rotate_pixels_270(image),
+        (1, true, false) => transpose_pixels(image),
+        (3, true, false) => transpose_pixels_anti(image),
+        _ => transform_pixels_generic(image, transform),
     };
+    ColorImage::new(rotated_size(width, height, rotation), pixels)
+}
+
+fn transform_pixels_generic(image: &ColorImage, transform: ViewTransform) -> Vec<Color32> {
+    let [width, height] = image.size;
+    let rotation = transform.rotation_quadrants % 4;
+    let output_size = rotated_size(width, height, rotation);
     let [out_width, out_height] = output_size;
     let mut pixels = Vec::with_capacity(out_width * out_height);
     for dst_y in 0..out_height {
@@ -118,7 +127,98 @@ fn transform_image(image: &ColorImage, transform: ViewTransform) -> ColorImage {
             pixels.push(image.pixels[src_y * width + src_x]);
         }
     }
-    ColorImage::new(output_size, pixels)
+    pixels
+}
+
+fn rotated_size(width: usize, height: usize, rotation: u8) -> [usize; 2] {
+    if rotation % 2 == 1 {
+        [height, width]
+    } else {
+        [width, height]
+    }
+}
+
+fn flip_pixels_horizontal(image: &ColorImage) -> Vec<Color32> {
+    let [width, height] = image.size;
+    let mut pixels = Vec::with_capacity(image.pixels.len());
+    for y in 0..height {
+        let row = &image.pixels[y * width..(y + 1) * width];
+        pixels.extend(row.iter().rev().copied());
+    }
+    pixels
+}
+
+fn flip_pixels_vertical(image: &ColorImage) -> Vec<Color32> {
+    let [width, height] = image.size;
+    let mut pixels = Vec::with_capacity(image.pixels.len());
+    for y in (0..height).rev() {
+        pixels.extend_from_slice(&image.pixels[y * width..(y + 1) * width]);
+    }
+    pixels
+}
+
+fn rotate_pixels_180(image: &ColorImage) -> Vec<Color32> {
+    let [width, height] = image.size;
+    let mut pixels = Vec::with_capacity(image.pixels.len());
+    for y in (0..height).rev() {
+        let row = &image.pixels[y * width..(y + 1) * width];
+        pixels.extend(row.iter().rev().copied());
+    }
+    pixels
+}
+
+fn rotate_pixels_90(image: &ColorImage) -> Vec<Color32> {
+    let [width, height] = image.size;
+    let out_width = height;
+    let mut pixels = vec![Color32::TRANSPARENT; image.pixels.len()];
+    for src_y in 0..height {
+        for src_x in 0..width {
+            let dst_x = height - 1 - src_y;
+            let dst_y = src_x;
+            pixels[dst_y * out_width + dst_x] = image.pixels[src_y * width + src_x];
+        }
+    }
+    pixels
+}
+
+fn rotate_pixels_270(image: &ColorImage) -> Vec<Color32> {
+    let [width, height] = image.size;
+    let out_width = height;
+    let mut pixels = vec![Color32::TRANSPARENT; image.pixels.len()];
+    for src_y in 0..height {
+        for src_x in 0..width {
+            let dst_x = src_y;
+            let dst_y = width - 1 - src_x;
+            pixels[dst_y * out_width + dst_x] = image.pixels[src_y * width + src_x];
+        }
+    }
+    pixels
+}
+
+fn transpose_pixels(image: &ColorImage) -> Vec<Color32> {
+    let [width, height] = image.size;
+    let out_width = height;
+    let mut pixels = vec![Color32::TRANSPARENT; image.pixels.len()];
+    for src_y in 0..height {
+        for src_x in 0..width {
+            pixels[src_x * out_width + src_y] = image.pixels[src_y * width + src_x];
+        }
+    }
+    pixels
+}
+
+fn transpose_pixels_anti(image: &ColorImage) -> Vec<Color32> {
+    let [width, height] = image.size;
+    let out_width = height;
+    let mut pixels = vec![Color32::TRANSPARENT; image.pixels.len()];
+    for src_y in 0..height {
+        for src_x in 0..width {
+            let dst_x = height - 1 - src_y;
+            let dst_y = width - 1 - src_x;
+            pixels[dst_y * out_width + dst_x] = image.pixels[src_y * width + src_x];
+        }
+    }
+    pixels
 }
 
 fn smooth_image(image: &ColorImage) -> ColorImage {
@@ -348,7 +448,10 @@ pub fn compose_images_horizontally(images: &[ColorImage], gap: usize) -> Option<
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_effects_to_image, gamma_channel, ImageFilter, ViewEffects};
+    use super::{
+        apply_effects_to_image, gamma_channel, transform_image, ImageFilter, ViewEffects,
+        ViewTransform,
+    };
     use eframe::egui::{Color32, ColorImage};
 
     #[test]
@@ -391,5 +494,58 @@ mod tests {
         );
 
         assert_eq!(output.pixels[0], expected);
+    }
+
+    #[test]
+    fn transform_fast_paths_keep_expected_orientation() {
+        let pixels = vec![
+            Color32::from_rgb(10, 0, 0),
+            Color32::from_rgb(20, 0, 0),
+            Color32::from_rgb(30, 0, 0),
+            Color32::from_rgb(40, 0, 0),
+            Color32::from_rgb(50, 0, 0),
+            Color32::from_rgb(60, 0, 0),
+        ];
+        let image = ColorImage::new([2, 3], pixels);
+
+        let rotate_90 = transform_image(
+            &image,
+            ViewTransform {
+                rotation_quadrants: 1,
+                ..ViewTransform::default()
+            },
+        );
+        assert_eq!(rotate_90.size, [3, 2]);
+        assert_eq!(
+            rotate_90.pixels,
+            vec![
+                Color32::from_rgb(50, 0, 0),
+                Color32::from_rgb(30, 0, 0),
+                Color32::from_rgb(10, 0, 0),
+                Color32::from_rgb(60, 0, 0),
+                Color32::from_rgb(40, 0, 0),
+                Color32::from_rgb(20, 0, 0),
+            ]
+        );
+
+        let flip_h = transform_image(
+            &image,
+            ViewTransform {
+                flip_horizontal: true,
+                ..ViewTransform::default()
+            },
+        );
+        assert_eq!(flip_h.size, [2, 3]);
+        assert_eq!(
+            flip_h.pixels,
+            vec![
+                Color32::from_rgb(20, 0, 0),
+                Color32::from_rgb(10, 0, 0),
+                Color32::from_rgb(40, 0, 0),
+                Color32::from_rgb(30, 0, 0),
+                Color32::from_rgb(60, 0, 0),
+                Color32::from_rgb(50, 0, 0),
+            ]
+        );
     }
 }

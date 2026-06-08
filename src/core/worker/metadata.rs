@@ -210,10 +210,27 @@ fn transform_rgba_pixels(
         return None;
     }
 
-    if transform == OrientationTransform::default() {
-        return Some((size, rgba.to_vec()));
-    }
+    let rotation = transform.rotation_quadrants % 4;
+    let output = match (rotation, transform.flip_horizontal, transform.flip_vertical) {
+        (0, false, false) => (size, rgba.to_vec()),
+        (0, true, false) => (size, flip_rgba_horizontal(width, height, rgba)?),
+        (0, false, true) => (size, flip_rgba_vertical(width, height, rgba)?),
+        (2, false, false) => (size, rotate_rgba_180(width, height, rgba)?),
+        (1, false, false) => ([height, width], rotate_rgba_90(width, height, rgba)?),
+        (3, false, false) => ([height, width], rotate_rgba_270(width, height, rgba)?),
+        (1, true, false) => ([height, width], transpose_rgba(width, height, rgba)?),
+        (3, true, false) => ([height, width], transpose_rgba_anti(width, height, rgba)?),
+        _ => transform_rgba_pixels_generic(size, rgba, transform)?,
+    };
+    Some(output)
+}
 
+fn transform_rgba_pixels_generic(
+    size: [usize; 2],
+    rgba: &[u8],
+    transform: OrientationTransform,
+) -> Option<([usize; 2], Vec<u8>)> {
+    let [width, height] = size;
     let rotation = transform.rotation_quadrants % 4;
     let output_size = if rotation % 2 == 1 {
         [height, width]
@@ -221,7 +238,7 @@ fn transform_rgba_pixels(
         [width, height]
     };
     let [out_width, out_height] = output_size;
-    let mut output = vec![0; out_width * out_height * 4];
+    let mut output = vec![0; out_width.checked_mul(out_height)?.checked_mul(4)?];
     for dst_y in 0..out_height {
         for dst_x in 0..out_width {
             let rotated_x = if transform.flip_horizontal {
@@ -241,12 +258,171 @@ fn transform_rgba_pixels(
                 3 => (width - 1 - rotated_y, rotated_x),
                 _ => unreachable!(),
             };
-            let src_offset = (src_y * width + src_x) * 4;
-            let dst_offset = (dst_y * out_width + dst_x) * 4;
-            output[dst_offset..dst_offset + 4].copy_from_slice(&rgba[src_offset..src_offset + 4]);
+            copy_rgba_pixel(
+                rgba,
+                &mut output,
+                width,
+                out_width,
+                src_x,
+                src_y,
+                dst_x,
+                dst_y,
+            );
         }
     }
     Some((output_size, output))
+}
+
+fn flip_rgba_horizontal(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> {
+    let row_bytes = width.checked_mul(4)?;
+    let mut output = vec![0; row_bytes.checked_mul(height)?];
+    for y in 0..height {
+        let row_start = y.checked_mul(row_bytes)?;
+        copy_reversed_rgba_row(
+            &rgba[row_start..row_start + row_bytes],
+            &mut output[row_start..row_start + row_bytes],
+        );
+    }
+    Some(output)
+}
+
+fn flip_rgba_vertical(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> {
+    let row_bytes = width.checked_mul(4)?;
+    let mut output = vec![0; row_bytes.checked_mul(height)?];
+    for dst_y in 0..height {
+        let src_y = height - 1 - dst_y;
+        let src_start = src_y.checked_mul(row_bytes)?;
+        let dst_start = dst_y.checked_mul(row_bytes)?;
+        output[dst_start..dst_start + row_bytes]
+            .copy_from_slice(&rgba[src_start..src_start + row_bytes]);
+    }
+    Some(output)
+}
+
+fn rotate_rgba_180(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> {
+    let row_bytes = width.checked_mul(4)?;
+    let mut output = vec![0; row_bytes.checked_mul(height)?];
+    for dst_y in 0..height {
+        let src_y = height - 1 - dst_y;
+        let src_start = src_y.checked_mul(row_bytes)?;
+        let dst_start = dst_y.checked_mul(row_bytes)?;
+        copy_reversed_rgba_row(
+            &rgba[src_start..src_start + row_bytes],
+            &mut output[dst_start..dst_start + row_bytes],
+        );
+    }
+    Some(output)
+}
+
+fn rotate_rgba_90(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> {
+    let out_width = height;
+    let out_height = width;
+    let mut output = vec![0; out_width.checked_mul(out_height)?.checked_mul(4)?];
+    for src_y in 0..height {
+        for src_x in 0..width {
+            let dst_x = height - 1 - src_y;
+            let dst_y = src_x;
+            copy_rgba_pixel(
+                rgba,
+                &mut output,
+                width,
+                out_width,
+                src_x,
+                src_y,
+                dst_x,
+                dst_y,
+            );
+        }
+    }
+    Some(output)
+}
+
+fn rotate_rgba_270(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> {
+    let out_width = height;
+    let out_height = width;
+    let mut output = vec![0; out_width.checked_mul(out_height)?.checked_mul(4)?];
+    for src_y in 0..height {
+        for src_x in 0..width {
+            let dst_x = src_y;
+            let dst_y = width - 1 - src_x;
+            copy_rgba_pixel(
+                rgba,
+                &mut output,
+                width,
+                out_width,
+                src_x,
+                src_y,
+                dst_x,
+                dst_y,
+            );
+        }
+    }
+    Some(output)
+}
+
+fn transpose_rgba(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> {
+    let out_width = height;
+    let out_height = width;
+    let mut output = vec![0; out_width.checked_mul(out_height)?.checked_mul(4)?];
+    for src_y in 0..height {
+        for src_x in 0..width {
+            copy_rgba_pixel(
+                rgba,
+                &mut output,
+                width,
+                out_width,
+                src_x,
+                src_y,
+                src_y,
+                src_x,
+            );
+        }
+    }
+    Some(output)
+}
+
+fn transpose_rgba_anti(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> {
+    let out_width = height;
+    let out_height = width;
+    let mut output = vec![0; out_width.checked_mul(out_height)?.checked_mul(4)?];
+    for src_y in 0..height {
+        for src_x in 0..width {
+            let dst_x = height - 1 - src_y;
+            let dst_y = width - 1 - src_x;
+            copy_rgba_pixel(
+                rgba,
+                &mut output,
+                width,
+                out_width,
+                src_x,
+                src_y,
+                dst_x,
+                dst_y,
+            );
+        }
+    }
+    Some(output)
+}
+
+fn copy_reversed_rgba_row(src: &[u8], dst: &mut [u8]) {
+    for (src_pixel, dst_pixel) in src.chunks_exact(4).rev().zip(dst.chunks_exact_mut(4)) {
+        dst_pixel.copy_from_slice(src_pixel);
+    }
+}
+
+fn copy_rgba_pixel(
+    src: &[u8],
+    dst: &mut [u8],
+    src_width: usize,
+    dst_width: usize,
+    src_x: usize,
+    src_y: usize,
+    dst_x: usize,
+    dst_y: usize,
+) {
+    let src_offset = (src_y * src_width + src_x) * 4;
+    let dst_offset = (dst_y * dst_width + dst_x) * 4;
+    dst[dst_offset..dst_offset + 4].copy_from_slice(&src[src_offset..src_offset + 4]);
 }
 
 fn orientation_swaps_dimensions(orientation: Orientation) -> bool {

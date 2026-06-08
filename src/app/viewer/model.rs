@@ -176,28 +176,36 @@ pub(in crate::app) struct Transition {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::app) enum CpuScaleState {
+pub(in crate::app) enum PrepareScaleState {
     Native,
-    Upscale(CpuScaleFilter),
-    Downscale(CpuScaleFilter),
+    CpuUpscale(CpuScaleFilter),
+    CpuDownscale(CpuScaleFilter),
+    FastSampledScaledDownscale(DecodeBackend),
 }
 
-impl CpuScaleState {
+impl PrepareScaleState {
     pub(in crate::app) fn label(self) -> String {
         match self {
-            Self::Native => "no CPU resize".to_owned(),
-            Self::Upscale(filter) => format!("CPU upscale ({})", filter.label()),
-            Self::Downscale(filter) => format!("CPU downscale ({})", filter.label()),
+            Self::Native => "no prepare resize".to_owned(),
+            Self::CpuUpscale(filter) => format!("CPU prepare upscale ({})", filter.label()),
+            Self::CpuDownscale(filter) => format!("CPU resize downscale ({})", filter.label()),
+            Self::FastSampledScaledDownscale(backend) => {
+                format!("sampled/scaled prepare ({})", backend.label())
+            }
         }
     }
 
     fn from_page(key: PageCacheKey, page: &PreparedPage) -> Self {
         if page.display_width > page.original_width || page.display_height > page.original_height {
-            Self::Upscale(key.decode.cpu_upscale_filter)
+            Self::CpuUpscale(key.decode.cpu_upscale_filter)
         } else if page.display_width < page.original_width
             || page.display_height < page.original_height
         {
-            Self::Downscale(key.decode.cpu_downscale_filter)
+            if page.decode_backend.is_sampled_or_scaled_prepare() {
+                Self::FastSampledScaledDownscale(page.decode_backend)
+            } else {
+                Self::CpuDownscale(key.decode.cpu_downscale_filter)
+            }
         } else {
             Self::Native
         }
@@ -248,7 +256,7 @@ pub(in crate::app) struct PageRenderInfo {
     pub(in crate::app) page_index: usize,
     pub(in crate::app) target_long_edge: u32,
     pub(in crate::app) decode_backend: DecodeBackend,
-    pub(in crate::app) cpu_scale: CpuScaleState,
+    pub(in crate::app) prepare_scale: PrepareScaleState,
 }
 
 impl PageRenderInfo {
@@ -261,7 +269,7 @@ impl PageRenderInfo {
             page_index,
             target_long_edge: key.target_long_edge,
             decode_backend: page.decode_backend,
-            cpu_scale: CpuScaleState::from_page(key, page),
+            prepare_scale: PrepareScaleState::from_page(key, page),
         }
     }
 }
@@ -270,7 +278,7 @@ impl PageRenderInfo {
 pub(in crate::app) struct CurrentViewState {
     pub(in crate::app) page_index: usize,
     pub(in crate::app) decode_backend: DecodeBackend,
-    pub(in crate::app) cpu_scale: CpuScaleState,
+    pub(in crate::app) prepare_scale: PrepareScaleState,
     pub(in crate::app) wgpu_scale: WgpuScaleState,
     pub(in crate::app) target_intent: PreparedTargetIntent,
 }
@@ -283,7 +291,7 @@ impl CurrentViewState {
         Self {
             page_index: render.page_index,
             decode_backend: render.decode_backend,
-            cpu_scale: render.cpu_scale,
+            prepare_scale: render.prepare_scale,
             wgpu_scale: WgpuScaleState::Inactive,
             target_intent,
         }
@@ -309,7 +317,7 @@ impl CurrentViewState {
         Self {
             page_index: render.page_index,
             decode_backend: render.decode_backend,
-            cpu_scale: render.cpu_scale,
+            prepare_scale: render.prepare_scale,
             wgpu_scale: WgpuScaleState::from_plan(active, scale_plan),
             target_intent,
         }

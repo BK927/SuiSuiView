@@ -1,7 +1,7 @@
 use super::cache::{page_cache_key, should_skip_published_app_cache_hint, PublishedAppCacheHints};
 use super::scheduler::{is_visible_page_index, should_skip_ai_preview_or_prefetch, PageJob};
 use super::{PreparedPage, WorkerCommand, WorkerOptions};
-use crate::core::source::SharedSource;
+use crate::core::source::{PageReadHint, SharedSource};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::{perf_trace, perf_trace::PerfField};
 use crossbeam_channel::Receiver;
@@ -34,6 +34,7 @@ impl ReadAhead {
             .name("suisuiview-page-read-ahead".to_owned())
             .stack_size(READ_AHEAD_STACK_BYTES)
             .spawn(move || {
+                let read_hint = source.page_read_hint(index);
                 let started = Instant::now();
                 let result = source.read_page(index).map_err(|error| error.to_string());
                 record_page_read(
@@ -43,6 +44,7 @@ impl ReadAhead {
                     false,
                     started.elapsed(),
                     result.is_ok(),
+                    read_hint,
                 );
                 ReadAheadResult { result }
             })
@@ -225,7 +227,9 @@ pub(super) fn record_page_read(
     decode_ahead: bool,
     duration: Duration,
     success: bool,
+    hint: Option<PageReadHint>,
 ) {
+    let hint = hint.unwrap_or_else(PageReadHint::unknown);
     perf_trace::record_duration_if_at_least(
         "page_read",
         duration,
@@ -236,6 +240,15 @@ pub(super) fn record_page_read(
             PerfField::Bool("success", success),
             PerfField::Bool("read_ahead", read_ahead),
             PerfField::Bool("decode_ahead", decode_ahead),
+            PerfField::Str("source_kind", hint.source_kind.as_str()),
+            PerfField::Str("compression_method", hint.compression_method.as_str()),
+            PerfField::Str("compression_state", hint.compression_state()),
+            PerfField::Usize("compressed_size", size_hint_to_usize(hint.compressed_size)),
+            PerfField::Usize(
+                "uncompressed_size",
+                size_hint_to_usize(hint.uncompressed_size),
+            ),
+            PerfField::Usize("compression_ratio_milli", hint.compression_ratio_milli()),
         ],
     );
 }
@@ -248,7 +261,14 @@ pub(super) fn record_page_read(
     _decode_ahead: bool,
     _duration: Duration,
     _success: bool,
+    _hint: Option<PageReadHint>,
 ) {
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+fn size_hint_to_usize(size: Option<u64>) -> usize {
+    size.and_then(|size| usize::try_from(size).ok())
+        .unwrap_or_default()
 }
 
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]

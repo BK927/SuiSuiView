@@ -1,6 +1,6 @@
 use super::{
     clamp_target_long_edge, decoded_byte_size, display_dimensions, prepared_page_from_rgba,
-    reject_oversized_original, sampled_source_index, DecodeBackend, PreparedPage,
+    reject_oversized_original, sampled_index_map, DecodeBackend, PreparedPage,
     GIF_SAMPLED_MIN_RATIO,
 };
 use gif::{ColorOutput as GifColorOutput, DecodeOptions as GifDecodeOptions};
@@ -97,30 +97,51 @@ fn sample_indexed_gif_to_rgba(
     let source_height = height as usize;
     let display_width = display_width as usize;
     let display_height = display_height as usize;
+    let x_indices = sampled_index_map(display_width, source_width);
+    let y_indices = sampled_index_map(display_height, source_height);
+    let rgba_palette = rgba_palette_lut(palette, transparent);
+    let output_stride = display_width
+        .checked_mul(4)
+        .ok_or_else(|| "GIF output row size overflows memory limits".to_owned())?;
 
     for out_y in 0..display_height {
-        let source_y = sampled_source_index(out_y, display_height, source_height);
-        for out_x in 0..display_width {
-            let source_x = sampled_source_index(out_x, display_width, source_width);
-            let palette_index = usize::from(indices[source_y * source_width + source_x]);
-            let palette_offset = palette_index
-                .checked_mul(3)
-                .ok_or_else(|| "GIF palette index overflows memory limits".to_owned())?;
-            if palette_offset + 2 >= palette.len() {
-                return Err("GIF frame referenced a missing palette entry".to_owned());
-            }
+        let source_y = y_indices[out_y];
+        let source_row = source_y
+            .checked_mul(source_width)
+            .ok_or_else(|| "GIF source row offset overflows memory limits".to_owned())?;
+        let output_start = out_y
+            .checked_mul(output_stride)
+            .ok_or_else(|| "GIF output offset overflows memory limits".to_owned())?;
+        let output_end = output_start + output_stride;
+        if output_end > raw.len() {
+            return Err("GIF output row exceeded allocation".to_owned());
+        }
 
-            let target_offset = (out_y * display_width + out_x) * 4;
-            raw[target_offset] = palette[palette_offset];
-            raw[target_offset + 1] = palette[palette_offset + 1];
-            raw[target_offset + 2] = palette[palette_offset + 2];
-            raw[target_offset + 3] = if transparent == Some(palette_index as u8) {
-                0
-            } else {
-                255
+        let output = &mut raw[output_start..output_end];
+        for (&source_x, rgba) in x_indices.iter().zip(output.chunks_exact_mut(4)) {
+            let palette_index = usize::from(indices[source_row + source_x]);
+            let Some(color) = rgba_palette.get(palette_index) else {
+                return Err("GIF frame referenced a missing palette entry".to_owned());
             };
+            rgba.copy_from_slice(color);
         }
     }
 
     Ok(raw)
+}
+
+fn rgba_palette_lut(palette: &[u8], transparent: Option<u8>) -> Vec<[u8; 4]> {
+    let transparent = transparent.map(usize::from);
+    palette
+        .chunks_exact(3)
+        .enumerate()
+        .map(|(index, rgb)| {
+            [
+                rgb[0],
+                rgb[1],
+                rgb[2],
+                if transparent == Some(index) { 0 } else { 255 },
+            ]
+        })
+        .collect()
 }

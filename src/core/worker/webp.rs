@@ -167,6 +167,28 @@ mod tests {
         assert_eq!(page.display_height, 683);
     }
 
+    #[test]
+    fn scaled_libwebp_defers_when_fast_sampled_scaled_decode_is_disabled() {
+        let bytes = encoded_webp(2304, 1536);
+        let page = prepare_image_with_options(
+            &bytes,
+            1024,
+            DecodeOptions {
+                decoder_preferences: DecoderPreferences {
+                    webp: DecoderPreference::LibWebp,
+                    ..DecoderPreferences::default()
+                },
+                fast_sampled_scaled_decode: false,
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(page.decode_backend, DecodeBackend::LibWebp);
+        assert_eq!(page.display_width, 1024);
+        assert_eq!(page.display_height, 683);
+    }
+
     fn encoded_webp(width: u32, height: u32) -> Vec<u8> {
         let image = RgbImage::from_fn(width, height, |x, y| {
             Rgb([

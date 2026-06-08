@@ -338,6 +338,8 @@ pub struct AppSettings {
     pub decode_mode: DecodeMode,
     #[serde(default)]
     pub decoder_preferences: DecoderPreferences,
+    #[serde(default = "default_true")]
+    pub fast_sampled_scaled_decode: bool,
     #[serde(default = "default_cpu_upscale_filter")]
     pub cpu_upscale_filter: CpuScaleFilter,
     #[serde(default = "default_cpu_downscale_filter")]
@@ -452,6 +454,7 @@ impl Default for AppSettings {
             archive_edge_page_action: default_archive_edge_page_action(),
             decode_mode: DecodeMode::AutoFast,
             decoder_preferences: DecoderPreferences::default(),
+            fast_sampled_scaled_decode: true,
             cpu_upscale_filter: default_cpu_upscale_filter(),
             cpu_downscale_filter: default_cpu_downscale_filter(),
             gpu_effect_mode: GpuEffectMode::Auto,

@@ -1,9 +1,9 @@
 use super::{
     clamp_target_long_edge, decoded_byte_size, display_dimensions, prepared_page_from_rgba,
-    reject_oversized_dimensions, reject_oversized_original, sampled_source_index, DecodeBackend,
+    reject_oversized_dimensions, reject_oversized_original, sampled_index_map, DecodeBackend,
     PreparedPage, MAX_TARGET_LONG_EDGE, PNG_SAMPLED_MIN_RATIO,
 };
-use ::png::{
+use png::{
     BitDepth as PngBitDepth, ColorType as PngColorType, Decoder as PngDecoder, Reader as PngReader,
     Transformations as PngTransformations,
 };
@@ -273,6 +273,8 @@ fn sample_png_rows_to_rgba<R: BufRead + Seek>(
     let source_height = plan.height as usize;
     let display_width = plan.display_width as usize;
     let display_height = plan.display_height as usize;
+    let x_indices = sampled_index_map(display_width, source_width);
+    let y_indices = sampled_index_map(display_height, source_height);
     let mut next_output_y = 0usize;
 
     for source_y in 0..source_height {
@@ -284,16 +286,14 @@ fn sample_png_rows_to_rgba<R: BufRead + Seek>(
             return Err("PNG ended before all rows were decoded".to_owned());
         }
 
-        while next_output_y < display_height
-            && sampled_source_index(next_output_y, display_height, source_height) == source_y
-        {
+        while next_output_y < display_height && y_indices[next_output_y] == source_y {
             sample_png_row_to_rgba(
                 row,
                 &mut raw,
                 plan.color_type,
                 plan.channels,
                 source_width,
-                display_width,
+                &x_indices,
                 next_output_y,
             )?;
             next_output_y += 1;
@@ -483,48 +483,59 @@ fn sample_png_row_to_rgba(
     color_type: PngColorType,
     channels: usize,
     source_width: usize,
-    display_width: usize,
+    x_indices: &[usize],
     out_y: usize,
 ) -> Result<(), String> {
-    for out_x in 0..display_width {
-        let source_x = sampled_source_index(out_x, display_width, source_width);
-        let source_offset = source_x
-            .checked_mul(channels)
-            .ok_or_else(|| "PNG row offset overflows memory limits".to_owned())?;
-        if source_offset + channels > row.len() {
-            return Err("PNG row ended unexpectedly".to_owned());
-        }
+    let display_width = x_indices.len();
+    let expected_input = source_width
+        .checked_mul(channels)
+        .ok_or_else(|| "PNG row size overflows memory limits".to_owned())?;
+    let output_stride = display_width
+        .checked_mul(4)
+        .ok_or_else(|| "PNG output row size overflows memory limits".to_owned())?;
+    let output_start = out_y
+        .checked_mul(output_stride)
+        .ok_or_else(|| "PNG output offset overflows memory limits".to_owned())?;
+    let output_end = output_start
+        .checked_add(output_stride)
+        .ok_or_else(|| "PNG output row end overflows memory limits".to_owned())?;
+    if row.len() < expected_input || output_end > raw.len() {
+        return Err("PNG row ended unexpectedly".to_owned());
+    }
 
-        let target_offset = (out_y * display_width + out_x) * 4;
-        match color_type {
-            PngColorType::Grayscale => {
-                let gray = row[source_offset];
-                raw[target_offset] = gray;
-                raw[target_offset + 1] = gray;
-                raw[target_offset + 2] = gray;
-                raw[target_offset + 3] = 255;
+    let output = &mut raw[output_start..output_end];
+    match color_type {
+        PngColorType::Grayscale => {
+            for (&source_x, rgba) in x_indices.iter().zip(output.chunks_exact_mut(4)) {
+                let gray = row[source_x];
+                rgba.copy_from_slice(&[gray, gray, gray, 255]);
             }
-            PngColorType::GrayscaleAlpha => {
-                let gray = row[source_offset];
-                raw[target_offset] = gray;
-                raw[target_offset + 1] = gray;
-                raw[target_offset + 2] = gray;
-                raw[target_offset + 3] = row[source_offset + 1];
-            }
-            PngColorType::Rgb => {
-                raw[target_offset] = row[source_offset];
-                raw[target_offset + 1] = row[source_offset + 1];
-                raw[target_offset + 2] = row[source_offset + 2];
-                raw[target_offset + 3] = 255;
-            }
-            PngColorType::Rgba => {
-                raw[target_offset] = row[source_offset];
-                raw[target_offset + 1] = row[source_offset + 1];
-                raw[target_offset + 2] = row[source_offset + 2];
-                raw[target_offset + 3] = row[source_offset + 3];
-            }
-            PngColorType::Indexed => return Err("Indexed PNG row was not expanded".to_owned()),
         }
+        PngColorType::GrayscaleAlpha => {
+            for (&source_x, rgba) in x_indices.iter().zip(output.chunks_exact_mut(4)) {
+                let source_offset = source_x * 2;
+                let gray = row[source_offset];
+                rgba.copy_from_slice(&[gray, gray, gray, row[source_offset + 1]]);
+            }
+        }
+        PngColorType::Rgb => {
+            for (&source_x, rgba) in x_indices.iter().zip(output.chunks_exact_mut(4)) {
+                let source_offset = source_x * 3;
+                rgba.copy_from_slice(&[
+                    row[source_offset],
+                    row[source_offset + 1],
+                    row[source_offset + 2],
+                    255,
+                ]);
+            }
+        }
+        PngColorType::Rgba => {
+            for (&source_x, rgba) in x_indices.iter().zip(output.chunks_exact_mut(4)) {
+                let source_offset = source_x * 4;
+                rgba.copy_from_slice(&row[source_offset..source_offset + 4]);
+            }
+        }
+        PngColorType::Indexed => return Err("Indexed PNG row was not expanded".to_owned()),
     }
 
     Ok(())

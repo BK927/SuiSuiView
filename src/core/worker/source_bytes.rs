@@ -1,4 +1,6 @@
 use super::read_ahead::{clear_matching as clear_matching_read_ahead, consume_matching, ReadAhead};
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use crate::core::source::PageReadHint;
 use crate::core::source::SharedSource;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::{perf_trace, perf_trace::PerfField};
@@ -151,6 +153,8 @@ fn read_uncached_source_bytes(
 ) -> Result<Vec<u8>, String> {
     consume_matching(read_ahead, book_id, book_epoch, index).unwrap_or_else(|| {
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        let read_hint = source.page_read_hint(index);
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let read_started = Instant::now();
         let read_result = source.read_page(index).map_err(|error| error.to_string());
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -159,6 +163,7 @@ fn read_uncached_source_bytes(
             book_epoch,
             read_started.elapsed(),
             read_result.is_ok(),
+            read_hint,
         );
         read_result
     })
@@ -199,7 +204,14 @@ fn source_bytes_key(book_id: &str, index: usize) -> String {
 }
 
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-fn record_direct_page_read(index: usize, book_epoch: usize, duration: Duration, success: bool) {
+fn record_direct_page_read(
+    index: usize,
+    book_epoch: usize,
+    duration: Duration,
+    success: bool,
+    hint: Option<PageReadHint>,
+) {
+    let hint = hint.unwrap_or_else(PageReadHint::unknown);
     perf_trace::record_duration_if_at_least(
         "page_read",
         duration,
@@ -210,8 +222,23 @@ fn record_direct_page_read(index: usize, book_epoch: usize, duration: Duration, 
             PerfField::Bool("success", success),
             PerfField::Bool("read_ahead", false),
             PerfField::Bool("decode_ahead", false),
+            PerfField::Str("source_kind", hint.source_kind.as_str()),
+            PerfField::Str("compression_method", hint.compression_method.as_str()),
+            PerfField::Str("compression_state", hint.compression_state()),
+            PerfField::Usize("compressed_size", size_hint_to_usize(hint.compressed_size)),
+            PerfField::Usize(
+                "uncompressed_size",
+                size_hint_to_usize(hint.uncompressed_size),
+            ),
+            PerfField::Usize("compression_ratio_milli", hint.compression_ratio_milli()),
         ],
     );
+}
+
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+fn size_hint_to_usize(size: Option<u64>) -> usize {
+    size.and_then(|size| usize::try_from(size).ok())
+        .unwrap_or_default()
 }
 
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]

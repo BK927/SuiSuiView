@@ -606,6 +606,7 @@ mod tests {
             strategy: DecodeStrategy::ImageCrate,
             cpu_upscale_filter: CpuScaleFilter::Nearest,
             cpu_downscale_filter: CpuScaleFilter::Nearest,
+            fast_sampled_scaled_decode: false,
             allow_display_upscale: true,
             apply_exif_orientation: true,
             apply_embedded_icc: true,
@@ -618,6 +619,7 @@ mod tests {
 
         assert_eq!(lanczos.cpu_upscale_filter, CpuScaleFilter::Lanczos3);
         assert_eq!(lanczos.cpu_downscale_filter, CpuScaleFilter::Lanczos3);
+        assert!(!lanczos.fast_sampled_scaled_decode);
         assert_eq!(lanczos.strategy, DecodeStrategy::ImageCrate);
         assert!(lanczos.allow_display_upscale);
         assert!(lanczos.apply_exif_orientation);

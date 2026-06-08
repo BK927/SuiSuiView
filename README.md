@@ -87,8 +87,9 @@ state file.
 
 - General: UI language, delete confirmation, ESC exit, always-on-top, and
   first/last page behavior.
-- Rendering: transition effect, GPU acceleration, scaler/filter controls,
-  EXIF orientation, embedded ICC conversion, prefetch, and cache memory.
+- Rendering: transition effect, fast sampled/scaled decode, GPU
+  acceleration, scaler/filter controls, EXIF orientation, embedded ICC
+  conversion, prefetch, and cache memory.
 - Decoders: decode mode and per-format decoder choices. `기본값` is shown as
   selected text, with the resolved backend summarized beside each format.
 - File links: on Windows, register SuiSuiView as a Default Apps candidate for
@@ -96,6 +97,10 @@ state file.
 - View, keyboard, and mouse: visible viewer UI, top-bar scaler quick picks,
   customizable keyboard shortcuts, double-click maximize, middle-click
   fullscreen, and wheel behavior.
+
+Fast sampled/scaled decode is enabled by default. It lets large JPEG, WebP,
+PNG, BMP, and GIF pages use format-specific display-sized preparation before
+falling back to full decode plus the selected CPU downscale filter.
 
 The UI language can be set to system default, Korean, or English. UI text and
 state words such as Default, Off, and Experimental are localized, while

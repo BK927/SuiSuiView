@@ -39,10 +39,12 @@ fn prepare_jpeg_with_preference(
 ) -> Result<PreparedPage, String> {
     match options.decoder_preferences.jpeg {
         DecoderPreference::Default => {
-            if let Ok(Some(page)) =
-                jpeg::prepare_image_with_scaled_jpeg(bytes, target_long_edge, options)
-            {
-                return Ok(page);
+            if options.fast_sampled_scaled_decode {
+                if let Ok(Some(page)) =
+                    jpeg::prepare_image_with_scaled_jpeg(bytes, target_long_edge, options)
+                {
+                    return Ok(page);
+                }
             }
             prepare_direct_or_image_fallback(
                 bytes,
@@ -73,13 +75,24 @@ fn prepare_png_with_preference(
 ) -> Result<PreparedPage, String> {
     match options.decoder_preferences.png {
         DecoderPreference::Default => {
-            match png::prepare_image_with_png_rows(bytes, target_long_edge) {
-                Ok(png::PngRowResult::ExactOriginal(page) | png::PngRowResult::Sampled(page)) => {
-                    return Ok(page);
+            if options.fast_sampled_scaled_decode {
+                match png::prepare_image_with_png_rows(bytes, target_long_edge) {
+                    Ok(
+                        png::PngRowResult::ExactOriginal(page) | png::PngRowResult::Sampled(page),
+                    ) => {
+                        return Ok(page);
+                    }
+                    Ok(png::PngRowResult::Unsupported) => {}
+                    Err(png::PngRowError::ExactOriginal(error)) => return Err(error),
+                    Err(png::PngRowError::FallbackAllowed(_error)) => {}
                 }
-                Ok(png::PngRowResult::Unsupported) => {}
-                Err(png::PngRowError::ExactOriginal(error)) => return Err(error),
-                Err(png::PngRowError::FallbackAllowed(_error)) => {}
+            } else {
+                match png::prepare_exact_original_with_png_rows(bytes, target_long_edge) {
+                    Ok(Some(page)) => return Ok(page),
+                    Ok(None) => {}
+                    Err(png::PngRowError::ExactOriginal(error)) => return Err(error),
+                    Err(png::PngRowError::FallbackAllowed(_error)) => {}
+                }
             }
             prepare_direct_or_image_fallback(
                 bytes,
@@ -158,8 +171,11 @@ fn prepare_gif_with_preference(
 ) -> Result<PreparedPage, String> {
     match options.decoder_preferences.gif {
         DecoderPreference::Default => {
-            if let Ok(Some(page)) = gif::prepare_image_with_sampled_gif(bytes, target_long_edge) {
-                return Ok(page);
+            if options.fast_sampled_scaled_decode {
+                if let Ok(Some(page)) = gif::prepare_image_with_sampled_gif(bytes, target_long_edge)
+                {
+                    return Ok(page);
+                }
             }
             prepare_direct_or_image_fallback(
                 bytes,
@@ -190,8 +206,11 @@ fn prepare_bmp_with_preference(
 ) -> Result<PreparedPage, String> {
     match options.decoder_preferences.bmp {
         DecoderPreference::Default => {
-            if let Ok(Some(page)) = bmp::prepare_image_with_sampled_bmp(bytes, target_long_edge) {
-                return Ok(page);
+            if options.fast_sampled_scaled_decode {
+                if let Ok(Some(page)) = bmp::prepare_image_with_sampled_bmp(bytes, target_long_edge)
+                {
+                    return Ok(page);
+                }
             }
             prepare_direct_or_image_fallback(
                 bytes,
@@ -279,10 +298,12 @@ fn prepare_default_webp_still(
     target_long_edge: u32,
     options: DecodeOptions,
 ) -> Result<PreparedPage, String> {
-    if let Ok(Some(page)) =
-        super::webp::prepare_image_with_scaled_libwebp(bytes, target_long_edge, options)
-    {
-        return Ok(page);
+    if options.fast_sampled_scaled_decode {
+        if let Ok(Some(page)) =
+            super::webp::prepare_image_with_scaled_libwebp(bytes, target_long_edge, options)
+        {
+            return Ok(page);
+        }
     }
     prepare_direct_or_image_fallback(
         bytes,
@@ -308,10 +329,12 @@ fn prepare_libwebp_or_fallback(
     target_long_edge: u32,
     options: DecodeOptions,
 ) -> Result<PreparedPage, String> {
-    if let Ok(Some(page)) =
-        super::webp::prepare_image_with_scaled_libwebp(bytes, target_long_edge, options)
-    {
-        return Ok(page);
+    if options.fast_sampled_scaled_decode {
+        if let Ok(Some(page)) =
+            super::webp::prepare_image_with_scaled_libwebp(bytes, target_long_edge, options)
+        {
+            return Ok(page);
+        }
     }
     prepare_direct_or_image_fallback(
         bytes,

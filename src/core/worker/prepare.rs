@@ -40,6 +40,10 @@ pub(in crate::core::worker) fn prepare_page_with_perf(
             PerfField::Usize("book_epoch", book_epoch),
             PerfField::U32("target_long_edge", job.target_long_edge),
             PerfField::Str("decode_strategy", decode.strategy.as_str()),
+            PerfField::Bool(
+                "fast_sampled_scaled_decode",
+                decode.fast_sampled_scaled_decode,
+            ),
             PerfField::Str("cpu_upscale_filter", decode.cpu_upscale_filter.token()),
             PerfField::Str("cpu_downscale_filter", decode.cpu_downscale_filter.token()),
             PerfField::Bool("allow_display_upscale", decode.allow_display_upscale),

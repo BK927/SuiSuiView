@@ -47,6 +47,7 @@ impl DecodeAhead {
             .name("suisuiview-page-decode-ahead".to_owned())
             .stack_size(DECODE_AHEAD_STACK_BYTES)
             .spawn(move || {
+                let read_hint = source.page_read_hint(job.index);
                 let read_started = Instant::now();
                 let result = source
                     .read_page(job.index)
@@ -58,6 +59,7 @@ impl DecodeAhead {
                     true,
                     read_started.elapsed(),
                     result.is_ok(),
+                    read_hint,
                 );
                 if cancel_for_thread.load(Ordering::Acquire) {
                     return DecodeAheadResult {

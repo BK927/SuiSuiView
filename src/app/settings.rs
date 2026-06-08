@@ -656,6 +656,19 @@ fn show_rendering_settings(
                 .num_columns(2)
                 .spacing([14.0, 8.0])
                 .show(ui, |ui| {
+                    let fast_decode_help =
+                        i18n.text("settings.rendering.fast_sampled_scaled_decode.help");
+                    grid_label_with_help(
+                        ui,
+                        &i18n.text("settings.rendering.fast_sampled_scaled_decode"),
+                        &fast_decode_help,
+                    );
+                    *changed |= ui
+                        .checkbox(&mut draft.fast_sampled_scaled_decode, "")
+                        .on_hover_text(fast_decode_help)
+                        .changed();
+                    ui.end_row();
+
                     grid_label_with_help(
                         ui,
                         &i18n.text("settings.rendering.cpu_upscale_filter"),

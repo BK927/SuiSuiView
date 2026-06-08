@@ -482,6 +482,24 @@ pub(super) fn record_page_effects_cpu(started: Instant, page: usize, target_long
     );
 }
 
+pub(super) fn record_color_image_prepare(
+    started: Instant,
+    page: usize,
+    target_long_edge: u32,
+    effects: bool,
+) {
+    perf_trace::record_duration_if_at_least(
+        "color_image_prepare",
+        started.elapsed(),
+        Duration::from_millis(8),
+        &[
+            PerfField::Usize("page", page),
+            PerfField::U32("target_long_edge", target_long_edge),
+            PerfField::Bool("effects", effects),
+        ],
+    );
+}
+
 pub(super) fn record_texture_load(started: Instant, page: usize, target_long_edge: u32) {
     perf_trace::record_duration_if_at_least(
         "texture_load",

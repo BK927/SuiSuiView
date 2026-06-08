@@ -56,6 +56,7 @@ fn settings_defaults_match_viewer_policy() {
     assert_eq!(settings.edge_page_action, EdgePageAction::Stop);
     assert_eq!(settings.decode_mode, DecodeMode::AutoFast);
     assert_eq!(settings.decoder_preferences, DecoderPreferences::default());
+    assert!(settings.fast_sampled_scaled_decode);
     assert_eq!(settings.cpu_upscale_filter, CpuScaleFilter::CatmullRom);
     assert_eq!(settings.cpu_downscale_filter, CpuScaleFilter::Hamming);
     assert_eq!(settings.gpu_effect_mode, GpuEffectMode::Auto);
@@ -234,6 +235,7 @@ fn language_setting_round_trips() {
 #[test]
 fn app_settings_save_new_scaler_keys() {
     let json = serde_json::to_value(AppSettings {
+        fast_sampled_scaled_decode: false,
         cpu_upscale_filter: CpuScaleFilter::Lanczos3,
         cpu_downscale_filter: CpuScaleFilter::Hamming,
         wgpu_upscale_method: WgpuUpscaleMethod::WgslFsr1EasuRcas,
@@ -243,6 +245,7 @@ fn app_settings_save_new_scaler_keys() {
     .unwrap();
     let object = json.as_object().unwrap();
 
+    assert_eq!(object["fast_sampled_scaled_decode"], false);
     assert_eq!(object["cpu_upscale_filter"], "Lanczos3");
     assert_eq!(object["cpu_downscale_filter"], "Hamming");
     assert_eq!(object["wgpu_upscale_method"], "WgslFsr1EasuRcas");

@@ -1,5 +1,6 @@
 use super::{
-    classify_path, open_source_from_path, BookSource, FolderSource, SourceKind, ZipCbzSource,
+    classify_path, open_source_from_path, BookSource, FolderSource, PageReadCompression,
+    PageReadSourceKind, SourceKind, ZipCbzSource,
 };
 use std::fs::{self, File};
 use std::io::Write;
@@ -131,6 +132,40 @@ fn page_display_path_uses_real_files_for_folders_and_virtual_paths_for_archives(
         zip_source.page_display_path(0),
         Some(format!("{}::chapter/page-001.jpg", archive.display()))
     );
+}
+
+#[test]
+fn zip_page_read_hint_reports_compression_and_sizes() {
+    let dir = temp_test_dir("zip-read-hint");
+    let archive = dir.join("book.cbz");
+    let file = File::create(&archive).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    let stored = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let deflated =
+        SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    zip.start_file("stored/page-001.jpg", stored).unwrap();
+    zip.write_all(b"stored").unwrap();
+    zip.start_file("deflated/page-002.jpg", deflated).unwrap();
+    zip.write_all(b"deflated deflated deflated").unwrap();
+    zip.finish().unwrap();
+
+    let source = ZipCbzSource::open(&archive).unwrap();
+    let stored_hint = source.page_read_hint(1).unwrap();
+    let deflated_hint = source.page_read_hint(0).unwrap();
+
+    assert_eq!(stored_hint.source_kind, PageReadSourceKind::ZipCbz);
+    assert_eq!(stored_hint.compression_method, PageReadCompression::Stored);
+    assert_eq!(stored_hint.compression_state(), "stored");
+    assert_eq!(stored_hint.uncompressed_size, Some(6));
+    assert_eq!(stored_hint.compressed_size, Some(6));
+
+    assert_eq!(deflated_hint.source_kind, PageReadSourceKind::ZipCbz);
+    assert_eq!(
+        deflated_hint.compression_method,
+        PageReadCompression::Deflated
+    );
+    assert_eq!(deflated_hint.compression_state(), "compressed");
+    assert_eq!(deflated_hint.uncompressed_size, Some(26));
 }
 
 fn write_test_zip(path: &Path) {

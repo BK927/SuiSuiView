@@ -240,6 +240,7 @@ impl DecodeStrategy {
 pub struct DecodeOptions {
     pub strategy: DecodeStrategy,
     pub decoder_preferences: DecoderPreferences,
+    pub fast_sampled_scaled_decode: bool,
     pub cpu_upscale_filter: CpuScaleFilter,
     pub cpu_downscale_filter: CpuScaleFilter,
     pub allow_display_upscale: bool,
@@ -252,6 +253,7 @@ impl Default for DecodeOptions {
         Self {
             strategy: DecodeStrategy::Auto,
             decoder_preferences: DecoderPreferences::default(),
+            fast_sampled_scaled_decode: true,
             cpu_upscale_filter: CpuScaleFilter::CatmullRom,
             cpu_downscale_filter: CpuScaleFilter::Hamming,
             allow_display_upscale: false,
@@ -264,9 +266,14 @@ impl Default for DecodeOptions {
 impl DecodeOptions {
     pub fn cache_token(self) -> String {
         format!(
-            "{}-{}-down-{}-{}{}{}",
+            "{}-{}-fastprep-{}-down-{}-{}{}{}",
             self.strategy.as_str(),
             self.decoder_preferences.cache_token(),
+            if self.fast_sampled_scaled_decode {
+                "on"
+            } else {
+                "off"
+            },
             self.cpu_downscale_filter.token(),
             if self.allow_display_upscale {
                 self.cpu_upscale_filter.token()
@@ -384,6 +391,17 @@ pub enum DecodeBackend {
 }
 
 impl DecodeBackend {
+    pub fn is_sampled_or_scaled_prepare(self) -> bool {
+        matches!(
+            self,
+            Self::JpegScaled
+                | Self::BmpSampled
+                | Self::GifSampled
+                | Self::PngSampled
+                | Self::LibWebpScaled
+        )
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::ImageCrate => "image crate",
@@ -701,6 +719,12 @@ fn reject_oversized_dimensions(width: u32, height: u32) -> Result<(), String> {
 
 fn sampled_source_index(out_index: usize, out_len: usize, source_len: usize) -> usize {
     (((out_index * 2 + 1) * source_len) / (out_len * 2)).min(source_len.saturating_sub(1))
+}
+
+fn sampled_index_map(out_len: usize, source_len: usize) -> Vec<usize> {
+    (0..out_len)
+        .map(|out_index| sampled_source_index(out_index, out_len, source_len))
+        .collect()
 }
 
 fn prepared_page_from_rgba(
@@ -1473,9 +1497,15 @@ mod tests {
             ..DecodeOptions::default()
         }
         .cache_token();
+        let conservative_prepare = DecodeOptions {
+            fast_sampled_scaled_decode: false,
+            ..DecodeOptions::default()
+        }
+        .cache_token();
 
         assert_eq!(normal, changed_upscaler);
         assert_ne!(normal, allowed_upscaler);
+        assert_ne!(normal, conservative_prepare);
     }
 
     #[test]
@@ -1507,6 +1537,24 @@ mod tests {
         let page = prepare_image_with_strategy(&bytes, 1024, DecodeStrategy::ImageCrate).unwrap();
 
         assert_eq!(page.decode_backend, DecodeBackend::ImageCrate);
+        assert_eq!(page.display_width, 1024);
+        assert_eq!(page.display_height, 683);
+    }
+
+    #[test]
+    fn fast_sampled_scaled_toggle_disables_large_jpeg_scaled_decode() {
+        let bytes = encoded_sized_test_image(ImageFormat::Jpeg, 2304, 1536);
+        let page = prepare_image_with_options(
+            &bytes,
+            1024,
+            DecodeOptions {
+                fast_sampled_scaled_decode: false,
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_ne!(page.decode_backend, DecodeBackend::JpegScaled);
         assert_eq!(page.display_width, 1024);
         assert_eq!(page.display_height, 683);
     }
@@ -1591,6 +1639,24 @@ mod tests {
     }
 
     #[test]
+    fn fast_sampled_scaled_toggle_disables_large_bmp_sampling() {
+        let bytes = encoded_sized_test_image(ImageFormat::Bmp, 2048, 16);
+        let page = prepare_image_with_options(
+            &bytes,
+            1024,
+            DecodeOptions {
+                fast_sampled_scaled_decode: false,
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_ne!(page.decode_backend, DecodeBackend::BmpSampled);
+        assert_eq!(page.display_width, 1024);
+        assert_eq!(page.display_height, 8);
+    }
+
+    #[test]
     fn auto_strategy_samples_large_static_gifs() {
         let bytes = encoded_sized_test_image(ImageFormat::Gif, 2048, 16);
         let page = prepare_image_with_strategy(&bytes, 1024, DecodeStrategy::Auto).unwrap();
@@ -1613,6 +1679,24 @@ mod tests {
     }
 
     #[test]
+    fn fast_sampled_scaled_toggle_disables_large_gif_sampling() {
+        let bytes = encoded_sized_test_image(ImageFormat::Gif, 2048, 16);
+        let page = prepare_image_with_options(
+            &bytes,
+            1024,
+            DecodeOptions {
+                fast_sampled_scaled_decode: false,
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_ne!(page.decode_backend, DecodeBackend::GifSampled);
+        assert_eq!(page.display_width, 1024);
+        assert_eq!(page.display_height, 8);
+    }
+
+    #[test]
     fn auto_strategy_samples_large_pngs() {
         let bytes = encoded_sized_test_image(ImageFormat::Png, 2048, 16);
         let page = prepare_image_with_strategy(&bytes, 1024, DecodeStrategy::Auto).unwrap();
@@ -1630,6 +1714,24 @@ mod tests {
         let page = prepare_image_with_strategy(&bytes, 1024, DecodeStrategy::ImageCrate).unwrap();
 
         assert_eq!(page.decode_backend, DecodeBackend::ImageCrate);
+        assert_eq!(page.display_width, 1024);
+        assert_eq!(page.display_height, 8);
+    }
+
+    #[test]
+    fn fast_sampled_scaled_toggle_disables_large_png_sampling() {
+        let bytes = encoded_sized_test_image(ImageFormat::Png, 2048, 16);
+        let page = prepare_image_with_options(
+            &bytes,
+            1024,
+            DecodeOptions {
+                fast_sampled_scaled_decode: false,
+                ..DecodeOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_ne!(page.decode_backend, DecodeBackend::PngSampled);
         assert_eq!(page.display_width, 1024);
         assert_eq!(page.display_height, 8);
     }
