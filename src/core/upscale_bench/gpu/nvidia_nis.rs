@@ -102,16 +102,7 @@ impl NvidiaNisBench {
     ) -> Result<GpuUpscaleOutput, String> {
         let [source_width, source_height] = image.size;
         let [output_width, output_height] = output_size;
-        if source_width == 0 || source_height == 0 || output_width == 0 || output_height == 0 {
-            return Err("cannot upscale an empty image with NVIDIA NIS".to_owned());
-        }
-        let scale_x = source_width as f32 / output_width as f32;
-        let scale_y = source_height as f32 / output_height as f32;
-        if !(0.5..=1.0).contains(&scale_x) || !(0.5..=1.0).contains(&scale_y) {
-            return Err(format!(
-                "NVIDIA NIS supports 1x..2x enlargement, got {source_width}x{source_height} -> {output_width}x{output_height}"
-            ));
-        }
+        validate_output_size(image.size, output_size)?;
 
         let started = Instant::now();
         let source_bytes = color_image_to_rgba(image);
@@ -316,5 +307,48 @@ impl NisParams {
                 0.0,
             ],
         }
+    }
+}
+
+fn validate_output_size(source_size: [usize; 2], output_size: [usize; 2]) -> Result<(), String> {
+    let [source_width, source_height] = source_size;
+    let [output_width, output_height] = output_size;
+    if source_width == 0 || source_height == 0 || output_width == 0 || output_height == 0 {
+        return Err("cannot upscale an empty image with NVIDIA NIS".to_owned());
+    }
+    if !supports_near_1x_to_2x(source_width, output_width)?
+        || !supports_near_1x_to_2x(source_height, output_height)?
+    {
+        return Err(format!(
+            "NVIDIA NIS supports near-1x..2x enlargement within one pixel, got {source_width}x{source_height} -> {output_width}x{output_height}"
+        ));
+    }
+    Ok(())
+}
+
+fn supports_near_1x_to_2x(source: usize, output: usize) -> Result<bool, String> {
+    let exact_2x = source
+        .checked_mul(2)
+        .ok_or_else(|| "NVIDIA NIS 2x output size overflowed".to_owned())?;
+    let max_output = exact_2x
+        .checked_add(1)
+        .ok_or_else(|| "NVIDIA NIS rounded output size overflowed".to_owned())?;
+    Ok(output >= source && output <= max_output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_output_size;
+
+    #[test]
+    fn output_size_accepts_one_pixel_rounding_over_2x() {
+        assert!(validate_output_size([984, 1024], [1969, 2048]).is_ok());
+    }
+
+    #[test]
+    fn output_size_rejects_sizes_outside_near_1x_to_2x() {
+        assert!(validate_output_size([984, 1024], [1970, 2048]).is_err());
+        assert!(validate_output_size([984, 1024], [983, 2048]).is_err());
+        assert!(validate_output_size([984, 1024], [1968, 0]).is_err());
     }
 }

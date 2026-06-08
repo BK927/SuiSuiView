@@ -28,13 +28,11 @@ fn validate_output_crop(
 ) -> Result<(), String> {
     if output_size[0] == 0
         || output_size[1] == 0
-        || output_size[0] > exact_output_size[0]
-        || output_size[1] > exact_output_size[1]
-        || exact_output_size[0] - output_size[0] > 1
-        || exact_output_size[1] - output_size[1] > 1
+        || output_size[0].abs_diff(exact_output_size[0]) > 1
+        || output_size[1].abs_diff(exact_output_size[1]) > 1
     {
         return Err(format!(
-            "{} requires 2x output or a one-pixel crop, got {}x{} -> {}x{}",
+            "{} requires near-2x output within one pixel, got {}x{} -> {}x{}",
             variant.label(),
             source_size[0],
             source_size[1],
@@ -156,7 +154,7 @@ pub(crate) fn extent_for_size(size: [usize; 2]) -> wgpu::Extent3d {
 
 #[cfg(test)]
 mod tests {
-    use super::{exact_output_size, ArtcnnVariant};
+    use super::{exact_output_size, validate_output_crop, ArtcnnVariant};
 
     #[test]
     fn exact_output_size_rejects_empty_source() {
@@ -177,5 +175,32 @@ mod tests {
     #[test]
     fn c4f32_feature_size_uses_wide_packing() {
         assert_eq!(ArtcnnVariant::C4F32.feature_size([8, 6]), Ok([32, 12]));
+    }
+
+    #[test]
+    fn output_crop_accepts_near_2x_rounding() {
+        let variant = ArtcnnVariant::C4F16;
+        let source_size = [984, 1024];
+        let exact_output = [1968, 2048];
+
+        assert!(
+            validate_output_crop(variant, source_size, [1969, 2048], exact_output).is_ok(),
+            "one-pixel wider target should be accepted for rounded quality scans"
+        );
+        assert!(
+            validate_output_crop(variant, source_size, [1967, 2048], exact_output).is_ok(),
+            "one-pixel crop remains accepted"
+        );
+    }
+
+    #[test]
+    fn output_crop_rejects_sizes_outside_near_2x() {
+        let variant = ArtcnnVariant::C4F16;
+        let source_size = [984, 1024];
+        let exact_output = [1968, 2048];
+
+        assert!(validate_output_crop(variant, source_size, [1970, 2048], exact_output).is_err());
+        assert!(validate_output_crop(variant, source_size, [1966, 2048], exact_output).is_err());
+        assert!(validate_output_crop(variant, source_size, [1968, 0], exact_output).is_err());
     }
 }

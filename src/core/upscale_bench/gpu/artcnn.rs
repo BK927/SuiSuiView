@@ -115,7 +115,10 @@ impl ArtcnnBench {
             source_size,
             options,
         )?;
-        debug_assert!(output.size[0] <= exact_output[0] && output.size[1] <= exact_output[1]);
+        debug_assert!(
+            output.size[0].abs_diff(exact_output[0]) <= 1
+                && output.size[1].abs_diff(exact_output[1]) <= 1
+        );
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &output.texture,

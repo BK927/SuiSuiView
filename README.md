@@ -89,7 +89,8 @@ state file.
   first/last page behavior; Ask prompts auto-dismiss unless hovered.
 - Rendering: transition effect, fast sampled/scaled decode, GPU
   acceleration, scaler/filter controls, EXIF orientation, embedded ICC
-  conversion, prefetch, and cache memory.
+  conversion, prefetch, and cache memory. Manifest-backed SR Lab SPAN x2 is
+  available as a slow manual GPU upscaler when local SPAN weights are present.
 - Decoders: decode mode and per-format decoder choices. `기본값` is shown as
   selected text, with the resolved backend summarized beside each format.
 - File links: on Windows, register SuiSuiView as a Default Apps candidate for

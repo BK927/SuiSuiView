@@ -758,18 +758,14 @@ fn show_rendering_settings(
                                             upscaler.settings_label_i18n(i18n),
                                         );
                                         selected_upscaler_changed |= option_response.changed();
-                                        if upscaler.experimental_selectable() {
-                                            let hover_text =
-                                                if upscaler == WgpuUpscaleMethod::WgslSrLabSpanX2 {
-                                                    i18n.text(
-                                                        "settings.rendering.experimental_span.help",
-                                                    )
-                                                } else {
-                                                    i18n.text(
-                                                    "settings.rendering.experimental_upscaler.help",
-                                                )
-                                                };
-                                            option_response.on_hover_text(hover_text);
+                                        if upscaler == WgpuUpscaleMethod::WgslSrLabSpanX2 {
+                                            option_response.on_hover_text(
+                                                i18n.text("settings.rendering.slow_span.help"),
+                                            );
+                                        } else if upscaler.experimental_selectable() {
+                                            option_response.on_hover_text(i18n.text(
+                                                "settings.rendering.experimental_upscaler.help",
+                                            ));
                                         }
                                     }
                                 });

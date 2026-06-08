@@ -120,8 +120,8 @@ impl WgpuUpscaleMethod {
             | Self::WgslArtcnnC4F16Ds
             | Self::WgslArtcnnC4F32
             | Self::WgslArtcnnC4F32Dn
-            | Self::WgslArtcnnC4F32Ds
-            | Self::WgslSrLabSpanX2 => i18n.experimental_label(self.label()),
+            | Self::WgslArtcnnC4F32Ds => i18n.experimental_label(self.label()),
+            Self::WgslSrLabSpanX2 => i18n.slow_label(self.label()),
             _ => self.label_i18n(i18n),
         }
     }
@@ -249,7 +249,7 @@ impl WgpuUpscaleMethod {
                 "2x",
                 "multi-pass",
                 "wgpu compute + local manifest",
-                false,
+                true,
             ),
             Self::WgslAcnetF8B4Luma => upscaler_candidate!(
                 "ACNetGLSL",

@@ -74,6 +74,10 @@ impl I18n {
     pub fn experimental_label(self, name: &str) -> String {
         format!("{name} ({})", self.text("state.experimental"))
     }
+
+    pub fn slow_label(self, name: &str) -> String {
+        format!("{name} ({})", self.text("state.slow"))
+    }
 }
 
 fn catalog(language: ResolvedLanguage) -> &'static BTreeMap<&'static str, &'static str> {
@@ -143,6 +147,7 @@ const CATALOG_KO_KR: &[(&str, &str)] = &[
     ("state.off", "사용 안 함"),
     ("state.on", "켜짐"),
     ("state.experimental", "실험"),
+    ("state.slow", "느림"),
     ("state.current_only", "현재 페이지만"),
     ("state.current_and_next", "현재+다음 1장"),
     ("state.manual", "수동"),
@@ -241,7 +246,7 @@ const CATALOG_KO_KR: &[(&str, &str)] = &[
     ("settings.rendering.gpu_off_note", "GPU 가속이 꺼져 있으면 기본 업스케일러만 사용할 수 있습니다."),
     ("settings.rendering.fast_start.normal", "WGPU 모드에서는 빠른 시작이 기본 적용됩니다."),
     ("settings.rendering.fast_start.failed", "최근 WGPU 빠른 시작 실패로 GPU 가속이 꺼졌습니다."),
-    ("settings.rendering.experimental_span.help", "실험 업스케일러입니다. 로컬 SPAN manifest가 있어야 실제로 적용됩니다."),
+    ("settings.rendering.slow_span.help", "정식 수동 업스케일러지만 구조상 느립니다. 로컬 SPAN manifest가 있어야 실제로 적용됩니다."),
     ("settings.rendering.experimental_upscaler.help", "실험 업스케일러입니다. 품질과 속도는 GPU와 이미지에 따라 달라질 수 있습니다."),
     ("settings.rendering.image_info.title", "이미지 정보 적용"),
     ("settings.rendering.image_info.desc", "파일 안에 들어 있는 방향과 색상 정보를 표시 결과에 반영합니다."),
@@ -708,6 +713,7 @@ const CATALOG_EN_US: &[(&str, &str)] = &[
     ("state.off", "Off"),
     ("state.on", "On"),
     ("state.experimental", "Experimental"),
+    ("state.slow", "Slow"),
     ("state.current_only", "Current page only"),
     ("state.current_and_next", "Current + next page"),
     ("state.manual", "Manual"),
@@ -806,7 +812,7 @@ const CATALOG_EN_US: &[(&str, &str)] = &[
     ("settings.rendering.gpu_off_note", "When GPU acceleration is off, only the default upscaler is used."),
     ("settings.rendering.fast_start.normal", "Fast start is applied by default in WGPU mode."),
     ("settings.rendering.fast_start.failed", "GPU acceleration was turned off after a recent WGPU fast-start failure."),
-    ("settings.rendering.experimental_span.help", "Experimental upscaler. A local SPAN manifest is required before it can apply."),
+    ("settings.rendering.slow_span.help", "Stable manual upscaler, but structurally slow. A local SPAN manifest is required before it can apply."),
     ("settings.rendering.experimental_upscaler.help", "Experimental upscaler. Quality and speed may vary by GPU and image."),
     ("settings.rendering.image_info.title", "Image Metadata"),
     ("settings.rendering.image_info.desc", "Apply orientation and color metadata embedded in files."),
@@ -1283,6 +1289,8 @@ mod tests {
         assert_eq!(ko.text("state.default"), "기본값");
         assert_eq!(en.text("state.default"), "Default");
         assert_eq!(ko.experimental_label("ArtCNN C4F16"), "ArtCNN C4F16 (실험)");
+        assert_eq!(ko.slow_label("SR Lab SPAN x2"), "SR Lab SPAN x2 (느림)");
+        assert_eq!(en.slow_label("SR Lab SPAN x2"), "SR Lab SPAN x2 (Slow)");
         assert_eq!(
             en.experimental_label("ArtCNN C4F16"),
             "ArtCNN C4F16 (Experimental)"

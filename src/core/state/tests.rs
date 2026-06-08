@@ -439,7 +439,7 @@ fn product_wgpu_upscale_methods_keep_experiments_separate() {
     assert!(!WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::WgslNisStyle));
     assert!(!WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::WgslArtcnnC4F16));
     assert!(!WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::WgslArtcnnC4F32Ds));
-    assert!(!WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::WgslSrLabSpanX2));
+    assert!(WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::WgslSrLabSpanX2));
     assert!(WgpuUpscaleMethod::SETTINGS_CHOICES.contains(&WgpuUpscaleMethod::WgslFsr1Style));
     assert!(WgpuUpscaleMethod::SETTINGS_CHOICES.contains(&WgpuUpscaleMethod::WgslNisStyle));
     assert!(WgpuUpscaleMethod::SETTINGS_CHOICES.contains(&WgpuUpscaleMethod::WgslArtcnnC4F16));
@@ -463,19 +463,19 @@ fn product_wgpu_upscale_methods_keep_experiments_separate() {
             .product_visible
     );
     assert!(
-        !WgpuUpscaleMethod::WgslSrLabSpanX2
+        WgpuUpscaleMethod::WgslSrLabSpanX2
             .candidate()
             .product_visible
     );
     assert!(WgpuUpscaleMethod::WgslFsr1Style.product_selectable());
     assert!(!WgpuUpscaleMethod::WgslNisStyle.product_selectable());
     assert!(!WgpuUpscaleMethod::WgslArtcnnC4F16.product_selectable());
-    assert!(!WgpuUpscaleMethod::WgslSrLabSpanX2.product_selectable());
+    assert!(WgpuUpscaleMethod::WgslSrLabSpanX2.product_selectable());
     assert!(!WgpuUpscaleMethod::WgslFsr1Style.experimental_selectable());
     assert!(WgpuUpscaleMethod::WgslNisStyle.experimental_selectable());
     assert!(WgpuUpscaleMethod::WgslArtcnnC4F16.experimental_selectable());
     assert!(WgpuUpscaleMethod::WgslArtcnnC4F32Ds.experimental_selectable());
-    assert!(WgpuUpscaleMethod::WgslSrLabSpanX2.experimental_selectable());
+    assert!(!WgpuUpscaleMethod::WgslSrLabSpanX2.experimental_selectable());
     assert!(WgpuUpscaleMethod::WgslFsr1Style.user_selectable());
     assert!(WgpuUpscaleMethod::WgslNisStyle.user_selectable());
     assert!(WgpuUpscaleMethod::WgslArtcnnC4F16.user_selectable());
@@ -495,7 +495,12 @@ fn product_wgpu_upscale_methods_keep_experiments_separate() {
     assert_eq!(
         WgpuUpscaleMethod::WgslSrLabSpanX2
             .settings_label_i18n(I18n::resolved(ResolvedLanguage::KoKr)),
-        "SR Lab SPAN x2 (실험)"
+        "SR Lab SPAN x2 (느림)"
+    );
+    assert_eq!(
+        WgpuUpscaleMethod::WgslSrLabSpanX2
+            .settings_label_i18n(I18n::resolved(ResolvedLanguage::EnUs)),
+        "SR Lab SPAN x2 (Slow)"
     );
     assert_eq!(
         WgpuUpscaleMethod::WgslFsr1EasuRcas

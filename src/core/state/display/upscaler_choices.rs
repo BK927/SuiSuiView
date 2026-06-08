@@ -1,7 +1,7 @@
 use super::WgpuUpscaleMethod;
 
 impl WgpuUpscaleMethod {
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 39] = [
         Self::Auto,
         Self::None,
         Self::WgslBilinear,
@@ -9,6 +9,7 @@ impl WgpuUpscaleMethod {
         Self::WgslFsr1EasuRcas,
         Self::WgslAnime4kV32CnnX2S,
         Self::WgslAnime4kV32CnnX2M,
+        Self::WgslSrLabSpanX2,
         Self::WgslAcnetF8B4Luma,
         Self::WgslAcnetF8B4BoxLuma,
         Self::WgslAcnetF8B4HdnLuma,
@@ -90,7 +91,7 @@ impl WgpuUpscaleMethod {
         Self::Cunny8x32Ds,
     ];
 
-    pub const EXPERIMENTAL: [Self; 8] = [
+    pub const EXPERIMENTAL: [Self; 7] = [
         Self::WgslNisStyle,
         Self::WgslArtcnnC4F16,
         Self::WgslArtcnnC4F16Dn,
@@ -98,7 +99,6 @@ impl WgpuUpscaleMethod {
         Self::WgslArtcnnC4F32,
         Self::WgslArtcnnC4F32Dn,
         Self::WgslArtcnnC4F32Ds,
-        Self::WgslSrLabSpanX2,
     ];
 
     pub const SETTINGS_CHOICES: [Self; 46] = [
