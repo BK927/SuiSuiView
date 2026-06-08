@@ -32,6 +32,7 @@ mod cache;
 mod commands;
 mod context_menu;
 mod debug_compare;
+mod delete_dialog;
 mod deletion;
 mod edge_prompt;
 mod eframe_host;
@@ -76,6 +77,7 @@ pub(in crate::app) use cache::{
     cache_budget_bytes, gpu_visual_needs_wgsl, rect_target_size, should_allow_cpu_display_upscale,
     PageCacheKey, TextureCacheKey, TextureEntry, TextureSampling, BYTES_PER_RGBA_PIXEL,
 };
+pub(in crate::app) use delete_dialog::PendingDeleteDialog;
 pub(in crate::app) use edge_prompt::EdgePrompt;
 pub(crate) use opening::{start_startup_open_loader, StartupOpen};
 pub(in crate::app) use opening::{LoaderEvent, OpenOrigin};
@@ -243,6 +245,7 @@ pub struct SuiSuiViewApp {
     bookmark_delete_dialog: Option<BookmarkDeleteDialog>,
     bookmark_rows: BookmarkRowsCache,
     pending_bookmark_jump: Option<PendingBookmarkJump>,
+    pending_delete_dialog: Option<PendingDeleteDialog>,
     edge_prompt: Option<EdgePrompt>,
 }
 
@@ -378,6 +381,7 @@ impl SuiSuiViewApp {
             bookmark_delete_dialog: None,
             bookmark_rows: BookmarkRowsCache::default(),
             pending_bookmark_jump: None,
+            pending_delete_dialog: None,
             edge_prompt: None,
         };
         if let Some((origin, started_at)) = startup_open_trace {
@@ -721,6 +725,12 @@ impl SuiSuiViewApp {
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
+        if self.pending_delete_dialog.is_some() {
+            if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                self.cancel_delete_confirmation();
+            }
+            return;
+        }
         if self.edge_prompt.is_some() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.edge_prompt = None;
             return;
@@ -861,6 +871,7 @@ impl SuiSuiViewApp {
         self.effects = ViewEffects::default();
         self.current_view_state = None;
         self.edge_prompt = None;
+        self.pending_delete_dialog = None;
         self.decoded_pages.clear();
         self.decoded_bytes = 0;
         self.page_metrics.clear();

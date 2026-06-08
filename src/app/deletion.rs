@@ -1,20 +1,21 @@
-use super::{commands::DeleteMode, opening::OpenViewFallback, OpenOrigin, SuiSuiViewApp};
+use super::{
+    commands::DeleteMode, opening::OpenViewFallback, OpenOrigin, PendingDeleteDialog, SuiSuiViewApp,
+};
 use crate::core::natural::cmp_natural;
 use crate::core::source::{classify_path, BookSource, SourceKind};
 use crate::core::worker::NavigationDirection;
-use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct DeleteAfterPlan {
-    target: PathBuf,
+pub(in crate::app) struct DeleteAfterPlan {
+    pub(in crate::app) target: PathBuf,
     success: Option<DeleteOpenPlan>,
     restore: DeleteOpenPlan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct DeleteOpenPlan {
+pub(in crate::app) struct DeleteOpenPlan {
     path: PathBuf,
     direction: NavigationDirection,
     explicit_page: Option<usize>,
@@ -38,11 +39,17 @@ impl SuiSuiViewApp {
             return;
         };
 
-        if !confirm_delete(mode, &plan.target, self.settings.confirm_delete) {
-            self.set_status("Delete cancelled.");
+        if should_confirm_delete(mode, self.settings.confirm_delete) {
+            self.edge_prompt = None;
+            self.close_bookmark_popover();
+            self.pending_delete_dialog = Some(PendingDeleteDialog::new(mode, plan));
             return;
         }
 
+        self.execute_delete_plan(mode, plan);
+    }
+
+    pub(in crate::app) fn execute_delete_plan(&mut self, mode: DeleteMode, plan: DeleteAfterPlan) {
         if !self.worker.clear_book_blocking() {
             self.notify(
                 "Background decode is still finishing; deletion was not attempted. Try again soon.",
@@ -232,27 +239,8 @@ fn same_path(left: &Path, right: &Path) -> bool {
     }
 }
 
-fn confirm_delete(mode: DeleteMode, target: &Path, confirm_delete: bool) -> bool {
-    let title = match mode {
-        DeleteMode::Recycle => "Move file to Recycle Bin?",
-        DeleteMode::Permanent => "Permanently delete file?",
-    };
-    let description = match mode {
-        DeleteMode::Recycle => format!("{}", target.display()),
-        DeleteMode::Permanent => format!("This cannot be undone.\n\n{}", target.display()),
-    };
-    let level = match mode {
-        DeleteMode::Recycle => MessageLevel::Warning,
-        DeleteMode::Permanent => MessageLevel::Error,
-    };
-    mode == DeleteMode::Recycle && !confirm_delete
-        || MessageDialog::new()
-            .set_level(level)
-            .set_title(title)
-            .set_description(description)
-            .set_buttons(MessageButtons::YesNo)
-            .show()
-            == MessageDialogResult::Yes
+fn should_confirm_delete(mode: DeleteMode, confirm_delete: bool) -> bool {
+    mode == DeleteMode::Permanent || confirm_delete
 }
 
 fn delete_file(mode: DeleteMode, target: &Path) -> Result<(), String> {
@@ -276,9 +264,9 @@ fn delete_result_message(mode: DeleteMode, target: &Path, result: &Result<(), St
 mod tests {
     use super::{
         adjacent_book_after_delete, adjacent_entry_after_delete, adjacent_image_after_delete,
-        delete_after_plan_for, delete_target_for, DeleteOpenPlan,
+        delete_after_plan_for, delete_target_for, should_confirm_delete, DeleteOpenPlan,
     };
-    use crate::app::OpenOrigin;
+    use crate::app::{commands::DeleteMode, OpenOrigin};
     use crate::core::source::{BookSource, SourceError};
     use crate::core::worker::NavigationDirection;
     use std::fs;
@@ -312,6 +300,18 @@ mod tests {
             adjacent_entry_after_delete(&entries, Path::new("001.jpg")),
             None
         );
+    }
+
+    #[test]
+    fn recycle_delete_can_skip_confirmation() {
+        assert!(!should_confirm_delete(DeleteMode::Recycle, false));
+        assert!(should_confirm_delete(DeleteMode::Recycle, true));
+    }
+
+    #[test]
+    fn permanent_delete_always_confirms() {
+        assert!(should_confirm_delete(DeleteMode::Permanent, false));
+        assert!(should_confirm_delete(DeleteMode::Permanent, true));
     }
 
     #[test]

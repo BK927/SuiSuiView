@@ -91,6 +91,7 @@ impl SuiSuiViewApp {
 
         self.show_bookmark_popover(ctx);
         self.show_edge_prompt(ctx);
+        self.show_delete_confirmation_dialog(ctx);
         self.drive_queued_page_turn_after_paint(ctx);
         self.drive_queued_sibling_book_turn(ctx);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
