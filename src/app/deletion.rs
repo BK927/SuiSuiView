@@ -1,5 +1,6 @@
 use super::{
-    commands::DeleteMode, opening::OpenViewFallback, OpenOrigin, PendingDeleteDialog, SuiSuiViewApp,
+    commands::DeleteMode, opening::OpenViewFallback, perf, OpenOrigin, PendingDeleteDialog,
+    SuiSuiViewApp,
 };
 use crate::core::natural::cmp_natural;
 use crate::core::source::{classify_path, BookSource, SourceKind};
@@ -30,6 +31,42 @@ impl DeleteOpenPlan {
             Some(view_fallback),
         );
     }
+
+    fn open_after_successful_delete(
+        self,
+        app: &mut SuiSuiViewApp,
+        view_fallback: OpenViewFallback,
+    ) {
+        if self.can_use_adjacent_seed() {
+            if let Some(cache) =
+                app.take_adjacent_seed_for_successor(&self.path, self.direction, self.explicit_page)
+            {
+                app.install_adjacent_seed_cache(
+                    cache,
+                    self.direction,
+                    view_fallback,
+                    self.explicit_page,
+                );
+                return;
+            }
+            perf::record_adjacent_seed_prefetch_hit(false, app.target_long_edge);
+        }
+
+        app.open_path_after_successful_delete(
+            self.path,
+            self.direction,
+            self.explicit_page,
+            Some(view_fallback),
+        );
+    }
+
+    fn can_use_adjacent_seed(&self) -> bool {
+        self.explicit_page.is_none()
+            && matches!(
+                classify_path(&self.path),
+                SourceKind::Folder | SourceKind::ZipCbz
+            )
+    }
 }
 
 impl SuiSuiViewApp {
@@ -58,18 +95,21 @@ impl SuiSuiViewApp {
         }
 
         let view_fallback = self.open_view_fallback();
-        self.clear_local_book_state("Closing current book before deleting file...");
         let result = delete_file(mode, &plan.target);
         let message = delete_result_message(mode, &plan.target, &result);
         match result {
             Ok(()) => {
                 if let Some(next) = plan.success {
-                    next.open(self, view_fallback);
+                    next.open_after_successful_delete(self, view_fallback);
+                    self.notify(message);
+                } else {
+                    self.clear_local_book_state(message);
                 }
-                self.notify(message);
             }
             Err(_) => {
-                plan.restore.open(self, view_fallback);
+                if !self.reload_current_book_after_delete_failure() {
+                    plan.restore.open(self, view_fallback);
+                }
                 self.notify(message);
             }
         }
@@ -78,6 +118,21 @@ impl SuiSuiViewApp {
     fn current_delete_after_plan(&self) -> Option<DeleteAfterPlan> {
         let source = self.source.as_ref()?;
         delete_after_plan_for(self.open_origin?, source.as_ref(), self.current_page)
+    }
+
+    fn reload_current_book_after_delete_failure(&mut self) -> bool {
+        let Some(source) = self.source.clone() else {
+            return false;
+        };
+        self.worker.load_book(
+            source,
+            self.worker_center_page(),
+            self.last_nav_direction,
+            self.target_long_edge,
+            self.visible_page_count(),
+            self.worker_options(),
+        );
+        true
     }
 }
 
@@ -312,6 +367,29 @@ mod tests {
     fn permanent_delete_always_confirms() {
         assert!(should_confirm_delete(DeleteMode::Permanent, false));
         assert!(should_confirm_delete(DeleteMode::Permanent, true));
+    }
+
+    #[test]
+    fn delete_successor_seed_candidates_are_book_siblings_only() {
+        let archive = DeleteOpenPlan {
+            path: path("next.cbz"),
+            direction: NavigationDirection::Forward,
+            explicit_page: None,
+        };
+        let shifted_folder_page = DeleteOpenPlan {
+            path: path("folder"),
+            direction: NavigationDirection::Forward,
+            explicit_page: Some(1),
+        };
+        let image = DeleteOpenPlan {
+            path: path("next.jpg"),
+            direction: NavigationDirection::Forward,
+            explicit_page: None,
+        };
+
+        assert!(archive.can_use_adjacent_seed());
+        assert!(!shifted_folder_page.can_use_adjacent_seed());
+        assert!(!image.can_use_adjacent_seed());
     }
 
     #[test]

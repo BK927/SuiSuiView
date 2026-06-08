@@ -1,6 +1,9 @@
 use super::{
     adjacent_sibling_book_paths_ordered, image_header,
-    opening::{open_origin_for_source_kind, reading_position_for_open, selected_open_page},
+    opening::{
+        open_origin_for_source_kind, reading_position_for_open, selected_open_page,
+        OpenViewFallback,
+    },
     perf,
     viewer::{target_long_edge_for_view, OriginalPageSize},
     OpenOrigin, PageCacheKey, PageMetrics, SuiSuiViewApp,
@@ -299,12 +302,79 @@ impl SuiSuiViewApp {
         &mut self,
         direction: isize,
     ) -> Option<AdjacentSeedCache> {
+        self.take_adjacent_seed_matching(direction, None, None)
+    }
+
+    pub(in crate::app) fn take_adjacent_seed_for_successor(
+        &mut self,
+        path: &Path,
+        direction: NavigationDirection,
+        explicit_page: Option<usize>,
+    ) -> Option<AdjacentSeedCache> {
+        self.take_adjacent_seed_matching(
+            signed_navigation_direction(direction),
+            Some(path),
+            explicit_page,
+        )
+    }
+
+    pub(in crate::app) fn install_adjacent_seed_cache(
+        &mut self,
+        cache: AdjacentSeedCache,
+        initial_direction: NavigationDirection,
+        view_fallback: OpenViewFallback,
+        explicit_page: Option<usize>,
+    ) {
+        let target_long_edge = cache.target_long_edge;
+        let origin = cache.origin;
+        let source = cache.source;
+        let forced_page = cache.forced_page;
+        let path = cache.path;
+        let seeded_page = cache.seeded_page;
+        let seeded_followup_page = cache.seeded_followup_page;
+
+        perf::record_adjacent_seed_prefetch_hit(true, target_long_edge);
+        self.pending_bookmark_jump = None;
+        self.loader_generation = self.loader_generation.wrapping_add(1);
+        self.clear_adjacent_seed_cache();
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        {
+            self.open_to_first_visible_trace =
+                Some(perf::OpenToFirstVisibleTrace::new(origin.perf_label()));
+        }
+        self.install_source(
+            source,
+            forced_page,
+            origin,
+            path,
+            Some(seeded_page),
+            initial_direction,
+            Some(view_fallback),
+            explicit_page,
+        );
+        self.insert_seeded_page_if_matching_target(seeded_followup_page);
+    }
+
+    fn take_adjacent_seed_matching(
+        &mut self,
+        direction: isize,
+        path: Option<&Path>,
+        explicit_page: Option<usize>,
+    ) -> Option<AdjacentSeedCache> {
         if !perf::adjacent_seed_prefetch_enabled() {
             return None;
         }
         let current = self.current_book_reference_path()?;
+        let direction = direction.signum();
         let position = self.adjacent_seed_cache.iter().position(|cache| {
-            cache.direction == direction.signum() && cache.base_path == current
+            adjacent_seed_matches_successor(
+                &cache.base_path,
+                &cache.path,
+                cache.direction,
+                &current,
+                path,
+                direction,
+            )
         })?;
         let mut caches = std::mem::take(&mut self.adjacent_seed_cache);
         let cache = caches.remove(position);
@@ -324,7 +394,7 @@ impl SuiSuiViewApp {
         );
         let selected_page = selected_open_page(
             cache.source.as_ref(),
-            None,
+            explicit_page,
             cache.forced_page,
             reading_position.as_ref(),
             None,
@@ -357,6 +427,33 @@ impl SuiSuiViewApp {
         }
         self.adjacent_seed_cache = retained;
         drop_adjacent_seed_caches_off_thread(dropped);
+    }
+}
+
+fn signed_navigation_direction(direction: NavigationDirection) -> isize {
+    match direction {
+        NavigationDirection::Forward => 1,
+        NavigationDirection::Backward => -1,
+    }
+}
+
+fn adjacent_seed_matches_successor(
+    cache_base: &Path,
+    cache_path: &Path,
+    cache_direction: isize,
+    current: &Path,
+    expected_path: Option<&Path>,
+    direction: isize,
+) -> bool {
+    cache_direction == direction.signum()
+        && cache_base == current
+        && expected_path.is_none_or(|path| same_path(cache_path, path))
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
     }
 }
 
@@ -568,12 +665,56 @@ fn seed_target_long_edge_from_view(
 #[cfg(test)]
 mod tests {
     use super::{
-        should_skip_memory_aware_adjacent_seed, should_skip_memory_aware_adjacent_seed_source,
-        ADJACENT_SEED_LARGE_SOURCE_BYTES, ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE,
+        adjacent_seed_matches_successor, should_skip_memory_aware_adjacent_seed,
+        should_skip_memory_aware_adjacent_seed_source, ADJACENT_SEED_LARGE_SOURCE_BYTES,
+        ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE,
     };
     use crate::core::source::{BookSource, SourceError};
     use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn adjacent_seed_successor_match_requires_path_and_direction() {
+        let current = Path::new("book-1.cbz");
+        let successor = Path::new("book-2.cbz");
+
+        assert!(adjacent_seed_matches_successor(
+            current,
+            successor,
+            1,
+            current,
+            Some(successor),
+            1,
+        ));
+        assert!(!adjacent_seed_matches_successor(
+            current,
+            Path::new("book-3.cbz"),
+            1,
+            current,
+            Some(successor),
+            1,
+        ));
+        assert!(!adjacent_seed_matches_successor(
+            current,
+            successor,
+            -1,
+            current,
+            Some(successor),
+            1,
+        ));
+    }
+
+    #[test]
+    fn adjacent_seed_direction_match_keeps_existing_sibling_behavior() {
+        assert!(adjacent_seed_matches_successor(
+            Path::new("book-1.cbz"),
+            Path::new("book-2.cbz"),
+            1,
+            Path::new("book-1.cbz"),
+            None,
+            1,
+        ));
+    }
 
     #[test]
     fn memory_aware_adjacent_seed_skips_8192px_sources() {

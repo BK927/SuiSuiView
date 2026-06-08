@@ -13,6 +13,7 @@ pub(in crate::app) struct PendingDeleteDialog {
     mode: DeleteMode,
     plan: DeleteAfterPlan,
     skip_recycle_confirmation: bool,
+    selected_action: DeleteDialogAction,
 }
 
 impl PendingDeleteDialog {
@@ -21,8 +22,32 @@ impl PendingDeleteDialog {
             mode,
             plan,
             skip_recycle_confirmation: false,
+            selected_action: DeleteDialogAction::Confirm,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeleteDialogAction {
+    Cancel,
+    Confirm,
+}
+
+impl DeleteDialogAction {
+    fn toggled(self) -> Self {
+        match self {
+            Self::Cancel => Self::Confirm,
+            Self::Confirm => Self::Cancel,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeleteDialogKeyboardAction {
+    None,
+    Cancel,
+    Select(DeleteDialogAction),
+    Activate(DeleteDialogAction),
 }
 
 impl SuiSuiViewApp {
@@ -64,6 +89,18 @@ impl SuiSuiViewApp {
         let is_permanent = matches!(pending.mode, DeleteMode::Permanent);
         let mut cancel_clicked = false;
         let mut delete_clicked = false;
+
+        match delete_dialog_keyboard_action(ctx, pending.selected_action) {
+            DeleteDialogKeyboardAction::None => {}
+            DeleteDialogKeyboardAction::Cancel => cancel_clicked = true,
+            DeleteDialogKeyboardAction::Select(action) => pending.selected_action = action,
+            DeleteDialogKeyboardAction::Activate(DeleteDialogAction::Cancel) => {
+                cancel_clicked = true;
+            }
+            DeleteDialogKeyboardAction::Activate(DeleteDialogAction::Confirm) => {
+                delete_clicked = true;
+            }
+        }
 
         egui::Area::new(egui::Id::new("delete_confirmation_dialog"))
             .fixed_pos(screen.min)
@@ -142,6 +179,17 @@ impl SuiSuiViewApp {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
+                                    let confirm_stroke = selected_button_stroke(
+                                        pending.selected_action == DeleteDialogAction::Confirm,
+                                        Stroke::new(
+                                            1.0,
+                                            if is_permanent {
+                                                theme::ACCENT_HOVER
+                                            } else {
+                                                Color32::from_rgb(79, 139, 101)
+                                            },
+                                        ),
+                                    );
                                     if ui
                                         .add_sized(
                                             [156.0, 36.0],
@@ -151,28 +199,22 @@ impl SuiSuiViewApp {
                                                 } else {
                                                     Color32::from_rgb(46, 92, 67)
                                                 })
-                                                .stroke(Stroke::new(
-                                                    1.0,
-                                                    if is_permanent {
-                                                        theme::ACCENT_HOVER
-                                                    } else {
-                                                        Color32::from_rgb(79, 139, 101)
-                                                    },
-                                                )),
+                                                .stroke(confirm_stroke),
                                         )
                                         .clicked()
                                     {
                                         delete_clicked = true;
                                     }
+                                    let cancel_stroke = selected_button_stroke(
+                                        pending.selected_action == DeleteDialogAction::Cancel,
+                                        Stroke::new(1.0, Color32::from_rgb(58, 64, 73)),
+                                    );
                                     if ui
                                         .add_sized(
                                             [86.0, 36.0],
                                             egui::Button::new(i18n.text("common.cancel"))
                                                 .fill(Color32::from_rgb(38, 41, 47))
-                                                .stroke(Stroke::new(
-                                                    1.0,
-                                                    Color32::from_rgb(58, 64, 73),
-                                                )),
+                                                .stroke(cancel_stroke),
                                         )
                                         .clicked()
                                     {
@@ -195,5 +237,92 @@ impl SuiSuiViewApp {
         } else {
             self.pending_delete_dialog = Some(pending);
         }
+    }
+}
+
+fn delete_dialog_keyboard_action(
+    ctx: &egui::Context,
+    selected: DeleteDialogAction,
+) -> DeleteDialogKeyboardAction {
+    ctx.input(|input| {
+        delete_dialog_keyboard_action_from_keys(selected, |key| input.key_pressed(key))
+    })
+}
+
+fn delete_dialog_keyboard_action_from_keys(
+    selected: DeleteDialogAction,
+    key_pressed: impl Fn(egui::Key) -> bool,
+) -> DeleteDialogKeyboardAction {
+    if key_pressed(egui::Key::Escape) {
+        DeleteDialogKeyboardAction::Cancel
+    } else if key_pressed(egui::Key::Enter) || key_pressed(egui::Key::Space) {
+        DeleteDialogKeyboardAction::Activate(selected)
+    } else if key_pressed(egui::Key::ArrowLeft) || key_pressed(egui::Key::ArrowUp) {
+        DeleteDialogKeyboardAction::Select(DeleteDialogAction::Cancel)
+    } else if key_pressed(egui::Key::ArrowRight) || key_pressed(egui::Key::ArrowDown) {
+        DeleteDialogKeyboardAction::Select(DeleteDialogAction::Confirm)
+    } else if key_pressed(egui::Key::Tab) {
+        DeleteDialogKeyboardAction::Select(selected.toggled())
+    } else {
+        DeleteDialogKeyboardAction::None
+    }
+}
+
+fn selected_button_stroke(selected: bool, normal: Stroke) -> Stroke {
+    if selected {
+        theme::selected_stroke()
+    } else {
+        normal
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        delete_dialog_keyboard_action_from_keys, DeleteDialogAction, DeleteDialogKeyboardAction,
+    };
+    use eframe::egui;
+
+    #[test]
+    fn delete_dialog_action_toggles_between_buttons() {
+        assert_eq!(
+            DeleteDialogAction::Cancel.toggled(),
+            DeleteDialogAction::Confirm
+        );
+        assert_eq!(
+            DeleteDialogAction::Confirm.toggled(),
+            DeleteDialogAction::Cancel
+        );
+    }
+
+    #[test]
+    fn delete_dialog_arrows_select_cancel_or_confirm() {
+        assert_eq!(
+            action_for_key(DeleteDialogAction::Confirm, egui::Key::ArrowLeft),
+            DeleteDialogKeyboardAction::Select(DeleteDialogAction::Cancel)
+        );
+        assert_eq!(
+            action_for_key(DeleteDialogAction::Cancel, egui::Key::ArrowRight),
+            DeleteDialogKeyboardAction::Select(DeleteDialogAction::Confirm)
+        );
+    }
+
+    #[test]
+    fn delete_dialog_enter_activates_selected_button() {
+        assert_eq!(
+            action_for_key(DeleteDialogAction::Cancel, egui::Key::Enter),
+            DeleteDialogKeyboardAction::Activate(DeleteDialogAction::Cancel)
+        );
+        assert_eq!(
+            action_for_key(DeleteDialogAction::Confirm, egui::Key::Enter),
+            DeleteDialogKeyboardAction::Activate(DeleteDialogAction::Confirm)
+        );
+    }
+
+    fn action_for_key(
+        selected: DeleteDialogAction,
+        pressed_key: egui::Key,
+    ) -> DeleteDialogKeyboardAction {
+        delete_dialog_keyboard_action_from_keys(selected, |key| key == pressed_key)
     }
 }
