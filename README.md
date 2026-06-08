@@ -86,7 +86,7 @@ backends. They are off by default.
 state file.
 
 - General: UI language, delete confirmation, ESC exit, always-on-top, and
-  first/last page behavior.
+  first/last page behavior; Ask prompts auto-dismiss unless hovered.
 - Rendering: transition effect, fast sampled/scaled decode, GPU
   acceleration, scaler/filter controls, EXIF orientation, embedded ICC
   conversion, prefetch, and cache memory.

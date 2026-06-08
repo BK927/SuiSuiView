@@ -1,25 +1,17 @@
 use super::{
-    edge_prompt_button, perf, sibling_book_path, transition_screen_sign, ui,
-    worker_center_page_for_mode, OpenOrigin, PageCacheKey, SuiSuiViewApp, Transition, ViewMode,
-    SIBLING_BOOK_TURN_REPAINT_DELAY,
+    perf, sibling_book_path, transition_screen_sign, worker_center_page_for_mode, EdgePrompt,
+    OpenOrigin, PageCacheKey, SuiSuiViewApp, Transition, ViewMode, SIBLING_BOOK_TURN_REPAINT_DELAY,
 };
 use crate::core::effects::ViewEffects;
-use crate::core::state::{
-    CommandId, EdgePageAction, FitMode, PageTransitionStyle, ReadingDirection,
-};
+use crate::core::state::{EdgePageAction, FitMode, PageTransitionStyle, ReadingDirection};
 use crate::core::worker::{DecodeOptions, NavigationDirection};
-use eframe::egui::{self, Color32, Pos2, RichText, Stroke, Vec2};
+use eframe::egui::{self, Vec2};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_QUEUED_PAGE_TURNS: usize = 1;
 const MAX_QUEUED_WORKER_VISIBLE_PAGES: usize = 25;
 const MAX_QUEUED_SIBLING_BOOK_TURNS: usize = 1;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::app) struct EdgePrompt {
-    pub(in crate::app) direction: NavigationDirection,
-}
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn next_page(&mut self) {
@@ -116,7 +108,10 @@ impl SuiSuiViewApp {
         if self.source.is_none() {
             return;
         }
-        self.edge_prompt = Some(EdgePrompt { direction });
+        if !should_open_edge_prompt(self.edge_prompt, direction) {
+            return;
+        }
+        self.edge_prompt = Some(EdgePrompt::new(direction));
     }
 
     pub(in crate::app) fn edge_page_action_for_current_book(&self) -> EdgePageAction {
@@ -138,111 +133,6 @@ impl SuiSuiViewApp {
             NavigationDirection::Backward => source.page_count().saturating_sub(1),
         };
         self.set_page(target, direction);
-    }
-
-    pub(in crate::app) fn show_edge_prompt(&mut self, ctx: &egui::Context) {
-        let Some(prompt) = self.edge_prompt else {
-            return;
-        };
-        if self.source.is_none() {
-            self.edge_prompt = None;
-            return;
-        }
-        if self.settings_open || self.about_open || self.bookmark_popover_open {
-            self.edge_prompt = None;
-            return;
-        }
-
-        let screen = ctx.screen_rect();
-        let available_width = (screen.width() - 32.0).max(280.0);
-        let width = available_width.min(560.0).max(available_width.min(360.0));
-        let pos = Pos2::new(
-            screen.center().x - width * 0.5,
-            (screen.bottom() - 164.0).max(screen.top() + 80.0),
-        );
-        let response = egui::Area::new("edge_page_prompt".into())
-            .order(egui::Order::Foreground)
-            .fixed_pos(pos)
-            .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(Color32::from_rgb(8, 9, 11))
-                    .stroke(Stroke::new(1.2, ui::theme::SUBTLE_STROKE))
-                    .corner_radius(egui::CornerRadius::same(14))
-                    .shadow(egui::epaint::Shadow {
-                        offset: [0, 10],
-                        blur: 22,
-                        spread: 0,
-                        color: Color32::from_black_alpha(150),
-                    })
-                    .inner_margin(egui::Margin::symmetric(22, 20))
-                    .show(ui, |ui| {
-                        ui.set_width(width - 44.0);
-                        ui.vertical_centered(|ui| {
-                            let i18n = self.i18n();
-                            let title = match prompt.direction {
-                                NavigationDirection::Forward => i18n.text("navigation.edge.last"),
-                                NavigationDirection::Backward => i18n.text("navigation.edge.first"),
-                            };
-                            ui.label(
-                                RichText::new(title)
-                                    .size(24.0)
-                                    .color(ui::theme::TEXT_PRIMARY)
-                                    .strong(),
-                            );
-                            ui.add_space(18.0);
-                            ui.horizontal_centered(|ui| {
-                                let previous_file = i18n.text("navigation.edge.previous_file");
-                                let previous_label = self.edge_action_button_text(
-                                    &previous_file,
-                                    CommandId::PreviousBook,
-                                );
-                                if edge_prompt_button(ui, &previous_label).clicked() {
-                                    self.edge_prompt = None;
-                                    self.open_sibling_book(-1);
-                                }
-
-                                let next_file = i18n.text("navigation.edge.next_file");
-                                let next_label =
-                                    self.edge_action_button_text(&next_file, CommandId::NextBook);
-                                if edge_prompt_button(ui, &next_label).clicked() {
-                                    self.edge_prompt = None;
-                                    self.open_sibling_book(1);
-                                }
-                            });
-                        });
-                    });
-            });
-
-        let prompt_rect = response.response.rect;
-        let clicked_outside = ctx.input(|input| {
-            input.pointer.any_click()
-                && input
-                    .pointer
-                    .interact_pos()
-                    .is_some_and(|pos| !prompt_rect.contains(pos))
-        });
-        if clicked_outside {
-            self.edge_prompt = None;
-        }
-    }
-
-    pub(in crate::app) fn edge_action_button_text(
-        &self,
-        label: &str,
-        command: CommandId,
-    ) -> String {
-        self.shortcut_hint_for_command(command).map_or_else(
-            || label.to_owned(),
-            |shortcut| format!("{label} ({shortcut})"),
-        )
-    }
-
-    pub(in crate::app) fn shortcut_hint_for_command(&self, command: CommandId) -> Option<String> {
-        self.settings
-            .key_bindings
-            .iter()
-            .find(|binding| binding.command == command)
-            .map(|binding| binding.shortcut.label())
     }
 
     pub(in crate::app) fn random_page(&mut self, direction: NavigationDirection) {
@@ -780,6 +670,10 @@ fn normalize_sibling_book_direction(direction: isize) -> isize {
     }
 }
 
+fn should_open_edge_prompt(current: Option<EdgePrompt>, direction: NavigationDirection) -> bool {
+    !current.is_some_and(|prompt| prompt.direction == direction)
+}
+
 fn push_queued_page_turn(
     queue: &mut Option<super::QueuedPageTurns>,
     direction: NavigationDirection,
@@ -818,7 +712,7 @@ mod tests {
     use super::super::QueuedPageTurns;
     use super::{
         normalize_sibling_book_direction, push_queued_page_turn, push_queued_sibling_book_turn,
-        MAX_QUEUED_PAGE_TURNS, MAX_QUEUED_SIBLING_BOOK_TURNS,
+        should_open_edge_prompt, EdgePrompt, MAX_QUEUED_PAGE_TURNS, MAX_QUEUED_SIBLING_BOOK_TURNS,
     };
     use crate::core::worker::NavigationDirection;
     use std::collections::VecDeque;
@@ -879,5 +773,19 @@ mod tests {
         push_queued_page_turn(&mut queue, NavigationDirection::Backward);
 
         assert_eq!(queue, None);
+    }
+
+    #[test]
+    fn edge_prompt_reuses_same_direction_timer() {
+        let prompt = EdgePrompt::new(NavigationDirection::Backward);
+
+        assert!(!should_open_edge_prompt(
+            Some(prompt),
+            NavigationDirection::Backward
+        ));
+        assert!(should_open_edge_prompt(
+            Some(prompt),
+            NavigationDirection::Forward
+        ));
     }
 }

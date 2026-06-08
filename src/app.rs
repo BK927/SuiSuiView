@@ -13,7 +13,7 @@ use crate::core::worker::{
 use commands::{collect_keyboard_actions, AppCommand, KeyboardAction, NavigationRelease};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use debug_compare::{DebugCompareState, DebugCompareWorker};
-use eframe::egui::{self, Color32, Pos2, Rect, RichText, Stroke, Vec2};
+use eframe::egui::{self, Pos2, Rect, Vec2};
 use image_info::ImageInfoState;
 use lru::LruCache;
 use rfd::FileDialog;
@@ -33,6 +33,7 @@ mod commands;
 mod context_menu;
 mod debug_compare;
 mod deletion;
+mod edge_prompt;
 mod eframe_host;
 pub(crate) mod fast_start;
 #[cfg(target_os = "windows")]
@@ -75,7 +76,7 @@ pub(in crate::app) use cache::{
     cache_budget_bytes, gpu_visual_needs_wgsl, rect_target_size, should_allow_cpu_display_upscale,
     PageCacheKey, TextureCacheKey, TextureEntry, TextureSampling, BYTES_PER_RGBA_PIXEL,
 };
-pub(in crate::app) use navigation::EdgePrompt;
+pub(in crate::app) use edge_prompt::EdgePrompt;
 pub(crate) use opening::{start_startup_open_loader, StartupOpen};
 pub(in crate::app) use opening::{LoaderEvent, OpenOrigin};
 #[cfg(test)]
@@ -998,20 +999,6 @@ impl Drop for SuiSuiViewApp {
         );
         perf::flush();
     }
-}
-
-fn edge_prompt_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(
-            RichText::new(label)
-                .size(16.0)
-                .color(ui::theme::TEXT_PRIMARY)
-                .strong(),
-        )
-        .min_size(Vec2::new(220.0, 34.0))
-        .fill(Color32::from_rgb(5, 6, 8))
-        .stroke(Stroke::new(1.0, Color32::from_rgb(52, 55, 60))),
-    )
 }
 
 impl SuiSuiViewApp {
