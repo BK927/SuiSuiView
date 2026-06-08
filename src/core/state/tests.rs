@@ -435,7 +435,7 @@ fn wgpu_downscale_method_resolves_only_when_page_is_shrunk() {
 
 #[test]
 fn product_wgpu_upscale_methods_keep_experiments_separate() {
-    assert!(!WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::WgslFsr1Style));
+    assert!(WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::WgslFsr1Style));
     assert!(!WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::WgslNisStyle));
     assert!(!WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::WgslArtcnnC4F16));
     assert!(!WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::WgslArtcnnC4F32Ds));
@@ -450,7 +450,7 @@ fn product_wgpu_upscale_methods_keep_experiments_separate() {
     assert!(WgpuUpscaleMethod::SETTINGS_CHOICES.contains(&WgpuUpscaleMethod::WgslArtcnnC4F32Ds));
     assert!(WgpuUpscaleMethod::SETTINGS_CHOICES.contains(&WgpuUpscaleMethod::WgslSrLabSpanX2));
     assert!(!WgpuUpscaleMethod::SETTINGS_CHOICES.contains(&WgpuUpscaleMethod::NvidiaNis));
-    assert!(!WgpuUpscaleMethod::WgslFsr1Style.candidate().product_visible);
+    assert!(WgpuUpscaleMethod::WgslFsr1Style.candidate().product_visible);
     assert!(!WgpuUpscaleMethod::WgslNisStyle.candidate().product_visible);
     assert!(
         !WgpuUpscaleMethod::WgslArtcnnC4F16
@@ -467,11 +467,11 @@ fn product_wgpu_upscale_methods_keep_experiments_separate() {
             .candidate()
             .product_visible
     );
-    assert!(!WgpuUpscaleMethod::WgslFsr1Style.product_selectable());
+    assert!(WgpuUpscaleMethod::WgslFsr1Style.product_selectable());
     assert!(!WgpuUpscaleMethod::WgslNisStyle.product_selectable());
     assert!(!WgpuUpscaleMethod::WgslArtcnnC4F16.product_selectable());
     assert!(!WgpuUpscaleMethod::WgslSrLabSpanX2.product_selectable());
-    assert!(WgpuUpscaleMethod::WgslFsr1Style.experimental_selectable());
+    assert!(!WgpuUpscaleMethod::WgslFsr1Style.experimental_selectable());
     assert!(WgpuUpscaleMethod::WgslNisStyle.experimental_selectable());
     assert!(WgpuUpscaleMethod::WgslArtcnnC4F16.experimental_selectable());
     assert!(WgpuUpscaleMethod::WgslArtcnnC4F32Ds.experimental_selectable());
@@ -482,6 +482,11 @@ fn product_wgpu_upscale_methods_keep_experiments_separate() {
     assert!(WgpuUpscaleMethod::WgslArtcnnC4F32Ds.user_selectable());
     assert!(WgpuUpscaleMethod::WgslSrLabSpanX2.user_selectable());
     assert!(!WgpuUpscaleMethod::NvidiaNis.user_selectable());
+    assert_eq!(
+        WgpuUpscaleMethod::WgslFsr1Style
+            .settings_label_i18n(I18n::resolved(ResolvedLanguage::KoKr)),
+        "WGSL FSR-style"
+    );
     assert_eq!(
         WgpuUpscaleMethod::WgslArtcnnC4F16
             .settings_label_i18n(I18n::resolved(ResolvedLanguage::KoKr)),

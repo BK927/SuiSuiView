@@ -114,8 +114,7 @@ impl WgpuUpscaleMethod {
 
     pub fn settings_label_i18n(self, i18n: I18n) -> String {
         match self {
-            Self::WgslFsr1Style
-            | Self::WgslNisStyle
+            Self::WgslNisStyle
             | Self::WgslArtcnnC4F16
             | Self::WgslArtcnnC4F16Dn
             | Self::WgslArtcnnC4F16Ds
@@ -167,7 +166,7 @@ impl WgpuUpscaleMethod {
                 "arbitrary",
                 "1",
                 "wgpu",
-                false,
+                true,
             ),
             Self::WgslFsr1EasuRcas => upscaler_candidate!(
                 "AMD FidelityFX FSR 1",
