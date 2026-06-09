@@ -27,6 +27,7 @@ fn main() -> eframe::Result<()> {
         }
     }
 
+    let _startup_flash_guard = startup_window::start_flash_guard();
     let store = StateStore::load();
     let startup_open_path = startup_open_path();
 
@@ -99,7 +100,6 @@ fn run_eframe_app(
         persist_window: false,
         ..Default::default()
     };
-    let _startup_flash_guard = startup_window::start_flash_guard();
 
     eframe::run_native(
         "SuiSuiView",
@@ -172,13 +172,23 @@ fn initial_viewport(
     store: &StateStore,
     icon: eframe::egui::IconData,
 ) -> eframe::egui::ViewportBuilder {
-    let placement = store.window_placement();
+    initial_viewport_for_placement(store.window_placement(), icon)
+}
+
+fn initial_viewport_for_placement(
+    placement: &WindowPlacement,
+    icon: eframe::egui::IconData,
+) -> eframe::egui::ViewportBuilder {
     let inner_size = valid_window_size(placement).unwrap_or(DEFAULT_WINDOW_SIZE);
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_inner_size(inner_size)
         .with_min_inner_size(MIN_WINDOW_SIZE)
         .with_clamp_size_to_monitor_size(true)
         .with_icon(Arc::new(icon));
+    #[cfg(target_os = "windows")]
+    {
+        viewport = viewport.with_visible(false);
+    }
 
     if let Some(position) = valid_window_position(placement) {
         viewport = viewport.with_position(position);
@@ -250,7 +260,8 @@ fn window_icon() -> eframe::egui::IconData {
 
 #[cfg(test)]
 mod tests {
-    use super::window_icon;
+    use super::{initial_viewport_for_placement, window_icon};
+    use crate::core::state::WindowPlacement;
 
     #[test]
     fn embedded_window_icon_loads_from_ico() {
@@ -264,5 +275,37 @@ mod tests {
             icon.rgba.len(),
             icon.width as usize * icon.height as usize * 4
         );
+    }
+
+    #[test]
+    fn initial_viewport_visibility_matches_platform() {
+        let viewport = initial_viewport_for_placement(
+            &WindowPlacement {
+                inner_size: Some([1280.0, 820.0]),
+                outer_position: None,
+                maximized: false,
+            },
+            window_icon(),
+        );
+
+        if cfg!(target_os = "windows") {
+            assert_eq!(viewport.visible, Some(false));
+        } else {
+            assert_eq!(viewport.visible, None);
+        }
+    }
+
+    #[test]
+    fn initial_viewport_keeps_saved_maximize_state() {
+        let viewport = initial_viewport_for_placement(
+            &WindowPlacement {
+                inner_size: Some([1280.0, 820.0]),
+                outer_position: None,
+                maximized: true,
+            },
+            window_icon(),
+        );
+
+        assert_eq!(viewport.maximized, Some(true));
     }
 }

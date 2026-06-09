@@ -128,6 +128,11 @@ impl GlutinWindowContext {
         &self.window
     }
 
+    pub(super) fn reveal_after_first_frame(&self) {
+        crate::startup_window::reveal_main_windows();
+        self.window.set_visible(true);
+    }
+
     pub(super) fn resize(&self, physical_size: winit::dpi::PhysicalSize<u32>) {
         use glutin::surface::GlSurface as _;
         let Some(width) = NonZeroU32::new(physical_size.width) else {

@@ -1,4 +1,4 @@
-use super::runtime::{AppRuntime, ScreenRenderer};
+use super::runtime::{AppRuntime, ScreenRenderer, StartupReveal};
 use super::{perf, StartupOpen, SuiSuiViewApp};
 use crate::core::state::StateStore;
 use crossbeam_channel::Receiver;
@@ -23,7 +23,11 @@ impl SuiSuiViewApp {
                     }
                 });
         Self::new(
-            AppRuntime::new(cc.egui_ctx.clone(), screen_renderer),
+            AppRuntime::new(
+                cc.egui_ctx.clone(),
+                screen_renderer,
+                StartupReveal::for_eframe_host(),
+            ),
             store,
             ipc_rx,
             startup_open_path,

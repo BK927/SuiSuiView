@@ -155,6 +155,7 @@ pub struct SuiSuiViewApp {
     #[cfg(target_os = "windows")]
     file_association_selection: file_associations::FileAssociationSelection,
     pending_gpu_acceleration: Option<bool>,
+    startup_reveal_pending: bool,
     fast_start_failure_notice: Option<FastStartFailureNotice>,
     shortcut_capture: Option<settings_input::ShortcutCapture>,
     shortcut_conflict: Option<settings_input::ShortcutConflict>,
@@ -260,6 +261,8 @@ impl SuiSuiViewApp {
         let app_started = Instant::now();
         let egui_ctx = runtime.egui_ctx().clone();
         let screen_renderer = runtime.screen_renderer();
+        let startup_reveal_pending =
+            runtime.startup_reveal() == runtime::StartupReveal::AfterFirstFrame;
         platform::install_app_fonts(&egui_ctx);
         ui::apply_app_theme(&egui_ctx);
         let startup_open_parts = startup_open.map(StartupOpen::into_parts);
@@ -291,6 +294,7 @@ impl SuiSuiViewApp {
             #[cfg(target_os = "windows")]
             file_association_selection: file_associations::FileAssociationSelection::default(),
             pending_gpu_acceleration: None,
+            startup_reveal_pending,
             fast_start_failure_notice,
             shortcut_capture: None,
             shortcut_conflict: None,

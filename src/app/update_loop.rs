@@ -103,6 +103,7 @@ impl SuiSuiViewApp {
         if self.transition.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
+        self.reveal_startup_window_after_first_frame(ctx);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::record_ui_update(
             update_started,

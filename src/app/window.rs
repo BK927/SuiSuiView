@@ -20,9 +20,19 @@ pub(in crate::app) struct WindowDpiSizeGuard {
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn maintain_native_window_state(&mut self, ctx: &egui::Context) {
+        if self.startup_reveal_pending {
+            return;
+        }
         self.sync_viewport_flags(ctx);
         self.ensure_window_position_visible(ctx);
         self.persist_window_placement_deferred(ctx);
+    }
+
+    pub(in crate::app) fn reveal_startup_window_after_first_frame(&mut self, ctx: &egui::Context) {
+        if take_startup_reveal_request(&mut self.startup_reveal_pending) {
+            crate::startup_window::reveal_main_windows();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
     }
 
     fn sync_viewport_flags(&mut self, ctx: &egui::Context) {
@@ -202,6 +212,12 @@ fn round_pos(value: Pos2) -> [f32; 2] {
     [value.x.round(), value.y.round()]
 }
 
+fn take_startup_reveal_request(pending: &mut bool) -> bool {
+    let should_reveal = *pending;
+    *pending = false;
+    should_reveal
+}
+
 fn valid_scale(scale: Option<f32>) -> Option<f32> {
     scale.filter(|scale| scale.is_finite() && *scale > 0.0)
 }
@@ -290,7 +306,7 @@ fn clamped_window_position(outer_rect: Rect, monitor_size: Vec2) -> Option<Pos2>
 mod tests {
     use super::{
         clamped_window_position, looks_like_dpi_size_artifact, persistent_inner_size,
-        scale_changed, size_close_to,
+        scale_changed, size_close_to, take_startup_reveal_request,
     };
     use eframe::egui::{pos2, vec2, Rect};
 
@@ -345,6 +361,15 @@ mod tests {
             persistent_inner_size(Some([1200.0, 800.0]), None, vec2(1500.0, 900.0), false),
             ([1500.0, 900.0], Some([1500.0, 900.0]))
         );
+    }
+
+    #[test]
+    fn startup_reveal_request_is_one_shot() {
+        let mut pending = true;
+
+        assert!(take_startup_reveal_request(&mut pending));
+        assert!(!pending);
+        assert!(!take_startup_reveal_request(&mut pending));
     }
 
     #[test]

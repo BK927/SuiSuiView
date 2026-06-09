@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use super::runtime::{AppRuntime, ScreenRenderer};
+use super::runtime::{AppRuntime, ScreenRenderer, StartupReveal};
 use super::{StartupOpen, SuiSuiViewApp};
 use crate::core::state::{AppSettings, RendererMode, StateStore};
 use crossbeam_channel::Receiver;
@@ -224,15 +224,17 @@ impl HandoffPreviewApp {
             true,
         );
         let app = SuiSuiViewApp::new(
-            AppRuntime::new(egui_glow.egui_ctx.clone(), ScreenRenderer::Glow),
+            AppRuntime::new(
+                egui_glow.egui_ctx.clone(),
+                ScreenRenderer::Glow,
+                StartupReveal::HostManaged,
+            ),
             options.store,
             options.ipc_rx,
             options.startup_open_path,
             options.startup_open,
         );
         self.start_prewarm();
-        gl_window.window().set_visible(true);
-        schedule_process_visible_window_title("SuiSuiView".to_owned());
         gl_window.window().request_redraw();
         self.stage = Some(Stage::Glow {
             app,
@@ -299,7 +301,7 @@ impl HandoffPreviewApp {
         self.metrics.last_glow_present_ms = Some(now_ms);
         if self.metrics.first_glow_present_ms.is_none() {
             self.metrics.first_glow_present_ms = Some(now_ms);
-            gl_window.window().set_visible(true);
+            gl_window.reveal_after_first_frame();
             schedule_process_visible_window_title("SuiSuiView".to_owned());
         }
         sync_visible_window_title(gl_window.window());
@@ -680,10 +682,16 @@ impl winit::application::ApplicationHandler<()> for HandoffPreviewApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        match self.stage.as_ref() {
-            Some(Stage::Glow { gl_window, .. }) => gl_window.window().request_redraw(),
-            Some(Stage::Wgpu { window, .. }) => window.request_redraw(),
-            None => {}
+        if matches!(self.stage, Some(Stage::Glow { .. }))
+            && self.metrics.first_glow_present_ms.is_none()
+        {
+            self.redraw(event_loop);
+        } else {
+            match self.stage.as_ref() {
+                Some(Stage::Glow { gl_window, .. }) => gl_window.window().request_redraw(),
+                Some(Stage::Wgpu { window, .. }) => window.request_redraw(),
+                None => {}
+            }
         }
         event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
     }
