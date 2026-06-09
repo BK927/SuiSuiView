@@ -1,7 +1,6 @@
 use super::super::commands::AppCommand;
 use super::super::debug_compare::DebugCompareTarget;
 use super::super::{SuiSuiViewApp, ViewMode};
-use super::top_bar_groups::{visible_top_bar_groups, TopBarGroup};
 use super::{icons, path_labels, theme};
 use crate::core::effects::ImageFilter;
 use crate::core::i18n::I18n;
@@ -123,50 +122,7 @@ impl SuiSuiViewApp {
             || ctx.is_popup_open()
     }
 
-    fn show_top_bar_contents(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        let i18n = self.i18n();
-        ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
-        ui.horizontal_centered(|ui| {
-            let mut first_group = true;
-            for group in visible_top_bar_groups(self.settings.top_bar_items) {
-                if !first_group {
-                    toolbar_separator(ui);
-                }
-                match group {
-                    TopBarGroup::Open => self.show_open_group(ui),
-                    TopBarGroup::Page => self.show_page_group(ui),
-                    TopBarGroup::View => self.show_view_group(ctx, ui),
-                    TopBarGroup::Adjust => self.show_correction_group(ctx, ui),
-                    TopBarGroup::Compare => self.show_debug_compare_group(ui),
-                    TopBarGroup::Bookmarks => self.show_bookmark_group(ctx, ui),
-                }
-                first_group = false;
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(icon_button(icons::INFO, icons::IconStyle::Regular, 19.0))
-                    .on_hover_text(i18n.text("topbar.info"))
-                    .clicked()
-                {
-                    self.open_about_window();
-                }
-                if ui
-                    .add(icon_button(
-                        icons::SETTINGS,
-                        icons::IconStyle::Regular,
-                        20.0,
-                    ))
-                    .on_hover_text(i18n.text("topbar.settings"))
-                    .clicked()
-                {
-                    self.settings_open = true;
-                }
-                self.show_top_bar_pin_button(ui);
-            });
-        });
-    }
-
-    fn show_top_bar_pin_button(&mut self, ui: &mut egui::Ui) {
+    pub(in crate::app::ui) fn show_top_bar_pin_button(&mut self, ui: &mut egui::Ui) {
         let (icon, style, color) = if self.settings.top_bar_pinned {
             (
                 icons::PIN_FILLED,
@@ -195,7 +151,7 @@ impl SuiSuiViewApp {
         self.top_bar_auto_hide_until = Some(Instant::now() + TOP_BAR_MENU_HOLD_DELAY);
     }
 
-    fn show_open_group(&mut self, ui: &mut egui::Ui) {
+    pub(in crate::app::ui) fn show_open_group(&mut self, ui: &mut egui::Ui) {
         let i18n = self.i18n();
         ui.menu_button(
             icons::icon_text(icons::FOLDER_OPEN, &i18n.text("topbar.open")),
@@ -260,7 +216,7 @@ impl SuiSuiViewApp {
         );
     }
 
-    fn show_page_group(&mut self, ui: &mut egui::Ui) {
+    pub(in crate::app::ui) fn show_page_group(&mut self, ui: &mut egui::Ui) {
         let i18n = self.i18n();
         let has_book = self.source.is_some();
         let previous = ui
@@ -303,7 +259,7 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn show_view_group(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+    pub(in crate::app::ui) fn show_view_group(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let i18n = self.i18n();
         let label = format!(
             "{}: {}",
@@ -359,7 +315,11 @@ impl SuiSuiViewApp {
         self.show_scale_group(ctx, ui);
     }
 
-    fn show_correction_group(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+    pub(in crate::app::ui) fn show_correction_group(
+        &mut self,
+        ctx: &egui::Context,
+        ui: &mut egui::Ui,
+    ) {
         let i18n = self.i18n();
         ui.menu_button(
             icons::icon_text(icons::WAND, &i18n.text("topbar.correction")),
@@ -399,7 +359,7 @@ impl SuiSuiViewApp {
         );
     }
 
-    fn show_debug_compare_group(&mut self, ui: &mut egui::Ui) {
+    pub(in crate::app::ui) fn show_debug_compare_group(&mut self, ui: &mut egui::Ui) {
         let has_book = self.source.is_some();
         let response = ui.add_enabled(
             has_book,
@@ -420,7 +380,11 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn show_bookmark_group(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+    pub(in crate::app::ui) fn show_bookmark_group(
+        &mut self,
+        ctx: &egui::Context,
+        ui: &mut egui::Ui,
+    ) {
         let bookmarked = self.current_page_is_bookmarked();
         let response = bookmark_toolbar_button(
             ui,
@@ -688,13 +652,17 @@ fn compare_target_combo(
         });
 }
 
-fn toolbar_separator(ui: &mut egui::Ui) {
+pub(in crate::app::ui) fn toolbar_separator(ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.separator();
     ui.add_space(4.0);
 }
 
-fn icon_button(code: char, style: icons::IconStyle, size: f32) -> Button<'static> {
+pub(in crate::app::ui) fn icon_button(
+    code: char,
+    style: icons::IconStyle,
+    size: f32,
+) -> Button<'static> {
     icon_button_colored(code, style, size, theme::TEXT_PRIMARY)
 }
 

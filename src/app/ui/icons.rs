@@ -20,6 +20,7 @@ pub(in crate::app) const IMAGE_SPARKLE: char = '\u{F01F2}';
 pub(in crate::app) const INFO: char = '\u{F4A4}';
 pub(in crate::app) const KEYBOARD: char = '\u{F4B9}';
 pub(in crate::app) const LOCK_OPEN: char = '\u{E796}';
+pub(in crate::app) const MORE_HORIZONTAL: char = '\u{E824}';
 pub(in crate::app) const PIN: char = '\u{F602}';
 pub(in crate::app) const PIN_FILLED: char = '\u{F60C}';
 pub(in crate::app) const RESIZE_SMALL: char = '\u{EA1A}';
