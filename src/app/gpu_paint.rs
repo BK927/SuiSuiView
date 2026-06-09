@@ -429,6 +429,7 @@ struct GpuIntermediateTexture {
     mip_views: Vec<wgpu::TextureView>,
     bind_group: Arc<wgpu::BindGroup>,
     size: [usize; 2],
+    content_key: u64,
     byte_size: usize,
 }
 
@@ -448,6 +449,14 @@ impl GpuDrawState {
             _intermediate_pins: intermediate_pins,
             intermediate_byte_size,
         }
+    }
+
+    fn with_intermediate_pin(mut self, intermediate: Arc<GpuIntermediateTexture>) -> Self {
+        self.intermediate_byte_size = self
+            .intermediate_byte_size
+            .saturating_add(intermediate.byte_size);
+        self._intermediate_pins.push(intermediate);
+        self
     }
 }
 
@@ -679,52 +688,25 @@ impl GpuPaintResources {
         );
         let effective_upscaler = scale_plan.effective_upscale_method;
         let effective_downscaler = scale_plan.effective_downscale_method;
+        let source_content_key =
+            source_texture_content_key(source_key, source_size, output_size, effects);
         self.realtime_sr
             .cancel_inactive_pending_work(effective_upscaler);
         if RealtimeSrResources::is_supported(effective_upscaler) {
-            let sr_key = realtime_sr_texture_key(source_key, source_size, effective_upscaler);
-            if self.should_defer_realtime_sr_first_frame(sr_key, effective_upscaler) {
-                self.realtime_sr.warm_up_async(effective_upscaler, device);
-                ctx.request_repaint_after(Duration::from_millis(16));
-            } else {
-                self.ensure_realtime_sr_texture(
-                    device,
-                    encoder,
-                    sr_key,
-                    source_key,
-                    source_size,
-                    effective_upscaler,
-                );
-            }
-            if self.realtime_sr.has_pending_async_work(effective_upscaler) {
-                ctx.request_repaint_after(Duration::from_millis(16));
-            }
-            if let Some(intermediate) = self.intermediate_textures.peek(&sr_key).cloned() {
-                record_wgpu_upscale_method_render(
-                    effective_upscaler,
-                    source_size,
-                    output_size,
-                    display_rect.full_size,
-                    intermediate.size,
-                    "realtime_sr",
-                );
-                let params = params_for_effects_with_display(
-                    intermediate.size,
-                    output_size_for_effects(intermediate.size, effects),
-                    effects,
-                    WgpuUpscaleMethod::None,
-                    effective_downscaler,
-                    display_rect.origin,
-                    display_rect.visible_size,
-                    display_rect.sample_offset,
-                    display_rect.full_size,
-                    opacity,
-                );
-                return GpuDrawState::new(
-                    intermediate.bind_group.clone(),
-                    self.params_bind_group_for(device, params),
-                    vec![intermediate],
-                );
+            if let Some(draw_state) = self.prepare_realtime_sr_draw_state(
+                device,
+                encoder,
+                source_key,
+                source_size,
+                output_size,
+                effects,
+                effective_upscaler,
+                wgpu_downscale_method,
+                display_rect,
+                opacity,
+                ctx,
+            ) {
+                return draw_state;
             }
         }
         if let Some(rcas_method) = effective_upscaler.rcas_shader_method_id() {
@@ -806,7 +788,7 @@ impl GpuPaintResources {
             return self.prepare_hardware_mipmap_draw_state(
                 device,
                 encoder,
-                source_key,
+                source_content_key,
                 source_bind_group,
                 source_size,
                 output_size,
@@ -823,7 +805,7 @@ impl GpuPaintResources {
             return self.prepare_pyramid_downscale_draw_state(
                 device,
                 encoder,
-                source_key,
+                source_content_key,
                 source_bind_group,
                 source_size,
                 output_size,
@@ -867,11 +849,171 @@ impl GpuPaintResources {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn prepare_pyramid_downscale_draw_state(
+    fn prepare_realtime_sr_draw_state(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source_key: GpuPaintSourceKey,
+        source_size: [usize; 2],
+        output_size: [usize; 2],
+        effects: ViewEffects,
+        upscaler: WgpuUpscaleMethod,
+        downscaler: WgpuDownscaleMethod,
+        display_rect: GpuDisplayRect,
+        opacity: f32,
+        ctx: &egui::Context,
+    ) -> Option<GpuDrawState> {
+        let stack_passes = upscaler.fixed_2x_stack_passes(output_size, display_rect.full_size);
+        let mut current_size = source_size;
+        let mut current_intermediate: Option<Arc<GpuIntermediateTexture>> = None;
+        let mut best_ready: Option<Arc<GpuIntermediateTexture>> = None;
+
+        for stage_index in 0..stack_passes {
+            let stage_key = realtime_sr_stage_texture_key(
+                source_key,
+                source_size,
+                upscaler,
+                stage_index,
+                current_size,
+                stack_passes,
+            );
+            if self.should_defer_realtime_sr_first_frame(stage_key, upscaler) {
+                self.realtime_sr.warm_up_async(upscaler, device);
+                ctx.request_repaint_after(Duration::from_millis(16));
+                break;
+            }
+
+            let next_intermediate = if stage_index == 0 {
+                self.ensure_realtime_sr_stage_texture_from_source(
+                    device,
+                    encoder,
+                    stage_key,
+                    source_key,
+                    current_size,
+                    upscaler,
+                )
+            } else {
+                let input = current_intermediate.as_ref()?;
+                self.ensure_realtime_sr_stage_texture_from_view(
+                    device,
+                    encoder,
+                    stage_key,
+                    &input._view,
+                    current_size,
+                    upscaler,
+                )
+            };
+            if self.realtime_sr.has_pending_async_work(upscaler) {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
+            let Some(next_intermediate) = next_intermediate else {
+                break;
+            };
+
+            current_size = next_intermediate.size;
+            best_ready = Some(next_intermediate.clone());
+            current_intermediate = Some(next_intermediate);
+        }
+
+        let intermediate = best_ready?;
+        record_wgpu_upscale_method_render(
+            upscaler,
+            source_size,
+            output_size,
+            display_rect.full_size,
+            intermediate.size,
+            if stack_passes > 1 {
+                "realtime_sr_stacked"
+            } else {
+                "realtime_sr"
+            },
+        );
+        Some(self.prepare_realtime_sr_presentation_draw_state(
+            device,
+            encoder,
+            effects,
+            downscaler,
+            display_rect,
+            opacity,
+            intermediate,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_realtime_sr_presentation_draw_state(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        effects: ViewEffects,
+        downscaler: WgpuDownscaleMethod,
+        display_rect: GpuDisplayRect,
+        opacity: f32,
+        intermediate: Arc<GpuIntermediateTexture>,
+    ) -> GpuDrawState {
+        let sr_output_size = output_size_for_effects(intermediate.size, effects);
+        let post_downscaler =
+            post_realtime_sr_downscale_method(sr_output_size, display_rect.full_size, downscaler);
+        if post_downscaler.is_hardware_mipmap() {
+            return self
+                .prepare_hardware_mipmap_draw_state(
+                    device,
+                    encoder,
+                    intermediate.content_key,
+                    intermediate.bind_group.clone(),
+                    intermediate.size,
+                    sr_output_size,
+                    effects,
+                    display_rect,
+                    opacity,
+                )
+                .with_intermediate_pin(intermediate);
+        }
+        if post_downscaler.is_pyramid()
+            && !display_rect.is_clipped()
+            && needs_multi_pass_downscale(sr_output_size, display_rect.full_size)
+        {
+            return self
+                .prepare_pyramid_downscale_draw_state(
+                    device,
+                    encoder,
+                    intermediate.content_key,
+                    intermediate.bind_group.clone(),
+                    intermediate.size,
+                    sr_output_size,
+                    effects,
+                    post_downscaler,
+                    display_rect.origin,
+                    display_rect.visible_size,
+                    opacity,
+                )
+                .with_intermediate_pin(intermediate);
+        }
+
+        let params = params_for_effects_with_display(
+            intermediate.size,
+            sr_output_size,
+            effects,
+            WgpuUpscaleMethod::None,
+            post_downscaler,
+            display_rect.origin,
+            display_rect.visible_size,
+            display_rect.sample_offset,
+            display_rect.full_size,
+            opacity,
+        );
+        GpuDrawState::new(
+            intermediate.bind_group.clone(),
+            self.params_bind_group_for(device, params),
+            vec![intermediate],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_pyramid_downscale_draw_state(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        content_key: u64,
         source_bind_group: Arc<wgpu::BindGroup>,
         source_size: [usize; 2],
         output_size: [usize; 2],
@@ -896,7 +1038,7 @@ impl GpuPaintResources {
             let intermediate = self.render_downscale_stage(
                 device,
                 encoder,
-                source_key,
+                content_key,
                 source_size,
                 output_size,
                 effects,
@@ -920,7 +1062,7 @@ impl GpuPaintResources {
             let intermediate = self.render_downscale_stage(
                 device,
                 encoder,
-                source_key,
+                content_key,
                 source_size,
                 output_size,
                 effects,
@@ -977,7 +1119,7 @@ impl GpuPaintResources {
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        source_key: GpuPaintSourceKey,
+        content_key: u64,
         source_size: [usize; 2],
         output_size: [usize; 2],
         effects: ViewEffects,
@@ -992,10 +1134,7 @@ impl GpuPaintResources {
         let stage_size = stage_size.map(|dimension| dimension.max(1));
         let stage_key = downscale_intermediate_texture_key(
             "pyramid",
-            source_key,
-            source_size,
-            output_size,
-            effects,
+            content_key,
             downscaler,
             [stage_size[0], stage_size[1]],
             current_size,
@@ -1044,7 +1183,7 @@ impl GpuPaintResources {
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        source_key: GpuPaintSourceKey,
+        content_key: u64,
         source_bind_group: Arc<wgpu::BindGroup>,
         source_size: [usize; 2],
         output_size: [usize; 2],
@@ -1053,8 +1192,7 @@ impl GpuPaintResources {
         opacity: f32,
     ) -> GpuDrawState {
         let mip_levels = mip_level_count(output_size);
-        let mip_key =
-            mipmap_intermediate_texture_key(source_key, source_size, output_size, effects);
+        let mip_key = mipmap_intermediate_texture_key(content_key);
         self.ensure_mipmapped_intermediate_texture(
             device,
             mip_key,
@@ -1158,6 +1296,7 @@ impl GpuPaintResources {
                 mip_views,
                 bind_group,
                 size: [target_size[0] as usize, target_size[1] as usize],
+                content_key: key,
                 byte_size,
             }),
         ) {
@@ -1207,6 +1346,7 @@ impl GpuPaintResources {
                 mip_views,
                 bind_group,
                 size: [target_size[0] as usize, target_size[1] as usize],
+                content_key: key,
                 byte_size,
             }),
         ) {
@@ -1235,7 +1375,7 @@ impl GpuPaintResources {
         true
     }
 
-    fn ensure_realtime_sr_texture(
+    fn ensure_realtime_sr_stage_texture_from_source(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -1243,35 +1383,67 @@ impl GpuPaintResources {
         source_key: GpuPaintSourceKey,
         source_size: [usize; 2],
         method: WgpuUpscaleMethod,
-    ) {
-        if self.intermediate_textures.get(&key).is_some() {
-            return;
+    ) -> Option<Arc<GpuIntermediateTexture>> {
+        if let Some(intermediate) = self.intermediate_textures.get(&key).cloned() {
+            return Some(intermediate);
         }
         let Some(source) = self.source_textures.peek(&source_key) else {
-            return;
+            return None;
         };
         let Some(output) =
             self.realtime_sr
                 .render(method, key, device, encoder, &source.view, source_size)
         else {
-            return;
+            return None;
         };
+        Some(self.insert_realtime_sr_stage_texture(device, key, method, source_size, output))
+    }
+
+    fn ensure_realtime_sr_stage_texture_from_view(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        key: u64,
+        source_view: &wgpu::TextureView,
+        source_size: [usize; 2],
+        method: WgpuUpscaleMethod,
+    ) -> Option<Arc<GpuIntermediateTexture>> {
+        if let Some(intermediate) = self.intermediate_textures.get(&key).cloned() {
+            return Some(intermediate);
+        }
+        let Some(output) =
+            self.realtime_sr
+                .render(method, key, device, encoder, source_view, source_size)
+        else {
+            return None;
+        };
+        Some(self.insert_realtime_sr_stage_texture(device, key, method, source_size, output))
+    }
+
+    fn insert_realtime_sr_stage_texture(
+        &mut self,
+        device: &wgpu::Device,
+        key: u64,
+        method: WgpuUpscaleMethod,
+        source_size: [usize; 2],
+        output: super::realtime_sr::RealtimeSrOutput,
+    ) -> Arc<GpuIntermediateTexture> {
         let output_size = output.size;
         let output_byte_size = output.byte_size;
         let bind_group = Arc::new(self.texture_bind_group_for(device, &output.view));
         let mip_views = vec![output.texture.create_view(&mip_view_descriptor(0))];
+        let intermediate = Arc::new(GpuIntermediateTexture {
+            _texture: output.texture,
+            _view: output.view,
+            mip_views,
+            bind_group,
+            size: output_size,
+            content_key: key,
+            byte_size: output_byte_size,
+        });
         let evicted_on_insert = if let Some((_old_key, old_texture)) =
-            self.intermediate_textures.push(
-                key,
-                Arc::new(GpuIntermediateTexture {
-                    _texture: output.texture,
-                    _view: output.view,
-                    mip_views,
-                    bind_group,
-                    size: output_size,
-                    byte_size: output_byte_size,
-                }),
-            ) {
+            self.intermediate_textures.push(key, intermediate.clone())
+        {
             self.intermediate_texture_bytes = self
                 .intermediate_texture_bytes
                 .saturating_sub(old_texture.byte_size);
@@ -1292,6 +1464,7 @@ impl GpuPaintResources {
             self.intermediate_texture_bytes,
             evicted_on_insert,
         );
+        intermediate
     }
 
     fn insert_draw_state(&mut self, key: u64, draw_state: GpuDrawState) {
@@ -1609,12 +1782,24 @@ fn intermediate_texture_key(
     hasher.finish()
 }
 
-fn downscale_intermediate_texture_key(
-    namespace: &'static str,
+fn source_texture_content_key(
     source_key: GpuPaintSourceKey,
     source_size: [usize; 2],
     output_size: [usize; 2],
     effects: ViewEffects,
+) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "source_texture_content".hash(&mut hasher);
+    source_key.hash(&mut hasher);
+    source_size.hash(&mut hasher);
+    output_size.hash(&mut hasher);
+    effects.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn downscale_intermediate_texture_key(
+    namespace: &'static str,
+    content_key: u64,
     downscaler: WgpuDownscaleMethod,
     stage_size: [u32; 2],
     current_size: [usize; 2],
@@ -1622,10 +1807,7 @@ fn downscale_intermediate_texture_key(
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     namespace.hash(&mut hasher);
-    source_key.hash(&mut hasher);
-    source_size.hash(&mut hasher);
-    output_size.hash(&mut hasher);
-    effects.hash(&mut hasher);
+    content_key.hash(&mut hasher);
     downscaler.token().hash(&mut hasher);
     stage_size.hash(&mut hasher);
     current_size.hash(&mut hasher);
@@ -1633,18 +1815,10 @@ fn downscale_intermediate_texture_key(
     hasher.finish()
 }
 
-fn mipmap_intermediate_texture_key(
-    source_key: GpuPaintSourceKey,
-    source_size: [usize; 2],
-    output_size: [usize; 2],
-    effects: ViewEffects,
-) -> u64 {
+fn mipmap_intermediate_texture_key(content_key: u64) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     "hardware_mipmap_linear".hash(&mut hasher);
-    source_key.hash(&mut hasher);
-    source_size.hash(&mut hasher);
-    output_size.hash(&mut hasher);
-    effects.hash(&mut hasher);
+    content_key.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1794,15 +1968,30 @@ fn defer_initial_realtime_sr_frame(method: WgpuUpscaleMethod) -> bool {
     method.is_artcnn() || matches!(method, WgpuUpscaleMethod::WgslSrLabSpanX2)
 }
 
-fn realtime_sr_texture_key(
+fn post_realtime_sr_downscale_method(
+    output_size: [usize; 2],
+    target_size: [u32; 2],
+    requested_downscaler: WgpuDownscaleMethod,
+) -> WgpuDownscaleMethod {
+    requested_downscaler.resolve_for_downscale(output_size, target_size)
+}
+
+fn realtime_sr_stage_texture_key(
     source_key: GpuPaintSourceKey,
-    source_size: [usize; 2],
+    base_source_size: [usize; 2],
     wgpu_upscale_method: WgpuUpscaleMethod,
+    stage_index: usize,
+    input_size: [usize; 2],
+    stack_passes: usize,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "realtime_sr_stage".hash(&mut hasher);
     source_key.hash(&mut hasher);
-    source_size.hash(&mut hasher);
+    base_source_size.hash(&mut hasher);
     wgpu_upscale_method.token().hash(&mut hasher);
+    stage_index.hash(&mut hasher);
+    input_size.hash(&mut hasher);
+    stack_passes.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1957,6 +2146,107 @@ mod tests {
     }
 
     #[test]
+    fn realtime_sr_stage_texture_keys_separate_stack_stages() {
+        let source_key = GpuPaintSourceKey {
+            book: 1,
+            page: PageCacheKey {
+                index: 0,
+                target_long_edge: 512,
+                decode: DecodeOptions::default(),
+            },
+        };
+        let pass_1 = realtime_sr_stage_texture_key(
+            source_key,
+            [512, 512],
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2S,
+            0,
+            [512, 512],
+            2,
+        );
+        let pass_2 = realtime_sr_stage_texture_key(
+            source_key,
+            [512, 512],
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2S,
+            1,
+            [1024, 1024],
+            2,
+        );
+        let single_pass = realtime_sr_stage_texture_key(
+            source_key,
+            [512, 512],
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2S,
+            0,
+            [512, 512],
+            1,
+        );
+        assert_ne!(pass_1, pass_2);
+        assert_ne!(pass_1, single_pass);
+    }
+
+    #[test]
+    fn post_sr_downscale_keys_include_intermediate_content() {
+        let anime_content = 10;
+        let cunny_content = 20;
+        let anime_downscale = downscale_intermediate_texture_key(
+            "pyramid",
+            anime_content,
+            WgpuDownscaleMethod::PyramidLanczos3,
+            [1536, 1536],
+            [2048, 2048],
+            0,
+        );
+        let cunny_downscale = downscale_intermediate_texture_key(
+            "pyramid",
+            cunny_content,
+            WgpuDownscaleMethod::PyramidLanczos3,
+            [1536, 1536],
+            [2048, 2048],
+            0,
+        );
+        assert_ne!(anime_downscale, cunny_downscale);
+        assert_ne!(
+            mipmap_intermediate_texture_key(anime_content),
+            mipmap_intermediate_texture_key(cunny_content)
+        );
+    }
+
+    #[test]
+    fn post_realtime_sr_downscale_preserves_requested_filter() {
+        assert_eq!(
+            post_realtime_sr_downscale_method(
+                [2048, 2048],
+                [1536, 1536],
+                WgpuDownscaleMethod::PyramidLanczos3
+            ),
+            WgpuDownscaleMethod::PyramidLanczos3
+        );
+        assert_eq!(
+            post_realtime_sr_downscale_method(
+                [2048, 2048],
+                [1536, 1536],
+                WgpuDownscaleMethod::Hamming
+            ),
+            WgpuDownscaleMethod::Hamming
+        );
+        assert_eq!(
+            post_realtime_sr_downscale_method(
+                [2048, 2048],
+                [1536, 1536],
+                WgpuDownscaleMethod::HardwareMipmapLinear
+            ),
+            WgpuDownscaleMethod::HardwareMipmapLinear
+        );
+        assert_eq!(
+            post_realtime_sr_downscale_method(
+                [2048, 2048],
+                [3072, 3072],
+                WgpuDownscaleMethod::PyramidLanczos3
+            ),
+            WgpuDownscaleMethod::Bilinear
+        );
+    }
+
+    #[test]
     fn pyramid_stage_size_halves_until_target_is_within_two_x() {
         assert!(needs_multi_pass_downscale([4096, 4096], [1024, 1024]));
         assert_eq!(
@@ -2056,6 +2346,44 @@ mod tests {
         });
     }
 
+    #[test]
+    #[ignore = "requires a local WGPU adapter and compiles realtime SR shaders"]
+    fn wgpu_realtime_sr_downscale_after_sr_renders_nonblank_output() {
+        pollster::block_on(async {
+            let Some((device, queue)) = smoke_device().await else {
+                eprintln!("Skipping realtime SR downscale smoke: no adapter available");
+                return;
+            };
+            assert!(render_realtime_sr_frame(
+                &device,
+                &queue,
+                [1024, 1024],
+                [1536, 1536],
+                WgpuUpscaleMethod::WgslAnime4kV32CnnX2S,
+                WgpuDownscaleMethod::PyramidLanczos3,
+            ));
+        });
+    }
+
+    #[test]
+    #[ignore = "requires a local WGPU adapter and compiles realtime SR shaders"]
+    fn wgpu_realtime_sr_stacking_renders_nonblank_output() {
+        pollster::block_on(async {
+            let Some((device, queue)) = smoke_device().await else {
+                eprintln!("Skipping realtime SR stacking smoke: no adapter available");
+                return;
+            };
+            assert!(render_realtime_sr_frame(
+                &device,
+                &queue,
+                [512, 512],
+                [1536, 1536],
+                WgpuUpscaleMethod::WgslAnime4kV32CnnX2S,
+                WgpuDownscaleMethod::PyramidLanczos3,
+            ));
+        });
+    }
+
     async fn smoke_device() -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::default();
         let adapter = instance
@@ -2122,6 +2450,47 @@ mod tests {
         fixture: &mut DownscaleSmokeFixture,
         downscaler: WgpuDownscaleMethod,
     ) -> bool {
+        let output_size = fixture.source_size;
+        render_gpu_frame(
+            device,
+            queue,
+            fixture,
+            output_size,
+            [1024, 1024],
+            WgpuUpscaleMethod::None,
+            downscaler,
+        )
+    }
+
+    fn render_realtime_sr_frame(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source_size: [usize; 2],
+        target_size: [u32; 2],
+        upscaler: WgpuUpscaleMethod,
+        downscaler: WgpuDownscaleMethod,
+    ) -> bool {
+        let mut fixture = DownscaleSmokeFixture::new(device, queue, source_size);
+        render_gpu_frame(
+            device,
+            queue,
+            &mut fixture,
+            source_size,
+            target_size,
+            upscaler,
+            downscaler,
+        )
+    }
+
+    fn render_gpu_frame(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        fixture: &mut DownscaleSmokeFixture,
+        output_size: [usize; 2],
+        target_size: [u32; 2],
+        upscaler: WgpuUpscaleMethod,
+        downscaler: WgpuDownscaleMethod,
+    ) -> bool {
         let resources = &mut fixture.resources;
         let source_key = fixture.source_key;
         let source_bind_group = resources
@@ -2139,15 +2508,15 @@ mod tests {
             source_key,
             source_bind_group,
             fixture.source_size,
-            fixture.source_size,
+            output_size,
             ViewEffects::default(),
-            WgpuUpscaleMethod::None,
+            upscaler,
             downscaler,
             GpuDisplayRect {
                 origin: [0, 0],
-                visible_size: [1024, 1024],
+                visible_size: target_size,
                 sample_offset: [0, 0],
-                full_size: [1024, 1024],
+                full_size: target_size,
             },
             1.0,
             &egui::Context::default(),
@@ -2155,8 +2524,8 @@ mod tests {
         let output_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("suisuiview-gpu-downscale-smoke-output"),
             size: wgpu::Extent3d {
-                width: 1024,
-                height: 1024,
+                width: target_size[0],
+                height: target_size[1],
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -2188,10 +2557,11 @@ mod tests {
             pass.draw(0..3, 0..1);
         }
 
-        let padded_bytes_per_row = align_to_smoke(1024 * 4, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let padded_bytes_per_row =
+            align_to_smoke(target_size[0] * 4, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("suisuiview-gpu-downscale-smoke-readback"),
-            size: padded_bytes_per_row as u64 * 1024,
+            size: padded_bytes_per_row as u64 * u64::from(target_size[1]),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -2207,12 +2577,12 @@ mod tests {
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: Some(1024),
+                    rows_per_image: Some(target_size[1]),
                 },
             },
             wgpu::Extent3d {
-                width: 1024,
-                height: 1024,
+                width: target_size[0],
+                height: target_size[1],
                 depth_or_array_layers: 1,
             },
         );
@@ -2230,6 +2600,10 @@ mod tests {
             .any(|pixel| pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0 || pixel[3] != 0);
         drop(mapped);
         readback.unmap();
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        {
+            let _ = crate::core::perf_trace::flush_timeout(Duration::from_secs(2));
+        }
         nonblank
     }
 

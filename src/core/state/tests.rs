@@ -686,6 +686,42 @@ fn resolve_wgpu_upscale_for_test(
 }
 
 #[test]
+fn fixed_2x_sr_falls_back_for_tiny_display_upscale() {
+    assert_eq!(
+        resolve_wgpu_upscale_for_test(
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2M,
+            [1000, 1000],
+            [1090, 1090]
+        ),
+        Some(WgpuUpscaleMethod::WgslFsr1EasuRcas)
+    );
+    assert_eq!(
+        resolve_wgpu_upscale_for_test(
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2M,
+            [1000, 1000],
+            [1100, 1100]
+        ),
+        Some(WgpuUpscaleMethod::WgslAnime4kV32CnnX2M)
+    );
+}
+
+#[test]
+fn fixed_2x_sr_stack_passes_start_at_two_point_two_five_x() {
+    assert_eq!(
+        WgpuUpscaleMethod::WgslAnime4kV32CnnX2M.fixed_2x_stack_passes([1000, 1000], [2240, 2240]),
+        1
+    );
+    assert_eq!(
+        WgpuUpscaleMethod::WgslAnime4kV32CnnX2M.fixed_2x_stack_passes([1000, 1000], [2250, 2250]),
+        2
+    );
+    assert_eq!(
+        WgpuUpscaleMethod::WgslFsr1EasuRcas.fixed_2x_stack_passes([1000, 1000], [3000, 3000]),
+        1
+    );
+}
+
+#[test]
 fn exact_cunny_variants_render_only_when_upscaling() {
     assert_eq!(
         resolve_wgpu_upscale_for_test(
