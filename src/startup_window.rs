@@ -2,7 +2,7 @@
 mod imp {
     use std::sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        Arc,
     };
     use std::thread::{self, JoinHandle};
     use std::time::{Duration, Instant};
@@ -11,17 +11,14 @@ mod imp {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, EnumWindows, GetClassNameW, GetWindowLongPtrW, GetWindowThreadProcessId,
         MsgWaitForMultipleObjectsEx, PeekMessageW, SetLayeredWindowAttributes, SetWindowLongPtrW,
-        SetWindowPos, TranslateMessage, EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, GWL_EXSTYLE,
-        LWA_ALPHA, MSG, MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT,
-        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-        WINEVENT_OUTOFCONTEXT, WS_EX_LAYERED,
+        TranslateMessage, EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, GWL_EXSTYLE, LWA_ALPHA, MSG,
+        MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT, WINEVENT_OUTOFCONTEXT,
+        WS_EX_LAYERED,
     };
 
-    const MAIN_WINDOW_CLASS: &str = "Window Class";
     const WINIT_EVENT_TARGET_CLASS: &str = "Winit Thread Event Target";
-    const FLASH_GUARD_DURATION: Duration = Duration::from_millis(1500);
+    const FLASH_GUARD_DURATION: Duration = Duration::from_millis(1_500);
     const FLASH_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(2);
-    static MAIN_WINDOW_REVEALED: AtomicBool = AtomicBool::new(false);
 
     pub(crate) struct StartupFlashGuard {
         stop: Arc<AtomicBool>,
@@ -30,18 +27,13 @@ mod imp {
 
     impl StartupFlashGuard {
         pub(crate) fn start() -> Self {
-            MAIN_WINDOW_REVEALED.store(false, Ordering::Release);
             let stop = Arc::new(AtomicBool::new(false));
             let worker_stop = stop.clone();
             let pid = std::process::id();
-            let (ready_tx, ready_rx) = mpsc::channel();
             let join = thread::Builder::new()
                 .name("suisuiview-startup-window-guard".to_owned())
-                .spawn(move || run_flash_guard(pid, worker_stop, ready_tx))
+                .spawn(move || run_flash_guard(pid, worker_stop))
                 .ok();
-            if join.is_some() {
-                let _ = ready_rx.recv_timeout(Duration::from_millis(100));
-            }
 
             Self { stop, join }
         }
@@ -56,11 +48,9 @@ mod imp {
         }
     }
 
-    fn run_flash_guard(pid: u32, stop: Arc<AtomicBool>, ready: mpsc::Sender<()>) {
+    fn run_flash_guard(pid: u32, stop: Arc<AtomicBool>) {
         let deadline = Instant::now() + FLASH_GUARD_DURATION;
         let event_hook = startup_window_event_hook(pid);
-        mask_startup_windows(pid);
-        let _ = ready.send(());
         while Instant::now() < deadline && !stop.load(Ordering::Acquire) {
             mask_startup_windows(pid);
             pump_startup_window_events();
@@ -80,8 +70,7 @@ mod imp {
     }
 
     unsafe extern "system" fn enum_windows_for_startup_mask(hwnd: HWND, lparam: LPARAM) -> i32 {
-        let pid = lparam as u32;
-        if window_process_id(hwnd) == pid {
+        if window_process_id(hwnd) == lparam as u32 {
             mask_startup_window(hwnd);
         }
         1
@@ -138,52 +127,13 @@ mod imp {
     }
 
     unsafe fn mask_startup_window(hwnd: HWND) {
-        let class_name = window_class_name(hwnd);
-        if class_name == WINIT_EVENT_TARGET_CLASS
-            || (class_name == MAIN_WINDOW_CLASS && !MAIN_WINDOW_REVEALED.load(Ordering::Acquire))
-        {
+        if window_class_name(hwnd) == WINIT_EVENT_TARGET_CLASS {
             let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             if ex_style & WS_EX_LAYERED as isize == 0 {
                 let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED as isize);
             }
             let _ = SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA);
         }
-    }
-
-    pub(crate) fn reveal_main_windows() {
-        MAIN_WINDOW_REVEALED.store(true, Ordering::Release);
-        unsafe {
-            EnumWindows(
-                Some(enum_windows_for_startup_reveal),
-                std::process::id() as LPARAM,
-            );
-        }
-    }
-
-    unsafe extern "system" fn enum_windows_for_startup_reveal(hwnd: HWND, lparam: LPARAM) -> i32 {
-        let pid = lparam as u32;
-        if window_process_id(hwnd) == pid && window_class_name(hwnd) == MAIN_WINDOW_CLASS {
-            reveal_main_window(hwnd);
-        }
-        1
-    }
-
-    unsafe fn reveal_main_window(hwnd: HWND) {
-        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        if ex_style & WS_EX_LAYERED as isize == 0 {
-            return;
-        }
-        let _ = SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
-        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style & !(WS_EX_LAYERED as isize));
-        let _ = SetWindowPos(
-            hwnd,
-            std::ptr::null_mut(),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-        );
     }
 
     unsafe fn window_process_id(hwnd: HWND) -> u32 {
@@ -208,8 +158,6 @@ mod imp {
             Self
         }
     }
-
-    pub(crate) fn reveal_main_windows() {}
 }
 
 pub(crate) use imp::StartupFlashGuard;
@@ -218,6 +166,4 @@ pub(crate) fn start_flash_guard() -> StartupFlashGuard {
     StartupFlashGuard::start()
 }
 
-pub(crate) fn reveal_main_windows() {
-    imp::reveal_main_windows();
-}
+pub(crate) fn reveal_main_windows() {}

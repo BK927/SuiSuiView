@@ -100,7 +100,6 @@ fn run_eframe_app(
         persist_window: false,
         ..Default::default()
     };
-
     eframe::run_native(
         "SuiSuiView",
         options,
@@ -172,31 +171,33 @@ fn initial_viewport(
     store: &StateStore,
     icon: eframe::egui::IconData,
 ) -> eframe::egui::ViewportBuilder {
-    initial_viewport_for_placement(store.window_placement(), icon)
+    initial_viewport_for_placement(store.window_placement(), store.settings(), icon)
 }
 
 fn initial_viewport_for_placement(
     placement: &WindowPlacement,
+    settings: &AppSettings,
     icon: eframe::egui::IconData,
 ) -> eframe::egui::ViewportBuilder {
-    let inner_size = valid_window_size(placement).unwrap_or(DEFAULT_WINDOW_SIZE);
     let mut viewport = eframe::egui::ViewportBuilder::default()
-        .with_inner_size(inner_size)
         .with_min_inner_size(MIN_WINDOW_SIZE)
         .with_clamp_size_to_monitor_size(true)
         .with_icon(Arc::new(icon));
-    #[cfg(target_os = "windows")]
-    {
-        viewport = viewport.with_visible(false);
+
+    if placement.maximized && should_restore_startup_maximized(settings) {
+        return viewport.with_maximized(true);
     }
 
+    let inner_size = valid_window_size(placement).unwrap_or(DEFAULT_WINDOW_SIZE);
+    viewport = viewport.with_inner_size(inner_size);
     if let Some(position) = valid_window_position(placement) {
         viewport = viewport.with_position(position);
     }
-    if placement.maximized {
-        viewport = viewport.with_maximized(true);
-    }
     viewport
+}
+
+fn should_restore_startup_maximized(settings: &AppSettings) -> bool {
+    !(cfg!(target_os = "windows") && matches!(settings.renderer_mode, RendererMode::LowMemoryGlow))
 }
 
 fn valid_window_size(placement: &WindowPlacement) -> Option<[f32; 2]> {
@@ -261,7 +262,8 @@ fn window_icon() -> eframe::egui::IconData {
 #[cfg(test)]
 mod tests {
     use super::{initial_viewport_for_placement, window_icon};
-    use crate::core::state::WindowPlacement;
+    use crate::core::state::{AppSettings, RendererMode, WindowPlacement};
+    use eframe::egui::vec2;
 
     #[test]
     fn embedded_window_icon_loads_from_ico() {
@@ -285,27 +287,53 @@ mod tests {
                 outer_position: None,
                 maximized: false,
             },
+            &AppSettings::default(),
             window_icon(),
         );
 
-        if cfg!(target_os = "windows") {
-            assert_eq!(viewport.visible, Some(false));
-        } else {
-            assert_eq!(viewport.visible, None);
-        }
+        assert_eq!(viewport.visible, None);
     }
 
     #[test]
-    fn initial_viewport_keeps_saved_maximize_state() {
+    fn initial_viewport_keeps_saved_maximize_state_when_supported() {
+        let mut settings = AppSettings::default();
+        settings.renderer_mode = RendererMode::Wgpu;
         let viewport = initial_viewport_for_placement(
             &WindowPlacement {
                 inner_size: Some([1280.0, 820.0]),
                 outer_position: None,
                 maximized: true,
             },
+            &settings,
             window_icon(),
         );
 
         assert_eq!(viewport.maximized, Some(true));
+        assert_eq!(viewport.inner_size, None);
+        assert_eq!(viewport.position, None);
+        assert_eq!(viewport.visible, None);
+    }
+
+    #[test]
+    fn initial_viewport_defers_windows_glow_maximize_restore() {
+        let mut settings = AppSettings::default();
+        settings.renderer_mode = RendererMode::LowMemoryGlow;
+        let viewport = initial_viewport_for_placement(
+            &WindowPlacement {
+                inner_size: Some([1280.0, 820.0]),
+                outer_position: None,
+                maximized: true,
+            },
+            &settings,
+            window_icon(),
+        );
+
+        if cfg!(target_os = "windows") {
+            assert_eq!(viewport.maximized, None);
+            assert_eq!(viewport.inner_size, Some(vec2(1280.0, 820.0)));
+        } else {
+            assert_eq!(viewport.maximized, Some(true));
+            assert_eq!(viewport.inner_size, None);
+        }
     }
 }

@@ -27,11 +27,7 @@ pub(crate) enum StartupReveal {
 
 impl StartupReveal {
     pub(crate) fn for_eframe_host() -> Self {
-        if cfg!(target_os = "windows") {
-            Self::AfterFirstFrame
-        } else {
-            Self::HostManaged
-        }
+        Self::HostManaged
     }
 }
 
@@ -75,10 +71,6 @@ mod tests {
     fn eframe_host_reveal_policy_matches_platform() {
         let policy = StartupReveal::for_eframe_host();
 
-        if cfg!(target_os = "windows") {
-            assert_eq!(policy, StartupReveal::AfterFirstFrame);
-        } else {
-            assert_eq!(policy, StartupReveal::HostManaged);
-        }
+        assert_eq!(policy, StartupReveal::HostManaged);
     }
 }
