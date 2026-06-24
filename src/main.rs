@@ -27,8 +27,8 @@ fn main() -> eframe::Result<()> {
         }
     }
 
-    let _startup_flash_guard = startup_window::start_flash_guard();
     let store = StateStore::load();
+    let _startup_flash_guard = startup_window::start_flash_guard(startup_window_guard_mode(&store));
     let startup_open_path = startup_open_path();
 
     let restart_bypasses_single_instance =
@@ -167,16 +167,29 @@ fn startup_open_path() -> Option<PathBuf> {
     })
 }
 
+fn startup_window_guard_mode(store: &StateStore) -> startup_window::StartupWindowGuardMode {
+    startup_window_guard_mode_for(store.window_placement())
+}
+
+fn startup_window_guard_mode_for(
+    placement: &WindowPlacement,
+) -> startup_window::StartupWindowGuardMode {
+    if cfg!(target_os = "windows") && placement.maximized {
+        startup_window::StartupWindowGuardMode::MaskMainUntilStable
+    } else {
+        startup_window::StartupWindowGuardMode::AuxiliaryOnly
+    }
+}
+
 fn initial_viewport(
     store: &StateStore,
     icon: eframe::egui::IconData,
 ) -> eframe::egui::ViewportBuilder {
-    initial_viewport_for_placement(store.window_placement(), store.settings(), icon)
+    initial_viewport_for_placement(store.window_placement(), icon)
 }
 
 fn initial_viewport_for_placement(
     placement: &WindowPlacement,
-    settings: &AppSettings,
     icon: eframe::egui::IconData,
 ) -> eframe::egui::ViewportBuilder {
     let mut viewport = eframe::egui::ViewportBuilder::default()
@@ -184,7 +197,7 @@ fn initial_viewport_for_placement(
         .with_clamp_size_to_monitor_size(true)
         .with_icon(Arc::new(icon));
 
-    if placement.maximized && should_restore_startup_maximized(settings) {
+    if placement.maximized && !should_defer_startup_maximize_restore() {
         return viewport.with_maximized(true);
     }
 
@@ -196,8 +209,8 @@ fn initial_viewport_for_placement(
     viewport
 }
 
-fn should_restore_startup_maximized(settings: &AppSettings) -> bool {
-    !(cfg!(target_os = "windows") && matches!(settings.renderer_mode, RendererMode::LowMemoryGlow))
+fn should_defer_startup_maximize_restore() -> bool {
+    cfg!(target_os = "windows")
 }
 
 fn valid_window_size(placement: &WindowPlacement) -> Option<[f32; 2]> {
@@ -261,9 +274,9 @@ fn window_icon() -> eframe::egui::IconData {
 
 #[cfg(test)]
 mod tests {
-    use super::{initial_viewport_for_placement, window_icon};
+    use super::{initial_viewport_for_placement, startup_window_guard_mode_for, window_icon};
     use crate::core::state::{AppSettings, RendererMode, WindowPlacement};
-    use eframe::egui::vec2;
+    use crate::startup_window::StartupWindowGuardMode;
 
     #[test]
     fn embedded_window_icon_loads_from_ico() {
@@ -287,7 +300,6 @@ mod tests {
                 outer_position: None,
                 maximized: false,
             },
-            &AppSettings::default(),
             window_icon(),
         );
 
@@ -295,45 +307,56 @@ mod tests {
     }
 
     #[test]
-    fn initial_viewport_keeps_saved_maximize_state_when_supported() {
-        let mut settings = AppSettings::default();
-        settings.renderer_mode = RendererMode::Wgpu;
+    fn initial_viewport_defers_windows_maximize_to_startup_guard() {
         let viewport = initial_viewport_for_placement(
             &WindowPlacement {
                 inner_size: Some([1280.0, 820.0]),
                 outer_position: None,
                 maximized: true,
             },
-            &settings,
-            window_icon(),
-        );
-
-        assert_eq!(viewport.maximized, Some(true));
-        assert_eq!(viewport.inner_size, None);
-        assert_eq!(viewport.position, None);
-        assert_eq!(viewport.visible, None);
-    }
-
-    #[test]
-    fn initial_viewport_defers_windows_glow_maximize_restore() {
-        let mut settings = AppSettings::default();
-        settings.renderer_mode = RendererMode::LowMemoryGlow;
-        let viewport = initial_viewport_for_placement(
-            &WindowPlacement {
-                inner_size: Some([1280.0, 820.0]),
-                outer_position: None,
-                maximized: true,
-            },
-            &settings,
             window_icon(),
         );
 
         if cfg!(target_os = "windows") {
             assert_eq!(viewport.maximized, None);
-            assert_eq!(viewport.inner_size, Some(vec2(1280.0, 820.0)));
+            assert_eq!(viewport.inner_size, Some(eframe::egui::vec2(1280.0, 820.0)));
         } else {
             assert_eq!(viewport.maximized, Some(true));
             assert_eq!(viewport.inner_size, None);
+            assert_eq!(viewport.position, None);
+        }
+        assert_eq!(viewport.visible, None);
+    }
+
+    #[test]
+    fn startup_window_guard_masks_only_windows_maximized_startup() {
+        let mut settings = AppSettings::default();
+        settings.renderer_mode = RendererMode::LowMemoryGlow;
+        let maximized = WindowPlacement {
+            inner_size: Some([1280.0, 820.0]),
+            outer_position: None,
+            maximized: true,
+        };
+        let windowed = WindowPlacement {
+            maximized: false,
+            ..maximized.clone()
+        };
+
+        let glow_maximized = startup_window_guard_mode_for(&maximized);
+        let glow_windowed = startup_window_guard_mode_for(&windowed);
+        settings.renderer_mode = RendererMode::Wgpu;
+        let wgpu_maximized = startup_window_guard_mode_for(&maximized);
+
+        if cfg!(target_os = "windows") {
+            assert_eq!(glow_maximized, StartupWindowGuardMode::MaskMainUntilStable);
+        } else {
+            assert_eq!(glow_maximized, StartupWindowGuardMode::AuxiliaryOnly);
+        }
+        assert_eq!(glow_windowed, StartupWindowGuardMode::AuxiliaryOnly);
+        if cfg!(target_os = "windows") {
+            assert_eq!(wgpu_maximized, StartupWindowGuardMode::MaskMainUntilStable);
+        } else {
+            assert_eq!(wgpu_maximized, StartupWindowGuardMode::AuxiliaryOnly);
         }
     }
 }

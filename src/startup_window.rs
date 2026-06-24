@@ -1,61 +1,186 @@
 #[cfg(target_os = "windows")]
 mod imp {
+    use std::sync::mpsc;
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicIsize, Ordering},
         Arc,
     };
     use std::thread::{self, JoinHandle};
     use std::time::{Duration, Instant};
-    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, EnumWindows, GetClassNameW, GetWindowLongPtrW, GetWindowThreadProcessId,
-        MsgWaitForMultipleObjectsEx, PeekMessageW, SetLayeredWindowAttributes, SetWindowLongPtrW,
-        TranslateMessage, EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, GWL_EXSTYLE, LWA_ALPHA, MSG,
-        MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT, WINEVENT_OUTOFCONTEXT,
-        WS_EX_LAYERED,
+        CallNextHookEx, DispatchMessageW, EnumWindows, GetClassNameW, GetWindowLongPtrW,
+        GetWindowThreadProcessId, IsWindowVisible, PeekMessageW,
+        SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, ShowWindow,
+        TranslateMessage, UnhookWindowsHookEx, CWPRETSTRUCT, CWPSTRUCT, EVENT_OBJECT_CREATE,
+        EVENT_OBJECT_SHOW, GWL_EXSTYLE, HHOOK, LWA_ALPHA, MSG, OBJID_WINDOW, PM_REMOVE,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE,
+        WH_CALLWNDPROC, WH_CALLWNDPROCRET, WINEVENT_OUTOFCONTEXT, WS_EX_LAYERED,
     };
 
+    const MAIN_WINDOW_CLASS: &str = "Window Class";
     const WINIT_EVENT_TARGET_CLASS: &str = "Winit Thread Event Target";
-    const FLASH_GUARD_DURATION: Duration = Duration::from_millis(1_500);
-    const FLASH_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(2);
+    const AUXILIARY_GUARD_DURATION: Duration = Duration::from_millis(1_500);
+    const MAXIMIZED_GUARD_DURATION: Duration = Duration::from_millis(3_000);
+    const AUXILIARY_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(2);
+    const MASK_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(1);
+    const MAIN_REVEAL_FORCE_DURATION: Duration = Duration::from_millis(500);
+    static MASK_MAIN_WINDOWS: AtomicBool = AtomicBool::new(false);
+    static REVEAL_MAIN_ON_RAW_VISIBLE: AtomicBool = AtomicBool::new(false);
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum StartupWindowGuardMode {
+        AuxiliaryOnly,
+        MaskMainUntilStable,
+    }
 
     pub(crate) struct StartupFlashGuard {
         stop: Arc<AtomicBool>,
         join: Option<JoinHandle<()>>,
+        hooks: Arc<MainThreadHooks>,
     }
 
     impl StartupFlashGuard {
-        pub(crate) fn start() -> Self {
+        pub(crate) fn start(mode: StartupWindowGuardMode) -> Self {
+            MASK_MAIN_WINDOWS.store(
+                mode == StartupWindowGuardMode::MaskMainUntilStable,
+                Ordering::Release,
+            );
+            REVEAL_MAIN_ON_RAW_VISIBLE.store(false, Ordering::Release);
+            let (callwnd_hook, callwnd_ret_hook) = install_main_thread_hooks(mode);
+            let hooks = Arc::new(MainThreadHooks::new(callwnd_hook, callwnd_ret_hook));
+            let worker_hooks = hooks.clone();
             let stop = Arc::new(AtomicBool::new(false));
             let worker_stop = stop.clone();
             let pid = std::process::id();
+            let (ready_tx, ready_rx) = mpsc::channel();
             let join = thread::Builder::new()
                 .name("suisuiview-startup-window-guard".to_owned())
-                .spawn(move || run_flash_guard(pid, worker_stop))
+                .spawn(move || run_flash_guard(pid, worker_stop, mode, ready_tx, worker_hooks))
                 .ok();
+            if join.is_some() {
+                let _ = ready_rx.recv_timeout(Duration::from_millis(100));
+            }
 
-            Self { stop, join }
+            Self { stop, join, hooks }
         }
     }
 
     impl Drop for StartupFlashGuard {
         fn drop(&mut self) {
             self.stop.store(true, Ordering::Release);
+            reveal_main_windows();
+            self.hooks.unhook();
             if let Some(join) = self.join.take() {
                 let _ = join.join();
+            }
+            MASK_MAIN_WINDOWS.store(false, Ordering::Release);
+            REVEAL_MAIN_ON_RAW_VISIBLE.store(false, Ordering::Release);
+        }
+    }
+
+    fn install_main_thread_hooks(mode: StartupWindowGuardMode) -> (HHOOK, HHOOK) {
+        if mode != StartupWindowGuardMode::MaskMainUntilStable {
+            return (std::ptr::null_mut(), std::ptr::null_mut());
+        }
+        unsafe {
+            let thread_id = GetCurrentThreadId();
+            (
+                SetWindowsHookExW(
+                    WH_CALLWNDPROC,
+                    Some(startup_callwndproc_hook),
+                    std::ptr::null_mut(),
+                    thread_id,
+                ),
+                SetWindowsHookExW(
+                    WH_CALLWNDPROCRET,
+                    Some(startup_callwndretproc_hook),
+                    std::ptr::null_mut(),
+                    thread_id,
+                ),
+            )
+        }
+    }
+
+    fn unhook_slot(slot: &AtomicIsize) {
+        let handle = slot.swap(0, Ordering::AcqRel);
+        if handle != 0 {
+            unsafe {
+                let _ = UnhookWindowsHookEx(handle as HHOOK);
             }
         }
     }
 
-    fn run_flash_guard(pid: u32, stop: Arc<AtomicBool>) {
-        let deadline = Instant::now() + FLASH_GUARD_DURATION;
-        let event_hook = startup_window_event_hook(pid);
-        while Instant::now() < deadline && !stop.load(Ordering::Acquire) {
-            mask_startup_windows(pid);
-            pump_startup_window_events();
-            wait_for_startup_window_event();
+    unsafe extern "system" fn startup_callwndproc_hook(
+        code: i32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if code >= 0 && MASK_MAIN_WINDOWS.load(Ordering::Acquire) {
+            let message = &*(lparam as *const CWPSTRUCT);
+            mask_main_window_from_hook(message.hwnd);
         }
+        CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+    }
+
+    unsafe extern "system" fn startup_callwndretproc_hook(
+        code: i32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if code >= 0 && MASK_MAIN_WINDOWS.load(Ordering::Acquire) {
+            let message = &*(lparam as *const CWPRETSTRUCT);
+            mask_main_window_from_hook(message.hwnd);
+        }
+        CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+    }
+
+    unsafe fn mask_main_window_from_hook(hwnd: HWND) {
+        if !hwnd.is_null() && window_class_is(hwnd, MAIN_WINDOW_CLASS) {
+            mask_startup_window(hwnd, MAIN_WINDOW_CLASS);
+        }
+    }
+
+    fn run_flash_guard(
+        pid: u32,
+        stop: Arc<AtomicBool>,
+        mode: StartupWindowGuardMode,
+        ready: mpsc::Sender<()>,
+        main_thread_hooks: Arc<MainThreadHooks>,
+    ) {
+        let deadline = Instant::now() + guard_duration(mode);
+        let mut main_reveal = MainRevealState::new(mode);
+        let event_hook = startup_window_event_hook(pid);
+        mask_startup_windows(pid);
+        let _ = ready.send(());
+        while Instant::now() < deadline && !stop.load(Ordering::Acquire) {
+            let snapshot = mask_startup_windows(pid);
+            match main_reveal.update(snapshot, Instant::now()) {
+                MainRevealAction::None => {}
+                MainRevealAction::Reveal => {
+                    main_thread_hooks.unhook();
+                    reveal_main_windows();
+                }
+                MainRevealAction::ForceReveal => force_reveal_main_windows(),
+            }
+            if mode == StartupWindowGuardMode::MaskMainUntilStable
+                && main_reveal.observe_external_reveal(Instant::now())
+            {
+                main_thread_hooks.unhook();
+                force_reveal_main_windows();
+            }
+            if mode == StartupWindowGuardMode::MaskMainUntilStable
+                && main_reveal.is_complete(Instant::now())
+            {
+                break;
+            }
+            pump_startup_window_events();
+            wait_for_startup_window_event(mode);
+        }
+        reveal_main_windows();
+        main_thread_hooks.unhook();
         if !event_hook.is_null() {
             unsafe {
                 let _ = UnhookWinEvent(event_hook);
@@ -63,15 +188,57 @@ mod imp {
         }
     }
 
-    fn mask_startup_windows(pid: u32) {
-        unsafe {
-            EnumWindows(Some(enum_windows_for_startup_mask), pid as LPARAM);
+    fn guard_duration(mode: StartupWindowGuardMode) -> Duration {
+        if mode == StartupWindowGuardMode::MaskMainUntilStable {
+            MAXIMIZED_GUARD_DURATION
+        } else {
+            AUXILIARY_GUARD_DURATION
         }
     }
 
+    struct MainThreadHooks {
+        callwnd_hook: AtomicIsize,
+        callwnd_ret_hook: AtomicIsize,
+    }
+
+    impl MainThreadHooks {
+        fn new(callwnd_hook: HHOOK, callwnd_ret_hook: HHOOK) -> Self {
+            Self {
+                callwnd_hook: AtomicIsize::new(callwnd_hook as isize),
+                callwnd_ret_hook: AtomicIsize::new(callwnd_ret_hook as isize),
+            }
+        }
+
+        fn unhook(&self) {
+            unhook_slot(&self.callwnd_hook);
+            unhook_slot(&self.callwnd_ret_hook);
+        }
+    }
+
+    fn mask_startup_windows(pid: u32) -> WindowScanSnapshot {
+        let mut snapshot = WindowScanSnapshot::default();
+        let mut context = WindowScanContext {
+            snapshot: &mut snapshot,
+            pid,
+        };
+        unsafe {
+            EnumWindows(
+                Some(enum_windows_for_startup_mask),
+                &mut context as *mut WindowScanContext as LPARAM,
+            );
+        }
+        snapshot
+    }
+
     unsafe extern "system" fn enum_windows_for_startup_mask(hwnd: HWND, lparam: LPARAM) -> i32 {
-        if window_process_id(hwnd) == lparam as u32 {
-            mask_startup_window(hwnd);
+        let context = &mut *(lparam as *mut WindowScanContext);
+        if window_process_id(hwnd) == context.pid {
+            let class_name = window_class_name(hwnd);
+            if class_name == MAIN_WINDOW_CLASS {
+                context.snapshot.main_visible |= IsWindowVisible(hwnd) != 0;
+                context.snapshot.main_hwnd = hwnd;
+            }
+            mask_startup_window(hwnd, &class_name);
         }
         1
     }
@@ -100,7 +267,8 @@ mod imp {
         _event_time: u32,
     ) {
         if id_object == OBJID_WINDOW && id_child == 0 {
-            mask_startup_window(hwnd);
+            let class_name = window_class_name(hwnd);
+            mask_startup_window(hwnd, &class_name);
         }
     }
 
@@ -114,26 +282,84 @@ mod imp {
         }
     }
 
-    fn wait_for_startup_window_event() {
+    fn wait_for_startup_window_event(mode: StartupWindowGuardMode) {
+        let interval = if mode == StartupWindowGuardMode::MaskMainUntilStable {
+            MASK_GUARD_POLL_INTERVAL
+        } else {
+            AUXILIARY_GUARD_POLL_INTERVAL
+        };
+        thread::sleep(interval);
+    }
+
+    unsafe fn mask_startup_window(hwnd: HWND, class_name: &str) {
+        let masks_main_window = class_name == MAIN_WINDOW_CLASS;
+        if masks_main_window
+            && REVEAL_MAIN_ON_RAW_VISIBLE.load(Ordering::Acquire)
+            && IsWindowVisible(hwnd) != 0
+        {
+            REVEAL_MAIN_ON_RAW_VISIBLE.store(false, Ordering::Release);
+            MASK_MAIN_WINDOWS.store(false, Ordering::Release);
+            reveal_main_window(hwnd);
+            return;
+        }
+        if class_name == WINIT_EVENT_TARGET_CLASS
+            || (masks_main_window && MASK_MAIN_WINDOWS.load(Ordering::Acquire))
+        {
+            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            if masks_main_window && !MASK_MAIN_WINDOWS.load(Ordering::Acquire) {
+                return;
+            }
+            if ex_style & WS_EX_LAYERED as isize == 0 {
+                let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED as isize);
+            }
+            if masks_main_window && !MASK_MAIN_WINDOWS.load(Ordering::Acquire) {
+                return;
+            }
+            let _ = SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA);
+        }
+    }
+
+    pub(crate) fn reveal_main_windows() {
+        REVEAL_MAIN_ON_RAW_VISIBLE.store(false, Ordering::Release);
+        if !MASK_MAIN_WINDOWS.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        force_reveal_main_windows();
+    }
+
+    fn force_reveal_main_windows() {
         unsafe {
-            let _ = MsgWaitForMultipleObjectsEx(
-                0,
-                std::ptr::null(),
-                FLASH_GUARD_POLL_INTERVAL.as_millis() as u32,
-                QS_ALLINPUT,
-                MWMO_INPUTAVAILABLE,
+            EnumWindows(
+                Some(enum_windows_for_startup_reveal),
+                std::process::id() as LPARAM,
             );
         }
     }
 
-    unsafe fn mask_startup_window(hwnd: HWND) {
-        if window_class_name(hwnd) == WINIT_EVENT_TARGET_CLASS {
-            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            if ex_style & WS_EX_LAYERED as isize == 0 {
-                let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED as isize);
-            }
-            let _ = SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA);
+    unsafe extern "system" fn enum_windows_for_startup_reveal(hwnd: HWND, lparam: LPARAM) -> i32 {
+        if window_process_id(hwnd) == lparam as u32 && window_class_name(hwnd) == MAIN_WINDOW_CLASS
+        {
+            reveal_main_window(hwnd);
         }
+        1
+    }
+
+    unsafe fn reveal_main_window(hwnd: HWND) {
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        if ex_style & WS_EX_LAYERED as isize == 0 {
+            return;
+        }
+        let _ = SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style & !(WS_EX_LAYERED as isize));
+        let _ = SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
     }
 
     unsafe fn window_process_id(hwnd: HWND) -> u32 {
@@ -147,23 +373,117 @@ mod imp {
         let len = GetClassNameW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
         String::from_utf16_lossy(&buffer[..usize::try_from(len).unwrap_or(0)])
     }
+
+    unsafe fn window_class_is(hwnd: HWND, target: &str) -> bool {
+        let mut buffer = [0u16; 64];
+        let len = GetClassNameW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
+        let len = usize::try_from(len).unwrap_or(0);
+        buffer[..len].iter().copied().eq(target.encode_utf16())
+    }
+
+    #[derive(Default)]
+    struct WindowScanSnapshot {
+        main_visible: bool,
+        main_hwnd: HWND,
+    }
+
+    struct WindowScanContext<'a> {
+        snapshot: &'a mut WindowScanSnapshot,
+        pid: u32,
+    }
+
+    struct MainRevealState {
+        mode: StartupWindowGuardMode,
+        revealed: bool,
+        maximize_requested: bool,
+        force_reveal_until: Option<Instant>,
+    }
+
+    impl MainRevealState {
+        fn new(mode: StartupWindowGuardMode) -> Self {
+            Self {
+                mode,
+                revealed: mode != StartupWindowGuardMode::MaskMainUntilStable,
+                maximize_requested: mode != StartupWindowGuardMode::MaskMainUntilStable,
+                force_reveal_until: None,
+            }
+        }
+
+        fn update(&mut self, snapshot: WindowScanSnapshot, now: Instant) -> MainRevealAction {
+            if self.force_reveal_until.is_some_and(|until| now <= until) {
+                return MainRevealAction::ForceReveal;
+            }
+            self.force_reveal_until = None;
+            if self.revealed {
+                return MainRevealAction::None;
+            }
+            if self.mode == StartupWindowGuardMode::MaskMainUntilStable
+                && !self.maximize_requested
+                && !snapshot.main_hwnd.is_null()
+                && snapshot.main_visible
+            {
+                unsafe {
+                    let _ = ShowWindow(snapshot.main_hwnd, SW_MAXIMIZE);
+                }
+                REVEAL_MAIN_ON_RAW_VISIBLE.store(true, Ordering::Release);
+                self.maximize_requested = true;
+                return MainRevealAction::None;
+            }
+            if snapshot.main_visible {
+                self.revealed = true;
+                self.force_reveal_until = Some(now + MAIN_REVEAL_FORCE_DURATION);
+                return MainRevealAction::Reveal;
+            }
+            MainRevealAction::None
+        }
+
+        fn is_complete(&self, now: Instant) -> bool {
+            self.revealed && self.force_reveal_until.is_none_or(|until| now > until)
+        }
+
+        fn observe_external_reveal(&mut self, now: Instant) -> bool {
+            if self.revealed || MASK_MAIN_WINDOWS.load(Ordering::Acquire) {
+                return false;
+            }
+            self.revealed = true;
+            self.force_reveal_until = Some(now + MAIN_REVEAL_FORCE_DURATION);
+            true
+        }
+    }
+
+    enum MainRevealAction {
+        None,
+        Reveal,
+        ForceReveal,
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
 mod imp {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum StartupWindowGuardMode {
+        AuxiliaryOnly,
+        MaskMainUntilStable,
+    }
+
     pub(crate) struct StartupFlashGuard;
 
     impl StartupFlashGuard {
-        pub(crate) fn start() -> Self {
+        pub(crate) fn start(_mode: StartupWindowGuardMode) -> Self {
             Self
         }
     }
+
+    pub(crate) fn reveal_main_windows() {}
 }
 
 pub(crate) use imp::StartupFlashGuard;
+pub(crate) use imp::StartupWindowGuardMode;
 
-pub(crate) fn start_flash_guard() -> StartupFlashGuard {
-    StartupFlashGuard::start()
+pub(crate) fn start_flash_guard(mode: StartupWindowGuardMode) -> StartupFlashGuard {
+    StartupFlashGuard::start(mode)
 }
 
-pub(crate) fn reveal_main_windows() {}
+pub(crate) fn reveal_main_windows() {
+    imp::reveal_main_windows();
+}
