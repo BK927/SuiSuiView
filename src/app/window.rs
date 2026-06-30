@@ -106,7 +106,9 @@ impl SuiSuiViewApp {
                     viewport.native_pixels_per_point,
                 )
             });
-        if minimized == Some(true) || fullscreen == Some(true) {
+        let native = native_window_state(ctx.pixels_per_point());
+        let is_minimized = minimized == Some(true) || native.is_some_and(|state| state.minimized);
+        if is_minimized || fullscreen == Some(true) || self.fullscreen {
             return None;
         }
 
@@ -114,20 +116,29 @@ impl SuiSuiViewApp {
         self.observe_window_scale(native_pixels_per_point, now);
 
         let mut placement = self.store.window_placement().clone();
-        placement.maximized = maximized.unwrap_or(placement.maximized);
+        placement.maximized = maximized
+            .or(native.map(|state| state.maximized))
+            .unwrap_or(placement.maximized);
         if placement.maximized {
             return Some(placement);
         }
 
-        if let Some(inner_rect) = inner_rect {
-            let size = inner_rect.size();
-            if size.x.is_finite() && size.y.is_finite() && size.x > 0.0 && size.y > 0.0 {
-                self.suspend_dpi_artifact_size_save_if_needed(size, now);
-                placement.inner_size = Some(self.inner_size_for_persistence(size, now));
-            }
+        let inner_size = inner_rect
+            .map(|rect| rect.size())
+            .unwrap_or_else(|| ctx.screen_rect().size());
+        if inner_size.x.is_finite()
+            && inner_size.y.is_finite()
+            && inner_size.x > 0.0
+            && inner_size.y > 0.0
+        {
+            self.suspend_dpi_artifact_size_save_if_needed(inner_size, now);
+            placement.inner_size = Some(self.inner_size_for_persistence(inner_size, now));
         }
-        if let Some(outer_rect) = outer_rect {
-            let position = outer_rect.min;
+
+        let outer_position = outer_rect
+            .map(|rect| rect.min)
+            .or_else(|| native.and_then(|state| state.outer_position_points));
+        if let Some(position) = outer_position {
             if position.x.is_finite() && position.y.is_finite() {
                 placement.outer_position = Some(round_pos(position));
             }
@@ -210,6 +221,80 @@ fn round_vec2(value: Vec2) -> [f32; 2] {
 
 fn round_pos(value: Pos2) -> [f32; 2] {
     [value.x.round(), value.y.round()]
+}
+
+#[derive(Clone, Copy)]
+struct NativeWindowState {
+    minimized: bool,
+    maximized: bool,
+    outer_position_points: Option<Pos2>,
+}
+
+// egui/winit (0.32) leaves `ViewportInfo` geometry and minimized/maximized
+// flags as `None` on Windows here, so the egui-blessed read path cannot observe
+// the window. Read the live state from Win32 instead, reproducing the same
+// logical-point coordinate space egui would have reported (physical / ppp).
+#[cfg(windows)]
+fn native_window_state(ppp: f32) -> Option<NativeWindowState> {
+    use std::sync::atomic::{AtomicIsize, Ordering};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetClassNameW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsZoomed,
+    };
+
+    const MAIN_WINDOW_CLASS: &str = "Window Class";
+    static HWND_CACHE: AtomicIsize = AtomicIsize::new(0);
+
+    unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> i32 {
+        let found = &mut *(lparam as *mut (u32, HWND));
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == found.0 {
+            let mut buffer = [0u16; 64];
+            let len = GetClassNameW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
+            let len = usize::try_from(len).unwrap_or(0);
+            if buffer[..len].iter().copied().eq(MAIN_WINDOW_CLASS.encode_utf16()) {
+                found.1 = hwnd;
+                return 0;
+            }
+        }
+        1
+    }
+
+    let mut hwnd = HWND_CACHE.load(Ordering::Relaxed) as HWND;
+    if hwnd.is_null() {
+        let mut found: (u32, HWND) = (std::process::id(), std::ptr::null_mut());
+        unsafe {
+            EnumWindows(Some(collect), &mut found as *mut _ as LPARAM);
+        }
+        hwnd = found.1;
+        if hwnd.is_null() {
+            return None;
+        }
+        HWND_CACHE.store(hwnd as isize, Ordering::Relaxed);
+    }
+
+    let outer_position_points = if ppp.is_finite() && ppp > 0.0 {
+        let mut rect = unsafe { std::mem::zeroed::<RECT>() };
+        if unsafe { GetWindowRect(hwnd, &mut rect) } != 0 {
+            Some(egui::pos2(rect.left as f32 / ppp, rect.top as f32 / ppp))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    Some(NativeWindowState {
+        minimized: unsafe { IsIconic(hwnd) } != 0,
+        maximized: unsafe { IsZoomed(hwnd) } != 0,
+        outer_position_points,
+    })
+}
+
+#[cfg(not(windows))]
+fn native_window_state(_ppp: f32) -> Option<NativeWindowState> {
+    None
 }
 
 fn take_startup_reveal_request(pending: &mut bool) -> bool {
