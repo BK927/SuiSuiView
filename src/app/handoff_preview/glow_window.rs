@@ -90,6 +90,7 @@ impl GlutinWindowContext {
             glutin_winit::finalize_window(event_loop, attributes.clone(), &gl_config)
                 .expect("failed to finalize GL window")
         });
+        apply_dark_startup_chrome(&window);
         let size = window.inner_size();
         let width = NonZeroU32::new(size.width).unwrap_or(NonZeroU32::MIN);
         let height = NonZeroU32::new(size.height).unwrap_or(NonZeroU32::MIN);
@@ -203,6 +204,44 @@ pub(super) fn create_gl_display(
 fn window_icon(icon: egui::IconData) -> Option<winit::window::Icon> {
     winit::window::Icon::from_rgba(icon.rgba, icon.width, icon.height).ok()
 }
+
+/// Give the window dark chrome from creation so the default light title bar and
+/// the white pre-render background buffer never show on this dark-themed app:
+/// a dark immersive title bar, and a dark class background brush so the frame
+/// Windows paints before the first GL frame is composited is the app background
+/// color instead of white (winit leaves `hbrBackground` NULL, which is what
+/// lets the white startup buffer show through).
+#[cfg(target_os = "windows")]
+fn apply_dark_startup_chrome(window: &winit::window::Window) {
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let winit::raw_window_handle::RawWindowHandle::Win32(win32) = handle.as_raw() else {
+        return;
+    };
+    let hwnd = win32.hwnd.get() as windows_sys::Win32::Foundation::HWND;
+    unsafe {
+        let enabled: i32 = 1;
+        let _ = windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+            hwnd,
+            windows_sys::Win32::Graphics::Dwm::DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            &enabled as *const i32 as *const core::ffi::c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
+        // COLORREF is 0x00BBGGRR; the viewer clears to ~rgb(4, 4, 5).
+        let brush = windows_sys::Win32::Graphics::Gdi::CreateSolidBrush(0x0005_0404);
+        if !brush.is_null() {
+            windows_sys::Win32::UI::WindowsAndMessaging::SetClassLongPtrW(
+                hwnd,
+                windows_sys::Win32::UI::WindowsAndMessaging::GCLP_HBRBACKGROUND,
+                brush as isize,
+            );
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_dark_startup_chrome(_window: &winit::window::Window) {}
 
 fn valid_window_size(
     placement: &crate::core::state::WindowPlacement,
