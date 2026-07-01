@@ -4,7 +4,7 @@ use crate::core::sr_lab::{
     gpu::tiled::{SpanGpuTiledRunner, DEFAULT_SPAN_TILE_EDGE},
     SrLabFamily, SrLabManifest,
 };
-use eframe::egui::ColorImage;
+use egui::ColorImage;
 use image::{imageops::FilterType, RgbaImage};
 use std::env;
 use std::path::{Path, PathBuf};

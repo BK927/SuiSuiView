@@ -1,6 +1,6 @@
 use super::{image_reader, jpeg, retained_page_byte_size, PreparedPage};
 #[cfg(test)]
-use eframe::egui::ColorImage;
+use egui::ColorImage;
 use image::{metadata::Orientation, ImageDecoder};
 use lcms2::{Intent, PixelFormat as LcmsPixelFormat, Profile, Transform};
 use std::io::{BufReader, Cursor};
@@ -442,7 +442,7 @@ mod tests {
         transform_rgba_pixels,
     };
     use crate::core::gpu_effect::color_image_to_rgba;
-    use eframe::egui::{Color32, ColorImage};
+    use egui::{Color32, ColorImage};
     use image::metadata::Orientation;
 
     #[test]

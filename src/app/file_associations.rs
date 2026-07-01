@@ -2,7 +2,7 @@ use super::settings::setting_group;
 use super::ui::theme;
 use super::{platform, SuiSuiViewApp};
 use crate::core::i18n::I18n;
-use eframe::egui::{self, RichText};
+use egui::{self, RichText};
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -5,7 +5,7 @@ use crate::core::i18n::I18n;
 use crate::core::state::{
     AppSettings, CpuScaleFilter, RendererMode, WgpuDownscaleMethod, WgpuUpscaleMethod,
 };
-use eframe::egui::{self, RichText};
+use egui::{self, RichText};
 
 impl SuiSuiViewApp {
     pub(in crate::app::ui) fn show_scale_group(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {

@@ -2,7 +2,6 @@ use super::{PageCacheKey, TextureCacheKey, TextureEntry};
 use crate::app::perf;
 use crate::app::SuiSuiViewApp;
 use crate::core::worker::{PreparedPage, PreparedTargetIntent, MAX_TARGET_LONG_EDGE};
-use eframe::egui;
 use lru::LruCache;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

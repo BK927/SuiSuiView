@@ -1,6 +1,6 @@
 use crate::core::state::{PageTransitionStyle, ReadingDirection};
 use crate::core::worker::NavigationDirection;
-use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
+use egui::{self, Color32, Pos2, Rect, Vec2};
 
 #[derive(Debug, Clone, Copy)]
 pub(in crate::app) struct TransitionPaintParams {

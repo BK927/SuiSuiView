@@ -1,7 +1,7 @@
 use super::{ui, SuiSuiViewApp};
 use crate::core::state::CommandId;
 use crate::core::worker::NavigationDirection;
-use eframe::egui::{self, Color32, Pos2, RichText, Stroke, Vec2};
+use egui::{self, Color32, Pos2, RichText, Stroke, Vec2};
 use std::time::{Duration, Instant};
 
 const EDGE_PROMPT_AUTO_DISMISS: Duration = Duration::from_millis(1200);

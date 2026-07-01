@@ -1,7 +1,6 @@
 #![allow(unsafe_code)]
 
 use crate::core::state::StateStore;
-use eframe::egui;
 use egui_winit::winit;
 use std::ffi::{c_void, CString};
 use std::num::NonZeroU32;

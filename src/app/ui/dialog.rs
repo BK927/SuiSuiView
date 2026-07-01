@@ -1,5 +1,5 @@
 use super::{icons, theme};
-use eframe::egui::{
+use egui::{
     self, text::LayoutJob, Button, Color32, CornerRadius, FontId, Frame, Margin, Response,
     RichText, Stroke, TextFormat,
 };

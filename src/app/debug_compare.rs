@@ -8,7 +8,7 @@ use crate::core::source::SharedSource;
 use crate::core::state::{CpuScaleFilter, WgpuDownscaleMethod, WgpuUpscaleMethod};
 use crate::core::worker::{prepare_image_with_options, DecodeOptions, PreparedPage};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
-use eframe::egui::{self, Align2, Color32, ImageData, Pos2, Rect, Vec2};
+use egui::{self, Align2, Color32, ImageData, Pos2, Rect, Vec2};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,

@@ -6,7 +6,7 @@ use crate::core::worker::{
     clamp_navigation_target_long_edge, clamp_target_long_edge, NavigationDirection,
     MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
-use eframe::egui::{self, Align2, Color32, Rect, Vec2};
+use egui::{self, Align2, Color32, Rect, Vec2};
 use std::time::{Duration, Instant};
 
 const LARGE_TARGET_INCREASE_STABILITY_DELAY: Duration = Duration::from_millis(16);
@@ -460,7 +460,7 @@ mod tests {
         zoom_delta_gesture, OriginalPageSize, LARGE_TARGET_INCREASE_STABILITY_DELAY,
     };
     use crate::core::state::{FitMode, MouseGesture};
-    use eframe::egui::Vec2;
+    use egui::Vec2;
     use std::time::Instant;
 
     #[test]

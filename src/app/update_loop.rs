@@ -1,7 +1,6 @@
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use super::perf;
 use super::SuiSuiViewApp;
-use eframe::egui;
 use std::time::Duration;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::time::Instant;

@@ -4,7 +4,7 @@ use super::runtime::{AppRuntime, StartupReveal};
 use super::{StartupOpen, SuiSuiViewApp};
 use crate::core::state::{AppSettings, RendererMode, StateStore};
 use crossbeam_channel::Receiver;
-use eframe::egui::{self, ViewportId};
+use egui::{self, ViewportId};
 use egui_wgpu::winit::Painter;
 use egui_wgpu::{wgpu, WgpuConfiguration, WgpuSetupExisting};
 use egui_winit::winit;

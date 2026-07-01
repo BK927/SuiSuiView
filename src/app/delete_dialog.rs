@@ -4,7 +4,7 @@ use super::{
     ui::{dialog, theme},
     SuiSuiViewApp,
 };
-use eframe::egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Stroke};
+use egui::{self, Color32, CornerRadius, Frame, Margin, RichText, Stroke};
 
 const DELETE_DIALOG_SIZE: egui::Vec2 = egui::vec2(430.0, 238.0);
 
@@ -281,7 +281,6 @@ mod tests {
     use super::{
         delete_dialog_keyboard_action_from_keys, DeleteDialogAction, DeleteDialogKeyboardAction,
     };
-    use eframe::egui;
 
     #[test]
     fn delete_dialog_action_toggles_between_buttons() {

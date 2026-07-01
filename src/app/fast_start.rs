@@ -5,7 +5,7 @@ use crate::core::i18n::I18n;
 use crate::core::source::{classify_path, SourceKind};
 use crate::core::state::FastStartFailureNotice;
 use crate::core::state::{RendererMode, StateStore};
-use eframe::egui::{self, RichText};
+use egui::{self, RichText};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;

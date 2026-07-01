@@ -8,7 +8,7 @@ use crate::core::state::{
     AppSettings, CpuScaleFilter, EdgePageAction, GpuEffectMode, Language, PageTransitionStyle,
     RendererMode, WgpuDownscaleMethod, WgpuUpscaleMethod,
 };
-use eframe::egui::{self, RichText};
+use egui::{self, RichText};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum SettingsSection {

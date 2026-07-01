@@ -6,7 +6,6 @@ use crate::core::state::{
     DEFAULT_TOP_BAR_CPU_SCALE_FILTERS, DEFAULT_TOP_BAR_WGPU_DOWNSCALE_METHODS,
     DEFAULT_TOP_BAR_WGPU_UPSCALE_METHODS,
 };
-use eframe::egui;
 
 pub(in crate::app) fn show_view_settings(
     ui: &mut egui::Ui,

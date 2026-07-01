@@ -1,5 +1,5 @@
 use crate::core::i18n::I18n;
-use eframe::egui::{Color32, ColorImage, Vec2};
+use egui::{Color32, ColorImage, Vec2};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ViewTransform {
@@ -452,7 +452,7 @@ mod tests {
         apply_effects_to_image, gamma_channel, transform_image, ImageFilter, ViewEffects,
         ViewTransform,
     };
-    use eframe::egui::{Color32, ColorImage};
+    use egui::{Color32, ColorImage};
 
     #[test]
     fn smooth_uses_unmultiplied_channels_for_transparent_pixels() {

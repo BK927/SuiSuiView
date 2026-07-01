@@ -7,7 +7,7 @@ use crate::core::state::{
     default_key_bindings, default_mouse_bindings, AppSettings, CommandId, KeyBinding, KeyCode,
     KeyShortcut, LargeImageAnchor, MouseBinding, MouseGesture, WheelMode,
 };
-use eframe::egui::{self, RichText};
+use egui::{self, RichText};
 
 const SHORTCUT_ACTION_WIDTH: f32 = 96.0;
 const SHORTCUT_COLUMN_GAP: f32 = 16.0;

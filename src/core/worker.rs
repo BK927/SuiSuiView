@@ -4,7 +4,7 @@ use crate::core::perf_trace::{self, PerfField};
 use crate::core::source::SharedSource;
 use crate::core::state::{CpuScaleFilter, DecoderPreferences};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
-use eframe::egui::{ColorImage, Context};
+use egui::{ColorImage, Context};
 use image::{ImageReader, Limits};
 use lru::LruCache;
 use std::io::Cursor;
@@ -1786,7 +1786,7 @@ mod tests {
             run_worker(
                 command_rx,
                 event_tx,
-                eframe::egui::Context::default(),
+                egui::Context::default(),
                 worker_shutdown,
             );
         });

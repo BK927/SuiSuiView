@@ -11,7 +11,7 @@ use crate::core::worker::{
     NavigationDirection, PreparedTargetIntent, FULL_QUALITY_PREFETCH_BACKWARD_PAGES,
     FULL_QUALITY_PREFETCH_FORWARD_PAGES, MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
-use eframe::egui::{Rect, TextureHandle};
+use egui::{Rect, TextureHandle};
 use lru::LruCache;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};

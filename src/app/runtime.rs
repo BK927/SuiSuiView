@@ -1,4 +1,3 @@
-use eframe::egui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StartupReveal {

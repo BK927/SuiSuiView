@@ -2,7 +2,6 @@ use super::super::SuiSuiViewApp;
 use super::icons;
 use super::top_bar::{icon_button, toolbar_separator};
 use super::top_bar_groups::{responsive_top_bar_layout, TopBarGroup};
-use eframe::egui;
 
 const TOP_BAR_ACTION_BUTTON_COUNT: f32 = 3.0;
 

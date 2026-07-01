@@ -2,7 +2,7 @@ use crate::core::source::open_source_from_path;
 use crate::core::state::{ResizeFilter, WgpuUpscaleMethod};
 use crate::core::upscale_bench::{gpu::GpuUpscaleBench, gpu_methods_for_filter};
 use crate::core::worker::clamp_target_long_edge;
-use eframe::egui::ColorImage;
+use egui::ColorImage;
 use image::{imageops::FilterType, RgbaImage};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -801,7 +801,7 @@ mod tests {
         PageUpscaleQuality, UpscaleQualityReport,
     };
     use crate::core::state::{ResizeFilter, WgpuUpscaleMethod};
-    use eframe::egui::{Color32, ColorImage};
+    use egui::{Color32, ColorImage};
 
     #[test]
     fn identical_images_have_perfect_quality() {

@@ -13,7 +13,7 @@ use crate::core::worker::{
 use commands::{collect_keyboard_actions, AppCommand, KeyboardAction, NavigationRelease};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use debug_compare::{DebugCompareState, DebugCompareWorker};
-use eframe::egui::{self, Pos2, Rect, Vec2};
+use egui::{self, Pos2, Rect, Vec2};
 use image_info::ImageInfoState;
 use lru::LruCache;
 use rfd::FileDialog;
@@ -160,8 +160,8 @@ pub struct SuiSuiViewApp {
     file_association_selection: file_associations::FileAssociationSelection,
     pending_gpu_acceleration: Option<bool>,
     startup_reveal_pending: bool,
-    // Set when the app asks to close (esc-to-quit, restart, etc). The custom
-    // winit host reads this to exit; the eframe path also sends ViewportCommand::Close.
+    // Set when the app asks to close (esc-to-quit, restart, etc). The winit
+    // host reads this to exit; a ViewportCommand::Close is also sent.
     close_requested: bool,
     fast_start_failure_notice: Option<FastStartFailureNotice>,
     shortcut_capture: Option<settings_input::ShortcutCapture>,
@@ -1124,7 +1124,7 @@ mod tests {
         DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PreparedPage,
         MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
     };
-    use eframe::egui::{Color32, ColorImage, Pos2, Rect, Vec2};
+    use egui::{Color32, ColorImage, Pos2, Rect, Vec2};
     use lru::LruCache;
     use std::fs;
     use std::num::NonZeroUsize;
@@ -1641,7 +1641,7 @@ mod tests {
     fn rotation_swaps_layout_size_for_quarter_turns() {
         assert_eq!(
             transformed_page_size(100.0, 200.0, ViewTransform::default()),
-            eframe::egui::Vec2::new(100.0, 200.0)
+            egui::Vec2::new(100.0, 200.0)
         );
         assert_eq!(
             transformed_page_size(
@@ -1652,7 +1652,7 @@ mod tests {
                     ..ViewTransform::default()
                 },
             ),
-            eframe::egui::Vec2::new(200.0, 100.0)
+            egui::Vec2::new(200.0, 100.0)
         );
     }
 

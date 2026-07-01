@@ -17,7 +17,7 @@ const GUI_CLI_REDIRECT_MESSAGE: &str =
     "CLI 명령은 suisuiview-cli를 사용하세요.\n예: suisuiview-cli --perf-scan <path>";
 const RESTART_BYPASS_SINGLE_INSTANCE_ENV: &str = "SUISUIVIEW_RESTART_BYPASS_SINGLE_INSTANCE";
 
-fn main() -> eframe::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(first_arg) = std::env::args_os().nth(1) {
         if is_gui_cli_redirect_arg(&first_arg) {
             show_cli_redirect_message();
@@ -158,14 +158,14 @@ fn startup_window_guard_mode_for(
     }
 }
 
-fn window_icon() -> eframe::egui::IconData {
+fn window_icon() -> egui::IconData {
     let image = image::load_from_memory(include_bytes!("../assets/app-icon.ico"))
         .expect("embedded app icon should be a valid ICO")
         .into_rgba8();
     let width = image.width();
     let height = image.height();
 
-    eframe::egui::IconData {
+    egui::IconData {
         rgba: image.into_raw(),
         width,
         height,

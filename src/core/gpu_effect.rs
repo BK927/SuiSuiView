@@ -1,6 +1,6 @@
 use crate::core::effects::{ImageFilter, ViewEffects};
 use crate::core::state::{WgpuDownscaleMethod, WgpuUpscaleMethod};
-use eframe::egui::ColorImage;
+use egui::ColorImage;
 use std::borrow::Cow;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -587,7 +587,7 @@ pub struct ImageDiff {
 mod tests {
     use super::{align_to, color_image_to_rgba, output_size_for_effects};
     use crate::core::effects::{ViewEffects, ViewTransform};
-    use eframe::egui::{Color32, ColorImage};
+    use egui::{Color32, ColorImage};
 
     #[test]
     fn gpu_output_size_matches_rotation() {

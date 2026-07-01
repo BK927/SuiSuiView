@@ -5,7 +5,7 @@ use super::{
 use crate::core::effects::ViewEffects;
 use crate::core::state::{EdgePageAction, FitMode, PageTransitionStyle, ReadingDirection};
 use crate::core::worker::{DecodeOptions, NavigationDirection};
-use eframe::egui::{self, Vec2};
+use egui::{self, Vec2};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 

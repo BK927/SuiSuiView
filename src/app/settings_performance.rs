@@ -6,7 +6,7 @@ use crate::core::state::{
     AppSettings, CacheMemoryMode, DecodeMode, DecoderPreference, MANUAL_CACHE_MB_MAX,
     MANUAL_CACHE_MB_MIN,
 };
-use eframe::egui::{self, RichText};
+use egui::{self, RichText};
 
 const JPEG_DECODER_OPTIONS: &[DecoderPreference] = &[
     DecoderPreference::Default,

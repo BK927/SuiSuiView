@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, CornerRadius, Stroke};
+use egui::{self, Color32, CornerRadius, Stroke};
 
 pub(in crate::app) const TOP_BAR_HEIGHT: f32 = 56.0;
 pub(in crate::app) const VIEWER_BG: Color32 = Color32::from_rgb(13, 15, 18);

@@ -1,7 +1,7 @@
 use super::{align_to, GpuUpscaleOutput, TEXTURE_FORMAT};
 use crate::core::gpu_effect::color_image_to_rgba;
 use crate::core::state::WgpuUpscaleMethod;
-use eframe::egui::ColorImage;
+use egui::ColorImage;
 use std::borrow::Cow;
 use std::sync::mpsc;
 use std::time::Instant;
