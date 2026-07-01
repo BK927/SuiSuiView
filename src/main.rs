@@ -60,7 +60,7 @@ fn main() -> eframe::Result<()> {
             icon: window_icon(),
             default_window_size: DEFAULT_WINDOW_SIZE,
             min_window_size: MIN_WINDOW_SIZE,
-        }) {
+        }, true) {
             Ok(()) => return Ok(()),
             Err(failure) => {
                 eprintln!(
@@ -80,6 +80,33 @@ fn main() -> eframe::Result<()> {
                 return result;
             }
         }
+    }
+
+    // Stage 1 (eframe -> custom host migration): opt-in routing of the Glow path
+    // through the custom winit host for A/B verification. Falls back to eframe on
+    // failure. Default behavior is unchanged.
+    #[cfg(feature = "wgpu-fast-start")]
+    if std::env::var_os("SUISUIVIEW_GLOW_HOST").is_some() {
+        let glow_store = store.clone();
+        let startup_open = startup_open_path
+            .as_ref()
+            .and_then(|path| app::start_startup_open_loader(path.clone(), &glow_store));
+        let result = app::handoff_preview::run(
+            app::handoff_preview::HandoffPreviewOptions {
+                store: glow_store,
+                ipc_rx: ipc_rx.clone(),
+                startup_open_path: startup_open_path.clone(),
+                startup_open,
+                icon: window_icon(),
+                default_window_size: DEFAULT_WINDOW_SIZE,
+                min_window_size: MIN_WINDOW_SIZE,
+            },
+            false,
+        );
+        if result.is_ok() {
+            return Ok(());
+        }
+        eprintln!("SUISUIVIEW_GLOW_HOST failed; falling back to eframe.");
     }
 
     run_eframe_app(store, ipc_rx, startup_open_path)

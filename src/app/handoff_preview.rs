@@ -46,11 +46,14 @@ pub(crate) fn enabled_for_settings(settings: &AppSettings) -> bool {
     matches!(settings.renderer_mode, RendererMode::Wgpu)
 }
 
-pub(crate) fn run(options: HandoffPreviewOptions) -> Result<(), HandoffFailure> {
+pub(crate) fn run(
+    options: HandoffPreviewOptions,
+    handoff_enabled: bool,
+) -> Result<(), HandoffFailure> {
     let event_loop = winit::event_loop::EventLoop::<()>::new()
         .map_err(|error| HandoffFailure::new(HandoffFailureStage::Unknown, error.to_string()))?;
     let handoff_delay = handoff_delay_from_env();
-    let mut app = HandoffPreviewApp::new(options, handoff_delay);
+    let mut app = HandoffPreviewApp::new(options, handoff_delay, handoff_enabled);
     let result = event_loop.run_app(&mut app);
     if let Some(failure) = app.failure.take() {
         return Err(failure);
@@ -135,6 +138,9 @@ impl HandoffFailureStage {
 struct HandoffPreviewApp {
     options: Option<HandoffPreviewOptions>,
     handoff_delay: Duration,
+    // When false, run as a plain Glow host: never prewarm WGPU or hand off,
+    // staying in `Stage::Glow` for the whole session.
+    handoff_enabled: bool,
     started_at: Instant,
     stage: Option<Stage>,
     prewarm_rx: Option<mpsc::Receiver<PrewarmReport>>,
@@ -183,10 +189,11 @@ pub(crate) struct HandoffPreviewMetrics {
 }
 
 impl HandoffPreviewApp {
-    fn new(options: HandoffPreviewOptions, handoff_delay: Duration) -> Self {
+    fn new(options: HandoffPreviewOptions, handoff_delay: Duration, handoff_enabled: bool) -> Self {
         Self {
             options: Some(options),
             handoff_delay,
+            handoff_enabled,
             started_at: Instant::now(),
             stage: None,
             prewarm_rx: None,
@@ -234,7 +241,9 @@ impl HandoffPreviewApp {
             options.startup_open_path,
             options.startup_open,
         );
-        self.start_prewarm();
+        if self.handoff_enabled {
+            self.start_prewarm();
+        }
         gl_window.window().request_redraw();
         self.stage = Some(Stage::Glow {
             app,
@@ -321,6 +330,9 @@ impl HandoffPreviewApp {
     }
 
     fn ready_to_handoff(&self, now: Instant) -> bool {
+        if !self.handoff_enabled {
+            return false;
+        }
         let Some(first_visible_ms) = self.metrics.first_glow_present_ms else {
             return false;
         };
