@@ -143,7 +143,7 @@ impl SuiSuiViewApp {
             return;
         }
 
-        self.persist_reading_position();
+        self.write_current_book_record();
         let title = self.default_page_bookmark_title(page);
         let page_name = self
             .source

@@ -442,6 +442,17 @@ impl SuiSuiViewApp {
     }
 
     fn persist_reading_position(&mut self) {
+        if !self.settings.auto_save_reading_position {
+            return;
+        }
+        self.write_current_book_record();
+    }
+
+    /// Writes the current book's record unconditionally. Automatic reading-position
+    /// saves go through `persist_reading_position`, which honors the
+    /// auto-save-reading-position setting; explicit actions (adding a bookmark) call
+    /// this directly so the book is always persisted regardless of that setting.
+    fn write_current_book_record(&mut self) {
         let Some(source) = self.source.as_ref() else {
             return;
         };
