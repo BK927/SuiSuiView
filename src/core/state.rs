@@ -386,8 +386,6 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub resume_by_file_identity: bool,
     #[serde(default = "default_true")]
-    pub share_state_between_instances: bool,
-    #[serde(default = "default_true")]
     pub remember_archive_page_name: bool,
     #[serde(default = "default_key_bindings")]
     pub key_bindings: Vec<KeyBinding>,
@@ -474,7 +472,6 @@ impl Default for AppSettings {
             apply_embedded_icc: false,
             auto_save_reading_position: true,
             resume_by_file_identity: true,
-            share_state_between_instances: true,
             remember_archive_page_name: true,
             key_bindings: default_key_bindings(),
             mouse_bindings: default_mouse_bindings(),
@@ -533,7 +530,7 @@ impl StateStore {
             pending_book: None,
             state_dirty: false,
         };
-        store.migrate_monolithic_books_if_needed();
+        store.import_legacy_bookmarks();
         store
     }
 
@@ -822,13 +819,33 @@ impl StateStore {
         }
     }
 
-    fn migrate_monolithic_books_if_needed(&mut self) {
+    // One-time import from the old monolithic state.json. During beta the resume
+    // history is disposable, so keep only the manual page bookmarks and discard
+    // the reading positions; books without bookmarks are dropped entirely.
+    fn import_legacy_bookmarks(&mut self) {
         if self.state.books.is_empty() {
             return;
         }
         let books = std::mem::take(&mut self.state.books);
-        for record in books.values() {
-            let _ = self.write_book_record(record);
+        for record in books.into_values() {
+            if record.page_bookmarks.is_empty() {
+                continue;
+            }
+            let rescued = BookRecord {
+                book_id: record.book_id,
+                title: record.title,
+                last_page: 0,
+                last_page_name: None,
+                total_pages: record.total_pages,
+                known_paths: record.known_paths,
+                reading_direction: record.reading_direction,
+                fit_mode: record.fit_mode,
+                manual_zoom: None,
+                path_positions: BTreeMap::new(),
+                page_bookmarks: record.page_bookmarks,
+                updated_at: record.updated_at,
+            };
+            let _ = self.write_book_record(&rescued);
         }
         let _ = self.write_state_file();
     }

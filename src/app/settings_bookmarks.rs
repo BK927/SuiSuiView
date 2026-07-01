@@ -252,12 +252,6 @@ impl SuiSuiViewApp {
                     &i18n.text("settings.bookmarks.file_identity"),
                     &i18n.text("settings.bookmarks.file_identity.help"),
                 );
-                *changed |= checkbox_with_help(
-                    ui,
-                    &mut draft.share_state_between_instances,
-                    &i18n.text("settings.bookmarks.share_state"),
-                    &i18n.text("settings.bookmarks.share_state.help"),
-                );
             },
         );
 

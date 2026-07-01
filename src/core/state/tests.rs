@@ -78,7 +78,6 @@ fn settings_defaults_match_viewer_policy() {
     assert!(settings.apply_exif_orientation);
     assert!(!settings.apply_embedded_icc);
     assert!(settings.auto_save_reading_position);
-    assert!(settings.share_state_between_instances);
     assert!(settings.remember_archive_page_name);
     assert_eq!(settings.wheel_mode, WheelMode::PageTurn);
 }

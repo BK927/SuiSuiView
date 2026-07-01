@@ -525,7 +525,7 @@ mod tests {
             pending_book: None,
             state_dirty: false,
         };
-        store.migrate_monolithic_books_if_needed();
+        store.import_legacy_bookmarks();
 
         assert_eq!(store.page_bookmarks("book-1").len(), 1);
         assert!(store.all_page_bookmarks().is_empty());
@@ -616,25 +616,44 @@ mod tests {
     }
 
     #[test]
-    fn migration_moves_monolithic_books_into_per_file_store() {
+    fn legacy_import_keeps_bookmarks_and_drops_resume() {
         let json = r#"{
             "version": 4,
             "settings": {},
             "books": {
-                "book-1": {
-                    "book_id": "book-1",
-                    "title": "Book One",
-                    "last_page": 4,
-                    "total_pages": 10,
-                    "known_paths": ["C:/books/book-1.zip"],
+                "with-bookmark": {
+                    "book_id": "with-bookmark",
+                    "title": "Bookmarked",
+                    "last_page": 7,
+                    "total_pages": 20,
+                    "known_paths": ["C:/books/one.zip"],
                     "reading_direction": "RightToLeft",
                     "fit_mode": "FitPage",
+                    "page_bookmarks": [{
+                        "page": 5,
+                        "source_path": "C:/books/one.zip",
+                        "title": "mark",
+                        "page_name": "006.webp",
+                        "pinned": false,
+                        "created_at": 1,
+                        "updated_at": 1
+                    }],
                     "updated_at": 100
+                },
+                "resume-only": {
+                    "book_id": "resume-only",
+                    "title": "Resume Only",
+                    "last_page": 9,
+                    "total_pages": 20,
+                    "known_paths": ["C:/books/two.zip"],
+                    "reading_direction": "RightToLeft",
+                    "fit_mode": "FitPage",
+                    "updated_at": 90
                 }
             }
         }"#;
         let state: PersistedState = serde_json::from_str(json).unwrap();
-        let base = unique_base("migrate");
+        let base = unique_base("legacy-import");
         let mut store = StateStore {
             path: base.join("state.json"),
             books_dir: base.join("books"),
@@ -642,14 +661,18 @@ mod tests {
             pending_book: None,
             state_dirty: false,
         };
-        store.migrate_monolithic_books_if_needed();
+        store.import_legacy_bookmarks();
 
-        // A fresh instance (empty in-memory state) resolves the book from its file.
         let reopened = store_at(&base);
-        let position = reopened
-            .reading_position("book-1", Path::new("C:/books/book-1.zip"), true)
-            .expect("migrated record is readable from the per-book file");
-        assert_eq!(position.last_page, 4);
+        // Bookmarked book: the manual bookmark survives, resume position is reset.
+        let record = reopened
+            .book_record("with-bookmark")
+            .expect("bookmarked book is kept");
+        assert_eq!(record.page_bookmarks.len(), 1);
+        assert_eq!(record.last_page, 0);
+        assert!(record.path_positions.is_empty());
+        // Resume-only book (no manual bookmark) is discarded entirely.
+        assert!(reopened.book_record("resume-only").is_none());
     }
 
     fn unique_base(name: &str) -> std::path::PathBuf {
