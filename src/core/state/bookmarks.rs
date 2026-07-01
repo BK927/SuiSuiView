@@ -675,6 +675,121 @@ mod tests {
         assert!(reopened.book_record("resume-only").is_none());
     }
 
+    #[test]
+    fn smoke_real_folder_book_resume_round_trip() {
+        use crate::core::source::open_source_from_path;
+
+        let base = unique_base("smoke-folder");
+        let comic = base.join("comic");
+        write_test_png(&comic.join("001.png"), 32, 48);
+        write_test_png(&comic.join("002.png"), 40, 40);
+        write_test_png(&comic.join("003.png"), 24, 60);
+
+        let (source, _forced) = open_source_from_path(&comic).expect("folder opens");
+        assert_eq!(source.page_count(), 3);
+        let book_id = source.book_id().to_owned();
+
+        // Same content opened again yields the same identity (crux of the resume bug).
+        let (again, _) = open_source_from_path(&comic).expect("folder reopens");
+        assert_eq!(again.book_id(), book_id);
+
+        // Save a reading position, then restore it from a fresh store instance.
+        let store_dir = base.join("state");
+        let mut store = store_at(&store_dir);
+        store.upsert_book_record(BookRecordInput {
+            book_id: &book_id,
+            title: source.title(),
+            last_page: 2,
+            last_page_name: source.page_name(2),
+            total_pages: source.page_count(),
+            path: source.source_path(),
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: None,
+        });
+        let reopened = store_at(&store_dir);
+        assert_eq!(
+            reopened
+                .reading_position(&book_id, source.source_path(), true)
+                .expect("resume restored")
+                .last_page,
+            2
+        );
+
+        // Changing the folder contents changes the identity (fresh start, no stale resume).
+        write_test_png(&comic.join("004.png"), 30, 30);
+        let (edited, _) = open_source_from_path(&comic).expect("folder reopens after edit");
+        assert_ne!(edited.book_id(), book_id);
+    }
+
+    #[test]
+    fn smoke_real_zip_book_resume_round_trip() {
+        use crate::core::source::open_source_from_path;
+
+        let base = unique_base("smoke-zip");
+        let archive = base.join("book.zip");
+        write_test_zip(&archive, &["01.png", "02.png", "03.png"]);
+
+        let (source, _forced) = open_source_from_path(&archive).expect("zip opens");
+        assert_eq!(source.page_count(), 3);
+        let book_id = source.book_id().to_owned();
+        assert!(book_id.starts_with("zip:"));
+
+        let store_dir = base.join("state");
+        let mut store = store_at(&store_dir);
+        store.upsert_book_record(BookRecordInput {
+            book_id: &book_id,
+            title: source.title(),
+            last_page: 1,
+            last_page_name: source.page_name(1),
+            total_pages: source.page_count(),
+            path: source.source_path(),
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: None,
+        });
+
+        // Reopening the same archive from a fresh store restores the page (by name).
+        let reopened = store_at(&store_dir);
+        let position = reopened
+            .reading_position(&book_id, source.source_path(), true)
+            .expect("resume restored");
+        assert_eq!(position.last_page, 1);
+        assert_eq!(position.last_page_name.as_deref(), Some("02.png"));
+    }
+
+    fn write_test_png(path: &Path, width: u32, height: u32) {
+        use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
+        let pixels = vec![0u8; width as usize * height as usize * 3];
+        let mut bytes = Vec::new();
+        PngEncoder::new(&mut bytes)
+            .write_image(&pixels, width, height, ColorType::Rgb8.into())
+            .expect("encode test png");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn write_test_zip(path: &Path, page_names: &[&str]) {
+        use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        for (index, name) in page_names.iter().enumerate() {
+            let width = 24 + index as u32 * 4;
+            let pixels = vec![0u8; width as usize * 32 * 3];
+            let mut bytes = Vec::new();
+            PngEncoder::new(&mut bytes)
+                .write_image(&pixels, width, 32, ColorType::Rgb8.into())
+                .expect("encode test png");
+            zip.start_file(*name, options).expect("zip start_file");
+            zip.write_all(&bytes).expect("zip write");
+        }
+        zip.finish().expect("zip finish");
+    }
+
     fn unique_base(name: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
