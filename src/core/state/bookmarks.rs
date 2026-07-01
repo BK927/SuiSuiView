@@ -106,23 +106,21 @@ pub(super) fn path_key(path: &Path) -> String {
 
 impl StateStore {
     pub fn recent_books(&self, limit: usize) -> Vec<BookRecord> {
-        let mut books: Vec<_> = self.state.books.values().collect();
-        books.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-        books.into_iter().take(limit).cloned().collect()
+        let mut records = self.load_all_book_records();
+        records.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        records.truncate(limit);
+        records
     }
 
-    pub fn page_bookmarks(&self, book_id: &str) -> &[PageBookmark] {
-        self.state
-            .books
-            .get(book_id)
-            .map(|bookmark| bookmark.page_bookmarks.as_slice())
+    pub fn page_bookmarks(&self, book_id: &str) -> Vec<PageBookmark> {
+        self.read_book_record(book_id)
+            .map(|record| record.page_bookmarks)
             .unwrap_or_default()
     }
 
     pub fn all_page_bookmarks(&self) -> Vec<PageBookmarkEntry> {
-        self.state
-            .books
-            .values()
+        self.load_all_book_records()
+            .iter()
             .flat_map(page_bookmark_entries_for_book)
             .collect()
     }
@@ -132,19 +130,17 @@ impl StateStore {
         book_id: &str,
         source_path: &Path,
     ) -> Vec<PageBookmarkEntry> {
-        self.state
-            .books
-            .get(book_id)
-            .map(|book| page_bookmark_entries_for_path(book, path_key(source_path).as_str()))
+        self.read_book_record(book_id)
+            .map(|record| page_bookmark_entries_for_path(&record, path_key(source_path).as_str()))
             .unwrap_or_default()
     }
 
     pub fn all_page_bookmark_count(&self) -> usize {
-        self.state
-            .books
-            .values()
-            .map(|book| {
-                book.page_bookmarks
+        self.load_all_book_records()
+            .iter()
+            .map(|record| {
+                record
+                    .page_bookmarks
                     .iter()
                     .filter(|bookmark| !bookmark.source_path.is_empty())
                     .count()
@@ -154,9 +150,12 @@ impl StateStore {
 
     pub fn has_page_bookmark(&self, book_id: &str, source_path: &Path, page: usize) -> bool {
         let source_path = path_key(source_path);
-        self.page_bookmarks(book_id)
-            .iter()
-            .any(|bookmark| bookmark.source_path == source_path && bookmark.page == page)
+        self.read_book_record(book_id).is_some_and(|record| {
+            record
+                .page_bookmarks
+                .iter()
+                .any(|bookmark| bookmark.source_path == source_path && bookmark.page == page)
+        })
     }
 
     pub fn upsert_page_bookmark(
@@ -167,16 +166,14 @@ impl StateStore {
         title: impl Into<String>,
         page_name: Option<String>,
     ) {
-        self.state.version = 4;
         let now = now_unix_seconds();
         let title = title.into();
         let source_path = path_key(source_path);
-        let entry = self.state.books.get_mut(book_id);
-        let Some(bookmark) = entry else {
+        let Some(mut record) = self.read_book_record(book_id) else {
             return;
         };
 
-        if let Some(existing) = bookmark
+        if let Some(existing) = record
             .page_bookmarks
             .iter_mut()
             .find(|bookmark| bookmark.source_path == source_path && bookmark.page == page)
@@ -185,7 +182,7 @@ impl StateStore {
             existing.page_name = page_name;
             existing.updated_at = now;
         } else {
-            bookmark.page_bookmarks.push(PageBookmark {
+            record.page_bookmarks.push(PageBookmark {
                 page,
                 source_path,
                 title,
@@ -195,65 +192,61 @@ impl StateStore {
                 updated_at: now,
             });
         }
-        bookmark.page_bookmarks.sort_by(page_bookmark_order);
-        bookmark.updated_at = now;
-        let _ = self.save();
+        record.page_bookmarks.sort_by(page_bookmark_order);
+        record.updated_at = now;
+        let _ = self.write_book_record(&record);
     }
 
     pub fn remove_page_bookmark(&mut self, book_id: &str, source_path: &Path, page: usize) {
-        self.state.version = 4;
-        let Some(bookmark) = self.state.books.get_mut(book_id) else {
+        let Some(mut record) = self.read_book_record(book_id) else {
             return;
         };
         let source_path = path_key(source_path);
-        let previous_len = bookmark.page_bookmarks.len();
-        bookmark.page_bookmarks.retain(|page_bookmark| {
+        let previous_len = record.page_bookmarks.len();
+        record.page_bookmarks.retain(|page_bookmark| {
             page_bookmark.source_path != source_path || page_bookmark.page != page
         });
-        if bookmark.page_bookmarks.len() == previous_len {
+        if record.page_bookmarks.len() == previous_len {
             return;
         }
-        bookmark.updated_at = now_unix_seconds();
-        let _ = self.save();
+        record.updated_at = now_unix_seconds();
+        let _ = self.write_book_record(&record);
     }
 
     pub fn clear_page_bookmarks(&mut self, book_id: &str, source_path: &Path) -> usize {
-        let Some(bookmark) = self.state.books.get_mut(book_id) else {
+        let Some(mut record) = self.read_book_record(book_id) else {
             return 0;
         };
         let source_path = path_key(source_path);
-        let previous_len = bookmark.page_bookmarks.len();
-        bookmark
+        let previous_len = record.page_bookmarks.len();
+        record
             .page_bookmarks
             .retain(|page_bookmark| page_bookmark.source_path != source_path);
-        let removed = previous_len - bookmark.page_bookmarks.len();
+        let removed = previous_len - record.page_bookmarks.len();
         if removed == 0 {
             return 0;
         }
-        self.state.version = 4;
-        bookmark.updated_at = now_unix_seconds();
-        let _ = self.save();
+        record.updated_at = now_unix_seconds();
+        let _ = self.write_book_record(&record);
         removed
     }
 
     pub fn clear_all_page_bookmarks(&mut self) -> usize {
+        self.flush_pending_book();
         let mut removed = 0;
         let now = now_unix_seconds();
-        for bookmark in self.state.books.values_mut() {
-            let previous_len = bookmark.page_bookmarks.len();
-            bookmark
+        for mut record in self.load_all_book_records() {
+            let previous_len = record.page_bookmarks.len();
+            record
                 .page_bookmarks
                 .retain(|page_bookmark| page_bookmark.source_path.is_empty());
-            let count = previous_len - bookmark.page_bookmarks.len();
+            let count = previous_len - record.page_bookmarks.len();
             if count == 0 {
                 continue;
             }
             removed += count;
-            bookmark.updated_at = now;
-        }
-        if removed > 0 {
-            self.state.version = 4;
-            let _ = self.save();
+            record.updated_at = now;
+            let _ = self.write_book_record(&record);
         }
         removed
     }
@@ -518,10 +511,21 @@ mod tests {
         }"#;
 
         let state: PersistedState = serde_json::from_str(json).unwrap();
-        let store = StateStore {
-            path: Path::new("unused.json").to_path_buf(),
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir()
+            .join("suisuiview-tests")
+            .join(format!("hidden-page-bookmarks-{stamp}"));
+        let mut store = StateStore {
+            path: base.join("state.json"),
+            books_dir: base.join("books"),
             state,
+            pending_book: None,
+            state_dirty: false,
         };
+        store.migrate_monolithic_books_if_needed();
 
         assert_eq!(store.page_bookmarks("book-1").len(), 1);
         assert!(store.all_page_bookmarks().is_empty());
@@ -552,16 +556,123 @@ mod tests {
         );
     }
 
-    fn test_store(name: &str) -> StateStore {
+    #[test]
+    fn book_records_persist_across_store_instances() {
+        let base = unique_base("persist-across");
+        let mut store = store_at(&base);
+        store.upsert_book_record(BookRecordInput {
+            book_id: "book-1",
+            title: "Book One",
+            last_page: 5,
+            last_page_name: Some("006.webp"),
+            total_pages: 20,
+            path: Path::new("C:/books/book-1.zip"),
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: None,
+        });
+
+        let reopened = store_at(&base);
+        let position = reopened
+            .reading_position("book-1", Path::new("C:/books/book-1.zip"), true)
+            .expect("record persisted to its own file");
+        assert_eq!(position.last_page, 5);
+        assert_eq!(position.last_page_name.as_deref(), Some("006.webp"));
+    }
+
+    #[test]
+    fn deferred_write_is_flushed_when_switching_books() {
+        let base = unique_base("switch-flush");
+        let mut store = store_at(&base);
+        let changed = store.upsert_book_record_deferred(BookRecordInput {
+            book_id: "book-1",
+            title: "Book One",
+            last_page: 3,
+            last_page_name: None,
+            total_pages: 10,
+            path: Path::new("C:/books/one.zip"),
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: None,
+        });
+        assert!(changed);
+
+        // Switching to another book must persist the buffered page for book-1.
+        store.upsert_book_record(BookRecordInput {
+            book_id: "book-2",
+            title: "Book Two",
+            last_page: 1,
+            last_page_name: None,
+            total_pages: 10,
+            path: Path::new("C:/books/two.zip"),
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: None,
+        });
+
+        let reopened = store_at(&base);
+        assert_eq!(reopened.book_record("book-1").unwrap().last_page, 3);
+        assert_eq!(reopened.book_record("book-2").unwrap().last_page, 1);
+    }
+
+    #[test]
+    fn migration_moves_monolithic_books_into_per_file_store() {
+        let json = r#"{
+            "version": 4,
+            "settings": {},
+            "books": {
+                "book-1": {
+                    "book_id": "book-1",
+                    "title": "Book One",
+                    "last_page": 4,
+                    "total_pages": 10,
+                    "known_paths": ["C:/books/book-1.zip"],
+                    "reading_direction": "RightToLeft",
+                    "fit_mode": "FitPage",
+                    "updated_at": 100
+                }
+            }
+        }"#;
+        let state: PersistedState = serde_json::from_str(json).unwrap();
+        let base = unique_base("migrate");
+        let mut store = StateStore {
+            path: base.join("state.json"),
+            books_dir: base.join("books"),
+            state,
+            pending_book: None,
+            state_dirty: false,
+        };
+        store.migrate_monolithic_books_if_needed();
+
+        // A fresh instance (empty in-memory state) resolves the book from its file.
+        let reopened = store_at(&base);
+        let position = reopened
+            .reading_position("book-1", Path::new("C:/books/book-1.zip"), true)
+            .expect("migrated record is readable from the per-book file");
+        assert_eq!(position.last_page, 4);
+    }
+
+    fn unique_base(name: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        std::env::temp_dir()
+            .join("suisuiview-tests")
+            .join(format!("{name}-{stamp}"))
+    }
+
+    fn store_at(base: &Path) -> StateStore {
         StateStore {
-            path: std::env::temp_dir()
-                .join("suisuiview-tests")
-                .join(format!("{name}-{stamp}.json")),
+            path: base.join("state.json"),
+            books_dir: base.join("books"),
             state: PersistedState::default(),
+            pending_book: None,
+            state_dirty: false,
         }
+    }
+
+    fn test_store(name: &str) -> StateStore {
+        store_at(&unique_base(name))
     }
 }

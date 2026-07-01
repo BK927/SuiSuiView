@@ -134,9 +134,6 @@ impl SuiSuiViewApp {
             self.notify(i18n.text("bookmark.no_path"));
             return;
         };
-        if self.settings.share_state_between_instances {
-            self.store.reload_books_from_disk();
-        }
         let page = self.current_page;
         if self.store.has_page_bookmark(&book_id, &source_path, page) {
             self.store

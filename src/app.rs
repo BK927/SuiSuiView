@@ -446,9 +446,6 @@ impl SuiSuiViewApp {
             return;
         };
         let path = self.current_bookmark_path(source.as_ref()).to_path_buf();
-        if self.settings.share_state_between_instances {
-            self.store.reload_books_from_disk();
-        }
         self.store.upsert_book_record(BookRecordInput {
             book_id: source.book_id(),
             title: source.title(),
@@ -472,9 +469,6 @@ impl SuiSuiViewApp {
             return;
         }
         let path = self.current_bookmark_path(source.as_ref()).to_path_buf();
-        if self.settings.share_state_between_instances {
-            self.store.reload_books_from_disk();
-        }
         let changed = self.store.upsert_book_record_deferred(BookRecordInput {
             book_id: source.book_id(),
             title: source.title(),
@@ -528,7 +522,7 @@ impl SuiSuiViewApp {
 
     fn flush_deferred_state_save(&mut self) {
         if self.pending_state_save_at.take().is_some() {
-            let _ = self.store.save();
+            let _ = self.store.flush();
         }
     }
 
