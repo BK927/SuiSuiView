@@ -43,73 +43,77 @@ fn main() -> eframe::Result<()> {
         None
     };
 
+    // Route every renderer mode through the custom winit host. `renderer_mode`
+    // Wgpu takes the WGPU fast-start handoff; LowMemoryGlow runs the Glow-only
+    // host; a handoff failure degrades to the Glow-only host. eframe stays
+    // reachable only via SUISUIVIEW_EFRAME=1 for A/B verification during the
+    // migration (removed once the host is confirmed for both modes).
     #[cfg(feature = "wgpu-fast-start")]
-    if app::handoff_preview::requested()
-        || app::handoff_preview::enabled_for_settings(store.settings())
-    {
-        let mut handoff_store = store.clone();
-        handoff_store.clear_fast_start_failure_notice();
-        let startup_open = startup_open_path
-            .as_ref()
-            .and_then(|path| app::start_startup_open_loader(path.clone(), &handoff_store));
-        match app::handoff_preview::run(app::handoff_preview::HandoffPreviewOptions {
-            store: handoff_store,
-            ipc_rx: ipc_rx.clone(),
-            startup_open_path: startup_open_path.clone(),
+    if std::env::var_os("SUISUIVIEW_EFRAME").is_none() {
+        let wants_wgpu = app::handoff_preview::requested()
+            || app::handoff_preview::enabled_for_settings(store.settings());
+        if wants_wgpu {
+            let mut handoff_store = store.clone();
+            handoff_store.clear_fast_start_failure_notice();
+            match run_host(handoff_store, true, ipc_rx.clone(), startup_open_path.clone()) {
+                Ok(()) => return Ok(()),
+                Err(failure) => {
+                    eprintln!(
+                        "SuiSuiView WGPU fast start failed at {}: {}",
+                        failure.stage.key(),
+                        failure.error
+                    );
+                    // Persist LowMemoryGlow + the failure notice (to disk), then
+                    // relaunch: winit forbids a second event loop in this process,
+                    // so a fresh process reads the demoted setting and runs the
+                    // Glow-only host.
+                    let _ = app::fast_start::disable_gpu_after_handoff_failure(
+                        StateStore::load(),
+                        &failure,
+                        startup_open_path.as_deref(),
+                    );
+                    match app::restart_current_process() {
+                        Ok(()) => return Ok(()),
+                        Err(error) => {
+                            eprintln!("SuiSuiView restart into Glow host failed: {error}");
+                        }
+                    }
+                }
+            }
+        } else if run_host(store.clone(), false, ipc_rx.clone(), startup_open_path.clone()).is_ok() {
+            // renderer_mode = LowMemoryGlow: the Glow-only host is the runtime.
+            return Ok(());
+        } else {
+            eprintln!("SuiSuiView Glow host failed; trying eframe.");
+        }
+    }
+
+    run_eframe_app(store, ipc_rx, startup_open_path)
+}
+
+#[cfg(feature = "wgpu-fast-start")]
+#[allow(clippy::result_large_err)] // mirrors handoff_preview::run's return type
+fn run_host(
+    store: StateStore,
+    handoff_enabled: bool,
+    ipc_rx: Option<Receiver<Option<PathBuf>>>,
+    startup_open_path: Option<PathBuf>,
+) -> Result<(), app::handoff_preview::HandoffFailure> {
+    let startup_open = startup_open_path
+        .as_ref()
+        .and_then(|path| app::start_startup_open_loader(path.clone(), &store));
+    app::handoff_preview::run(
+        app::handoff_preview::HandoffPreviewOptions {
+            store,
+            ipc_rx,
+            startup_open_path,
             startup_open,
             icon: window_icon(),
             default_window_size: DEFAULT_WINDOW_SIZE,
             min_window_size: MIN_WINDOW_SIZE,
-        }, true) {
-            Ok(()) => return Ok(()),
-            Err(failure) => {
-                eprintln!(
-                    "SuiSuiView WGPU fast start failed at {}: {}",
-                    failure.stage.key(),
-                    failure.error
-                );
-                let fallback_store = app::fast_start::disable_gpu_after_handoff_failure(
-                    StateStore::load(),
-                    &failure,
-                    startup_open_path.as_deref(),
-                );
-                let result = run_eframe_app(fallback_store.clone(), ipc_rx, startup_open_path);
-                if let Err(error) = &result {
-                    show_fast_start_fallback_failed_message(&fallback_store, error);
-                }
-                return result;
-            }
-        }
-    }
-
-    // Stage 1 (eframe -> custom host migration): opt-in routing of the Glow path
-    // through the custom winit host for A/B verification. Falls back to eframe on
-    // failure. Default behavior is unchanged.
-    #[cfg(feature = "wgpu-fast-start")]
-    if std::env::var_os("SUISUIVIEW_GLOW_HOST").is_some() {
-        let glow_store = store.clone();
-        let startup_open = startup_open_path
-            .as_ref()
-            .and_then(|path| app::start_startup_open_loader(path.clone(), &glow_store));
-        let result = app::handoff_preview::run(
-            app::handoff_preview::HandoffPreviewOptions {
-                store: glow_store,
-                ipc_rx: ipc_rx.clone(),
-                startup_open_path: startup_open_path.clone(),
-                startup_open,
-                icon: window_icon(),
-                default_window_size: DEFAULT_WINDOW_SIZE,
-                min_window_size: MIN_WINDOW_SIZE,
-            },
-            false,
-        );
-        if result.is_ok() {
-            return Ok(());
-        }
-        eprintln!("SUISUIVIEW_GLOW_HOST failed; falling back to eframe.");
-    }
-
-    run_eframe_app(store, ipc_rx, startup_open_path)
+        },
+        handoff_enabled,
+    )
 }
 
 fn run_eframe_app(
@@ -142,7 +146,9 @@ fn run_eframe_app(
     )
 }
 
+// Retained only for the temporary SUISUIVIEW_EFRAME A/B path; removed with eframe.
 #[cfg(feature = "wgpu-fast-start")]
+#[allow(dead_code)]
 fn show_fast_start_fallback_failed_message(store: &StateStore, error: &eframe::Error) {
     let diagnostic_path = store
         .fast_start_failure_notice()

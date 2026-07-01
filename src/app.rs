@@ -81,6 +81,12 @@ pub(in crate::app) use delete_dialog::PendingDeleteDialog;
 pub(in crate::app) use edge_prompt::EdgePrompt;
 pub(crate) use opening::{start_startup_open_loader, StartupOpen};
 pub(in crate::app) use opening::{LoaderEvent, OpenOrigin};
+
+/// Spawn a fresh copy of this process (winit forbids creating a second event
+/// loop in-process, so degrading renderers requires a relaunch).
+pub(crate) fn restart_current_process() -> Result<(), String> {
+    platform::restart_current_process()
+}
 #[cfg(test)]
 use sibling_books::adjacent_sibling_book_paths;
 pub(in crate::app) use sibling_books::{adjacent_sibling_book_paths_ordered, sibling_book_path};
