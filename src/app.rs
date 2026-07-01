@@ -156,6 +156,9 @@ pub struct SuiSuiViewApp {
     file_association_selection: file_associations::FileAssociationSelection,
     pending_gpu_acceleration: Option<bool>,
     startup_reveal_pending: bool,
+    // Set when the app asks to close (esc-to-quit, restart, etc). The custom
+    // winit host reads this to exit; the eframe path also sends ViewportCommand::Close.
+    close_requested: bool,
     fast_start_failure_notice: Option<FastStartFailureNotice>,
     shortcut_capture: Option<settings_input::ShortcutCapture>,
     shortcut_conflict: Option<settings_input::ShortcutConflict>,
@@ -295,6 +298,7 @@ impl SuiSuiViewApp {
             file_association_selection: file_associations::FileAssociationSelection::default(),
             pending_gpu_acceleration: None,
             startup_reveal_pending,
+            close_requested: false,
             fast_start_failure_notice,
             shortcut_capture: None,
             shortcut_conflict: None,
@@ -762,9 +766,13 @@ impl SuiSuiViewApp {
             AppCommand::CloseBook => {
                 self.close_book("Closed current book.");
             }
-            AppCommand::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            AppCommand::Quit => {
+                self.close_requested = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
             AppCommand::QuitFromEsc => {
                 if self.settings.esc_to_quit {
+                    self.close_requested = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 } else {
                     self.notify("ESC exit is disabled in settings.");
