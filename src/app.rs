@@ -35,7 +35,6 @@ mod debug_compare;
 mod delete_dialog;
 mod deletion;
 mod edge_prompt;
-mod eframe_host;
 pub(crate) mod fast_start;
 #[cfg(target_os = "windows")]
 mod file_associations;
@@ -269,7 +268,6 @@ impl SuiSuiViewApp {
     ) -> Self {
         let app_started = Instant::now();
         let egui_ctx = runtime.egui_ctx().clone();
-        let screen_renderer = runtime.screen_renderer();
         let startup_reveal_pending =
             runtime.startup_reveal() == runtime::StartupReveal::AfterFirstFrame;
         platform::install_app_fonts(&egui_ctx);
@@ -352,8 +350,10 @@ impl SuiSuiViewApp {
             auto_kind_hints: HashMap::new(),
             auto_kind_inflight: HashSet::new(),
             bookmark_thumbnails: None,
-            gpu_effects_available: screen_renderer.supports_wgsl_paint(),
-            gpu_target_format: screen_renderer.wgpu_target_format(),
+            // Both stages start on Glow; the WGPU stage patches these in
+            // `begin_handoff` once its render state is available.
+            gpu_effects_available: false,
+            gpu_target_format: None,
             last_nav_direction: NavigationDirection::Forward,
             transition: None,
             pending_page_turn: None,

@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use super::runtime::{AppRuntime, ScreenRenderer, StartupReveal};
+use super::runtime::{AppRuntime, StartupReveal};
 use super::{StartupOpen, SuiSuiViewApp};
 use crate::core::state::{AppSettings, RendererMode, StateStore};
 use crossbeam_channel::Receiver;
@@ -265,11 +265,7 @@ impl HandoffPreviewApp {
             });
         }
         let app = SuiSuiViewApp::new(
-            AppRuntime::new(
-                egui_glow.egui_ctx.clone(),
-                ScreenRenderer::Glow,
-                StartupReveal::HostManaged,
-            ),
+            AppRuntime::new(egui_glow.egui_ctx.clone(), StartupReveal::HostManaged),
             options.store,
             options.ipc_rx,
             options.startup_open_path,
