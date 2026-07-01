@@ -529,38 +529,6 @@ mod tests {
     }
 
     #[test]
-    fn pruning_auto_bookmarks_preserves_manual_page_bookmarks() {
-        let mut store = test_store("prune-auto-bookmarks");
-        for index in 0..3 {
-            let book_id = format!("book-{index}");
-            store.upsert_book_record(BookRecordInput {
-                book_id: &book_id,
-                title: &book_id,
-                last_page: index,
-                last_page_name: None,
-                total_pages: 10,
-                path: Path::new("C:/books/book.zip"),
-                reading_direction: ReadingDirection::LeftToRight,
-                fit_mode: FitMode::FitPage,
-                manual_zoom: None,
-            });
-        }
-        store.upsert_page_bookmark(
-            "book-0",
-            Path::new("C:/books/book.zip"),
-            2,
-            "manual",
-            Some("002.png".to_owned()),
-        );
-
-        let removed = store.prune_auto_bookmarks(1);
-
-        assert_eq!(removed, 2);
-        assert!(store.book_record("book-0").is_some());
-        assert_eq!(store.all_page_bookmark_count(), 1);
-    }
-
-    #[test]
     fn settings_default_hides_status_bar() {
         assert!(!AppSettings::default().show_status_bar);
     }

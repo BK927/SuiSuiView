@@ -387,8 +387,6 @@ pub struct AppSettings {
     pub resume_by_file_identity: bool,
     #[serde(default = "default_true")]
     pub share_state_between_instances: bool,
-    #[serde(default = "default_max_remembered_books")]
-    pub max_remembered_books: usize,
     #[serde(default = "default_true")]
     pub remember_archive_page_name: bool,
     #[serde(default = "default_key_bindings")]
@@ -477,7 +475,6 @@ impl Default for AppSettings {
             auto_save_reading_position: true,
             resume_by_file_identity: true,
             share_state_between_instances: true,
-            max_remembered_books: default_max_remembered_books(),
             remember_archive_page_name: true,
             key_bindings: default_key_bindings(),
             mouse_bindings: default_mouse_bindings(),
@@ -632,38 +629,6 @@ impl StateStore {
 
     pub fn upsert_book_record_deferred(&mut self, input: BookRecordInput<'_>) -> bool {
         self.update_book_record(input, false)
-    }
-
-    pub fn prune_auto_bookmarks(&mut self, max_books: usize) -> usize {
-        if max_books == 0 {
-            return 0;
-        }
-
-        let mut removable: Vec<_> = self
-            .state
-            .books
-            .values()
-            .filter(|book| {
-                book.page_bookmarks
-                    .iter()
-                    .all(|bookmark| bookmark.source_path.is_empty())
-            })
-            .map(|book| (book.book_id.clone(), book.updated_at))
-            .collect();
-        let keep_non_removable = self.state.books.len().saturating_sub(removable.len());
-        let removable_to_keep = max_books.saturating_sub(keep_non_removable);
-        if removable.len() <= removable_to_keep {
-            return 0;
-        }
-
-        removable.sort_by_key(|(_, updated_at)| *updated_at);
-        let remove_count = removable.len() - removable_to_keep;
-        for (book_id, _) in removable.into_iter().take(remove_count) {
-            self.state.books.remove(&book_id);
-        }
-        self.state.version = 4;
-        let _ = self.save();
-        remove_count
     }
 
     pub fn clear_archive_page_names(&mut self) -> usize {
@@ -848,8 +813,4 @@ pub fn default_top_bar_wgpu_upscale_methods() -> Vec<WgpuUpscaleMethod> {
 
 pub fn default_top_bar_wgpu_downscale_methods() -> Vec<WgpuDownscaleMethod> {
     DEFAULT_TOP_BAR_WGPU_DOWNSCALE_METHODS.to_vec()
-}
-
-fn default_max_remembered_books() -> usize {
-    30
 }

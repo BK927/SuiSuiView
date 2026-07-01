@@ -460,8 +460,6 @@ impl SuiSuiViewApp {
             fit_mode: self.fit_mode,
             manual_zoom: self.current_bookmark_manual_zoom(),
         });
-        self.store
-            .prune_auto_bookmarks(self.settings.max_remembered_books);
         self.bookmark_rows.clear();
         self.pending_state_save_at = None;
     }
@@ -489,8 +487,6 @@ impl SuiSuiViewApp {
             manual_zoom: self.current_bookmark_manual_zoom(),
         });
         if changed {
-            self.store
-                .prune_auto_bookmarks(self.settings.max_remembered_books);
             self.bookmark_rows.clear();
             self.pending_state_save_at = Some(Instant::now() + STATE_SAVE_DEBOUNCE);
             self.egui_ctx.request_repaint_after(STATE_SAVE_DEBOUNCE);
