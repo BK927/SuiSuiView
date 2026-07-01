@@ -6,7 +6,7 @@ license = "GPL-3.0-only"
 default-run = "suisuiview"
 
 [features]
-default = ["native-webp", "wgpu-fast-start"]
+default = ["native-webp"]
 bench-native = [
     "bench-native-jpeg-turbo",
     "bench-native-webp",
@@ -25,15 +25,7 @@ native-avif = ["dep:libavif"]
 native-ai = ["dep:pdfium-render"]
 perf-dev = []
 perf-diagnostics = []
-wgpu-fast-start = [
-    "egui-wgpu/winit",
-    "dep:egui-winit",
-    "dep:egui_glow",
-    "dep:glow",
-    "dep:glutin",
-    "dep:glutin-winit",
-]
-runtime-probe = ["wgpu-fast-start", "dep:egui"]
+runtime-probe = ["dep:egui"]
 
 [[bin]]
 name = "suisuiview-runtime-probe"
@@ -48,13 +40,13 @@ crossbeam-channel = "0.5"
 directories = "6.0"
 eframe = { version = "0.32", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "wgpu", "x11"] }
 egui = { version = "0.32.3", optional = true }
-egui-wgpu = { version = "0.32.3", default-features = false }
-egui-winit = { version = "0.32.3", optional = true }
-egui_glow = { version = "0.32.3", optional = true, features = ["winit"] }
+egui-wgpu = { version = "0.32.3", default-features = false, features = ["winit"] }
+egui-winit = "0.32.3"
+egui_glow = { version = "0.32.3", features = ["winit"] }
 fast_image_resize = { version = "6.0", default-features = false, features = ["std", "only_u8x4"] }
-glow = { version = "0.16", optional = true }
-glutin = { version = "0.32.3", optional = true }
-glutin-winit = { version = "0.5.0", optional = true }
+glow = "0.16"
+glutin = "0.32.3"
+glutin-winit = "0.5.0"
 image = { version = "0.25", default-features = false, features = ["bmp", "dds", "exr", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 gif = "0.14"
 image-webp = "0.2"

@@ -39,7 +39,6 @@ pub(crate) mod fast_start;
 #[cfg(target_os = "windows")]
 mod file_associations;
 mod gpu_paint;
-#[cfg(feature = "wgpu-fast-start")]
 pub(crate) mod handoff_preview;
 mod image_header;
 mod image_info;

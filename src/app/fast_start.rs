@@ -2,20 +2,14 @@ use super::platform;
 use super::ui::theme;
 use super::SuiSuiViewApp;
 use crate::core::i18n::I18n;
-#[cfg(feature = "wgpu-fast-start")]
 use crate::core::source::{classify_path, SourceKind};
 use crate::core::state::FastStartFailureNotice;
-#[cfg(feature = "wgpu-fast-start")]
 use crate::core::state::{RendererMode, StateStore};
 use eframe::egui::{self, RichText};
-#[cfg(feature = "wgpu-fast-start")]
 use serde::Serialize;
-#[cfg(feature = "wgpu-fast-start")]
 use std::fs;
-#[cfg(feature = "wgpu-fast-start")]
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(feature = "wgpu-fast-start")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,7 +18,6 @@ pub(in crate::app) enum FastStartReportAction {
     OpenDiagnostics,
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 pub(crate) fn disable_gpu_after_handoff_failure(
     mut store: StateStore,
     failure: &super::handoff_preview::HandoffFailure,
@@ -298,7 +291,6 @@ fn open_diagnostics_path(notice: &FastStartFailureNotice) -> Result<(), String> 
     platform::reveal_in_file_manager(&PathBuf::from(path))
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 fn write_diagnostic(
     store: &StateStore,
     failure: &super::handoff_preview::HandoffFailure,
@@ -331,7 +323,6 @@ fn write_diagnostic(
     Ok(path)
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 #[derive(Serialize)]
 struct FastStartDiagnostic<'a> {
     diagnostic_version: u32,
@@ -348,7 +339,6 @@ struct FastStartDiagnostic<'a> {
     startup_source: Option<StartupSourceDiagnostic>,
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 #[derive(Serialize)]
 struct GpuDiagnostic<'a> {
     name: Option<&'a str>,
@@ -356,7 +346,6 @@ struct GpuDiagnostic<'a> {
     device_type: Option<&'a str>,
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 #[derive(Serialize)]
 struct StartupSourceDiagnostic {
     source_kind: &'static str,
@@ -365,7 +354,6 @@ struct StartupSourceDiagnostic {
     size_bytes: Option<u64>,
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 fn source_diagnostic(path: &Path) -> StartupSourceDiagnostic {
     StartupSourceDiagnostic {
         source_kind: source_kind_label(classify_path(path)),
@@ -381,7 +369,6 @@ fn source_diagnostic(path: &Path) -> StartupSourceDiagnostic {
     }
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 fn source_kind_label(kind: SourceKind) -> &'static str {
     match kind {
         SourceKind::Folder => "folder",
@@ -392,7 +379,6 @@ fn source_kind_label(kind: SourceKind) -> &'static str {
     }
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 fn user_reason_key_for_stage(stage: &str) -> &'static str {
     match stage {
         "gl_create" | "gl_swap" => "fast_start.reason.gl_create",
@@ -404,7 +390,6 @@ fn user_reason_key_for_stage(stage: &str) -> &'static str {
     }
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 fn diagnostics_dir(store: &StateStore) -> PathBuf {
     let state_parent = store.path().parent().unwrap_or_else(|| Path::new("."));
     if state_parent.file_name().and_then(|name| name.to_str()) == Some("data") {
@@ -416,13 +401,11 @@ fn diagnostics_dir(store: &StateStore) -> PathBuf {
     state_parent.join("diagnostics")
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 struct UtcTimestamp {
     display: String,
     filename: String,
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 impl UtcTimestamp {
     fn now() -> Self {
         let seconds = SystemTime::now()
@@ -437,7 +420,6 @@ impl UtcTimestamp {
     }
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 fn utc_parts(seconds: i64) -> (i32, u32, u32, u32, u32, u32) {
     let days = seconds.div_euclid(86_400);
     let seconds_of_day = seconds.rem_euclid(86_400);
@@ -448,7 +430,6 @@ fn utc_parts(seconds: i64) -> (i32, u32, u32, u32, u32, u32) {
     (year, month, day, hour, minute, second)
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
     let z = days_since_unix_epoch + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;

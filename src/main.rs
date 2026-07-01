@@ -85,7 +85,6 @@ fn main() -> eframe::Result<()> {
     }
 }
 
-#[cfg(feature = "wgpu-fast-start")]
 #[allow(clippy::result_large_err)] // mirrors handoff_preview::run's return type
 fn run_host(
     store: StateStore,
