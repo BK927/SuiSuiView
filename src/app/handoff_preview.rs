@@ -53,7 +53,8 @@ pub(crate) fn run(
     let event_loop = winit::event_loop::EventLoop::<()>::new()
         .map_err(|error| HandoffFailure::new(HandoffFailureStage::Unknown, error.to_string()))?;
     let handoff_delay = handoff_delay_from_env();
-    let mut app = HandoffPreviewApp::new(options, handoff_delay, handoff_enabled);
+    let wake_proxy = event_loop.create_proxy();
+    let mut app = HandoffPreviewApp::new(options, handoff_delay, handoff_enabled, wake_proxy);
     let result = event_loop.run_app(&mut app);
     if let Some(failure) = app.failure.take() {
         return Err(failure);
@@ -148,10 +149,15 @@ struct HandoffPreviewApp {
     metrics: HandoffPreviewMetrics,
     failure: Option<HandoffFailure>,
     summary_printed: bool,
-    // Reactive control flow for the Glow-only host: egui's repaint callback
-    // records the next requested redraw time here so `about_to_wait` can
-    // `WaitUntil` it instead of busy-polling. `None` means idle (wait for input).
-    glow_redraw_deadline: Arc<Mutex<Option<Instant>>>,
+    // Reactive control flow for the steady-state host (Glow-only, or the WGPU
+    // stage after handoff): egui's repaint callback records the next requested
+    // redraw time here so `about_to_wait` can `WaitUntil` it instead of
+    // busy-polling. `None` means idle (wait for input).
+    redraw_deadline: Arc<Mutex<Option<Instant>>>,
+    // Wakes the (possibly sleeping) event loop when a repaint is requested from
+    // another thread, so background work (image loads, thumbnails) is shown
+    // without waiting for the next input event.
+    wake_proxy: winit::event_loop::EventLoopProxy<()>,
 }
 
 enum Stage {
@@ -193,7 +199,12 @@ pub(crate) struct HandoffPreviewMetrics {
 }
 
 impl HandoffPreviewApp {
-    fn new(options: HandoffPreviewOptions, handoff_delay: Duration, handoff_enabled: bool) -> Self {
+    fn new(
+        options: HandoffPreviewOptions,
+        handoff_delay: Duration,
+        handoff_enabled: bool,
+        wake_proxy: winit::event_loop::EventLoopProxy<()>,
+    ) -> Self {
         Self {
             options: Some(options),
             handoff_delay,
@@ -205,7 +216,8 @@ impl HandoffPreviewApp {
             metrics: HandoffPreviewMetrics::default(),
             failure: None,
             summary_printed: false,
-            glow_redraw_deadline: Arc::new(Mutex::new(None)),
+            redraw_deadline: Arc::new(Mutex::new(None)),
+            wake_proxy,
         }
     }
 
@@ -235,12 +247,21 @@ impl HandoffPreviewApp {
             Some(gl_window.window().scale_factor() as f32),
             true,
         );
-        if !self.handoff_enabled {
-            let deadline = self.glow_redraw_deadline.clone();
+        // The WGPU stage reuses this same egui context after handoff (see
+        // `begin_handoff`), so registering the repaint callback once here drives
+        // reactive control flow for both the Glow-only host and the WGPU stage.
+        {
+            let deadline = self.redraw_deadline.clone();
+            let wake_proxy = self.wake_proxy.clone();
             egui_glow.egui_ctx.set_request_repaint_callback(move |info| {
                 let at = Instant::now() + info.delay;
-                let mut slot = deadline.lock().unwrap();
-                *slot = Some(slot.map_or(at, |current| current.min(at)));
+                {
+                    let mut slot = deadline.lock().unwrap();
+                    *slot = Some(slot.map_or(at, |current| current.min(at)));
+                }
+                // Wake the event loop so it re-evaluates the deadline; needed
+                // when the request comes from a non-UI thread while idle.
+                let _ = wake_proxy.send_event(());
             });
         }
         let app = SuiSuiViewApp::new(
@@ -303,7 +324,7 @@ impl HandoffPreviewApp {
         }
         // Cleared before the frame so the app's repaint requests during
         // `update_frame` (via the callback) set a fresh deadline for the loop.
-        *self.glow_redraw_deadline.lock().unwrap() = None;
+        *self.redraw_deadline.lock().unwrap() = None;
         egui_glow.run(gl_window.window(), |ctx| app.update_frame(ctx));
         if app.close_requested {
             self.print_summary();
@@ -487,6 +508,9 @@ impl HandoffPreviewApp {
         mut painter: Painter,
         mut viewport_info: egui::ViewportInfo,
     ) {
+        // Cleared before the frame so this frame's repaint requests (via the
+        // shared egui repaint callback) set a fresh deadline for `about_to_wait`.
+        *self.redraw_deadline.lock().unwrap() = None;
         painter.handle_screenshots(&mut egui_state.egui_input_mut().events);
         let raw_input = egui_state.take_egui_input(&window);
         let egui_ctx = egui_state.egui_ctx().clone();
@@ -539,7 +563,8 @@ impl HandoffPreviewApp {
             return;
         }
 
-        window.request_redraw();
+        // Reactive: the next WGPU frame is scheduled by egui's repaint deadline
+        // (see `about_to_wait`) or by input in `window_event`, not every frame.
         self.stage = Some(Stage::Wgpu {
             app,
             window,
@@ -731,30 +756,32 @@ impl winit::application::ApplicationHandler<()> for HandoffPreviewApp {
             return;
         }
 
-        // Reactive Glow-only host: sleep until egui's next requested repaint or
-        // an input event, instead of rendering every loop iteration.
-        if !self.handoff_enabled && matches!(self.stage, Some(Stage::Glow { .. })) {
-            let deadline = *self.glow_redraw_deadline.lock().unwrap();
-            match deadline {
-                Some(at) if at <= Instant::now() => {
-                    if let Some(Stage::Glow { gl_window, .. }) = self.stage.as_ref() {
-                        gl_window.window().request_redraw();
-                    }
-                    event_loop.set_control_flow(ControlFlow::Poll);
-                }
-                Some(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
-                None => event_loop.set_control_flow(ControlFlow::Wait),
+        // While the Glow stage is still driving toward the WGPU handoff, keep
+        // polling so frames advance until the renderer swaps.
+        if self.handoff_enabled && matches!(self.stage, Some(Stage::Glow { .. })) {
+            if let Some(Stage::Glow { gl_window, .. }) = self.stage.as_ref() {
+                gl_window.window().request_redraw();
             }
+            event_loop.set_control_flow(ControlFlow::Poll);
             return;
         }
 
-        // WGPU handoff / WGPU stage: keep driving frames.
-        match self.stage.as_ref() {
-            Some(Stage::Glow { gl_window, .. }) => gl_window.window().request_redraw(),
-            Some(Stage::Wgpu { window, .. }) => window.request_redraw(),
-            None => {}
+        // Reactive steady state (the Glow-only host, or the WGPU stage after
+        // handoff): sleep until egui's next requested repaint or an input event
+        // instead of rendering every loop iteration.
+        let deadline = *self.redraw_deadline.lock().unwrap();
+        match deadline {
+            Some(at) if at <= Instant::now() => {
+                match self.stage.as_ref() {
+                    Some(Stage::Glow { gl_window, .. }) => gl_window.window().request_redraw(),
+                    Some(Stage::Wgpu { window, .. }) => window.request_redraw(),
+                    None => {}
+                }
+                event_loop.set_control_flow(ControlFlow::Poll);
+            }
+            Some(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
         }
-        event_loop.set_control_flow(ControlFlow::Poll);
     }
 
     fn exiting(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
