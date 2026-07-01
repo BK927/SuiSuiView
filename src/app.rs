@@ -3,7 +3,7 @@ use crate::core::effects::ViewEffects;
 use crate::core::formats::OPENABLE_FILE_EXTENSIONS;
 use crate::core::source::{BookSource, SharedSource};
 use crate::core::state::{
-    AppSettings, BookmarkInput, DecodeMode, DecoderPreferences, FastStartFailureNotice, FitMode,
+    AppSettings, BookRecordInput, DecodeMode, DecoderPreferences, FastStartFailureNotice, FitMode,
     ReadingDirection, StateStore, WgpuUpscaleMethod,
 };
 use crate::core::worker::{
@@ -441,7 +441,7 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn persist_current_bookmark(&mut self) {
+    fn persist_reading_position(&mut self) {
         let Some(source) = self.source.as_ref() else {
             return;
         };
@@ -449,7 +449,7 @@ impl SuiSuiViewApp {
         if self.settings.share_state_between_instances {
             self.store.reload_books_from_disk();
         }
-        self.store.upsert_bookmark(BookmarkInput {
+        self.store.upsert_book_record(BookRecordInput {
             book_id: source.book_id(),
             title: source.title(),
             last_page: self.current_page,
@@ -466,7 +466,7 @@ impl SuiSuiViewApp {
         self.pending_state_save_at = None;
     }
 
-    fn persist_current_bookmark_deferred(&mut self) {
+    fn persist_reading_position_deferred(&mut self) {
         let Some(source) = self.source.as_ref() else {
             return;
         };
@@ -477,7 +477,7 @@ impl SuiSuiViewApp {
         if self.settings.share_state_between_instances {
             self.store.reload_books_from_disk();
         }
-        let changed = self.store.upsert_bookmark_deferred(BookmarkInput {
+        let changed = self.store.upsert_book_record_deferred(BookRecordInput {
             book_id: source.book_id(),
             title: source.title(),
             last_page: self.current_page,

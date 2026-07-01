@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Bookmark {
+pub struct BookRecord {
     pub book_id: String,
     pub title: String,
     pub last_page: usize,
@@ -36,7 +36,7 @@ pub struct ReadingPosition {
 }
 
 impl ReadingPosition {
-    pub(super) fn from_input(input: &BookmarkInput<'_>, now: u64) -> Self {
+    pub(super) fn from_input(input: &BookRecordInput<'_>, now: u64) -> Self {
         Self {
             last_page: input.last_page.min(input.total_pages.saturating_sub(1)),
             last_page_name: input.last_page_name.map(ToOwned::to_owned),
@@ -47,18 +47,18 @@ impl ReadingPosition {
         }
     }
 
-    pub(super) fn from_bookmark(bookmark: &Bookmark) -> Self {
+    pub(super) fn from_record(record: &BookRecord) -> Self {
         Self {
-            last_page: bookmark.last_page,
-            last_page_name: bookmark.last_page_name.clone(),
-            reading_direction: bookmark.reading_direction,
-            fit_mode: bookmark.fit_mode,
-            manual_zoom: bookmark.manual_zoom,
-            updated_at: bookmark.updated_at,
+            last_page: record.last_page,
+            last_page_name: record.last_page_name.clone(),
+            reading_direction: record.reading_direction,
+            fit_mode: record.fit_mode,
+            manual_zoom: record.manual_zoom,
+            updated_at: record.updated_at,
         }
     }
 
-    pub(super) fn matches_input(&self, input: &BookmarkInput<'_>) -> bool {
+    pub(super) fn matches_input(&self, input: &BookRecordInput<'_>) -> bool {
         self.last_page == input.last_page.min(input.total_pages.saturating_sub(1))
             && self.last_page_name.as_deref() == input.last_page_name
             && self.reading_direction == input.reading_direction
@@ -67,7 +67,7 @@ impl ReadingPosition {
     }
 }
 
-pub struct BookmarkInput<'a> {
+pub struct BookRecordInput<'a> {
     pub book_id: &'a str,
     pub title: &'a str,
     pub last_page: usize,
@@ -105,7 +105,7 @@ pub(super) fn path_key(path: &Path) -> String {
 }
 
 impl StateStore {
-    pub fn recent_books(&self, limit: usize) -> Vec<Bookmark> {
+    pub fn recent_books(&self, limit: usize) -> Vec<BookRecord> {
         let mut books: Vec<_> = self.state.books.values().collect();
         books.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         books.into_iter().take(limit).cloned().collect()
@@ -259,7 +259,7 @@ impl StateStore {
     }
 }
 
-fn page_bookmark_entries_for_book(book: &Bookmark) -> Vec<PageBookmarkEntry> {
+fn page_bookmark_entries_for_book(book: &BookRecord) -> Vec<PageBookmarkEntry> {
     book.page_bookmarks
         .iter()
         .filter(|bookmark| !bookmark.source_path.is_empty())
@@ -272,7 +272,7 @@ fn page_bookmark_entries_for_book(book: &Bookmark) -> Vec<PageBookmarkEntry> {
         .collect()
 }
 
-fn page_bookmark_entries_for_path(book: &Bookmark, source_path: &str) -> Vec<PageBookmarkEntry> {
+fn page_bookmark_entries_for_path(book: &BookRecord, source_path: &str) -> Vec<PageBookmarkEntry> {
     book.page_bookmarks
         .iter()
         .filter(|bookmark| bookmark.source_path == source_path)
@@ -296,7 +296,7 @@ fn page_bookmark_order(left: &PageBookmark, right: &PageBookmark) -> std::cmp::O
 #[cfg(test)]
 mod tests {
     use super::super::{
-        AppSettings, BookmarkInput, FitMode, PersistedState, ReadingDirection, StateStore,
+        AppSettings, BookRecordInput, FitMode, PersistedState, ReadingDirection, StateStore,
     };
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn page_bookmarks_add_and_remove() {
         let mut store = test_store("page-bookmarks");
-        store.upsert_bookmark(BookmarkInput {
+        store.upsert_book_record(BookRecordInput {
             book_id: "book-1",
             title: "Book One",
             last_page: 0,
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn page_bookmarks_are_scoped_by_source_path() {
         let mut store = test_store("page-bookmark-path-scope");
-        store.upsert_bookmark(BookmarkInput {
+        store.upsert_book_record(BookRecordInput {
             book_id: "book-1",
             title: "Book One",
             last_page: 0,
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn reading_position_can_use_identity_or_exact_path() {
         let mut store = test_store("reading-position-policy");
-        store.upsert_bookmark(BookmarkInput {
+        store.upsert_book_record(BookRecordInput {
             book_id: "book-1",
             title: "Book One",
             last_page: 2,
@@ -420,7 +420,7 @@ mod tests {
             fit_mode: FitMode::FitPage,
             manual_zoom: None,
         });
-        store.upsert_bookmark(BookmarkInput {
+        store.upsert_book_record(BookRecordInput {
             book_id: "book-1",
             title: "Book One",
             last_page: 7,
@@ -454,7 +454,7 @@ mod tests {
             ("book-1", "C:/books/book-1"),
             ("book-2", "C:/books/book-2.cbz"),
         ] {
-            store.upsert_bookmark(BookmarkInput {
+            store.upsert_book_record(BookRecordInput {
                 book_id,
                 title: book_id,
                 last_page: 0,
@@ -486,7 +486,7 @@ mod tests {
         assert!(entries.iter().any(|entry| entry.book_id == "book-1"));
         assert_eq!(store.clear_all_page_bookmarks(), 2);
         assert!(store.all_page_bookmarks().is_empty());
-        assert!(store.bookmark("book-1").is_some());
+        assert!(store.book_record("book-1").is_some());
         assert_eq!(store.clear_all_page_bookmarks(), 0);
     }
 
@@ -533,7 +533,7 @@ mod tests {
         let mut store = test_store("prune-auto-bookmarks");
         for index in 0..3 {
             let book_id = format!("book-{index}");
-            store.upsert_bookmark(BookmarkInput {
+            store.upsert_book_record(BookRecordInput {
                 book_id: &book_id,
                 title: &book_id,
                 last_page: index,
@@ -556,7 +556,7 @@ mod tests {
         let removed = store.prune_auto_bookmarks(1);
 
         assert_eq!(removed, 2);
-        assert!(store.bookmark("book-0").is_some());
+        assert!(store.book_record("book-0").is_some());
         assert_eq!(store.all_page_bookmark_count(), 1);
     }
 

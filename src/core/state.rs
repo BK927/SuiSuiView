@@ -18,7 +18,7 @@ mod scalers;
 mod tests;
 pub use crate::core::i18n::Language;
 use bookmarks::path_key;
-pub use bookmarks::{Bookmark, BookmarkInput, PageBookmark, PageBookmarkEntry, ReadingPosition};
+pub use bookmarks::{BookRecord, BookRecordInput, PageBookmark, PageBookmarkEntry, ReadingPosition};
 pub use decoders::{DecodeMode, DecoderPreference, DecoderPreferences};
 pub use display::{GpuEffectMode, WgpuUpscaleMethod};
 pub use fast_start::FastStartFailureNotice;
@@ -494,7 +494,7 @@ pub struct PersistedState {
     pub window: WindowPlacement,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast_start_failure: Option<FastStartFailureNotice>,
-    pub books: BTreeMap<String, Bookmark>,
+    pub books: BTreeMap<String, BookRecord>,
 }
 
 impl Default for PersistedState {
@@ -527,7 +527,7 @@ impl StateStore {
         Self { path, state }
     }
 
-    pub fn bookmark(&self, book_id: &str) -> Option<&Bookmark> {
+    pub fn book_record(&self, book_id: &str) -> Option<&BookRecord> {
         self.state.books.get(book_id)
     }
 
@@ -537,11 +537,11 @@ impl StateStore {
         path: &Path,
         allow_identity_match: bool,
     ) -> Option<ReadingPosition> {
-        let bookmark = self.bookmark(book_id)?;
+        let record = self.book_record(book_id)?;
         if allow_identity_match {
-            return Some(ReadingPosition::from_bookmark(bookmark));
+            return Some(ReadingPosition::from_record(record));
         }
-        bookmark
+        record
             .path_positions
             .get(path_key(path).as_str())
             .cloned()
@@ -624,14 +624,14 @@ impl StateStore {
         true
     }
 
-    pub fn upsert_bookmark(&mut self, input: BookmarkInput<'_>) {
-        if self.update_bookmark(input, true) {
+    pub fn upsert_book_record(&mut self, input: BookRecordInput<'_>) {
+        if self.update_book_record(input, true) {
             let _ = self.save();
         }
     }
 
-    pub fn upsert_bookmark_deferred(&mut self, input: BookmarkInput<'_>) -> bool {
-        self.update_bookmark(input, false)
+    pub fn upsert_book_record_deferred(&mut self, input: BookRecordInput<'_>) -> bool {
+        self.update_book_record(input, false)
     }
 
     pub fn prune_auto_bookmarks(&mut self, max_books: usize) -> usize {
@@ -694,7 +694,7 @@ impl StateStore {
         cleared
     }
 
-    fn update_bookmark(&mut self, input: BookmarkInput<'_>, touch: bool) -> bool {
+    fn update_book_record(&mut self, input: BookRecordInput<'_>, touch: bool) -> bool {
         self.state.version = 4;
         let path_text = input.path.to_string_lossy().to_string();
         let now = now_unix_seconds();
@@ -703,7 +703,7 @@ impl StateStore {
             .state
             .books
             .entry(input.book_id.to_owned())
-            .or_insert_with(|| Bookmark {
+            .or_insert_with(|| BookRecord {
                 book_id: input.book_id.to_owned(),
                 title: input.title.to_owned(),
                 last_page: 0,
@@ -787,8 +787,8 @@ impl StateStore {
     }
 }
 
-fn looks_like_archive_book(bookmark: &Bookmark) -> bool {
-    bookmark.known_paths.iter().any(|path| {
+fn looks_like_archive_book(record: &BookRecord) -> bool {
+    record.known_paths.iter().any(|path| {
         Path::new(path)
             .extension()
             .and_then(|extension| extension.to_str())

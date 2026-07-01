@@ -419,12 +419,12 @@ impl SuiSuiViewApp {
                 self.visible_page_count(),
                 self.worker_options(),
             );
-            self.persist_current_bookmark();
+            self.persist_reading_position();
         }
     }
 }
 
-fn recent_open_menu_width(ui: &egui::Ui, recent_books: &[crate::core::state::Bookmark]) -> f32 {
+fn recent_open_menu_width(ui: &egui::Ui, recent_books: &[crate::core::state::BookRecord]) -> f32 {
     let viewport_width = ui.ctx().input(|input| {
         input
             .viewport()
