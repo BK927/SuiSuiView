@@ -528,9 +528,11 @@ impl HandoffPreviewApp {
             if let Some(last_glow_ms) = self.metrics.last_glow_present_ms {
                 self.metrics.handoff_gap_ms = Some(now_ms - last_glow_ms);
             }
-            // WGPU-direct starts the window hidden; reveal it on the first WGPU
-            // frame. (In the handoff path the window is already visible; this is
-            // an idempotent no-op there.)
+            // The flash guard (MaskMainUntilRevealed) has kept the main window
+            // masked (layered alpha 0) since it was shown inside create_window;
+            // now that a frame is painted, release the mask so it appears already
+            // rendered. set_visible is idempotent here (the window is already
+            // WS_VISIBLE) but keeps the intent explicit.
             crate::startup_window::reveal_main_windows();
             window.set_visible(true);
         }

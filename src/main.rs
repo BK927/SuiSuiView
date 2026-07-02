@@ -7,7 +7,7 @@ mod single_instance;
 mod startup_window;
 
 use crate::core::source::{classify_path, SourceKind};
-use crate::core::state::{StateStore, WindowPlacement};
+use crate::core::state::{RendererMode, StateStore, WindowPlacement};
 use crossbeam_channel::Receiver;
 use std::path::PathBuf;
 
@@ -145,16 +145,29 @@ fn startup_open_path() -> Option<PathBuf> {
 }
 
 fn startup_window_guard_mode(store: &StateStore) -> startup_window::StartupWindowGuardMode {
-    startup_window_guard_mode_for(store.window_placement())
+    startup_window_guard_mode_for(store.settings().renderer_mode, store.window_placement())
 }
 
 fn startup_window_guard_mode_for(
+    renderer_mode: RendererMode,
     placement: &WindowPlacement,
 ) -> startup_window::StartupWindowGuardMode {
-    if cfg!(target_os = "windows") && placement.maximized {
-        startup_window::StartupWindowGuardMode::MaskMainUntilStable
-    } else {
-        startup_window::StartupWindowGuardMode::AuxiliaryOnly
+    use startup_window::StartupWindowGuardMode::{
+        AuxiliaryOnly, MaskMainUntilRevealed, MaskMainUntilStable,
+    };
+    if !cfg!(target_os = "windows") {
+        return AuxiliaryOnly;
+    }
+    // winit shows the window *inside* create_window (before any post-create Rust
+    // code can mask it), so the main-window flash can only be caught by the
+    // guard's WH_CALLWNDPROC hook. WGPU-direct holds that mask until the host
+    // reveals it on the first rendered frame; the Glow path additionally re-issues
+    // SW_MAXIMIZE and reveals on a stability timer, so it only needs masking when
+    // the saved placement is maximized.
+    match renderer_mode {
+        RendererMode::Wgpu => MaskMainUntilRevealed,
+        RendererMode::LowMemoryGlow if placement.maximized => MaskMainUntilStable,
+        RendererMode::LowMemoryGlow => AuxiliaryOnly,
     }
 }
 
@@ -175,7 +188,7 @@ fn window_icon() -> egui::IconData {
 #[cfg(test)]
 mod tests {
     use super::{startup_window_guard_mode_for, window_icon};
-    use crate::core::state::{AppSettings, RendererMode, WindowPlacement};
+    use crate::core::state::{RendererMode, WindowPlacement};
     use crate::startup_window::StartupWindowGuardMode;
 
     #[test]
@@ -193,9 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_window_guard_masks_only_windows_maximized_startup() {
-        let mut settings = AppSettings::default();
-        settings.renderer_mode = RendererMode::LowMemoryGlow;
+    fn startup_window_guard_mode_per_renderer_and_placement() {
         let maximized = WindowPlacement {
             inner_size: Some([1280.0, 820.0]),
             outer_position: None,
@@ -206,21 +217,23 @@ mod tests {
             ..maximized.clone()
         };
 
-        let glow_maximized = startup_window_guard_mode_for(&maximized);
-        let glow_windowed = startup_window_guard_mode_for(&windowed);
-        settings.renderer_mode = RendererMode::Wgpu;
-        let wgpu_maximized = startup_window_guard_mode_for(&maximized);
+        let glow_maximized = startup_window_guard_mode_for(RendererMode::LowMemoryGlow, &maximized);
+        let glow_windowed = startup_window_guard_mode_for(RendererMode::LowMemoryGlow, &windowed);
+        // WGPU-direct always masks the main window via the guard hook (the flash
+        // happens inside create_window) and reveals on the first frame, windowed
+        // or maximized.
+        let wgpu_maximized = startup_window_guard_mode_for(RendererMode::Wgpu, &maximized);
+        let wgpu_windowed = startup_window_guard_mode_for(RendererMode::Wgpu, &windowed);
 
         if cfg!(target_os = "windows") {
             assert_eq!(glow_maximized, StartupWindowGuardMode::MaskMainUntilStable);
+            assert_eq!(wgpu_maximized, StartupWindowGuardMode::MaskMainUntilRevealed);
+            assert_eq!(wgpu_windowed, StartupWindowGuardMode::MaskMainUntilRevealed);
         } else {
             assert_eq!(glow_maximized, StartupWindowGuardMode::AuxiliaryOnly);
+            assert_eq!(wgpu_maximized, StartupWindowGuardMode::AuxiliaryOnly);
+            assert_eq!(wgpu_windowed, StartupWindowGuardMode::AuxiliaryOnly);
         }
         assert_eq!(glow_windowed, StartupWindowGuardMode::AuxiliaryOnly);
-        if cfg!(target_os = "windows") {
-            assert_eq!(wgpu_maximized, StartupWindowGuardMode::MaskMainUntilStable);
-        } else {
-            assert_eq!(wgpu_maximized, StartupWindowGuardMode::AuxiliaryOnly);
-        }
     }
 }
