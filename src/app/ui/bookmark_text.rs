@@ -1,6 +1,6 @@
 use super::bookmark_rows::BookmarkRow;
 use super::{path_labels, theme};
-use eframe::egui::{self, Align2, FontId, Rect, Sense};
+use egui::{self, Align2, FontId, Rect, Sense};
 use std::borrow::Cow;
 
 const TITLE_HEIGHT: f32 = 58.0;

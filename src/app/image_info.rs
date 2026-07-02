@@ -2,7 +2,6 @@ use super::SuiSuiViewApp;
 use crate::core::image_info::{analyze_image_info, ImageInfo};
 use crate::core::source::SharedSource;
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use eframe::egui;
 use std::sync::Arc;
 use std::thread;
 

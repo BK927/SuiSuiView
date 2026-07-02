@@ -14,7 +14,7 @@ use crate::core::worker::{
     prepare_image_with_options, DecodeOptions, NavigationDirection, PreparedPage,
     MAX_TARGET_LONG_EDGE,
 };
-use eframe::egui::Vec2;
+use egui::Vec2;
 use image::ImageReader;
 use std::fs;
 use std::io::Cursor;

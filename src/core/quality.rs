@@ -2,7 +2,7 @@ use crate::core::source::open_source_from_path;
 use crate::core::worker::{
     clamp_target_long_edge, prepare_image_with_strategy, DecodeBackend, DecodeStrategy,
 };
-use eframe::egui::ColorImage;
+use egui::ColorImage;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;

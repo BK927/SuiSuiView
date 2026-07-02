@@ -1,7 +1,7 @@
 use super::ui;
 use arboard::{Clipboard, ImageData as ClipboardImageData};
-use eframe::egui::{self, FontData, FontDefinitions, FontFamily};
-use eframe::epaint::ColorImage;
+use egui::{self, FontData, FontDefinitions, FontFamily};
+use egui::epaint::ColorImage;
 use std::borrow::Cow;
 #[cfg(target_os = "windows")]
 use std::ffi::OsStr;

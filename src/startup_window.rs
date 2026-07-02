@@ -33,7 +33,20 @@ mod imp {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum StartupWindowGuardMode {
         AuxiliaryOnly,
+        /// Glow maximized: mask the main window, re-issue `SW_MAXIMIZE`, and
+        /// reveal once the maximized frame is stable.
         MaskMainUntilStable,
+        /// WGPU-direct: mask the main window synchronously (the hook catches the
+        /// show that happens *inside* winit's `create_window`), then hold the
+        /// mask until the host reveals it on the first rendered frame via
+        /// `reveal_main_windows()`. No maximize, no stability timer.
+        MaskMainUntilRevealed,
+    }
+
+    impl StartupWindowGuardMode {
+        fn masks_main_window(self) -> bool {
+            matches!(self, Self::MaskMainUntilStable | Self::MaskMainUntilRevealed)
+        }
     }
 
     pub(crate) struct StartupFlashGuard {
@@ -44,10 +57,7 @@ mod imp {
 
     impl StartupFlashGuard {
         pub(crate) fn start(mode: StartupWindowGuardMode) -> Self {
-            MASK_MAIN_WINDOWS.store(
-                mode == StartupWindowGuardMode::MaskMainUntilStable,
-                Ordering::Release,
-            );
+            MASK_MAIN_WINDOWS.store(mode.masks_main_window(), Ordering::Release);
             REVEAL_MAIN_ON_RAW_VISIBLE.store(false, Ordering::Release);
             let (callwnd_hook, callwnd_ret_hook) = install_main_thread_hooks(mode);
             let hooks = Arc::new(MainThreadHooks::new(callwnd_hook, callwnd_ret_hook));
@@ -82,7 +92,7 @@ mod imp {
     }
 
     fn install_main_thread_hooks(mode: StartupWindowGuardMode) -> (HHOOK, HHOOK) {
-        if mode != StartupWindowGuardMode::MaskMainUntilStable {
+        if !mode.masks_main_window() {
             return (std::ptr::null_mut(), std::ptr::null_mut());
         }
         unsafe {
@@ -120,7 +130,7 @@ mod imp {
     ) -> LRESULT {
         if code >= 0 && MASK_MAIN_WINDOWS.load(Ordering::Acquire) {
             let message = &*(lparam as *const CWPSTRUCT);
-            mask_main_window_from_hook(message.hwnd);
+            mask_startup_window_from_hook(message.hwnd);
         }
         CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
     }
@@ -132,14 +142,23 @@ mod imp {
     ) -> LRESULT {
         if code >= 0 && MASK_MAIN_WINDOWS.load(Ordering::Acquire) {
             let message = &*(lparam as *const CWPRETSTRUCT);
-            mask_main_window_from_hook(message.hwnd);
+            mask_startup_window_from_hook(message.hwnd);
         }
         CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
     }
 
-    unsafe fn mask_main_window_from_hook(hwnd: HWND) {
-        if !hwnd.is_null() && window_class_is(hwnd, MAIN_WINDOW_CLASS) {
+    unsafe fn mask_startup_window_from_hook(hwnd: HWND) {
+        if hwnd.is_null() {
+            return;
+        }
+        if window_class_is(hwnd, MAIN_WINDOW_CLASS) {
             mask_startup_window(hwnd, MAIN_WINDOW_CLASS);
+        } else if window_class_is(hwnd, WINIT_EVENT_TARGET_CLASS) {
+            // Mask the 15x15 winit event target synchronously as it is created on
+            // the main thread, before the poll loop (or a trace sample) can catch
+            // the brief WS_EX_LAYERED-without-attributes state that Windows does
+            // not actually composite but IsWindowVisible reports as shown.
+            mask_startup_window(hwnd, WINIT_EVENT_TARGET_CLASS);
         }
     }
 
@@ -165,15 +184,11 @@ mod imp {
                 }
                 MainRevealAction::ForceReveal => force_reveal_main_windows(),
             }
-            if mode == StartupWindowGuardMode::MaskMainUntilStable
-                && main_reveal.observe_external_reveal(Instant::now())
-            {
+            if mode.masks_main_window() && main_reveal.observe_external_reveal(Instant::now()) {
                 main_thread_hooks.unhook();
                 force_reveal_main_windows();
             }
-            if mode == StartupWindowGuardMode::MaskMainUntilStable
-                && main_reveal.is_complete(Instant::now())
-            {
+            if mode.masks_main_window() && main_reveal.is_complete(Instant::now()) {
                 break;
             }
             pump_startup_window_events();
@@ -189,7 +204,7 @@ mod imp {
     }
 
     fn guard_duration(mode: StartupWindowGuardMode) -> Duration {
-        if mode == StartupWindowGuardMode::MaskMainUntilStable {
+        if mode.masks_main_window() {
             MAXIMIZED_GUARD_DURATION
         } else {
             AUXILIARY_GUARD_DURATION
@@ -403,7 +418,11 @@ mod imp {
         fn new(mode: StartupWindowGuardMode) -> Self {
             Self {
                 mode,
-                revealed: mode != StartupWindowGuardMode::MaskMainUntilStable,
+                // Both mask modes start masked (not yet revealed); AuxiliaryOnly
+                // never masks main, so it is effectively already revealed.
+                revealed: !mode.masks_main_window(),
+                // Only the Glow "stable" mode re-issues SW_MAXIMIZE; the others
+                // skip it (WGPU-direct maximizes via winit's window attributes).
                 maximize_requested: mode != StartupWindowGuardMode::MaskMainUntilStable,
                 force_reveal_until: None,
             }
@@ -429,7 +448,10 @@ mod imp {
                 self.maximize_requested = true;
                 return MainRevealAction::None;
             }
-            if snapshot.main_visible {
+            // Only the "stable" (Glow maximized) mode auto-reveals when the
+            // window first appears; MaskMainUntilRevealed holds the mask until the
+            // host reveals it explicitly on the first rendered frame.
+            if self.mode == StartupWindowGuardMode::MaskMainUntilStable && snapshot.main_visible {
                 self.revealed = true;
                 self.force_reveal_until = Some(now + MAIN_REVEAL_FORCE_DURATION);
                 return MainRevealAction::Reveal;
@@ -464,6 +486,7 @@ mod imp {
     pub(crate) enum StartupWindowGuardMode {
         AuxiliaryOnly,
         MaskMainUntilStable,
+        MaskMainUntilRevealed,
     }
 
     pub(crate) struct StartupFlashGuard;

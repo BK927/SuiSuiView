@@ -1,7 +1,6 @@
 #![allow(unsafe_code)]
 
 use crate::core::state::StateStore;
-use eframe::egui;
 use egui_winit::winit;
 use std::ffi::{c_void, CString};
 use std::num::NonZeroU32;
@@ -27,31 +26,8 @@ impl GlutinWindowContext {
         use glutin::display::GlDisplay as _;
         use glutin::prelude::GlSurface as _;
 
-        let placement = store.window_placement();
-        let window_size =
-            valid_window_size(placement, min_window_size).unwrap_or(default_window_size);
-        let mut attributes = winit::window::WindowAttributes::default()
-            .with_resizable(true)
-            .with_inner_size(winit::dpi::LogicalSize::new(
-                f64::from(window_size[0]),
-                f64::from(window_size[1]),
-            ))
-            .with_min_inner_size(winit::dpi::LogicalSize::new(
-                f64::from(min_window_size[0]),
-                f64::from(min_window_size[1]),
-            ))
-            .with_title("SuiSuiView")
-            .with_window_icon(window_icon(icon))
-            .with_visible(false);
-        if let Some(position) = valid_window_position(placement) {
-            attributes = attributes.with_position(winit::dpi::LogicalPosition::new(
-                f64::from(position[0]),
-                f64::from(position[1]),
-            ));
-        }
-        if placement.maximized {
-            attributes = attributes.with_maximized(true);
-        }
+        let attributes =
+            startup_window_attributes(store, icon, default_window_size, min_window_size);
 
         let config_template = glutin::config::ConfigTemplateBuilder::new()
             .prefer_hardware_accelerated(None)
@@ -152,24 +128,6 @@ impl GlutinWindowContext {
             .map_err(|error| format!("failed to swap GL buffers: {error}"))
     }
 
-    pub(super) fn into_window_after_context_destroy(self) -> Result<winit::window::Window, String> {
-        use glutin::context::PossiblyCurrentGlContext as _;
-
-        let Self {
-            window,
-            gl_context,
-            gl_display,
-            gl_surface,
-        } = self;
-        let not_current = gl_context
-            .make_not_current()
-            .map_err(|error| format!("failed to make GL context not current: {error}"))?;
-        drop(gl_surface);
-        drop(not_current);
-        drop(gl_display);
-        Ok(window)
-    }
-
     fn get_proc_address(&self, addr: &std::ffi::CStr) -> *const c_void {
         use glutin::display::GlDisplay as _;
         self.gl_display.get_proc_address(addr)
@@ -199,6 +157,58 @@ pub(super) fn create_gl_display(
         })
     };
     Ok((glutin_window, gl))
+}
+
+/// Build the shared startup window attributes (placement/size/icon, created
+/// hidden with dark chrome) used by both the Glow and WGPU-direct paths.
+fn startup_window_attributes(
+    store: &StateStore,
+    icon: egui::IconData,
+    default_window_size: [f32; 2],
+    min_window_size: [f32; 2],
+) -> winit::window::WindowAttributes {
+    let placement = store.window_placement();
+    let window_size = valid_window_size(placement, min_window_size).unwrap_or(default_window_size);
+    let mut attributes = winit::window::WindowAttributes::default()
+        .with_resizable(true)
+        .with_inner_size(winit::dpi::LogicalSize::new(
+            f64::from(window_size[0]),
+            f64::from(window_size[1]),
+        ))
+        .with_min_inner_size(winit::dpi::LogicalSize::new(
+            f64::from(min_window_size[0]),
+            f64::from(min_window_size[1]),
+        ))
+        .with_title("SuiSuiView")
+        .with_window_icon(window_icon(icon))
+        .with_visible(false);
+    if let Some(position) = valid_window_position(placement) {
+        attributes = attributes.with_position(winit::dpi::LogicalPosition::new(
+            f64::from(position[0]),
+            f64::from(position[1]),
+        ));
+    }
+    if placement.maximized {
+        attributes = attributes.with_maximized(true);
+    }
+    attributes
+}
+
+/// Create a plain winit window (no OpenGL context) for the WGPU-direct startup
+/// path, using the same placement/visibility/dark-chrome as the Glow window.
+pub(super) fn create_plain_window(
+    event_loop: &winit::event_loop::ActiveEventLoop,
+    store: &StateStore,
+    icon: egui::IconData,
+    default_window_size: [f32; 2],
+    min_window_size: [f32; 2],
+) -> Result<winit::window::Window, String> {
+    let attributes = startup_window_attributes(store, icon, default_window_size, min_window_size);
+    let window = event_loop
+        .create_window(attributes)
+        .map_err(|error| format!("failed to create window: {error}"))?;
+    apply_dark_startup_chrome(&window);
+    Ok(window)
 }
 
 fn window_icon(icon: egui::IconData) -> Option<winit::window::Icon> {

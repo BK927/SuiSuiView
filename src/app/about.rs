@@ -3,7 +3,7 @@ use super::ui::{dialog, icons, theme};
 use super::{SuiSuiViewApp, ViewMode};
 use crate::core::i18n::I18n;
 use crate::core::image_info::{ColorProfileInfo, ExifInfo, ImageExifTag, ImageInfo};
-use eframe::egui::{self, RichText};
+use egui::{self, RichText};
 use std::path::Path;
 
 const THIRD_PARTY_NOTICES: &str = include_str!("../../THIRD_PARTY_NOTICES.txt");

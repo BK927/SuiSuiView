@@ -5,7 +5,7 @@ use super::{
 use crate::core::effects::ViewEffects;
 use crate::core::state::WgpuUpscaleMethod;
 use crate::core::worker::{NavigationDirection, MAX_TARGET_LONG_EDGE};
-use eframe::egui::{self, ImageData};
+use egui::{self, ImageData};
 use std::sync::Arc;
 use std::time::Duration;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]

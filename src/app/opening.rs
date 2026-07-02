@@ -18,7 +18,7 @@ use crate::core::worker::{
     DEFAULT_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use eframe::egui::Vec2;
+use egui::Vec2;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Instant;

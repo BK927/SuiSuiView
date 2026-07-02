@@ -5,7 +5,6 @@ use crate::core::perf_trace::{self, PerfField};
 use crate::core::state::WgpuUpscaleMethod;
 use crate::core::worker::PreparedPage;
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
-use eframe::egui;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;

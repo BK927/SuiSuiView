@@ -1,5 +1,5 @@
 use super::super::SuiSuiViewApp;
-use eframe::egui::{self, Align2, Color32, CornerRadius, Frame, Margin, Stroke};
+use egui::{self, Align2, Color32, CornerRadius, Frame, Margin, Stroke};
 use std::time::Duration;
 
 const TOAST_VISIBLE_FOR: Duration = Duration::from_secs(4);

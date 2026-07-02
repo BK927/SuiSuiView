@@ -5,7 +5,7 @@ use crate::app::{
 };
 use crate::core::effects::ViewEffects;
 use crate::core::state::{FitMode, LargeImageAnchor};
-use eframe::egui::{
+use egui::{
     self, Align2, Color32, ColorImage, FontId, ImageData, Pos2, Rect, Stroke, StrokeKind,
     TextureHandle, TextureOptions, Vec2,
 };
@@ -185,7 +185,7 @@ pub(in crate::app) fn texture_options_for_sampling(sampling: TextureSampling) ->
 mod tests {
     use super::{source_pixel_scale, texture_options_for_sampling};
     use crate::app::TextureSampling;
-    use eframe::egui::TextureOptions;
+    use egui::TextureOptions;
 
     #[test]
     fn source_pixel_scale_maps_one_image_pixel_to_one_physical_pixel() {

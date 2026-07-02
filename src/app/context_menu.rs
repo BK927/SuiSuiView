@@ -4,7 +4,6 @@ use super::{
 };
 use crate::core::effects::ImageFilter;
 use crate::core::state::{FitMode, ReadingDirection};
-use eframe::egui;
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn show_context_menu(

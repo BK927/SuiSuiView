@@ -5,7 +5,7 @@ use super::{icons, path_labels, theme};
 use crate::core::effects::ImageFilter;
 use crate::core::i18n::I18n;
 use crate::core::state::{FitMode, PageTransitionStyle};
-use eframe::egui::{
+use egui::{
     self, Align2, Button, Color32, FontId, Frame, Margin, RichText, Sense, Stroke, Vec2,
 };
 use std::path::PathBuf;

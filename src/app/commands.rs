@@ -2,7 +2,7 @@ use crate::core::effects::ImageFilter;
 use crate::core::state::{
     AppSettings, CommandId, FitMode, KeyCode, KeyShortcut, MouseGesture, ReadingDirection,
 };
-use eframe::egui::{self, Key};
+use egui::{self, Key};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum AppCommand {

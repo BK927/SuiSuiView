@@ -1,5 +1,5 @@
 use super::theme;
-use eframe::egui::{self, text::LayoutJob, Color32, FontFamily, FontId, RichText, TextFormat};
+use egui::{self, text::LayoutJob, Color32, FontFamily, FontId, RichText, TextFormat};
 
 pub(in crate::app) const REGULAR_FONT: &str = "suisuiview-fluent-icons-regular";
 pub(in crate::app) const FILLED_FONT: &str = "suisuiview-fluent-icons-filled";

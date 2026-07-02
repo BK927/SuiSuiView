@@ -1,5 +1,5 @@
 use super::{color_image_to_rgba, UpscaleQualityVisual};
-use eframe::egui::ColorImage;
+use egui::ColorImage;
 use image::{imageops::FilterType, Rgba, RgbaImage};
 use std::fs;
 use std::path::Path;

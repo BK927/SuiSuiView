@@ -6,7 +6,7 @@ use crate::core::worker::{
     clamp_target_long_edge, display_dimensions_with_upscale, prepare_image_with_options,
     DecodeOptions, DecodeStrategy,
 };
-use eframe::egui::ColorImage;
+use egui::ColorImage;
 use image::{imageops::FilterType, RgbaImage};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -603,7 +603,7 @@ mod tests {
         selected_method_failure, PageUpscaleBench, UpscaleBenchReport, UpscaleBenchRun,
     };
     use crate::core::state::{ResizeFilter, WgpuUpscaleMethod};
-    use eframe::egui::{Color32, ColorImage};
+    use egui::{Color32, ColorImage};
     use image::{ImageBuffer, ImageFormat, Rgba};
     use std::fs;
     use std::io::Cursor;

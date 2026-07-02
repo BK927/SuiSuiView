@@ -6,7 +6,7 @@ use crate::core::state::{
     WgpuScalePlan, WgpuUpscaleMethod,
 };
 use crate::core::worker::{DecodeBackend, PreparedPage, PreparedTargetIntent};
-use eframe::egui::{TextureHandle, Vec2};
+use egui::{TextureHandle, Vec2};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;

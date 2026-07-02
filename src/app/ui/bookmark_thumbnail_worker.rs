@@ -10,7 +10,7 @@ use crate::core::perf_trace::{self, PerfField};
 use crate::core::source::{open_source_from_path, BookSource, SharedSource};
 use crate::core::worker::{prepare_image_with_options, DecodeOptions, PREVIEW_TARGET_LONG_EDGE};
 use crossbeam_channel::{Receiver, Sender};
-use eframe::egui::{self, ColorImage, Vec2};
+use egui::{self, ColorImage, Vec2};
 use lru::LruCache;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -233,7 +233,7 @@ mod tests {
     };
     use crate::core::source::{BookSource, SharedSource, SourceError};
     use crate::core::worker::DecodeOptions;
-    use eframe::egui::{self, Color32, ColorImage};
+    use egui::{self, Color32, ColorImage};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 

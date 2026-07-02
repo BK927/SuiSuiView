@@ -9,7 +9,7 @@ use crate::core::effects::{
 };
 use crate::core::state::PageTransitionStyle;
 use crate::core::worker::MAX_TARGET_LONG_EDGE;
-use eframe::egui::{
+use egui::{
     self, Align2, Color32, ColorImage, FontId, ImageData, Pos2, Rect, Sense, Stroke, StrokeKind,
     Vec2,
 };

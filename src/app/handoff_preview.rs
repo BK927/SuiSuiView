@@ -1,30 +1,28 @@
 #![allow(unsafe_code)]
 
-use super::runtime::{AppRuntime, ScreenRenderer, StartupReveal};
+use super::runtime::{AppRuntime, StartupReveal};
 use super::{StartupOpen, SuiSuiViewApp};
 use crate::core::state::{AppSettings, RendererMode, StateStore};
 use crossbeam_channel::Receiver;
-use eframe::egui::{self, ViewportId};
+use egui::{self, ViewportId};
 use egui_wgpu::winit::Painter;
 use egui_wgpu::{wgpu, WgpuConfiguration, WgpuSetupExisting};
 use egui_winit::winit;
 use serde::Serialize;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod glow_window;
 mod prewarm;
 
-use glow_window::{create_gl_display, GlutinWindowContext};
+use glow_window::{create_gl_display, create_plain_window, GlutinWindowContext};
 use prewarm::{run_wgpu_prewarm, PrewarmReport, PrewarmedWgpu};
 
 const REQUEST_ARG: &str = "--experimental-app-handoff";
 const REQUEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_APP_HANDOFF";
-const HANDOFF_DELAY_ENV: &str = "SUISUIVIEW_HANDOFF_DELAY_MS";
 const FAIL_STAGE_ENV: &str = "SUISUIVIEW_HANDOFF_FAIL_STAGE";
-const DEFAULT_HANDOFF_DELAY: Duration = Duration::from_millis(900);
 #[cfg(target_os = "windows")]
 static TITLE_SYNC_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -48,12 +46,12 @@ pub(crate) fn enabled_for_settings(settings: &AppSettings) -> bool {
 
 pub(crate) fn run(
     options: HandoffPreviewOptions,
-    handoff_enabled: bool,
+    wgpu_direct: bool,
 ) -> Result<(), HandoffFailure> {
     let event_loop = winit::event_loop::EventLoop::<()>::new()
         .map_err(|error| HandoffFailure::new(HandoffFailureStage::Unknown, error.to_string()))?;
-    let handoff_delay = handoff_delay_from_env();
-    let mut app = HandoffPreviewApp::new(options, handoff_delay, handoff_enabled);
+    let wake_proxy = event_loop.create_proxy();
+    let mut app = HandoffPreviewApp::new(options, wgpu_direct, wake_proxy);
     let result = event_loop.run_app(&mut app);
     if let Some(failure) = app.failure.take() {
         return Err(failure);
@@ -65,14 +63,6 @@ pub(crate) fn run(
             app.metrics.clone(),
         )
     })
-}
-
-fn handoff_delay_from_env() -> Duration {
-    std::env::var(HANDOFF_DELAY_ENV)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(DEFAULT_HANDOFF_DELAY)
 }
 
 #[derive(Debug, Clone)]
@@ -113,9 +103,6 @@ pub(crate) enum HandoffFailureStage {
     GlCreate,
     GlSwap,
     WgpuPrewarm,
-    GlDestroy,
-    WgpuSurfaceAttach,
-    WgpuRenderState,
     FirstWgpuFrame,
     Unknown,
 }
@@ -126,9 +113,6 @@ impl HandoffFailureStage {
             Self::GlCreate => "gl_create",
             Self::GlSwap => "gl_swap",
             Self::WgpuPrewarm => "wgpu_prewarm",
-            Self::GlDestroy => "gl_destroy",
-            Self::WgpuSurfaceAttach => "wgpu_surface_attach",
-            Self::WgpuRenderState => "wgpu_render_state",
             Self::FirstWgpuFrame => "first_wgpu_frame",
             Self::Unknown => "unknown",
         }
@@ -137,10 +121,9 @@ impl HandoffFailureStage {
 
 struct HandoffPreviewApp {
     options: Option<HandoffPreviewOptions>,
-    handoff_delay: Duration,
-    // When false, run as a plain Glow host: never prewarm WGPU or hand off,
-    // staying in `Stage::Glow` for the whole session.
-    handoff_enabled: bool,
+    // true: build the window and attach a WGPU surface directly (renderer_mode
+    // Wgpu). false: run the Glow-only host (LowMemoryGlow) for the whole session.
+    wgpu_direct: bool,
     started_at: Instant,
     stage: Option<Stage>,
     prewarm_rx: Option<mpsc::Receiver<PrewarmReport>>,
@@ -148,6 +131,15 @@ struct HandoffPreviewApp {
     metrics: HandoffPreviewMetrics,
     failure: Option<HandoffFailure>,
     summary_printed: bool,
+    // Reactive control flow for the steady-state host (Glow-only, or the WGPU
+    // stage after handoff): egui's repaint callback records the next requested
+    // redraw time here so `about_to_wait` can `WaitUntil` it instead of
+    // busy-polling. `None` means idle (wait for input).
+    redraw_deadline: Arc<Mutex<Option<Instant>>>,
+    // Wakes the (possibly sleeping) event loop when a repaint is requested from
+    // another thread, so background work (image loads, thumbnails) is shown
+    // without waiting for the next input event.
+    wake_proxy: winit::event_loop::EventLoopProxy<()>,
 }
 
 enum Stage {
@@ -189,11 +181,14 @@ pub(crate) struct HandoffPreviewMetrics {
 }
 
 impl HandoffPreviewApp {
-    fn new(options: HandoffPreviewOptions, handoff_delay: Duration, handoff_enabled: bool) -> Self {
+    fn new(
+        options: HandoffPreviewOptions,
+        wgpu_direct: bool,
+        wake_proxy: winit::event_loop::EventLoopProxy<()>,
+    ) -> Self {
         Self {
             options: Some(options),
-            handoff_delay,
-            handoff_enabled,
+            wgpu_direct,
             started_at: Instant::now(),
             stage: None,
             prewarm_rx: None,
@@ -201,6 +196,8 @@ impl HandoffPreviewApp {
             metrics: HandoffPreviewMetrics::default(),
             failure: None,
             summary_printed: false,
+            redraw_deadline: Arc::new(Mutex::new(None)),
+            wake_proxy,
         }
     }
 
@@ -230,20 +227,14 @@ impl HandoffPreviewApp {
             Some(gl_window.window().scale_factor() as f32),
             true,
         );
+        self.install_repaint_callback(&egui_glow.egui_ctx);
         let app = SuiSuiViewApp::new(
-            AppRuntime::new(
-                egui_glow.egui_ctx.clone(),
-                ScreenRenderer::Glow,
-                StartupReveal::HostManaged,
-            ),
+            AppRuntime::new(egui_glow.egui_ctx.clone(), StartupReveal::HostManaged),
             options.store,
             options.ipc_rx,
             options.startup_open_path,
             options.startup_open,
         );
-        if self.handoff_enabled {
-            self.start_prewarm();
-        }
         gl_window.window().request_redraw();
         self.stage = Some(Stage::Glow {
             app,
@@ -288,7 +279,15 @@ impl HandoffPreviewApp {
             self.fail(event_loop, HandoffFailureStage::WgpuPrewarm, error);
             return;
         }
+        // Cleared before the frame so the app's repaint requests during
+        // `update_frame` (via the callback) set a fresh deadline for the loop.
+        *self.redraw_deadline.lock().unwrap() = None;
         egui_glow.run(gl_window.window(), |ctx| app.update_frame(ctx));
+        if app.close_requested {
+            self.print_summary();
+            event_loop.exit();
+            return;
+        }
 
         unsafe {
             use glow::HasContext as _;
@@ -305,7 +304,6 @@ impl HandoffPreviewApp {
             return;
         }
 
-        let now = Instant::now();
         let now_ms = elapsed_ms(self.started_at.elapsed());
         self.metrics.last_glow_present_ms = Some(now_ms);
         if self.metrics.first_glow_present_ms.is_none() {
@@ -315,140 +313,13 @@ impl HandoffPreviewApp {
         }
         sync_visible_window_title(gl_window.window());
 
-        if self.ready_to_handoff(now) {
-            self.begin_handoff(event_loop, app, gl_window, gl, egui_glow);
-            return;
-        }
-
-        gl_window.window().request_redraw();
+        // The Glow host is reactive: the next redraw is scheduled by egui's
+        // repaint deadline (see `about_to_wait`) or by input in `window_event`.
         self.stage = Some(Stage::Glow {
             app,
             gl_window,
             gl,
             egui_glow,
-        });
-    }
-
-    fn ready_to_handoff(&self, now: Instant) -> bool {
-        if !self.handoff_enabled {
-            return false;
-        }
-        let Some(first_visible_ms) = self.metrics.first_glow_present_ms else {
-            return false;
-        };
-        let first_visible_at = self.started_at + Duration::from_secs_f64(first_visible_ms / 1000.0);
-        let prewarm_ready = self.prewarmed_wgpu.is_some() || self.metrics.prewarm_error.is_some();
-        prewarm_ready && now.duration_since(first_visible_at) >= self.handoff_delay
-    }
-
-    fn begin_handoff(
-        &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
-        mut app: SuiSuiViewApp,
-        gl_window: GlutinWindowContext,
-        gl: Arc<glow::Context>,
-        mut egui_glow: egui_glow::EguiGlow,
-    ) {
-        self.metrics.handoff_started_ms = Some(elapsed_ms(self.started_at.elapsed()));
-        let egui_ctx = egui_glow.egui_ctx.clone();
-
-        let destroy_started = Instant::now();
-        egui_glow.destroy();
-        drop(egui_glow);
-        drop(gl);
-        self.metrics.glow_destroy_ms = Some(elapsed_ms(destroy_started.elapsed()));
-
-        let context_destroy_started = Instant::now();
-        if let Some(error) = injected_failure(HandoffFailureStage::GlDestroy) {
-            self.fail(event_loop, HandoffFailureStage::GlDestroy, error);
-            return;
-        }
-        let window = match gl_window.into_window_after_context_destroy() {
-            Ok(window) => window,
-            Err(error) => {
-                self.fail(event_loop, HandoffFailureStage::GlDestroy, error);
-                return;
-            }
-        };
-        self.metrics.gl_context_destroy_ms = Some(elapsed_ms(context_destroy_started.elapsed()));
-        window.set_title("SuiSuiView");
-        set_process_visible_window_title("SuiSuiView");
-        schedule_process_visible_window_title("SuiSuiView".to_owned());
-
-        let mut config = tuned_wgpu_configuration();
-        if let Some(prewarmed) = self.prewarmed_wgpu.take() {
-            config.wgpu_setup = WgpuSetupExisting {
-                instance: prewarmed.instance,
-                adapter: prewarmed.adapter,
-                device: prewarmed.device,
-                queue: prewarmed.queue,
-            }
-            .into();
-            self.metrics.used_prewarmed_wgpu = true;
-        }
-
-        let painter_started = Instant::now();
-        let mut painter =
-            pollster::block_on(Painter::new(egui_ctx.clone(), config, 1, None, false, true));
-        self.metrics.wgpu_painter_new_ms = Some(elapsed_ms(painter_started.elapsed()));
-
-        let set_window_started = Instant::now();
-        if let Some(error) = injected_failure(HandoffFailureStage::WgpuSurfaceAttach) {
-            self.fail(event_loop, HandoffFailureStage::WgpuSurfaceAttach, error);
-            return;
-        }
-        let set_window_result = unsafe {
-            pollster::block_on(painter.set_window_unsafe(ViewportId::ROOT, Some(&window)))
-        };
-        if let Err(error) = set_window_result {
-            self.fail(
-                event_loop,
-                HandoffFailureStage::WgpuSurfaceAttach,
-                format!("failed to attach WGPU surface: {error}"),
-            );
-            return;
-        }
-        self.metrics.wgpu_set_window_ms = Some(elapsed_ms(set_window_started.elapsed()));
-
-        if let Some(error) = injected_failure(HandoffFailureStage::WgpuRenderState) {
-            self.fail(event_loop, HandoffFailureStage::WgpuRenderState, error);
-            return;
-        }
-        let Some(render_state) = painter.render_state() else {
-            self.fail(
-                event_loop,
-                HandoffFailureStage::WgpuRenderState,
-                "WGPU render state was not initialized".to_owned(),
-            );
-            return;
-        };
-        app.gpu_effects_available = true;
-        app.gpu_target_format = Some(render_state.target_format);
-        app.textures.clear();
-        app.bookmark_thumbnails = None;
-
-        let mut egui_state = egui_winit::State::new(
-            egui_ctx,
-            ViewportId::ROOT,
-            event_loop,
-            Some(window.scale_factor() as f32),
-            window.theme(),
-            painter.max_texture_side(),
-        );
-        let focused = window.has_focus();
-        egui_state.egui_input_mut().focused = focused;
-        egui_state
-            .egui_input_mut()
-            .events
-            .push(egui::Event::WindowFocused(focused));
-
-        window.request_redraw();
-        self.stage = Some(Stage::Wgpu {
-            app,
-            window,
-            egui_state,
-            painter,
-            viewport_info: egui::ViewportInfo::default(),
         });
     }
 
@@ -461,6 +332,9 @@ impl HandoffPreviewApp {
         mut painter: Painter,
         mut viewport_info: egui::ViewportInfo,
     ) {
+        // Cleared before the frame so this frame's repaint requests (via the
+        // shared egui repaint callback) set a fresh deadline for `about_to_wait`.
+        *self.redraw_deadline.lock().unwrap() = None;
         painter.handle_screenshots(&mut egui_state.egui_input_mut().events);
         let raw_input = egui_state.take_egui_input(&window);
         let egui_ctx = egui_state.egui_ctx().clone();
@@ -495,9 +369,13 @@ impl HandoffPreviewApp {
         if self.metrics.first_wgpu_present_ms.is_none() {
             let now_ms = elapsed_ms(self.started_at.elapsed());
             self.metrics.first_wgpu_present_ms = Some(now_ms);
-            if let Some(last_glow_ms) = self.metrics.last_glow_present_ms {
-                self.metrics.handoff_gap_ms = Some(now_ms - last_glow_ms);
-            }
+            // The flash guard (MaskMainUntilRevealed) has kept the main window
+            // masked (layered alpha 0) since it was shown inside create_window;
+            // now that a frame is painted, release the mask so it appears already
+            // rendered. set_visible is idempotent here (the window is already
+            // WS_VISIBLE) but keeps the intent explicit.
+            crate::startup_window::reveal_main_windows();
+            window.set_visible(true);
         }
 
         if app_requested_close(&viewport_info) {
@@ -513,7 +391,8 @@ impl HandoffPreviewApp {
             return;
         }
 
-        window.request_redraw();
+        // Reactive: the next WGPU frame is scheduled by egui's repaint deadline
+        // (see `about_to_wait`) or by input in `window_event`, not every frame.
         self.stage = Some(Stage::Wgpu {
             app,
             window,
@@ -521,6 +400,116 @@ impl HandoffPreviewApp {
             painter,
             viewport_info,
         });
+    }
+
+    /// Register egui's repaint callback (records the next redraw deadline and
+    /// wakes the loop). Shared by the Glow and WGPU-direct start paths.
+    fn install_repaint_callback(&self, egui_ctx: &egui::Context) {
+        let deadline = self.redraw_deadline.clone();
+        let wake_proxy = self.wake_proxy.clone();
+        egui_ctx.set_request_repaint_callback(move |info| {
+            let at = Instant::now() + info.delay;
+            {
+                let mut slot = deadline.lock().unwrap();
+                *slot = Some(slot.map_or(at, |current| current.min(at)));
+            }
+            // Wake the event loop so it re-evaluates the deadline; needed when
+            // the request comes from a non-UI thread while idle.
+            let _ = wake_proxy.send_event(());
+        });
+    }
+
+    /// WGPU-direct startup: skip the Glow stage and the handoff entirely —
+    /// create a plain window and attach WGPU straight away. The WGPU device is
+    /// prewarmed concurrently with window creation; the window stays hidden
+    /// until the first WGPU frame reveals it (see `redraw_wgpu`).
+    fn start_wgpu_direct(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) -> Result<(), String> {
+        let options = self
+            .options
+            .take()
+            .ok_or_else(|| "handoff preview options were already consumed".to_owned())?;
+
+        // Build the WGPU device on a worker thread while we create the window.
+        self.start_prewarm();
+        let window = create_plain_window(
+            event_loop,
+            &options.store,
+            options.icon,
+            options.default_window_size,
+            options.min_window_size,
+        )?;
+        self.wait_for_prewarm();
+
+        let egui_ctx = egui::Context::default();
+        self.install_repaint_callback(&egui_ctx);
+
+        let mut config = tuned_wgpu_configuration();
+        if let Some(prewarmed) = self.prewarmed_wgpu.take() {
+            config.wgpu_setup = WgpuSetupExisting {
+                instance: prewarmed.instance,
+                adapter: prewarmed.adapter,
+                device: prewarmed.device,
+                queue: prewarmed.queue,
+            }
+            .into();
+            self.metrics.used_prewarmed_wgpu = true;
+        }
+
+        let painter_started = Instant::now();
+        let mut painter =
+            pollster::block_on(Painter::new(egui_ctx.clone(), config, 1, None, false, true));
+        self.metrics.wgpu_painter_new_ms = Some(elapsed_ms(painter_started.elapsed()));
+
+        let set_window_started = Instant::now();
+        let set_window_result =
+            unsafe { pollster::block_on(painter.set_window_unsafe(ViewportId::ROOT, Some(&window))) };
+        if let Err(error) = set_window_result {
+            return Err(format!("failed to attach WGPU surface: {error}"));
+        }
+        self.metrics.wgpu_set_window_ms = Some(elapsed_ms(set_window_started.elapsed()));
+
+        let target_format = painter
+            .render_state()
+            .map(|state| state.target_format)
+            .ok_or_else(|| "WGPU render state was not initialized".to_owned())?;
+
+        let mut egui_state = egui_winit::State::new(
+            egui_ctx.clone(),
+            ViewportId::ROOT,
+            event_loop,
+            Some(window.scale_factor() as f32),
+            window.theme(),
+            painter.max_texture_side(),
+        );
+        let focused = window.has_focus();
+        egui_state.egui_input_mut().focused = focused;
+        egui_state
+            .egui_input_mut()
+            .events
+            .push(egui::Event::WindowFocused(focused));
+
+        let mut app = SuiSuiViewApp::new(
+            AppRuntime::new(egui_ctx, StartupReveal::HostManaged),
+            options.store,
+            options.ipc_rx,
+            options.startup_open_path,
+            options.startup_open,
+        );
+        app.gpu_effects_available = true;
+        app.gpu_target_format = Some(target_format);
+
+        window.request_redraw();
+        self.stage = Some(Stage::Wgpu {
+            app,
+            window,
+            egui_state,
+            painter,
+            viewport_info: egui::ViewportInfo::default(),
+        });
+        Ok(())
     }
 
     fn start_prewarm(&mut self) {
@@ -539,34 +528,51 @@ impl HandoffPreviewApp {
         self.prewarm_rx = Some(receiver);
     }
 
+    fn apply_prewarm_report(&mut self, report: PrewarmReport) {
+        self.metrics.prewarm_ready_ms = Some(report.ready_ms);
+        self.metrics.prewarm_init_ms = Some(report.init_ms);
+        self.metrics.prewarm_adapter_name = report.adapter_name;
+        self.metrics.prewarm_backend = report.backend;
+        self.metrics.prewarm_device_type = report.device_type;
+        match report.result {
+            Ok(prewarmed) => {
+                if let Some(error) = injected_failure(HandoffFailureStage::WgpuPrewarm) {
+                    self.metrics.prewarm_error = Some(error);
+                } else {
+                    self.prewarmed_wgpu = Some(prewarmed);
+                }
+            }
+            Err(error) => {
+                self.metrics.prewarm_error = Some(error);
+            }
+        }
+    }
+
     fn poll_prewarm(&mut self) {
         let Some(receiver) = self.prewarm_rx.take() else {
             return;
         };
         match receiver.try_recv() {
-            Ok(report) => {
-                self.metrics.prewarm_ready_ms = Some(report.ready_ms);
-                self.metrics.prewarm_init_ms = Some(report.init_ms);
-                self.metrics.prewarm_adapter_name = report.adapter_name;
-                self.metrics.prewarm_backend = report.backend;
-                self.metrics.prewarm_device_type = report.device_type;
-                match report.result {
-                    Ok(prewarmed) => {
-                        if let Some(error) = injected_failure(HandoffFailureStage::WgpuPrewarm) {
-                            self.metrics.prewarm_error = Some(error);
-                        } else {
-                            self.prewarmed_wgpu = Some(prewarmed);
-                        }
-                    }
-                    Err(error) => {
-                        self.metrics.prewarm_error = Some(error);
-                    }
-                }
-            }
+            Ok(report) => self.apply_prewarm_report(report),
             Err(mpsc::TryRecvError::Empty) => {
                 self.prewarm_rx = Some(receiver);
             }
             Err(mpsc::TryRecvError::Disconnected) => {
+                self.metrics.prewarm_error = Some("prewarm thread disconnected".to_owned());
+            }
+        }
+    }
+
+    /// Block until the WGPU prewarm thread finishes (used by the WGPU-direct
+    /// path, which spawns prewarm concurrently with window creation and then
+    /// needs the prewarmed device to build the painter).
+    fn wait_for_prewarm(&mut self) {
+        let Some(receiver) = self.prewarm_rx.take() else {
+            return;
+        };
+        match receiver.recv() {
+            Ok(report) => self.apply_prewarm_report(report),
+            Err(_) => {
                 self.metrics.prewarm_error = Some("prewarm thread disconnected".to_owned());
             }
         }
@@ -632,7 +638,14 @@ impl winit::application::ApplicationHandler<()> for HandoffPreviewApp {
         if self.stage.is_some() {
             return;
         }
-        if let Err(error) = self.start_glow(event_loop) {
+        // renderer_mode Wgpu builds the window + attaches a WGPU surface
+        // directly; LowMemoryGlow runs the Glow-only host.
+        let result = if self.wgpu_direct {
+            self.start_wgpu_direct(event_loop)
+        } else {
+            self.start_glow(event_loop)
+        };
+        if let Err(error) = result {
             self.fail(event_loop, HandoffFailureStage::GlCreate, error);
         }
     }
@@ -694,18 +707,37 @@ impl winit::application::ApplicationHandler<()> for HandoffPreviewApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        if matches!(self.stage, Some(Stage::Glow { .. }))
-            && self.metrics.first_glow_present_ms.is_none()
-        {
+        use winit::event_loop::ControlFlow;
+
+        // Bootstrap the first frame (Glow, or the first WGPU frame for
+        // WGPU-direct) so we can reveal and measure it.
+        let needs_first_frame = match self.stage {
+            Some(Stage::Glow { .. }) => self.metrics.first_glow_present_ms.is_none(),
+            Some(Stage::Wgpu { .. }) => self.metrics.first_wgpu_present_ms.is_none(),
+            None => false,
+        };
+        if needs_first_frame {
             self.redraw(event_loop);
-        } else {
-            match self.stage.as_ref() {
-                Some(Stage::Glow { gl_window, .. }) => gl_window.window().request_redraw(),
-                Some(Stage::Wgpu { window, .. }) => window.request_redraw(),
-                None => {}
-            }
+            event_loop.set_control_flow(ControlFlow::Poll);
+            return;
         }
-        event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+
+        // Reactive steady state (both the Glow-only host and the WGPU-direct
+        // stage): sleep until egui's next requested repaint or an input event
+        // instead of rendering every loop iteration.
+        let deadline = *self.redraw_deadline.lock().unwrap();
+        match deadline {
+            Some(at) if at <= Instant::now() => {
+                match self.stage.as_ref() {
+                    Some(Stage::Glow { gl_window, .. }) => gl_window.window().request_redraw(),
+                    Some(Stage::Wgpu { window, .. }) => window.request_redraw(),
+                    None => {}
+                }
+                event_loop.set_control_flow(ControlFlow::Poll);
+            }
+            Some(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
+        }
     }
 
     fn exiting(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {

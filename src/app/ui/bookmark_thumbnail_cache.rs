@@ -1,6 +1,6 @@
 #[cfg(not(test))]
 use directories::ProjectDirs;
-use eframe::egui::ColorImage;
+use egui::ColorImage;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -173,7 +173,7 @@ fn collect_thumbnail_cache_files(dir: &Path, files: &mut Vec<CacheFile>) -> Resu
 mod tests {
     use super::BookmarkThumbnailDiskEntry;
     use super::{decode_thumbnail_png, encode_thumbnail_png, read_cached_thumbnail};
-    use eframe::egui::{Color32, ColorImage};
+    use egui::{Color32, ColorImage};
     use std::fs;
 
     #[test]

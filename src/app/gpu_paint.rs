@@ -11,7 +11,7 @@ use crate::core::perf_trace::{self, PerfField};
 use crate::core::state::{
     FitMode, GpuEffectMode, RendererMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod,
 };
-use eframe::egui::{self, PaintCallbackInfo, Rect};
+use egui::{self, PaintCallbackInfo, Rect};
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use lru::LruCache;
 use std::borrow::Cow;
@@ -1999,7 +1999,7 @@ fn realtime_sr_stage_texture_key(
 mod tests {
     use super::*;
     use crate::core::worker::DecodeOptions;
-    use eframe::egui::{pos2, vec2};
+    use egui::{pos2, vec2};
 
     #[test]
     fn draw_id_separates_same_page_in_different_panes() {

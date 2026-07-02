@@ -3,7 +3,7 @@ use crate::core::perf_trace::{self, PerfField};
 use crate::core::source::SharedSource;
 use crate::core::worker::DecodeOptions;
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
-use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions, Vec2};
+use egui::{self, Color32, ColorImage, TextureHandle, TextureOptions, Vec2};
 use lru::LruCache;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;

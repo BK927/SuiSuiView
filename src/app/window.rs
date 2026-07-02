@@ -1,6 +1,6 @@
 use super::{SuiSuiViewApp, STATE_SAVE_DEBOUNCE};
 use crate::core::state::WindowPlacement;
-use eframe::egui::{self, Pos2, Rect, Vec2};
+use egui::{self, Pos2, Rect, Vec2};
 use std::time::{Duration, Instant};
 
 const POSITION_EDGE_PADDING: f32 = 16.0;
@@ -393,7 +393,7 @@ mod tests {
         clamped_window_position, looks_like_dpi_size_artifact, persistent_inner_size,
         scale_changed, size_close_to, take_startup_reveal_request,
     };
-    use eframe::egui::{pos2, vec2, Rect};
+    use egui::{pos2, vec2, Rect};
 
     #[test]
     fn clamped_window_position_keeps_visible_window() {

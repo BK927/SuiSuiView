@@ -5,7 +5,7 @@ use super::bookmark_thumbnails::{thumbnail_tint_for_state, BookmarkThumbnailStat
 use super::{dialog, icons, theme};
 use crate::core::i18n::I18n;
 use crate::core::state::PageBookmarkEntry;
-use eframe::egui::{
+use egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Rect, RichText, Sense, Stroke,
     StrokeKind,
 };

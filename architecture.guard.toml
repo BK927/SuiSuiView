@@ -16,7 +16,7 @@ growth_fail_lines = 200
 purpose = "Application shell, durable SuiSuiViewApp state, and top-level egui update orchestration."
 allowed_growth = [
   "SuiSuiViewApp state fields that are genuinely cross-cutting.",
-  "Top-level eframe::App update orchestration.",
+  "Top-level egui update orchestration (update_frame driven by the winit host).",
   "Small wiring needed while extracting app submodules."
 ]
 remediation = [

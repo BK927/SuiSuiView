@@ -13,7 +13,7 @@ use crate::core::worker::{
 use commands::{collect_keyboard_actions, AppCommand, KeyboardAction, NavigationRelease};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use debug_compare::{DebugCompareState, DebugCompareWorker};
-use eframe::egui::{self, Pos2, Rect, Vec2};
+use egui::{self, Pos2, Rect, Vec2};
 use image_info::ImageInfoState;
 use lru::LruCache;
 use rfd::FileDialog;
@@ -35,12 +35,10 @@ mod debug_compare;
 mod delete_dialog;
 mod deletion;
 mod edge_prompt;
-mod eframe_host;
 pub(crate) mod fast_start;
 #[cfg(target_os = "windows")]
 mod file_associations;
 mod gpu_paint;
-#[cfg(feature = "wgpu-fast-start")]
 pub(crate) mod handoff_preview;
 mod image_header;
 mod image_info;
@@ -81,6 +79,12 @@ pub(in crate::app) use delete_dialog::PendingDeleteDialog;
 pub(in crate::app) use edge_prompt::EdgePrompt;
 pub(crate) use opening::{start_startup_open_loader, StartupOpen};
 pub(in crate::app) use opening::{LoaderEvent, OpenOrigin};
+
+/// Spawn a fresh copy of this process (winit forbids creating a second event
+/// loop in-process, so degrading renderers requires a relaunch).
+pub(crate) fn restart_current_process() -> Result<(), String> {
+    platform::restart_current_process()
+}
 #[cfg(test)]
 use sibling_books::adjacent_sibling_book_paths;
 pub(in crate::app) use sibling_books::{adjacent_sibling_book_paths_ordered, sibling_book_path};
@@ -156,6 +160,9 @@ pub struct SuiSuiViewApp {
     file_association_selection: file_associations::FileAssociationSelection,
     pending_gpu_acceleration: Option<bool>,
     startup_reveal_pending: bool,
+    // Set when the app asks to close (esc-to-quit, restart, etc). The winit
+    // host reads this to exit; a ViewportCommand::Close is also sent.
+    close_requested: bool,
     fast_start_failure_notice: Option<FastStartFailureNotice>,
     shortcut_capture: Option<settings_input::ShortcutCapture>,
     shortcut_conflict: Option<settings_input::ShortcutConflict>,
@@ -260,7 +267,6 @@ impl SuiSuiViewApp {
     ) -> Self {
         let app_started = Instant::now();
         let egui_ctx = runtime.egui_ctx().clone();
-        let screen_renderer = runtime.screen_renderer();
         let startup_reveal_pending =
             runtime.startup_reveal() == runtime::StartupReveal::AfterFirstFrame;
         platform::install_app_fonts(&egui_ctx);
@@ -295,6 +301,7 @@ impl SuiSuiViewApp {
             file_association_selection: file_associations::FileAssociationSelection::default(),
             pending_gpu_acceleration: None,
             startup_reveal_pending,
+            close_requested: false,
             fast_start_failure_notice,
             shortcut_capture: None,
             shortcut_conflict: None,
@@ -342,8 +349,10 @@ impl SuiSuiViewApp {
             auto_kind_hints: HashMap::new(),
             auto_kind_inflight: HashSet::new(),
             bookmark_thumbnails: None,
-            gpu_effects_available: screen_renderer.supports_wgsl_paint(),
-            gpu_target_format: screen_renderer.wgpu_target_format(),
+            // Both stages start on Glow; the WGPU stage patches these in
+            // `begin_handoff` once its render state is available.
+            gpu_effects_available: false,
+            gpu_target_format: None,
             last_nav_direction: NavigationDirection::Forward,
             transition: None,
             pending_page_turn: None,
@@ -763,9 +772,13 @@ impl SuiSuiViewApp {
             AppCommand::CloseBook => {
                 self.close_book("Closed current book.");
             }
-            AppCommand::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            AppCommand::Quit => {
+                self.close_requested = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
             AppCommand::QuitFromEsc => {
                 if self.settings.esc_to_quit {
+                    self.close_requested = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 } else {
                     self.notify("ESC exit is disabled in settings.");
@@ -1112,7 +1125,7 @@ mod tests {
         DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PreparedPage,
         MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
     };
-    use eframe::egui::{Color32, ColorImage, Pos2, Rect, Vec2};
+    use egui::{Color32, ColorImage, Pos2, Rect, Vec2};
     use lru::LruCache;
     use std::fs;
     use std::num::NonZeroUsize;
@@ -1629,7 +1642,7 @@ mod tests {
     fn rotation_swaps_layout_size_for_quarter_turns() {
         assert_eq!(
             transformed_page_size(100.0, 200.0, ViewTransform::default()),
-            eframe::egui::Vec2::new(100.0, 200.0)
+            egui::Vec2::new(100.0, 200.0)
         );
         assert_eq!(
             transformed_page_size(
@@ -1640,7 +1653,7 @@ mod tests {
                     ..ViewTransform::default()
                 },
             ),
-            eframe::egui::Vec2::new(200.0, 100.0)
+            egui::Vec2::new(200.0, 100.0)
         );
     }
 
