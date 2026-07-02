@@ -3,8 +3,8 @@ use super::perf;
 use super::SuiSuiViewApp;
 use crate::core::effects::ViewEffects;
 use crate::core::state::{
-    AppSettings, CacheMemoryMode, FitMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod,
-    MANUAL_CACHE_MB_MAX, MANUAL_CACHE_MB_MIN,
+    AppSettings, CacheMemoryMode, CpuScaleFilter, FitMode, WgpuDownscaleMethod, WgpuScalePlan,
+    WgpuUpscaleMethod, MANUAL_CACHE_MB_MAX, MANUAL_CACHE_MB_MIN,
 };
 use crate::core::worker::{
     clamp_target_long_edge, preview_prefetch_indices, CachedPageKey, DecodeOptions,
@@ -490,12 +490,22 @@ pub(in crate::app) fn should_allow_cpu_display_upscale(
     fit_mode: FitMode,
     manual_zoom: f32,
     gpu_display_upscale_can_own_upscale: bool,
+    cpu_upscale_filter: CpuScaleFilter,
 ) -> bool {
+    let _ = manual_zoom;
+    // Manual zoom and original-size viewing never re-prepare at an enlarged size.
     if matches!(fit_mode, FitMode::Manual | FitMode::Original) {
         return false;
     }
-    let _ = (manual_zoom, gpu_display_upscale_can_own_upscale);
-    false
+    // In WGPU mode the GPU display upscaler owns the enlargement, so preparing an
+    // already-enlarged page on the CPU would be wasted work and cache memory.
+    if gpu_display_upscale_can_own_upscale {
+        return false;
+    }
+    // A Bilinear CPU upscale is identical to the free hardware texture sampler, so
+    // keep the page native and let the sampler enlarge it: same result, no large
+    // upscaled page held in the cache.
+    !matches!(cpu_upscale_filter, CpuScaleFilter::Bilinear)
 }
 
 pub(in crate::app) fn prepared_target_intent_for_view(

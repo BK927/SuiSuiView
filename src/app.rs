@@ -700,6 +700,7 @@ impl SuiSuiViewApp {
             self.fit_mode,
             self.manual_zoom,
             self.gpu_display_upscale_can_own_upscale(),
+            self.settings.cpu_upscale_filter,
         )
     }
 
@@ -1103,9 +1104,9 @@ mod tests {
         PageMetrics, TextureCacheKey, TextureSampling, ViewEffects, ViewMode, ViewTransform,
     };
     use crate::core::state::{
-        AppSettings, CacheMemoryMode, FitMode, KeyCode, KeyShortcut, PageTransitionStyle,
-        ReadingDirection, WgpuDownscaleMethod, WgpuUpscaleMethod, MANUAL_CACHE_MB_MAX,
-        MANUAL_CACHE_MB_MIN,
+        AppSettings, CacheMemoryMode, CpuScaleFilter, FitMode, KeyCode, KeyShortcut,
+        PageTransitionStyle, ReadingDirection, WgpuDownscaleMethod, WgpuUpscaleMethod,
+        MANUAL_CACHE_MB_MAX, MANUAL_CACHE_MB_MIN,
     };
     use crate::core::worker::{
         DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PreparedPage,
@@ -1857,44 +1858,54 @@ mod tests {
 
     #[test]
     fn gpu_display_upscale_disables_cpu_prepare_upscale() {
+        // WGPU mode with a GPU display upscaler owns the enlargement, so the CPU
+        // prepare step must not also upscale, regardless of the CPU filter.
         assert!(!should_allow_cpu_display_upscale(
             FitMode::FitPage,
             1.0,
-            true
+            true,
+            CpuScaleFilter::Lanczos3,
         ));
         assert!(!should_allow_cpu_display_upscale(
             FitMode::Manual,
             2.0,
-            true
+            true,
+            CpuScaleFilter::Lanczos3,
         ));
     }
 
     #[test]
-    fn cpu_prepare_upscale_stays_disabled_for_display_fit_modes() {
+    fn cpu_prepare_upscale_enabled_for_fit_modes_without_gpu_upscaler() {
+        // Glow mode (no GPU display upscaler): the user's CPU upscale filter enlarges
+        // fit-mode pages during preparation.
+        for fit_mode in [FitMode::FitPage, FitMode::FitWidth, FitMode::FitHeight] {
+            assert!(should_allow_cpu_display_upscale(
+                fit_mode,
+                1.0,
+                false,
+                CpuScaleFilter::Lanczos3,
+            ));
+        }
+        // Bilinear equals the free hardware sampler, so stay native and let the
+        // sampler enlarge instead of caching a large upscaled page.
         assert!(!should_allow_cpu_display_upscale(
             FitMode::FitPage,
             1.0,
-            false
+            false,
+            CpuScaleFilter::Bilinear,
         ));
-        assert!(!should_allow_cpu_display_upscale(
-            FitMode::FitWidth,
-            1.0,
-            false
-        ));
-        assert!(!should_allow_cpu_display_upscale(
-            FitMode::FitHeight,
-            1.0,
-            false
-        ));
+        // Manual zoom and original size never CPU-upscale.
         assert!(!should_allow_cpu_display_upscale(
             FitMode::Manual,
             1.25,
-            false
+            false,
+            CpuScaleFilter::Lanczos3,
         ));
         assert!(!should_allow_cpu_display_upscale(
             FitMode::Original,
             4.0,
-            false
+            false,
+            CpuScaleFilter::Lanczos3,
         ));
     }
 
