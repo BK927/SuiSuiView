@@ -553,7 +553,7 @@ impl SuiSuiViewApp {
                 ("count", page_count.to_string()),
             ],
         ));
-        self.persist_current_bookmark();
+        self.persist_reading_position();
         if self.queued_sibling_book_turns.is_empty() {
             self.request_adjacent_seed_prefetch();
         }

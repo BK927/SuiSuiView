@@ -392,7 +392,7 @@ impl SuiSuiViewApp {
             self.queued_worker_visible_page_count(),
             self.worker_options(),
         );
-        self.persist_current_bookmark_deferred();
+        self.persist_reading_position_deferred();
     }
 
     pub(in crate::app) fn active_page_transition_style(&self) -> PageTransitionStyle {
@@ -407,7 +407,7 @@ impl SuiSuiViewApp {
         self.manual_zoom = (self.manual_zoom * factor).clamp(0.1, 8.0);
         self.schedule_high_target_cleanup_if_leaving_target_intent(previous_intent);
         self.request_page_if_decode_or_target_intent_changed(previous_decode, previous_intent);
-        self.persist_current_bookmark();
+        self.persist_reading_position();
     }
 
     pub(in crate::app) fn adjust_zoom_by_delta(&mut self, delta: f32) {
@@ -418,7 +418,7 @@ impl SuiSuiViewApp {
         self.manual_zoom = (self.manual_zoom + delta).clamp(0.1, 8.0);
         self.schedule_high_target_cleanup_if_leaving_target_intent(previous_intent);
         self.request_page_if_decode_or_target_intent_changed(previous_decode, previous_intent);
-        self.persist_current_bookmark();
+        self.persist_reading_position();
     }
 
     pub(in crate::app) fn set_fit_mode(&mut self, mode: FitMode) {
@@ -431,7 +431,7 @@ impl SuiSuiViewApp {
         }
         self.schedule_high_target_cleanup_if_leaving_target_intent(previous_intent);
         self.request_page_if_decode_or_target_intent_changed(previous_decode, previous_intent);
-        self.persist_current_bookmark();
+        self.persist_reading_position();
     }
 
     fn request_page_if_decode_or_target_intent_changed(
@@ -467,7 +467,7 @@ impl SuiSuiViewApp {
             self.visible_page_count(),
             self.worker_options(),
         );
-        self.persist_current_bookmark();
+        self.persist_reading_position();
     }
 
     pub(in crate::app) fn toggle_double_mode(&mut self) {

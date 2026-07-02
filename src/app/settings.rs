@@ -380,7 +380,6 @@ impl SuiSuiViewApp {
         let previous_wgpu_upscale_method = self.settings.wgpu_upscale_method;
         let previous_wgpu_downscale_method = self.settings.wgpu_downscale_method;
         let previous_renderer_mode = self.settings.renderer_mode;
-        let previous_max_remembered_books = self.settings.max_remembered_books;
         let mut textures_invalidated = false;
 
         self.settings = settings;
@@ -450,10 +449,6 @@ impl SuiSuiViewApp {
         }
         if textures_invalidated {
             self.request_original_texture_only_decode_if_needed();
-        }
-        if previous_max_remembered_books != self.settings.max_remembered_books {
-            self.store
-                .prune_auto_bookmarks(self.settings.max_remembered_books);
         }
         self.set_status(self.i18n().text("status.settings_saved"));
     }

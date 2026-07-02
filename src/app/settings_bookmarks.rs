@@ -251,23 +251,6 @@ impl SuiSuiViewApp {
                     &i18n.text("settings.bookmarks.file_identity"),
                     &i18n.text("settings.bookmarks.file_identity.help"),
                 );
-                *changed |= checkbox_with_help(
-                    ui,
-                    &mut draft.share_state_between_instances,
-                    &i18n.text("settings.bookmarks.share_state"),
-                    &i18n.text("settings.bookmarks.share_state.help"),
-                );
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(i18n.text("settings.bookmarks.max_books"));
-                    super::settings::info_icon(ui, &i18n.text("settings.bookmarks.max_books.help"));
-                    *changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut draft.max_remembered_books)
-                                .range(1..=500)
-                                .speed(1),
-                        )
-                        .changed();
-                });
             },
         );
 

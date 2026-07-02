@@ -3,7 +3,7 @@ use crate::core::effects::ViewEffects;
 use crate::core::formats::OPENABLE_FILE_EXTENSIONS;
 use crate::core::source::{BookSource, SharedSource};
 use crate::core::state::{
-    AppSettings, BookmarkInput, DecodeMode, DecoderPreferences, FastStartFailureNotice, FitMode,
+    AppSettings, BookRecordInput, DecodeMode, DecoderPreferences, FastStartFailureNotice, FitMode,
     ReadingDirection, StateStore, WgpuUpscaleMethod,
 };
 use crate::core::worker::{
@@ -450,15 +450,23 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn persist_current_bookmark(&mut self) {
+    fn persist_reading_position(&mut self) {
+        if !self.settings.auto_save_reading_position {
+            return;
+        }
+        self.write_current_book_record();
+    }
+
+    /// Writes the current book's record unconditionally. Automatic reading-position
+    /// saves go through `persist_reading_position`, which honors the
+    /// auto-save-reading-position setting; explicit actions (adding a bookmark) call
+    /// this directly so the book is always persisted regardless of that setting.
+    fn write_current_book_record(&mut self) {
         let Some(source) = self.source.as_ref() else {
             return;
         };
         let path = self.current_bookmark_path(source.as_ref()).to_path_buf();
-        if self.settings.share_state_between_instances {
-            self.store.reload_books_from_disk();
-        }
-        self.store.upsert_bookmark(BookmarkInput {
+        self.store.upsert_book_record(BookRecordInput {
             book_id: source.book_id(),
             title: source.title(),
             last_page: self.current_page,
@@ -469,13 +477,11 @@ impl SuiSuiViewApp {
             fit_mode: self.fit_mode,
             manual_zoom: self.current_bookmark_manual_zoom(),
         });
-        self.store
-            .prune_auto_bookmarks(self.settings.max_remembered_books);
         self.bookmark_rows.clear();
         self.pending_state_save_at = None;
     }
 
-    fn persist_current_bookmark_deferred(&mut self) {
+    fn persist_reading_position_deferred(&mut self) {
         let Some(source) = self.source.as_ref() else {
             return;
         };
@@ -483,10 +489,7 @@ impl SuiSuiViewApp {
             return;
         }
         let path = self.current_bookmark_path(source.as_ref()).to_path_buf();
-        if self.settings.share_state_between_instances {
-            self.store.reload_books_from_disk();
-        }
-        let changed = self.store.upsert_bookmark_deferred(BookmarkInput {
+        let changed = self.store.upsert_book_record_deferred(BookRecordInput {
             book_id: source.book_id(),
             title: source.title(),
             last_page: self.current_page,
@@ -498,8 +501,6 @@ impl SuiSuiViewApp {
             manual_zoom: self.current_bookmark_manual_zoom(),
         });
         if changed {
-            self.store
-                .prune_auto_bookmarks(self.settings.max_remembered_books);
             self.bookmark_rows.clear();
             self.pending_state_save_at = Some(Instant::now() + STATE_SAVE_DEBOUNCE);
             self.egui_ctx.request_repaint_after(STATE_SAVE_DEBOUNCE);
@@ -541,7 +542,7 @@ impl SuiSuiViewApp {
 
     fn flush_deferred_state_save(&mut self) {
         if self.pending_state_save_at.take().is_some() {
-            let _ = self.store.save();
+            let _ = self.store.flush();
         }
     }
 

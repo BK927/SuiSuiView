@@ -18,7 +18,7 @@ mod scalers;
 mod tests;
 pub use crate::core::i18n::Language;
 use bookmarks::path_key;
-pub use bookmarks::{Bookmark, BookmarkInput, PageBookmark, PageBookmarkEntry, ReadingPosition};
+pub use bookmarks::{BookRecord, BookRecordInput, PageBookmark, PageBookmarkEntry, ReadingPosition};
 pub use decoders::{DecodeMode, DecoderPreference, DecoderPreferences};
 pub use display::{GpuEffectMode, WgpuUpscaleMethod};
 pub use fast_start::FastStartFailureNotice;
@@ -386,10 +386,6 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub resume_by_file_identity: bool,
     #[serde(default = "default_true")]
-    pub share_state_between_instances: bool,
-    #[serde(default = "default_max_remembered_books")]
-    pub max_remembered_books: usize,
-    #[serde(default = "default_true")]
     pub remember_archive_page_name: bool,
     #[serde(default = "default_key_bindings")]
     pub key_bindings: Vec<KeyBinding>,
@@ -476,8 +472,6 @@ impl Default for AppSettings {
             apply_embedded_icc: false,
             auto_save_reading_position: true,
             resume_by_file_identity: true,
-            share_state_between_instances: true,
-            max_remembered_books: default_max_remembered_books(),
             remember_archive_page_name: true,
             key_bindings: default_key_bindings(),
             mouse_bindings: default_mouse_bindings(),
@@ -494,7 +488,8 @@ pub struct PersistedState {
     pub window: WindowPlacement,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast_start_failure: Option<FastStartFailureNotice>,
-    pub books: BTreeMap<String, Bookmark>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub books: BTreeMap<String, BookRecord>,
 }
 
 impl Default for PersistedState {
@@ -512,23 +507,45 @@ impl Default for PersistedState {
 #[derive(Clone)]
 pub struct StateStore {
     path: PathBuf,
+    books_dir: PathBuf,
     state: PersistedState,
+    pending_book: Option<BookRecord>,
+    state_dirty: bool,
 }
 
 impl StateStore {
     pub fn load() -> Self {
         let path = state_file_path();
+        let books_dir = books_dir_path();
         let mut state = fs::read_to_string(&path)
             .ok()
             .and_then(|text| serde_json::from_str::<PersistedState>(&text).ok())
             .unwrap_or_default();
         state.settings.normalize_product_choices();
 
-        Self { path, state }
+        let mut store = Self {
+            path,
+            books_dir,
+            state,
+            pending_book: None,
+            state_dirty: false,
+        };
+        store.import_legacy_bookmarks();
+        store
     }
 
-    pub fn bookmark(&self, book_id: &str) -> Option<&Bookmark> {
-        self.state.books.get(book_id)
+    fn read_book_record(&self, book_id: &str) -> Option<BookRecord> {
+        if let Some(pending) = &self.pending_book {
+            if pending.book_id == book_id {
+                return Some(pending.clone());
+            }
+        }
+        let text = fs::read_to_string(book_file_path(&self.books_dir, book_id)).ok()?;
+        serde_json::from_str::<BookRecord>(&text).ok()
+    }
+
+    pub fn book_record(&self, book_id: &str) -> Option<BookRecord> {
+        self.read_book_record(book_id)
     }
 
     pub fn reading_position(
@@ -537,11 +554,11 @@ impl StateStore {
         path: &Path,
         allow_identity_match: bool,
     ) -> Option<ReadingPosition> {
-        let bookmark = self.bookmark(book_id)?;
+        let record = self.read_book_record(book_id)?;
         if allow_identity_match {
-            return Some(ReadingPosition::from_bookmark(bookmark));
+            return Some(ReadingPosition::from_record(&record));
         }
-        bookmark
+        record
             .path_positions
             .get(path_key(path).as_str())
             .cloned()
@@ -587,30 +604,6 @@ impl StateStore {
         }
     }
 
-    pub fn reload_from_disk(&mut self) -> bool {
-        let Ok(text) = fs::read_to_string(&self.path) else {
-            return false;
-        };
-        let Ok(state) = serde_json::from_str::<PersistedState>(&text) else {
-            return false;
-        };
-        let mut state = state;
-        state.settings.normalize_product_choices();
-        self.state = state;
-        true
-    }
-
-    pub fn reload_books_from_disk(&mut self) -> bool {
-        let Ok(text) = fs::read_to_string(&self.path) else {
-            return false;
-        };
-        let Ok(state) = serde_json::from_str::<PersistedState>(&text) else {
-            return false;
-        };
-        self.state.books = state.books;
-        true
-    }
-
     pub fn window_placement(&self) -> &WindowPlacement {
         &self.state.window
     }
@@ -621,158 +614,144 @@ impl StateStore {
         }
         self.state.window = placement;
         self.state.version = 4;
+        self.state_dirty = true;
         true
     }
 
-    pub fn upsert_bookmark(&mut self, input: BookmarkInput<'_>) {
-        if self.update_bookmark(input, true) {
-            let _ = self.save();
-        }
+    pub fn upsert_book_record(&mut self, input: BookRecordInput<'_>) {
+        self.flush_pending_book_if_other(input.book_id);
+        let (record, _changed) = self.compute_record_update(input, true);
+        let _ = self.write_book_record(&record);
     }
 
-    pub fn upsert_bookmark_deferred(&mut self, input: BookmarkInput<'_>) -> bool {
-        self.update_bookmark(input, false)
-    }
-
-    pub fn prune_auto_bookmarks(&mut self, max_books: usize) -> usize {
-        if max_books == 0 {
-            return 0;
+    pub fn upsert_book_record_deferred(&mut self, input: BookRecordInput<'_>) -> bool {
+        self.flush_pending_book_if_other(input.book_id);
+        let (record, changed) = self.compute_record_update(input, false);
+        if changed {
+            self.pending_book = Some(record);
         }
-
-        let mut removable: Vec<_> = self
-            .state
-            .books
-            .values()
-            .filter(|book| {
-                book.page_bookmarks
-                    .iter()
-                    .all(|bookmark| bookmark.source_path.is_empty())
-            })
-            .map(|book| (book.book_id.clone(), book.updated_at))
-            .collect();
-        let keep_non_removable = self.state.books.len().saturating_sub(removable.len());
-        let removable_to_keep = max_books.saturating_sub(keep_non_removable);
-        if removable.len() <= removable_to_keep {
-            return 0;
-        }
-
-        removable.sort_by_key(|(_, updated_at)| *updated_at);
-        let remove_count = removable.len() - removable_to_keep;
-        for (book_id, _) in removable.into_iter().take(remove_count) {
-            self.state.books.remove(&book_id);
-        }
-        self.state.version = 4;
-        let _ = self.save();
-        remove_count
+        changed
     }
 
     pub fn clear_archive_page_names(&mut self) -> usize {
+        self.flush_pending_book();
         let mut cleared = 0;
-        for bookmark in self.state.books.values_mut() {
-            if !looks_like_archive_book(bookmark) {
+        for mut record in self.load_all_book_records() {
+            if !looks_like_archive_book(&record) {
                 continue;
             }
-            let mut bookmark_cleared = false;
-            if bookmark.last_page_name.take().is_some() {
-                bookmark_cleared = true;
+            let mut record_cleared = false;
+            if record.last_page_name.take().is_some() {
+                record_cleared = true;
                 cleared += 1;
             }
-            for position in bookmark.path_positions.values_mut() {
+            for position in record.path_positions.values_mut() {
                 if position.last_page_name.take().is_some() {
-                    bookmark_cleared = true;
+                    record_cleared = true;
                     cleared += 1;
                 }
             }
-            if bookmark_cleared {
-                bookmark.updated_at = now_unix_seconds();
+            if record_cleared {
+                record.updated_at = now_unix_seconds();
+                let _ = self.write_book_record(&record);
             }
-        }
-        if cleared > 0 {
-            self.state.version = 4;
-            let _ = self.save();
         }
         cleared
     }
 
-    fn update_bookmark(&mut self, input: BookmarkInput<'_>, touch: bool) -> bool {
-        self.state.version = 4;
+    fn compute_record_update(&self, input: BookRecordInput<'_>, touch: bool) -> (BookRecord, bool) {
         let path_text = input.path.to_string_lossy().to_string();
         let now = now_unix_seconds();
-        let is_new = !self.state.books.contains_key(input.book_id);
-        let entry = self
-            .state
-            .books
-            .entry(input.book_id.to_owned())
-            .or_insert_with(|| Bookmark {
-                book_id: input.book_id.to_owned(),
-                title: input.title.to_owned(),
-                last_page: 0,
-                last_page_name: None,
-                total_pages: input.total_pages,
-                known_paths: Vec::new(),
-                reading_direction: input.reading_direction,
-                fit_mode: input.fit_mode,
-                manual_zoom: None,
-                path_positions: BTreeMap::new(),
-                page_bookmarks: Vec::new(),
-                updated_at: now,
-            });
+        let existing = self.read_book_record(input.book_id);
+        let is_new = existing.is_none();
+        let mut record = existing.unwrap_or_else(|| BookRecord {
+            book_id: input.book_id.to_owned(),
+            title: input.title.to_owned(),
+            last_page: 0,
+            last_page_name: None,
+            total_pages: input.total_pages,
+            known_paths: Vec::new(),
+            reading_direction: input.reading_direction,
+            fit_mode: input.fit_mode,
+            manual_zoom: None,
+            path_positions: BTreeMap::new(),
+            page_bookmarks: Vec::new(),
+            updated_at: now,
+        });
 
         let title = input.title.to_owned();
         let last_page = input.last_page.min(input.total_pages.saturating_sub(1));
         let last_page_name = input.last_page_name.map(ToOwned::to_owned);
-        let path_position_changed = entry
+        let path_position_changed = record
             .path_positions
             .get(path_text.as_str())
             .is_none_or(|position| !position.matches_input(&input));
         let mut changed = is_new
-            || entry.title != title
-            || entry.last_page != last_page
-            || entry.last_page_name != last_page_name
-            || entry.total_pages != input.total_pages
-            || entry.reading_direction != input.reading_direction
-            || entry.fit_mode != input.fit_mode
-            || entry.manual_zoom != input.manual_zoom
+            || record.title != title
+            || record.last_page != last_page
+            || record.last_page_name != last_page_name
+            || record.total_pages != input.total_pages
+            || record.reading_direction != input.reading_direction
+            || record.fit_mode != input.fit_mode
+            || record.manual_zoom != input.manual_zoom
             || path_position_changed;
 
-        entry.title = title;
-        entry.last_page = last_page;
-        entry.last_page_name = last_page_name;
-        entry.total_pages = input.total_pages;
-        entry.reading_direction = input.reading_direction;
-        entry.fit_mode = input.fit_mode;
-        entry.manual_zoom = input.manual_zoom;
+        record.title = title;
+        record.last_page = last_page;
+        record.last_page_name = last_page_name;
+        record.total_pages = input.total_pages;
+        record.reading_direction = input.reading_direction;
+        record.fit_mode = input.fit_mode;
+        record.manual_zoom = input.manual_zoom;
         if path_position_changed || touch {
-            entry
+            record
                 .path_positions
                 .insert(path_text.clone(), ReadingPosition::from_input(&input, now));
         }
 
-        if !entry.known_paths.iter().any(|known| known == &path_text) {
-            entry.known_paths.push(path_text);
+        if !record.known_paths.iter().any(|known| known == &path_text) {
+            record.known_paths.push(path_text);
             changed = true;
         }
-        if entry.known_paths.len() > 8 {
-            let extra = entry.known_paths.len() - 8;
-            entry.known_paths.drain(0..extra);
+        if record.known_paths.len() > 8 {
+            let extra = record.known_paths.len() - 8;
+            record.known_paths.drain(0..extra);
             changed = true;
         }
 
         if changed || touch {
-            entry.updated_at = now;
+            record.updated_at = now;
         }
-        changed || touch
+        (record, changed || touch)
     }
 
-    pub fn save(&self) -> std::io::Result<()> {
+    pub fn save(&mut self) -> std::io::Result<()> {
+        self.write_state_file()
+    }
+
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        let mut result = Ok(());
+        if let Some(record) = self.pending_book.take() {
+            result = self.write_book_record(&record);
+        }
+        if self.state_dirty {
+            let state_result = self.write_state_file();
+            if result.is_ok() {
+                result = state_result;
+            }
+        }
+        result
+    }
+
+    fn write_state_file(&mut self) -> std::io::Result<()> {
         let started = Instant::now();
         let result = (|| {
-            if let Some(parent) = self.path.parent() {
-                fs::create_dir_all(parent)?;
-            }
             let text = serde_json::to_string_pretty(&self.state)?;
-            fs::write(&self.path, text)
+            write_atomic(&self.path, &text)
         })();
+        if result.is_ok() {
+            self.state_dirty = false;
+        }
         perf_trace::record_duration_if_at_least(
             "state_save",
             started.elapsed(),
@@ -782,13 +761,102 @@ impl StateStore {
         result
     }
 
+    fn write_book_record(&mut self, record: &BookRecord) -> std::io::Result<()> {
+        if self
+            .pending_book
+            .as_ref()
+            .is_some_and(|pending| pending.book_id == record.book_id)
+        {
+            self.pending_book = None;
+        }
+        let text = serde_json::to_string_pretty(record)?;
+        write_atomic(&book_file_path(&self.books_dir, &record.book_id), &text)
+    }
+
+    fn load_all_book_records(&self) -> Vec<BookRecord> {
+        let mut records: Vec<BookRecord> = Vec::new();
+        if let Ok(entries) = fs::read_dir(&self.books_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    continue;
+                }
+                let Ok(text) = fs::read_to_string(&path) else {
+                    continue;
+                };
+                if let Ok(record) = serde_json::from_str::<BookRecord>(&text) {
+                    records.push(record);
+                }
+            }
+        }
+        if let Some(pending) = &self.pending_book {
+            match records
+                .iter_mut()
+                .find(|record| record.book_id == pending.book_id)
+            {
+                Some(slot) => *slot = pending.clone(),
+                None => records.push(pending.clone()),
+            }
+        }
+        records
+    }
+
+    fn flush_pending_book(&mut self) {
+        if let Some(record) = self.pending_book.take() {
+            let _ = self.write_book_record(&record);
+        }
+    }
+
+    // The single pending buffer only ever holds the current book; if a write for
+    // a different book arrives, persist the buffered one first so it is not lost.
+    fn flush_pending_book_if_other(&mut self, book_id: &str) {
+        if self
+            .pending_book
+            .as_ref()
+            .is_some_and(|pending| pending.book_id != book_id)
+        {
+            self.flush_pending_book();
+        }
+    }
+
+    // One-time import from the old monolithic state.json. During beta the resume
+    // history is disposable, so keep only the manual page bookmarks and discard
+    // the reading positions; books without bookmarks are dropped entirely.
+    fn import_legacy_bookmarks(&mut self) {
+        if self.state.books.is_empty() {
+            return;
+        }
+        let books = std::mem::take(&mut self.state.books);
+        for record in books.into_values() {
+            if record.page_bookmarks.is_empty() {
+                continue;
+            }
+            let rescued = BookRecord {
+                book_id: record.book_id,
+                title: record.title,
+                last_page: 0,
+                last_page_name: None,
+                total_pages: record.total_pages,
+                known_paths: record.known_paths,
+                reading_direction: record.reading_direction,
+                fit_mode: record.fit_mode,
+                manual_zoom: None,
+                path_positions: BTreeMap::new(),
+                page_bookmarks: record.page_bookmarks,
+                updated_at: record.updated_at,
+            };
+            let _ = self.write_book_record(&rescued);
+        }
+        let _ = self.write_state_file();
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
 }
 
-fn looks_like_archive_book(bookmark: &Bookmark) -> bool {
-    bookmark.known_paths.iter().any(|path| {
+fn looks_like_archive_book(record: &BookRecord) -> bool {
+    record.known_paths.iter().any(|path| {
         Path::new(path)
             .extension()
             .and_then(|extension| extension.to_str())
@@ -801,6 +869,44 @@ fn state_file_path() -> PathBuf {
     ProjectDirs::from("", "", "SuiSuiView")
         .map(|dirs| dirs.data_dir().join("state.json"))
         .unwrap_or_else(|| PathBuf::from("SuiSuiView-state.json"))
+}
+
+fn books_dir_path() -> PathBuf {
+    ProjectDirs::from("", "", "SuiSuiView")
+        .map(|dirs| dirs.data_dir().join("books"))
+        .unwrap_or_else(|| PathBuf::from("SuiSuiView-books"))
+}
+
+fn book_file_path(books_dir: &Path, book_id: &str) -> PathBuf {
+    books_dir.join(format!("{}.json", sanitize_book_id(book_id)))
+}
+
+// book_id is always "<kind>:<hex>"; ':' is invalid in Windows file names, so map
+// any non-portable character to '_'. The kind prefix keeps ids collision-free.
+fn sanitize_book_id(book_id: &str) -> String {
+    book_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("state");
+    let tmp = path.with_file_name(format!("{file_name}.{}.tmp", std::process::id()));
+    fs::write(&tmp, text)?;
+    fs::rename(&tmp, path)
 }
 
 fn now_unix_seconds() -> u64 {
@@ -848,8 +954,4 @@ pub fn default_top_bar_wgpu_upscale_methods() -> Vec<WgpuUpscaleMethod> {
 
 pub fn default_top_bar_wgpu_downscale_methods() -> Vec<WgpuDownscaleMethod> {
     DEFAULT_TOP_BAR_WGPU_DOWNSCALE_METHODS.to_vec()
-}
-
-fn default_max_remembered_books() -> usize {
-    30
 }

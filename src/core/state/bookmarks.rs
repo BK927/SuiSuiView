@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Bookmark {
+pub struct BookRecord {
     pub book_id: String,
     pub title: String,
     pub last_page: usize,
@@ -36,7 +36,7 @@ pub struct ReadingPosition {
 }
 
 impl ReadingPosition {
-    pub(super) fn from_input(input: &BookmarkInput<'_>, now: u64) -> Self {
+    pub(super) fn from_input(input: &BookRecordInput<'_>, now: u64) -> Self {
         Self {
             last_page: input.last_page.min(input.total_pages.saturating_sub(1)),
             last_page_name: input.last_page_name.map(ToOwned::to_owned),
@@ -47,18 +47,18 @@ impl ReadingPosition {
         }
     }
 
-    pub(super) fn from_bookmark(bookmark: &Bookmark) -> Self {
+    pub(super) fn from_record(record: &BookRecord) -> Self {
         Self {
-            last_page: bookmark.last_page,
-            last_page_name: bookmark.last_page_name.clone(),
-            reading_direction: bookmark.reading_direction,
-            fit_mode: bookmark.fit_mode,
-            manual_zoom: bookmark.manual_zoom,
-            updated_at: bookmark.updated_at,
+            last_page: record.last_page,
+            last_page_name: record.last_page_name.clone(),
+            reading_direction: record.reading_direction,
+            fit_mode: record.fit_mode,
+            manual_zoom: record.manual_zoom,
+            updated_at: record.updated_at,
         }
     }
 
-    pub(super) fn matches_input(&self, input: &BookmarkInput<'_>) -> bool {
+    pub(super) fn matches_input(&self, input: &BookRecordInput<'_>) -> bool {
         self.last_page == input.last_page.min(input.total_pages.saturating_sub(1))
             && self.last_page_name.as_deref() == input.last_page_name
             && self.reading_direction == input.reading_direction
@@ -67,7 +67,7 @@ impl ReadingPosition {
     }
 }
 
-pub struct BookmarkInput<'a> {
+pub struct BookRecordInput<'a> {
     pub book_id: &'a str,
     pub title: &'a str,
     pub last_page: usize,
@@ -105,24 +105,22 @@ pub(super) fn path_key(path: &Path) -> String {
 }
 
 impl StateStore {
-    pub fn recent_books(&self, limit: usize) -> Vec<Bookmark> {
-        let mut books: Vec<_> = self.state.books.values().collect();
-        books.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-        books.into_iter().take(limit).cloned().collect()
+    pub fn recent_books(&self, limit: usize) -> Vec<BookRecord> {
+        let mut records = self.load_all_book_records();
+        records.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        records.truncate(limit);
+        records
     }
 
-    pub fn page_bookmarks(&self, book_id: &str) -> &[PageBookmark] {
-        self.state
-            .books
-            .get(book_id)
-            .map(|bookmark| bookmark.page_bookmarks.as_slice())
+    pub fn page_bookmarks(&self, book_id: &str) -> Vec<PageBookmark> {
+        self.read_book_record(book_id)
+            .map(|record| record.page_bookmarks)
             .unwrap_or_default()
     }
 
     pub fn all_page_bookmarks(&self) -> Vec<PageBookmarkEntry> {
-        self.state
-            .books
-            .values()
+        self.load_all_book_records()
+            .iter()
             .flat_map(page_bookmark_entries_for_book)
             .collect()
     }
@@ -132,19 +130,17 @@ impl StateStore {
         book_id: &str,
         source_path: &Path,
     ) -> Vec<PageBookmarkEntry> {
-        self.state
-            .books
-            .get(book_id)
-            .map(|book| page_bookmark_entries_for_path(book, path_key(source_path).as_str()))
+        self.read_book_record(book_id)
+            .map(|record| page_bookmark_entries_for_path(&record, path_key(source_path).as_str()))
             .unwrap_or_default()
     }
 
     pub fn all_page_bookmark_count(&self) -> usize {
-        self.state
-            .books
-            .values()
-            .map(|book| {
-                book.page_bookmarks
+        self.load_all_book_records()
+            .iter()
+            .map(|record| {
+                record
+                    .page_bookmarks
                     .iter()
                     .filter(|bookmark| !bookmark.source_path.is_empty())
                     .count()
@@ -154,9 +150,12 @@ impl StateStore {
 
     pub fn has_page_bookmark(&self, book_id: &str, source_path: &Path, page: usize) -> bool {
         let source_path = path_key(source_path);
-        self.page_bookmarks(book_id)
-            .iter()
-            .any(|bookmark| bookmark.source_path == source_path && bookmark.page == page)
+        self.read_book_record(book_id).is_some_and(|record| {
+            record
+                .page_bookmarks
+                .iter()
+                .any(|bookmark| bookmark.source_path == source_path && bookmark.page == page)
+        })
     }
 
     pub fn upsert_page_bookmark(
@@ -167,16 +166,14 @@ impl StateStore {
         title: impl Into<String>,
         page_name: Option<String>,
     ) {
-        self.state.version = 4;
         let now = now_unix_seconds();
         let title = title.into();
         let source_path = path_key(source_path);
-        let entry = self.state.books.get_mut(book_id);
-        let Some(bookmark) = entry else {
+        let Some(mut record) = self.read_book_record(book_id) else {
             return;
         };
 
-        if let Some(existing) = bookmark
+        if let Some(existing) = record
             .page_bookmarks
             .iter_mut()
             .find(|bookmark| bookmark.source_path == source_path && bookmark.page == page)
@@ -185,7 +182,7 @@ impl StateStore {
             existing.page_name = page_name;
             existing.updated_at = now;
         } else {
-            bookmark.page_bookmarks.push(PageBookmark {
+            record.page_bookmarks.push(PageBookmark {
                 page,
                 source_path,
                 title,
@@ -195,71 +192,67 @@ impl StateStore {
                 updated_at: now,
             });
         }
-        bookmark.page_bookmarks.sort_by(page_bookmark_order);
-        bookmark.updated_at = now;
-        let _ = self.save();
+        record.page_bookmarks.sort_by(page_bookmark_order);
+        record.updated_at = now;
+        let _ = self.write_book_record(&record);
     }
 
     pub fn remove_page_bookmark(&mut self, book_id: &str, source_path: &Path, page: usize) {
-        self.state.version = 4;
-        let Some(bookmark) = self.state.books.get_mut(book_id) else {
+        let Some(mut record) = self.read_book_record(book_id) else {
             return;
         };
         let source_path = path_key(source_path);
-        let previous_len = bookmark.page_bookmarks.len();
-        bookmark.page_bookmarks.retain(|page_bookmark| {
+        let previous_len = record.page_bookmarks.len();
+        record.page_bookmarks.retain(|page_bookmark| {
             page_bookmark.source_path != source_path || page_bookmark.page != page
         });
-        if bookmark.page_bookmarks.len() == previous_len {
+        if record.page_bookmarks.len() == previous_len {
             return;
         }
-        bookmark.updated_at = now_unix_seconds();
-        let _ = self.save();
+        record.updated_at = now_unix_seconds();
+        let _ = self.write_book_record(&record);
     }
 
     pub fn clear_page_bookmarks(&mut self, book_id: &str, source_path: &Path) -> usize {
-        let Some(bookmark) = self.state.books.get_mut(book_id) else {
+        let Some(mut record) = self.read_book_record(book_id) else {
             return 0;
         };
         let source_path = path_key(source_path);
-        let previous_len = bookmark.page_bookmarks.len();
-        bookmark
+        let previous_len = record.page_bookmarks.len();
+        record
             .page_bookmarks
             .retain(|page_bookmark| page_bookmark.source_path != source_path);
-        let removed = previous_len - bookmark.page_bookmarks.len();
+        let removed = previous_len - record.page_bookmarks.len();
         if removed == 0 {
             return 0;
         }
-        self.state.version = 4;
-        bookmark.updated_at = now_unix_seconds();
-        let _ = self.save();
+        record.updated_at = now_unix_seconds();
+        let _ = self.write_book_record(&record);
         removed
     }
 
     pub fn clear_all_page_bookmarks(&mut self) -> usize {
+        self.flush_pending_book();
         let mut removed = 0;
         let now = now_unix_seconds();
-        for bookmark in self.state.books.values_mut() {
-            let previous_len = bookmark.page_bookmarks.len();
-            bookmark
+        for mut record in self.load_all_book_records() {
+            let previous_len = record.page_bookmarks.len();
+            record
                 .page_bookmarks
                 .retain(|page_bookmark| page_bookmark.source_path.is_empty());
-            let count = previous_len - bookmark.page_bookmarks.len();
+            let count = previous_len - record.page_bookmarks.len();
             if count == 0 {
                 continue;
             }
             removed += count;
-            bookmark.updated_at = now;
-        }
-        if removed > 0 {
-            self.state.version = 4;
-            let _ = self.save();
+            record.updated_at = now;
+            let _ = self.write_book_record(&record);
         }
         removed
     }
 }
 
-fn page_bookmark_entries_for_book(book: &Bookmark) -> Vec<PageBookmarkEntry> {
+fn page_bookmark_entries_for_book(book: &BookRecord) -> Vec<PageBookmarkEntry> {
     book.page_bookmarks
         .iter()
         .filter(|bookmark| !bookmark.source_path.is_empty())
@@ -272,7 +265,7 @@ fn page_bookmark_entries_for_book(book: &Bookmark) -> Vec<PageBookmarkEntry> {
         .collect()
 }
 
-fn page_bookmark_entries_for_path(book: &Bookmark, source_path: &str) -> Vec<PageBookmarkEntry> {
+fn page_bookmark_entries_for_path(book: &BookRecord, source_path: &str) -> Vec<PageBookmarkEntry> {
     book.page_bookmarks
         .iter()
         .filter(|bookmark| bookmark.source_path == source_path)
@@ -296,7 +289,7 @@ fn page_bookmark_order(left: &PageBookmark, right: &PageBookmark) -> std::cmp::O
 #[cfg(test)]
 mod tests {
     use super::super::{
-        AppSettings, BookmarkInput, FitMode, PersistedState, ReadingDirection, StateStore,
+        AppSettings, BookRecordInput, FitMode, PersistedState, ReadingDirection, StateStore,
     };
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -332,7 +325,7 @@ mod tests {
     #[test]
     fn page_bookmarks_add_and_remove() {
         let mut store = test_store("page-bookmarks");
-        store.upsert_bookmark(BookmarkInput {
+        store.upsert_book_record(BookRecordInput {
             book_id: "book-1",
             title: "Book One",
             last_page: 0,
@@ -378,7 +371,7 @@ mod tests {
     #[test]
     fn page_bookmarks_are_scoped_by_source_path() {
         let mut store = test_store("page-bookmark-path-scope");
-        store.upsert_bookmark(BookmarkInput {
+        store.upsert_book_record(BookRecordInput {
             book_id: "book-1",
             title: "Book One",
             last_page: 0,
@@ -409,7 +402,7 @@ mod tests {
     #[test]
     fn reading_position_can_use_identity_or_exact_path() {
         let mut store = test_store("reading-position-policy");
-        store.upsert_bookmark(BookmarkInput {
+        store.upsert_book_record(BookRecordInput {
             book_id: "book-1",
             title: "Book One",
             last_page: 2,
@@ -420,7 +413,7 @@ mod tests {
             fit_mode: FitMode::FitPage,
             manual_zoom: None,
         });
-        store.upsert_bookmark(BookmarkInput {
+        store.upsert_book_record(BookRecordInput {
             book_id: "book-1",
             title: "Book One",
             last_page: 7,
@@ -454,7 +447,7 @@ mod tests {
             ("book-1", "C:/books/book-1"),
             ("book-2", "C:/books/book-2.cbz"),
         ] {
-            store.upsert_bookmark(BookmarkInput {
+            store.upsert_book_record(BookRecordInput {
                 book_id,
                 title: book_id,
                 last_page: 0,
@@ -486,7 +479,7 @@ mod tests {
         assert!(entries.iter().any(|entry| entry.book_id == "book-1"));
         assert_eq!(store.clear_all_page_bookmarks(), 2);
         assert!(store.all_page_bookmarks().is_empty());
-        assert!(store.bookmark("book-1").is_some());
+        assert!(store.book_record("book-1").is_some());
         assert_eq!(store.clear_all_page_bookmarks(), 0);
     }
 
@@ -518,46 +511,25 @@ mod tests {
         }"#;
 
         let state: PersistedState = serde_json::from_str(json).unwrap();
-        let store = StateStore {
-            path: Path::new("unused.json").to_path_buf(),
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir()
+            .join("suisuiview-tests")
+            .join(format!("hidden-page-bookmarks-{stamp}"));
+        let mut store = StateStore {
+            path: base.join("state.json"),
+            books_dir: base.join("books"),
             state,
+            pending_book: None,
+            state_dirty: false,
         };
+        store.import_legacy_bookmarks();
 
         assert_eq!(store.page_bookmarks("book-1").len(), 1);
         assert!(store.all_page_bookmarks().is_empty());
         assert_eq!(store.all_page_bookmark_count(), 0);
-    }
-
-    #[test]
-    fn pruning_auto_bookmarks_preserves_manual_page_bookmarks() {
-        let mut store = test_store("prune-auto-bookmarks");
-        for index in 0..3 {
-            let book_id = format!("book-{index}");
-            store.upsert_bookmark(BookmarkInput {
-                book_id: &book_id,
-                title: &book_id,
-                last_page: index,
-                last_page_name: None,
-                total_pages: 10,
-                path: Path::new("C:/books/book.zip"),
-                reading_direction: ReadingDirection::LeftToRight,
-                fit_mode: FitMode::FitPage,
-                manual_zoom: None,
-            });
-        }
-        store.upsert_page_bookmark(
-            "book-0",
-            Path::new("C:/books/book.zip"),
-            2,
-            "manual",
-            Some("002.png".to_owned()),
-        );
-
-        let removed = store.prune_auto_bookmarks(1);
-
-        assert_eq!(removed, 2);
-        assert!(store.bookmark("book-0").is_some());
-        assert_eq!(store.all_page_bookmark_count(), 1);
     }
 
     #[test]
@@ -584,16 +556,261 @@ mod tests {
         );
     }
 
-    fn test_store(name: &str) -> StateStore {
+    #[test]
+    fn book_records_persist_across_store_instances() {
+        let base = unique_base("persist-across");
+        let mut store = store_at(&base);
+        store.upsert_book_record(BookRecordInput {
+            book_id: "book-1",
+            title: "Book One",
+            last_page: 5,
+            last_page_name: Some("006.webp"),
+            total_pages: 20,
+            path: Path::new("C:/books/book-1.zip"),
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: None,
+        });
+
+        let reopened = store_at(&base);
+        let position = reopened
+            .reading_position("book-1", Path::new("C:/books/book-1.zip"), true)
+            .expect("record persisted to its own file");
+        assert_eq!(position.last_page, 5);
+        assert_eq!(position.last_page_name.as_deref(), Some("006.webp"));
+    }
+
+    #[test]
+    fn deferred_write_is_flushed_when_switching_books() {
+        let base = unique_base("switch-flush");
+        let mut store = store_at(&base);
+        let changed = store.upsert_book_record_deferred(BookRecordInput {
+            book_id: "book-1",
+            title: "Book One",
+            last_page: 3,
+            last_page_name: None,
+            total_pages: 10,
+            path: Path::new("C:/books/one.zip"),
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: None,
+        });
+        assert!(changed);
+
+        // Switching to another book must persist the buffered page for book-1.
+        store.upsert_book_record(BookRecordInput {
+            book_id: "book-2",
+            title: "Book Two",
+            last_page: 1,
+            last_page_name: None,
+            total_pages: 10,
+            path: Path::new("C:/books/two.zip"),
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: None,
+        });
+
+        let reopened = store_at(&base);
+        assert_eq!(reopened.book_record("book-1").unwrap().last_page, 3);
+        assert_eq!(reopened.book_record("book-2").unwrap().last_page, 1);
+    }
+
+    #[test]
+    fn legacy_import_keeps_bookmarks_and_drops_resume() {
+        let json = r#"{
+            "version": 4,
+            "settings": {},
+            "books": {
+                "with-bookmark": {
+                    "book_id": "with-bookmark",
+                    "title": "Bookmarked",
+                    "last_page": 7,
+                    "total_pages": 20,
+                    "known_paths": ["C:/books/one.zip"],
+                    "reading_direction": "RightToLeft",
+                    "fit_mode": "FitPage",
+                    "page_bookmarks": [{
+                        "page": 5,
+                        "source_path": "C:/books/one.zip",
+                        "title": "mark",
+                        "page_name": "006.webp",
+                        "pinned": false,
+                        "created_at": 1,
+                        "updated_at": 1
+                    }],
+                    "updated_at": 100
+                },
+                "resume-only": {
+                    "book_id": "resume-only",
+                    "title": "Resume Only",
+                    "last_page": 9,
+                    "total_pages": 20,
+                    "known_paths": ["C:/books/two.zip"],
+                    "reading_direction": "RightToLeft",
+                    "fit_mode": "FitPage",
+                    "updated_at": 90
+                }
+            }
+        }"#;
+        let state: PersistedState = serde_json::from_str(json).unwrap();
+        let base = unique_base("legacy-import");
+        let mut store = StateStore {
+            path: base.join("state.json"),
+            books_dir: base.join("books"),
+            state,
+            pending_book: None,
+            state_dirty: false,
+        };
+        store.import_legacy_bookmarks();
+
+        let reopened = store_at(&base);
+        // Bookmarked book: the manual bookmark survives, resume position is reset.
+        let record = reopened
+            .book_record("with-bookmark")
+            .expect("bookmarked book is kept");
+        assert_eq!(record.page_bookmarks.len(), 1);
+        assert_eq!(record.last_page, 0);
+        assert!(record.path_positions.is_empty());
+        // Resume-only book (no manual bookmark) is discarded entirely.
+        assert!(reopened.book_record("resume-only").is_none());
+    }
+
+    #[test]
+    fn smoke_real_folder_book_resume_round_trip() {
+        use crate::core::source::open_source_from_path;
+
+        let base = unique_base("smoke-folder");
+        let comic = base.join("comic");
+        write_test_png(&comic.join("001.png"), 32, 48);
+        write_test_png(&comic.join("002.png"), 40, 40);
+        write_test_png(&comic.join("003.png"), 24, 60);
+
+        let (source, _forced) = open_source_from_path(&comic).expect("folder opens");
+        assert_eq!(source.page_count(), 3);
+        let book_id = source.book_id().to_owned();
+
+        // Same content opened again yields the same identity (crux of the resume bug).
+        let (again, _) = open_source_from_path(&comic).expect("folder reopens");
+        assert_eq!(again.book_id(), book_id);
+
+        // Save a reading position, then restore it from a fresh store instance.
+        let store_dir = base.join("state");
+        let mut store = store_at(&store_dir);
+        store.upsert_book_record(BookRecordInput {
+            book_id: &book_id,
+            title: source.title(),
+            last_page: 2,
+            last_page_name: source.page_name(2),
+            total_pages: source.page_count(),
+            path: source.source_path(),
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: None,
+        });
+        let reopened = store_at(&store_dir);
+        assert_eq!(
+            reopened
+                .reading_position(&book_id, source.source_path(), true)
+                .expect("resume restored")
+                .last_page,
+            2
+        );
+
+        // Changing the folder contents changes the identity (fresh start, no stale resume).
+        write_test_png(&comic.join("004.png"), 30, 30);
+        let (edited, _) = open_source_from_path(&comic).expect("folder reopens after edit");
+        assert_ne!(edited.book_id(), book_id);
+    }
+
+    #[test]
+    fn smoke_real_zip_book_resume_round_trip() {
+        use crate::core::source::open_source_from_path;
+
+        let base = unique_base("smoke-zip");
+        let archive = base.join("book.zip");
+        write_test_zip(&archive, &["01.png", "02.png", "03.png"]);
+
+        let (source, _forced) = open_source_from_path(&archive).expect("zip opens");
+        assert_eq!(source.page_count(), 3);
+        let book_id = source.book_id().to_owned();
+        assert!(book_id.starts_with("zip:"));
+
+        let store_dir = base.join("state");
+        let mut store = store_at(&store_dir);
+        store.upsert_book_record(BookRecordInput {
+            book_id: &book_id,
+            title: source.title(),
+            last_page: 1,
+            last_page_name: source.page_name(1),
+            total_pages: source.page_count(),
+            path: source.source_path(),
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: None,
+        });
+
+        // Reopening the same archive from a fresh store restores the page (by name).
+        let reopened = store_at(&store_dir);
+        let position = reopened
+            .reading_position(&book_id, source.source_path(), true)
+            .expect("resume restored");
+        assert_eq!(position.last_page, 1);
+        assert_eq!(position.last_page_name.as_deref(), Some("02.png"));
+    }
+
+    fn write_test_png(path: &Path, width: u32, height: u32) {
+        use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
+        let pixels = vec![0u8; width as usize * height as usize * 3];
+        let mut bytes = Vec::new();
+        PngEncoder::new(&mut bytes)
+            .write_image(&pixels, width, height, ColorType::Rgb8.into())
+            .expect("encode test png");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn write_test_zip(path: &Path, page_names: &[&str]) {
+        use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        for (index, name) in page_names.iter().enumerate() {
+            let width = 24 + index as u32 * 4;
+            let pixels = vec![0u8; width as usize * 32 * 3];
+            let mut bytes = Vec::new();
+            PngEncoder::new(&mut bytes)
+                .write_image(&pixels, width, 32, ColorType::Rgb8.into())
+                .expect("encode test png");
+            zip.start_file(*name, options).expect("zip start_file");
+            zip.write_all(&bytes).expect("zip write");
+        }
+        zip.finish().expect("zip finish");
+    }
+
+    fn unique_base(name: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        std::env::temp_dir()
+            .join("suisuiview-tests")
+            .join(format!("{name}-{stamp}"))
+    }
+
+    fn store_at(base: &Path) -> StateStore {
         StateStore {
-            path: std::env::temp_dir()
-                .join("suisuiview-tests")
-                .join(format!("{name}-{stamp}.json")),
+            path: base.join("state.json"),
+            books_dir: base.join("books"),
             state: PersistedState::default(),
+            pending_book: None,
+            state_dirty: false,
         }
+    }
+
+    fn test_store(name: &str) -> StateStore {
+        store_at(&unique_base(name))
     }
 }
