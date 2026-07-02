@@ -128,24 +128,6 @@ impl GlutinWindowContext {
             .map_err(|error| format!("failed to swap GL buffers: {error}"))
     }
 
-    pub(super) fn into_window_after_context_destroy(self) -> Result<winit::window::Window, String> {
-        use glutin::context::PossiblyCurrentGlContext as _;
-
-        let Self {
-            window,
-            gl_context,
-            gl_display,
-            gl_surface,
-        } = self;
-        let not_current = gl_context
-            .make_not_current()
-            .map_err(|error| format!("failed to make GL context not current: {error}"))?;
-        drop(gl_surface);
-        drop(not_current);
-        drop(gl_display);
-        Ok(window)
-    }
-
     fn get_proc_address(&self, addr: &std::ffi::CStr) -> *const c_void {
         use glutin::display::GlDisplay as _;
         self.gl_display.get_proc_address(addr)
