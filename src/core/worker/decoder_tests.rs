@@ -12,7 +12,11 @@ fn psd_preview_decodes_with_zune_psd_backend() {
     assert_eq!(page.original_height, 1);
     assert_eq!(page.display_width, 2);
     assert_eq!(page.display_height, 1);
-    assert_eq!(&page.rgba[..8], &[255, 0, 0, 255, 0, 255, 0, 255]);
+    assert!(!page.pixels.is_luma());
+    assert_eq!(
+        &page.pixels.as_slice()[..8],
+        &[255, 0, 0, 255, 0, 255, 0, 255]
+    );
 }
 
 #[test]
@@ -83,7 +87,7 @@ fn pdf_compatible_ai_renders_with_pdfium_when_available() {
     assert_eq!(page.original_height, 128);
     assert_eq!(page.display_width, 128);
     assert_eq!(page.display_height, 128);
-    assert_eq!(page.rgba.len(), 128 * 128 * 4);
+    assert_eq!(page.pixels.byte_len(), 128 * 128 * 4);
 }
 
 fn encoded_test_psd_rgb() -> Vec<u8> {

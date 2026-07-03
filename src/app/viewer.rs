@@ -212,7 +212,7 @@ impl SuiSuiViewApp {
                     page: best_key,
                 },
                 image_size: page.image_size(),
-                rgba: page.rgba.clone(),
+                pixels: page.pixels.clone(),
                 size: transformed_page_size(
                     page.original_width as f32,
                     page.original_height as f32,
@@ -554,7 +554,7 @@ impl SuiSuiViewApp {
                 PageVisual::ReadyGpu {
                     source_key,
                     image_size,
-                    rgba,
+                    pixels,
                     effects,
                     wgpu_upscale_method,
                     wgpu_downscale_method,
@@ -590,7 +590,7 @@ impl SuiSuiViewApp {
                             rect: page_rect,
                             source_key,
                             image_size,
-                            rgba,
+                            pixels,
                             effects,
                             wgpu_upscale_method,
                             wgpu_downscale_method,

@@ -1,7 +1,7 @@
 use super::{
     gpu_paint::{GpuPaintRequest, GpuPaintSourceKey},
     page_visual_size, texture_options_for_sampling, PageCacheKey, PageRenderInfo, PageVisual,
-    SuiSuiViewApp, TextureCacheKey, TextureEntry,
+    SuiSuiViewApp, TextureCacheKey, TextureEntry, BYTES_PER_RGBA_PIXEL,
 };
 use crate::core::effects::ViewEffects;
 use crate::core::source::SharedSource;
@@ -315,7 +315,7 @@ impl SuiSuiViewApp {
             PageVisual::ReadyGpu {
                 source_key,
                 image_size,
-                rgba,
+                pixels,
                 effects,
                 wgpu_upscale_method,
                 wgpu_downscale_method,
@@ -327,7 +327,7 @@ impl SuiSuiViewApp {
                         rect: page_rect,
                         source_key,
                         image_size,
-                        rgba,
+                        pixels,
                         effects,
                         wgpu_upscale_method,
                         wgpu_downscale_method,
@@ -422,7 +422,7 @@ impl SuiSuiViewApp {
                 page: best_key,
             },
             image_size: page.image_size(),
-            rgba: page.rgba.clone(),
+            pixels: page.pixels.clone(),
             size: page_natural_size(&page),
             effects: ViewEffects::default(),
             wgpu_upscale_method,
@@ -497,7 +497,12 @@ impl SuiSuiViewApp {
             texture_key,
             TextureEntry {
                 texture: texture.clone(),
-                byte_size: page.byte_size,
+                // egui textures are RGBA; account the RGBA footprint, not the retained byte_size
+                // (which is a quarter of that for a luma page).
+                byte_size: page
+                    .display_width
+                    .saturating_mul(page.display_height)
+                    .saturating_mul(BYTES_PER_RGBA_PIXEL),
             },
         );
         self.prune_texture_cache();

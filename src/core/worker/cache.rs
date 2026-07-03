@@ -162,7 +162,7 @@ mod tests {
     };
     use crate::core::state::{CpuScaleFilter, DecoderPreference, DecoderPreferences};
     use crate::core::worker::{
-        CachedPageKey, DecodeBackend, DecodeOptions, PreparedPage, MAX_TARGET_LONG_EDGE,
+        CachedPageKey, DecodeBackend, DecodeOptions, PagePixels, PreparedPage, MAX_TARGET_LONG_EDGE,
     };
     use lru::LruCache;
     use std::num::NonZeroUsize;
@@ -305,7 +305,7 @@ mod tests {
 
     fn test_prepared_page(byte_size: usize, target_long_edge: u32) -> PreparedPage {
         PreparedPage {
-            rgba: vec![0u8; byte_size].into(),
+            pixels: PagePixels::Rgba(vec![0u8; byte_size].into()),
             original_width: 1,
             original_height: 1,
             display_width: 1,

@@ -1,6 +1,7 @@
 use super::perf;
 use super::{
     texture_options_for_sampling, PageCacheKey, SuiSuiViewApp, TextureCacheKey, TextureEntry,
+    BYTES_PER_RGBA_PIXEL,
 };
 use crate::core::effects::ViewEffects;
 use crate::core::state::WgpuUpscaleMethod;
@@ -93,12 +94,18 @@ impl SuiSuiViewApp {
         let Some(page) = page else {
             return false;
         };
-        if !self.texture_cache_has_room_for(page.byte_size) {
+        // egui textures are always RGBA regardless of how the page retained its pixels, so budget
+        // against the RGBA footprint (a luma page's `byte_size` is only a quarter of that).
+        let texture_byte_size = page
+            .display_width
+            .saturating_mul(page.display_height)
+            .saturating_mul(BYTES_PER_RGBA_PIXEL);
+        if !self.texture_cache_has_room_for(texture_byte_size) {
             return false;
         }
 
         let image = Arc::new(page.color_image());
-        let byte_size = page.byte_size;
+        let byte_size = texture_byte_size;
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let texture_started = Instant::now();
         let texture = ctx.load_texture(

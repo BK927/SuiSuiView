@@ -108,7 +108,11 @@ fn prepare_first_page(
         display_size: Some([prepared.display_width, prepared.display_height]),
         target_long_edge,
         decode_backend: Some(prepared.decode_backend.as_str()),
-        rgba: Some(prepared.rgba.to_vec()),
+        rgba: Some(
+            prepared
+                .pixels
+                .to_rgba_vec(prepared.display_width, prepared.display_height),
+        ),
         error: None,
     }
 }

@@ -49,8 +49,15 @@ impl AutoKindWorker {
                     }
                     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
                     let classify_started = Instant::now();
+                    // The classifier assumes stride-4 RGBA. Expand transiently on this background
+                    // thread; luma pages are rare enough here that the extra copy is negligible.
+                    // TODO: a luma-native classifier path could skip the 3-channel duplication.
+                    let rgba = request
+                        .page
+                        .pixels
+                        .to_rgba_vec(request.page.display_width, request.page.display_height);
                     let prediction = classify_rgba(
-                        &request.page.rgba,
+                        &rgba,
                         request.page.display_width,
                         request.page.display_height,
                     );

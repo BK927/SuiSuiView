@@ -1126,8 +1126,8 @@ mod tests {
         SAVER_TOTAL_BUDGET_BYTES, STANDARD_TOTAL_BUDGET_BYTES,
     };
     use crate::core::worker::{
-        DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PreparedPage,
-        MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
+        DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PagePixels,
+        PreparedPage, MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
     };
     use egui::{Color32, ColorImage, Pos2, Rect, Vec2};
     use lru::LruCache;
@@ -2178,7 +2178,7 @@ mod tests {
 
     fn dummy_page(target_long_edge: u32) -> Arc<PreparedPage> {
         Arc::new(PreparedPage {
-            rgba: Arc::<[u8]>::from([255, 255, 255, 255]),
+            pixels: PagePixels::Rgba(Arc::<[u8]>::from([255, 255, 255, 255])),
             original_width: 1,
             original_height: 1,
             display_width: 1,

@@ -1,7 +1,7 @@
 use super::{
-    clamp_target_long_edge, decoded_byte_size, display_dimensions, prepared_page_from_rgba,
-    reject_oversized_dimensions, reject_oversized_original, sampled_index_map, DecodeBackend,
-    PreparedPage, MAX_TARGET_LONG_EDGE, PNG_SAMPLED_MIN_RATIO,
+    clamp_target_long_edge, decoded_byte_size, display_dimensions, prepared_page_from_luma,
+    prepared_page_from_rgba, reject_oversized_dimensions, reject_oversized_original,
+    sampled_index_map, DecodeBackend, PreparedPage, MAX_TARGET_LONG_EDGE, PNG_SAMPLED_MIN_RATIO,
 };
 use png::{
     BitDepth as PngBitDepth, ColorType as PngColorType, Decoder as PngDecoder, Reader as PngReader,
@@ -133,31 +133,50 @@ fn prepare_image_with_png_rows_for_mode(
         display_width,
         display_height,
     };
-    let (raw, backend) = if exact_original_target {
-        (
-            copy_png_rows_to_rgba(&mut reader, &mut row, plan)
-                .map_err(PngRowError::ExactOriginal)?,
-            DecodeBackend::PngExactRows,
+    // Plain 8-bit grayscale (no alpha) is retained as 1 byte/px luma. GrayscaleAlpha stays RGBA
+    // because the alpha channel must be preserved. This PNG path is never reached when an ICC
+    // transform applies (the caller routes those through image-crate), so luma is color-safe here.
+    let emit_luma = matches!(color_type, PngColorType::Grayscale);
+    let backend = if exact_original_target {
+        DecodeBackend::PngExactRows
+    } else {
+        DecodeBackend::PngSampled
+    };
+    let map_row_error = |error: String| png_row_error(exact_original_target, error);
+
+    let page = if emit_luma {
+        let raw = if exact_original_target {
+            copy_png_rows_to_luma(&mut reader, &mut row, plan).map_err(map_row_error)?
+        } else {
+            sample_png_rows_to_luma(&mut reader, &mut row, plan).map_err(map_row_error)?
+        };
+        prepared_page_from_luma(
+            raw,
+            width,
+            height,
+            display_width,
+            display_height,
+            target_long_edge,
+            backend,
         )
     } else {
-        (
-            sample_png_rows_to_rgba(&mut reader, &mut row, plan)
-                .map_err(PngRowError::FallbackAllowed)?,
-            DecodeBackend::PngSampled,
+        let raw = if exact_original_target {
+            copy_png_rows_to_rgba(&mut reader, &mut row, plan).map_err(map_row_error)?
+        } else {
+            sample_png_rows_to_rgba(&mut reader, &mut row, plan).map_err(map_row_error)?
+        };
+        prepared_page_from_rgba(
+            raw,
+            width,
+            height,
+            display_width,
+            display_height,
+            target_long_edge,
+            backend,
         )
     };
 
-    prepared_page_from_rgba(
-        raw,
-        width,
-        height,
-        display_width,
-        display_height,
-        target_long_edge,
-        backend,
-    )
-    .map_err(|error| png_row_error(exact_original_target, error))
-    .map(|page| {
+    page.map_err(map_row_error).map(|page| {
         if exact_original_target {
             PngRowResult::ExactOriginal(page)
         } else {
@@ -260,6 +279,90 @@ struct PngSamplePlan {
     height: u32,
     display_width: u32,
     display_height: u32,
+}
+
+/// Copy every 8-bit grayscale row into a tightly packed 1-byte/px luma buffer. Only valid for
+/// `PngColorType::Grayscale`; the caller guarantees that via `emit_luma`.
+fn copy_png_rows_to_luma<R: BufRead + Seek>(
+    reader: &mut PngReader<R>,
+    row: &mut [u8],
+    plan: PngSamplePlan,
+) -> Result<Vec<u8>, String> {
+    let width = plan.width as usize;
+    let height = plan.height as usize;
+    let byte_size = width
+        .checked_mul(height)
+        .ok_or_else(|| "PNG luma buffer size overflows memory limits".to_owned())?;
+    let mut raw = vec![0u8; byte_size];
+
+    for source_y in 0..height {
+        if reader
+            .read_row(row)
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            return Err("PNG ended before all rows were decoded".to_owned());
+        }
+        if row.len() < width {
+            return Err("PNG row ended unexpectedly".to_owned());
+        }
+        let output_start = source_y
+            .checked_mul(width)
+            .ok_or_else(|| "PNG luma output offset overflows memory limits".to_owned())?;
+        raw[output_start..output_start + width].copy_from_slice(&row[..width]);
+    }
+
+    Ok(raw)
+}
+
+/// Sample 8-bit grayscale rows into a tightly packed 1-byte/px luma buffer using the same nearest
+/// index maps as the RGBA sampler, so the retained pixels match the RGBA path's shared channel.
+fn sample_png_rows_to_luma<R: BufRead + Seek>(
+    reader: &mut PngReader<R>,
+    row: &mut [u8],
+    plan: PngSamplePlan,
+) -> Result<Vec<u8>, String> {
+    let source_width = plan.width as usize;
+    let source_height = plan.height as usize;
+    let display_width = plan.display_width as usize;
+    let display_height = plan.display_height as usize;
+    let byte_size = display_width
+        .checked_mul(display_height)
+        .ok_or_else(|| "PNG luma buffer size overflows memory limits".to_owned())?;
+    let mut raw = vec![0u8; byte_size];
+    let x_indices = sampled_index_map(display_width, source_width);
+    let y_indices = sampled_index_map(display_height, source_height);
+    let mut next_output_y = 0usize;
+
+    for source_y in 0..source_height {
+        if reader
+            .read_row(row)
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            return Err("PNG ended before all rows were decoded".to_owned());
+        }
+        if row.len() < source_width {
+            return Err("PNG row ended unexpectedly".to_owned());
+        }
+
+        while next_output_y < display_height && y_indices[next_output_y] == source_y {
+            let output_start = next_output_y
+                .checked_mul(display_width)
+                .ok_or_else(|| "PNG luma output offset overflows memory limits".to_owned())?;
+            let output = &mut raw[output_start..output_start + display_width];
+            for (&source_x, out) in x_indices.iter().zip(output.iter_mut()) {
+                *out = row[source_x];
+            }
+            next_output_y += 1;
+        }
+    }
+
+    if next_output_y != display_height {
+        return Err("PNG sampling did not produce every output row".to_owned());
+    }
+
+    Ok(raw)
 }
 
 fn sample_png_rows_to_rgba<R: BufRead + Seek>(
@@ -560,9 +663,9 @@ mod tests {
         assert_eq!(page.original_height, 2);
         assert_eq!(page.display_width, target as usize);
         assert_eq!(page.display_height, 2);
-        assert_eq!(page.rgba.len(), target as usize * 2 * 4);
+        assert_eq!(page.pixels.byte_len(), target as usize * 2 * 4);
         assert_eq!(
-            &page.rgba[..12],
+            &page.pixels.as_slice()[..12],
             &[0, 0, 0, 255, 1, 1, 1, 255, 2, 2, 2, 255]
         );
     }

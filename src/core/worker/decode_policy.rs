@@ -212,7 +212,7 @@ mod tests {
         decode_ahead_mode_value, DecodeAheadCandidate, DecodeAheadMode, DecodeAheadPolicy,
     };
     use crate::core::source::SharedSource;
-    use crate::core::worker::{DecodeBackend, PreparedPage};
+    use crate::core::worker::{DecodeBackend, PagePixels, PreparedPage};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -425,7 +425,7 @@ mod tests {
 
     fn prepared_page(decode_backend: DecodeBackend) -> PreparedPage {
         PreparedPage {
-            rgba: Arc::from([0, 0, 0, 255]),
+            pixels: PagePixels::Rgba(Arc::from([0, 0, 0, 255])),
             original_width: 1,
             original_height: 1,
             display_width: 1,

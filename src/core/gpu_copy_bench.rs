@@ -366,11 +366,12 @@ impl GpuCopyBench {
         iterations: usize,
     ) -> Result<Vec<GpuCopyBenchCase>, String> {
         let image = page.color_image();
-        let bytes = &page.rgba;
         let [width, height] = image.size;
         if width == 0 || height == 0 {
             return Err("cannot benchmark an empty image".to_owned());
         }
+        // GPU textures are RGBA; expand once for the upload benchmarks (dev tool, not a hot path).
+        let bytes = page.pixels.to_rgba_vec(width, height);
         let byte_size = bytes.len();
         let mut cases = Vec::with_capacity(8);
 

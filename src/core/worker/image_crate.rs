@@ -1,8 +1,8 @@
 use super::metadata::apply_embedded_icc_to_rgba;
 use super::{
     clamp_target_long_edge, display_dimensions_with_upscale, image_filter_type, image_reader,
-    prepared_page_from_rgba, reject_oversized_original, resize_rgba, DecodeBackend, DecodeOptions,
-    PreparedPage,
+    prepared_page_from_luma, prepared_page_from_rgba, reject_oversized_original, resize_luma,
+    resize_rgba, DecodeBackend, DecodeOptions, PreparedPage,
 };
 use image::DynamicImage;
 
@@ -39,6 +39,30 @@ pub(super) fn prepare_image_with_image_crate_and_icc(
     let (display_width, display_height) =
         display_dimensions_with_upscale(width, height, target_long_edge, allow_display_upscale)?;
     let resize_filter = options.scale_filter_for(width, height, display_width, display_height);
+
+    // Retain grayscale (Luma8) images as 1 byte/px, but only when no ICC transform applies: the
+    // lcms path below operates on RGBA and would otherwise be skipped, changing the pixels for
+    // color-managed gray images. Resizing goes through `resize_luma`, which mirrors the RGBA fast
+    // resizer so the on-screen result is unchanged.
+    if icc_profile.is_none() {
+        if let DynamicImage::ImageLuma8(luma) = &image {
+            let display = if display_width == width && display_height == height {
+                luma.clone()
+            } else {
+                resize_luma(luma, display_width, display_height, resize_filter)
+            };
+            return prepared_page_from_luma(
+                display.into_raw(),
+                width,
+                height,
+                display_width,
+                display_height,
+                target_long_edge,
+                DecodeBackend::ImageCrate,
+            );
+        }
+    }
+
     let display_rgba = if display_width == width && display_height == height {
         image.into_rgba8()
     } else if should_resize_before_rgba(&image) {

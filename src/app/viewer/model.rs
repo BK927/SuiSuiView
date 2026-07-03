@@ -5,10 +5,9 @@ use crate::core::state::{
     CpuScaleFilter, PageTransitionStyle, ReadingDirection, WgpuDownscaleMethod, WgpuScaleDirection,
     WgpuScalePlan, WgpuUpscaleMethod,
 };
-use crate::core::worker::{DecodeBackend, PreparedPage, PreparedTargetIntent};
+use crate::core::worker::{DecodeBackend, PagePixels, PreparedPage, PreparedTargetIntent};
 use egui::{TextureHandle, Vec2};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Instant;
 
 const SMART_WIDE_ASPECT: f32 = 1.20;
@@ -333,7 +332,7 @@ pub(in crate::app) enum PageVisual {
     ReadyGpu {
         source_key: GpuPaintSourceKey,
         image_size: [usize; 2],
-        rgba: Arc<[u8]>,
+        pixels: PagePixels,
         size: Vec2,
         effects: ViewEffects,
         wgpu_upscale_method: WgpuUpscaleMethod,

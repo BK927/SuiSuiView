@@ -1,4 +1,4 @@
-use super::{image_reader, jpeg, retained_page_byte_size, PreparedPage};
+use super::{image_reader, jpeg, retained_page_byte_size, PagePixels, PreparedPage};
 #[cfg(test)]
 use egui::ColorImage;
 use image::{metadata::Orientation, ImageDecoder};
@@ -95,15 +95,22 @@ pub(super) fn apply_exif_orientation_to_page(
 
     let transform = orientation_transform(orientation);
     let source_size = [page.display_width, page.display_height];
-    debug_assert_eq!(page.rgba.len(), source_size[0] * source_size[1] * 4);
-    let Some((output_size, output_rgba)) =
-        transform_rgba_pixels(source_size, &page.rgba, transform)
+    let bpp = page.pixels.bytes_per_pixel();
+    debug_assert_eq!(
+        page.pixels.byte_len(),
+        source_size[0] * source_size[1] * bpp
+    );
+    let Some((output_size, output_bytes)) =
+        transform_pixels(source_size, page.pixels.as_slice(), bpp, transform)
     else {
         return page;
     };
-    let rgba = Arc::<[u8]>::from(output_rgba.into_boxed_slice());
-    page.byte_size = retained_page_byte_size(rgba.len());
-    page.rgba = rgba;
+    let bytes = Arc::<[u8]>::from(output_bytes.into_boxed_slice());
+    page.byte_size = retained_page_byte_size(bytes.len());
+    page.pixels = match &page.pixels {
+        PagePixels::Rgba(_) => PagePixels::Rgba(bytes),
+        PagePixels::Luma(_) => PagePixels::Luma(bytes),
+    };
     page.display_width = output_size[0];
     page.display_height = output_size[1];
     if orientation_swaps_dimensions(orientation) {
@@ -200,34 +207,44 @@ fn transform_color_image(image: &ColorImage, transform: OrientationTransform) ->
     ColorImage::new(output_size, pixels)
 }
 
-fn transform_rgba_pixels(
+/// Apply an EXIF orientation to a tightly packed pixel buffer of `bpp` bytes per pixel. The index
+/// remap is identical for any `bpp`; only the per-pixel stride differs. RGBA (bpp == 4) keeps the
+/// hand-optimized row/transpose fast paths; other channel counts (e.g. luma bpp == 1) use the
+/// generic pixel-copy loop.
+fn transform_pixels(
     size: [usize; 2],
-    rgba: &[u8],
+    bytes: &[u8],
+    bpp: usize,
     transform: OrientationTransform,
 ) -> Option<([usize; 2], Vec<u8>)> {
     let [width, height] = size;
-    if rgba.len() != width.checked_mul(height)?.checked_mul(4)? {
+    if bytes.len() != width.checked_mul(height)?.checked_mul(bpp)? {
         return None;
     }
 
-    let rotation = transform.rotation_quadrants % 4;
-    let output = match (rotation, transform.flip_horizontal, transform.flip_vertical) {
-        (0, false, false) => (size, rgba.to_vec()),
-        (0, true, false) => (size, flip_rgba_horizontal(width, height, rgba)?),
-        (0, false, true) => (size, flip_rgba_vertical(width, height, rgba)?),
-        (2, false, false) => (size, rotate_rgba_180(width, height, rgba)?),
-        (1, false, false) => ([height, width], rotate_rgba_90(width, height, rgba)?),
-        (3, false, false) => ([height, width], rotate_rgba_270(width, height, rgba)?),
-        (1, true, false) => ([height, width], transpose_rgba(width, height, rgba)?),
-        (3, true, false) => ([height, width], transpose_rgba_anti(width, height, rgba)?),
-        _ => transform_rgba_pixels_generic(size, rgba, transform)?,
-    };
-    Some(output)
+    if bpp == 4 {
+        let rotation = transform.rotation_quadrants % 4;
+        let output = match (rotation, transform.flip_horizontal, transform.flip_vertical) {
+            (0, false, false) => (size, bytes.to_vec()),
+            (0, true, false) => (size, flip_rgba_horizontal(width, height, bytes)?),
+            (0, false, true) => (size, flip_rgba_vertical(width, height, bytes)?),
+            (2, false, false) => (size, rotate_rgba_180(width, height, bytes)?),
+            (1, false, false) => ([height, width], rotate_rgba_90(width, height, bytes)?),
+            (3, false, false) => ([height, width], rotate_rgba_270(width, height, bytes)?),
+            (1, true, false) => ([height, width], transpose_rgba(width, height, bytes)?),
+            (3, true, false) => ([height, width], transpose_rgba_anti(width, height, bytes)?),
+            _ => transform_pixels_generic(size, bytes, bpp, transform)?,
+        };
+        return Some(output);
+    }
+
+    transform_pixels_generic(size, bytes, bpp, transform)
 }
 
-fn transform_rgba_pixels_generic(
+fn transform_pixels_generic(
     size: [usize; 2],
-    rgba: &[u8],
+    bytes: &[u8],
+    bpp: usize,
     transform: OrientationTransform,
 ) -> Option<([usize; 2], Vec<u8>)> {
     let [width, height] = size;
@@ -238,7 +255,7 @@ fn transform_rgba_pixels_generic(
         [width, height]
     };
     let [out_width, out_height] = output_size;
-    let mut output = vec![0; out_width.checked_mul(out_height)?.checked_mul(4)?];
+    let mut output = vec![0; out_width.checked_mul(out_height)?.checked_mul(bpp)?];
     for dst_y in 0..out_height {
         for dst_x in 0..out_width {
             let rotated_x = if transform.flip_horizontal {
@@ -258,11 +275,12 @@ fn transform_rgba_pixels_generic(
                 3 => (width - 1 - rotated_y, rotated_x),
                 _ => unreachable!(),
             };
-            copy_rgba_pixel(
-                rgba,
+            copy_pixel(
+                bytes,
                 &mut output,
                 width,
                 out_width,
+                bpp,
                 src_x,
                 src_y,
                 dst_x,
@@ -322,11 +340,12 @@ fn rotate_rgba_90(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> {
         for src_x in 0..width {
             let dst_x = height - 1 - src_y;
             let dst_y = src_x;
-            copy_rgba_pixel(
+            copy_pixel(
                 rgba,
                 &mut output,
                 width,
                 out_width,
+                4,
                 src_x,
                 src_y,
                 dst_x,
@@ -345,11 +364,12 @@ fn rotate_rgba_270(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> 
         for src_x in 0..width {
             let dst_x = src_y;
             let dst_y = width - 1 - src_x;
-            copy_rgba_pixel(
+            copy_pixel(
                 rgba,
                 &mut output,
                 width,
                 out_width,
+                4,
                 src_x,
                 src_y,
                 dst_x,
@@ -366,11 +386,12 @@ fn transpose_rgba(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> {
     let mut output = vec![0; out_width.checked_mul(out_height)?.checked_mul(4)?];
     for src_y in 0..height {
         for src_x in 0..width {
-            copy_rgba_pixel(
+            copy_pixel(
                 rgba,
                 &mut output,
                 width,
                 out_width,
+                4,
                 src_x,
                 src_y,
                 src_y,
@@ -389,11 +410,12 @@ fn transpose_rgba_anti(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u
         for src_x in 0..width {
             let dst_x = height - 1 - src_y;
             let dst_y = width - 1 - src_x;
-            copy_rgba_pixel(
+            copy_pixel(
                 rgba,
                 &mut output,
                 width,
                 out_width,
+                4,
                 src_x,
                 src_y,
                 dst_x,
@@ -410,19 +432,21 @@ fn copy_reversed_rgba_row(src: &[u8], dst: &mut [u8]) {
     }
 }
 
-fn copy_rgba_pixel(
+#[allow(clippy::too_many_arguments)]
+fn copy_pixel(
     src: &[u8],
     dst: &mut [u8],
     src_width: usize,
     dst_width: usize,
+    bpp: usize,
     src_x: usize,
     src_y: usize,
     dst_x: usize,
     dst_y: usize,
 ) {
-    let src_offset = (src_y * src_width + src_x) * 4;
-    let dst_offset = (dst_y * dst_width + dst_x) * 4;
-    dst[dst_offset..dst_offset + 4].copy_from_slice(&src[src_offset..src_offset + 4]);
+    let src_offset = (src_y * src_width + src_x) * bpp;
+    let dst_offset = (dst_y * dst_width + dst_x) * bpp;
+    dst[dst_offset..dst_offset + bpp].copy_from_slice(&src[src_offset..src_offset + bpp]);
 }
 
 fn orientation_swaps_dimensions(orientation: Orientation) -> bool {
@@ -438,12 +462,22 @@ fn orientation_swaps_dimensions(orientation: Orientation) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        orient_color_image, orientation_swaps_dimensions, orientation_transform,
-        transform_rgba_pixels,
+        orient_color_image, orientation_swaps_dimensions, orientation_transform, transform_pixels,
     };
     use crate::core::gpu_effect::color_image_to_rgba;
     use egui::{Color32, ColorImage};
     use image::metadata::Orientation;
+
+    const ALL_ORIENTATIONS: [Orientation; 8] = [
+        Orientation::NoTransforms,
+        Orientation::Rotate90,
+        Orientation::Rotate180,
+        Orientation::Rotate270,
+        Orientation::FlipHorizontal,
+        Orientation::FlipVertical,
+        Orientation::Rotate90FlipH,
+        Orientation::Rotate270FlipH,
+    ];
 
     #[test]
     fn exif_orientation_swaps_and_rotates_pixels() {
@@ -477,19 +511,10 @@ mod tests {
         );
         let rgba = color_image_to_rgba(&image);
 
-        for orientation in [
-            Orientation::NoTransforms,
-            Orientation::Rotate90,
-            Orientation::Rotate180,
-            Orientation::Rotate270,
-            Orientation::FlipHorizontal,
-            Orientation::FlipVertical,
-            Orientation::Rotate90FlipH,
-            Orientation::Rotate270FlipH,
-        ] {
+        for orientation in ALL_ORIENTATIONS {
             let reference = orient_color_image(&image, orientation);
             let (size, oriented_rgba) =
-                transform_rgba_pixels(image.size, &rgba, orientation_transform(orientation))
+                transform_pixels(image.size, &rgba, 4, orientation_transform(orientation))
                     .expect("valid RGBA test image should transform");
 
             assert_eq!(size, reference.size, "{orientation:?}");
@@ -498,6 +523,28 @@ mod tests {
                 color_image_to_rgba(&reference),
                 "{orientation:?}"
             );
+        }
+    }
+
+    #[test]
+    fn luma_orientation_matches_expanded_rgba_transform() {
+        // Rotating a 1-byte/px luma buffer must equal expanding to gray-triplet RGBA and rotating
+        // that (then the shared channel matches). Verified against the RGBA reference transform for
+        // every orientation and both square-swapping and non-swapping shapes.
+        let size = [3usize, 2usize];
+        let luma: Vec<u8> = (0..(size[0] * size[1]) as u8).map(|v| v * 17).collect();
+        let rgba: Vec<u8> = luma.iter().flat_map(|&g| [g, g, g, 255]).collect();
+
+        for orientation in ALL_ORIENTATIONS {
+            let transform = orientation_transform(orientation);
+            let (luma_size, luma_out) =
+                transform_pixels(size, &luma, 1, transform).expect("luma transform");
+            let (rgba_size, rgba_out) =
+                transform_pixels(size, &rgba, 4, transform).expect("rgba transform");
+
+            assert_eq!(luma_size, rgba_size, "{orientation:?}");
+            let expanded: Vec<u8> = luma_out.iter().flat_map(|&g| [g, g, g, 255]).collect();
+            assert_eq!(expanded, rgba_out, "{orientation:?}");
         }
     }
 }

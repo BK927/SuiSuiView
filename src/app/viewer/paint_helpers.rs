@@ -1,13 +1,14 @@
 use crate::app::gpu_paint::{GpuPaintRequest, GpuPaintSourceKey};
 use crate::app::{
     gpu_visual_needs_wgsl, rect_target_size, SuiSuiViewApp, TextureCacheKey, TextureEntry,
-    TextureSampling,
+    TextureSampling, BYTES_PER_RGBA_PIXEL,
 };
 use crate::core::effects::ViewEffects;
 use crate::core::state::{FitMode, LargeImageAnchor};
+use crate::core::worker::PagePixels;
 use egui::{
-    self, Align2, Color32, ColorImage, FontId, ImageData, Pos2, Rect, Stroke, StrokeKind,
-    TextureHandle, TextureOptions, Vec2,
+    self, Align2, Color32, FontId, ImageData, Pos2, Rect, Stroke, StrokeKind, TextureHandle,
+    TextureOptions, Vec2,
 };
 use std::sync::Arc;
 
@@ -53,7 +54,7 @@ impl SuiSuiViewApp {
                 ctx,
                 request.source_key,
                 request.image_size,
-                &request.rgba,
+                &request.pixels,
                 request.effects,
                 !force_texture_fallback,
             );
@@ -74,7 +75,7 @@ impl SuiSuiViewApp {
         ctx: &egui::Context,
         source_key: GpuPaintSourceKey,
         image_size: [usize; 2],
-        rgba: &[u8],
+        pixels: &PagePixels,
         effects: ViewEffects,
         request_present_repaint: bool,
     ) -> TextureHandle {
@@ -91,8 +92,14 @@ impl SuiSuiViewApp {
             return texture;
         }
 
-        let image = Arc::new(ColorImage::from_rgba_unmultiplied(image_size, rgba));
-        let texture_byte_size = rgba.len();
+        // egui textures are RGBA. Build the ColorImage directly from whatever the page retained
+        // (luma builds gray Color32s with no intermediate RGBA Vec) and account the RGBA footprint.
+        let image = Arc::new(pixels.to_color_image(image_size));
+        let texture_byte_size = image_size
+            .iter()
+            .copied()
+            .product::<usize>()
+            .saturating_mul(BYTES_PER_RGBA_PIXEL);
         let texture = ctx.load_texture(
             format!(
                 "page-{}-{}-{:?}",

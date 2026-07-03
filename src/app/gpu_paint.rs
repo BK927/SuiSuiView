@@ -11,6 +11,7 @@ use crate::core::perf_trace::{self, PerfField};
 use crate::core::state::{
     FitMode, GpuEffectMode, RendererMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod,
 };
+use crate::core::worker::PagePixels;
 use egui::{self, PaintCallbackInfo, Rect};
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use lru::LruCache;
@@ -64,7 +65,7 @@ pub(super) struct GpuPaintRequest {
     pub(super) rect: Rect,
     pub(super) source_key: GpuPaintSourceKey,
     pub(super) image_size: [usize; 2],
-    pub(super) rgba: Arc<[u8]>,
+    pub(super) pixels: PagePixels,
     pub(super) effects: ViewEffects,
     pub(super) wgpu_upscale_method: WgpuUpscaleMethod,
     pub(super) wgpu_downscale_method: WgpuDownscaleMethod,
@@ -138,7 +139,7 @@ impl SuiSuiViewApp {
         let callback = GpuEffectCallback {
             source_key: request.source_key,
             image_size: request.image_size,
-            rgba: request.rgba,
+            pixels: request.pixels,
             effects: request.effects,
             wgpu_upscale_method: request.wgpu_upscale_method,
             wgpu_downscale_method: request.wgpu_downscale_method,
@@ -279,7 +280,7 @@ impl CallbackTrait for GpuOriginalInspectionCleanupCallback {
 struct GpuEffectCallback {
     source_key: GpuPaintSourceKey,
     image_size: [usize; 2],
-    rgba: Arc<[u8]>,
+    pixels: PagePixels,
     effects: ViewEffects,
     wgpu_upscale_method: WgpuUpscaleMethod,
     wgpu_downscale_method: WgpuDownscaleMethod,
@@ -347,7 +348,7 @@ impl CallbackTrait for GpuEffectCallback {
             queue,
             self.source_key,
             self.image_size,
-            &self.rgba,
+            &self.pixels,
         );
         #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
         let _ = source_uploaded;
@@ -629,7 +630,7 @@ impl GpuPaintResources {
         queue: &wgpu::Queue,
         key: GpuPaintSourceKey,
         image_size: [usize; 2],
-        rgba: &[u8],
+        pixels: &PagePixels,
     ) -> bool {
         if self.source_textures.get(&key).is_some() {
             return false;
@@ -638,9 +639,14 @@ impl GpuPaintResources {
         let upload_started = Instant::now();
         let [width, height] = image_size;
         let byte_size = width.saturating_mul(height).saturating_mul(4);
+        // VRAM is always RGBA. Expand luma -> RGBA here, after the LRU-miss check, so the cost is
+        // paid at most once per source texture (per-frame repaints hit the early return above). For
+        // RGBA pages `to_rgba_vec` just clones the retained buffer.
+        let rgba = pixels.to_rgba_vec(width, height);
         if rgba.len() != byte_size {
             return false;
         }
+        let rgba = rgba.as_slice();
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("suisuiview-gpu-effect-source"),
             size: wgpu::Extent3d {
@@ -2503,8 +2509,8 @@ mod tests {
                     decode: DecodeOptions::default(),
                 },
             };
-            let rgba = smoke_rgba(source_size);
-            resources.ensure_source_texture(device, queue, source_key, source_size, &rgba);
+            let pixels = PagePixels::Rgba(smoke_rgba(source_size).into());
+            resources.ensure_source_texture(device, queue, source_key, source_size, &pixels);
             Self {
                 resources,
                 source_key,

@@ -4,7 +4,7 @@ use crate::core::perf_trace::{self, PerfField};
 use crate::core::source::SharedSource;
 use crate::core::state::{CpuScaleFilter, DecoderPreferences};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
-use egui::{ColorImage, Context};
+use egui::{Color32, ColorImage, Context};
 use image::{ImageReader, Limits};
 use lru::LruCache;
 use std::io::Cursor;
@@ -85,7 +85,7 @@ use metadata::{apply_exif_orientation_to_page, read_image_metadata, ImageMetadat
 use prepare::prepare_page_with_perf;
 use read_ahead::{clear_pending as clear_pending_read_ahead, ReadAhead};
 pub use region::{prepare_original_region_with_options, OriginalRegion, PreparedRegion};
-use resize::{image_filter_type, resize_rgba};
+use resize::{image_filter_type, resize_luma, resize_rgba};
 use scheduler::{is_visible_page_index, prioritized_jobs, should_skip_ai_preview_or_prefetch};
 #[cfg(test)]
 use selection::prepare_unavailable_or_image_fallback;
@@ -190,9 +190,74 @@ fn push_unique_prefetch_index(indices: &mut Vec<usize>, index: usize, page_count
     }
 }
 
+/// Retained pixel storage for a prepared page. Grayscale content reported as such by the decoder
+/// is kept as 1 byte/px (`Luma`) to quarter its RAM footprint; everything else stays RGBA. VRAM
+/// always uses RGBA, so consumers expand to RGBA only transiently at the point of use — the cache
+/// never stores the expansion. The [`PreparedPage::rgba`] field was replaced with this enum on
+/// purpose so the compiler flags every consumer (a missed one would silently upload a
+/// wrong-length buffer and paint a blank page rather than crash).
+#[derive(Clone)]
+pub enum PagePixels {
+    Rgba(Arc<[u8]>),
+    Luma(Arc<[u8]>),
+}
+
+impl PagePixels {
+    pub fn is_luma(&self) -> bool {
+        matches!(self, PagePixels::Luma(_))
+    }
+
+    /// Bytes actually retained in RAM (RGBA: 4/px, Luma: 1/px).
+    pub fn byte_len(&self) -> usize {
+        match self {
+            PagePixels::Rgba(bytes) | PagePixels::Luma(bytes) => bytes.len(),
+        }
+    }
+
+    pub fn bytes_per_pixel(&self) -> usize {
+        match self {
+            PagePixels::Rgba(_) => 4,
+            PagePixels::Luma(_) => 1,
+        }
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        match self {
+            PagePixels::Rgba(bytes) | PagePixels::Luma(bytes) => bytes,
+        }
+    }
+
+    /// Transiently expand to an RGBA byte buffer sized `width*height*4`. For `Luma`, each byte
+    /// becomes an opaque gray triplet. The caller owns the result; nothing is cached.
+    pub fn to_rgba_vec(&self, width: usize, height: usize) -> Vec<u8> {
+        match self {
+            PagePixels::Rgba(bytes) => bytes.to_vec(),
+            PagePixels::Luma(bytes) => {
+                let mut rgba = Vec::with_capacity(width.saturating_mul(height).saturating_mul(4));
+                for &gray in bytes.iter() {
+                    rgba.extend_from_slice(&[gray, gray, gray, 255]);
+                }
+                rgba
+            }
+        }
+    }
+
+    /// Build an egui `ColorImage` of the given `size`. Bit-identical to expanding to RGBA and
+    /// calling `ColorImage::from_rgba_unmultiplied`, but the luma branch skips the RGBA Vec.
+    pub fn to_color_image(&self, size: [usize; 2]) -> ColorImage {
+        match self {
+            PagePixels::Rgba(bytes) => ColorImage::from_rgba_unmultiplied(size, bytes),
+            PagePixels::Luma(bytes) => {
+                let pixels = bytes.iter().map(|&gray| Color32::from_gray(gray)).collect();
+                ColorImage::new(size, pixels)
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct PreparedPage {
-    pub rgba: Arc<[u8]>,
+    pub pixels: PagePixels,
     pub original_width: usize,
     pub original_height: usize,
     pub display_width: usize,
@@ -209,7 +274,10 @@ impl PreparedPage {
     }
 
     pub fn color_image(&self) -> ColorImage {
-        ColorImage::from_rgba_unmultiplied(self.image_size(), &self.rgba)
+        // Delegates to `PagePixels::to_color_image`; the luma branch builds gray Color32s directly
+        // (no intermediate RGBA Vec) and is bit-identical to `from_rgba_unmultiplied` on an
+        // expanded [g,g,g,255] buffer.
+        self.pixels.to_color_image(self.image_size())
     }
 }
 
@@ -737,10 +805,64 @@ fn prepared_page_from_rgba(
     decode_backend: DecodeBackend,
 ) -> Result<PreparedPage, String> {
     let rgba = Arc::<[u8]>::from(raw.into_boxed_slice());
-    let byte_size = prepared_page_byte_size(rgba.len())?;
+    prepared_page_from_pixels(
+        PagePixels::Rgba(rgba),
+        original_width,
+        original_height,
+        display_width,
+        display_height,
+        target_long_edge,
+        decode_backend,
+    )
+}
+
+/// Build a `PreparedPage` from single-channel gray bytes retained as `PagePixels::Luma` (1 byte/px).
+/// Callers must only reach this for content the decoder reported as grayscale with no separate
+/// alpha and no color-management transform in play; VRAM still uploads RGBA via a transient expand.
+fn prepared_page_from_luma(
+    raw: Vec<u8>,
+    original_width: u32,
+    original_height: u32,
+    display_width: u32,
+    display_height: u32,
+    target_long_edge: u32,
+    decode_backend: DecodeBackend,
+) -> Result<PreparedPage, String> {
+    let luma = Arc::<[u8]>::from(raw.into_boxed_slice());
+    prepared_page_from_pixels(
+        PagePixels::Luma(luma),
+        original_width,
+        original_height,
+        display_width,
+        display_height,
+        target_long_edge,
+        decode_backend,
+    )
+}
+
+fn prepared_page_from_pixels(
+    pixels: PagePixels,
+    original_width: u32,
+    original_height: u32,
+    display_width: u32,
+    display_height: u32,
+    target_long_edge: u32,
+    decode_backend: DecodeBackend,
+) -> Result<PreparedPage, String> {
+    // Budget accounting tracks bytes actually retained, so a luma page counts a quarter of an RGBA
+    // page of the same dimensions. The oversized-page guard uses the expanded RGBA footprint so the
+    // cap still reflects the memory a consumer will transiently allocate on upload.
+    let byte_size = pixels.byte_len();
+    let expanded_rgba_bytes = display_width
+        .checked_mul(display_height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .map(|bytes| bytes as usize)
+        .unwrap_or(usize::MAX)
+        .max(byte_size);
+    prepared_page_byte_size(expanded_rgba_bytes)?;
 
     Ok(PreparedPage {
-        rgba,
+        pixels,
         original_width: original_width as usize,
         original_height: original_height as usize,
         display_width: display_width as usize,
@@ -1514,8 +1636,8 @@ mod tests {
         let page = prepare_image(&bytes, 1024).unwrap();
 
         assert_eq!(page.image_size(), [48, 32]);
-        assert_eq!(page.rgba.len(), 48 * 32 * 4);
-        assert_eq!(page.byte_size, page.rgba.len());
+        assert_eq!(page.pixels.byte_len(), 48 * 32 * 4);
+        assert_eq!(page.byte_size, page.pixels.byte_len());
         assert_eq!(page.color_image().size, [48, 32]);
     }
 
@@ -1904,5 +2026,316 @@ mod tests {
             }
             Ok(self.page_bytes.clone())
         }
+    }
+}
+
+#[cfg(test)]
+mod luma_tests {
+    use super::{
+        prepare_image_with_options, DecodeBackend, DecodeOptions, DecodeStrategy,
+        MAX_TARGET_LONG_EDGE,
+    };
+    use crate::core::state::{DecoderPreference, DecoderPreferences};
+    use image::{
+        DynamicImage, GrayAlphaImage, GrayImage, ImageFormat, LumaA, RgbImage, Rgba, RgbaImage,
+    };
+    use std::io::Cursor;
+
+    fn gray_value(x: u32, y: u32) -> u8 {
+        ((x * 3 + y * 7) % 256) as u8
+    }
+
+    fn gray_luma_image(width: u32, height: u32) -> GrayImage {
+        GrayImage::from_fn(width, height, |x, y| image::Luma([gray_value(x, y)]))
+    }
+
+    /// The same gray content as `gray_luma_image`, but as an RGB image with R=G=B. Lets a
+    /// grayscale fixture be re-encoded as a *color* PNG so the Default decode path takes the RGBA
+    /// row writer with the identical `sampled_index_map`, giving an algorithm-matched reference.
+    fn gray_as_rgb_image(width: u32, height: u32) -> RgbImage {
+        RgbImage::from_fn(width, height, |x, y| {
+            let g = gray_value(x, y);
+            image::Rgb([g, g, g])
+        })
+    }
+
+    /// Assert that `color_image()`'s direct-gray construction is bit-identical to expanding the
+    /// retained pixels to RGBA and building the ColorImage that way — the guarantee that keeps the
+    /// on-screen result unchanged regardless of how pixels are retained.
+    fn assert_color_image_matches_expanded_rgba(page: &super::PreparedPage) {
+        use egui::ColorImage;
+        let size = page.image_size();
+        let expanded = page.pixels.to_rgba_vec(size[0], size[1]);
+        assert_eq!(
+            page.color_image(),
+            ColorImage::from_rgba_unmultiplied(size, &expanded)
+        );
+    }
+
+    fn encode(image: DynamicImage, format: ImageFormat) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image
+            .write_to(&mut Cursor::new(&mut bytes), format)
+            .expect("encode fixture");
+        bytes
+    }
+
+    fn options_with_png(pref: DecoderPreference) -> DecodeOptions {
+        DecodeOptions {
+            strategy: DecodeStrategy::Auto,
+            decoder_preferences: DecoderPreferences {
+                png: pref,
+                ..DecoderPreferences::default()
+            },
+            ..DecodeOptions::default()
+        }
+    }
+
+    fn options_with_jpeg(pref: DecoderPreference) -> DecodeOptions {
+        DecodeOptions {
+            strategy: DecodeStrategy::Auto,
+            decoder_preferences: DecoderPreferences {
+                jpeg: pref,
+                ..DecoderPreferences::default()
+            },
+            ..DecodeOptions::default()
+        }
+    }
+
+    #[test]
+    fn sampled_gray_png_is_retained_as_luma_and_matches_rgba_reference() {
+        // Large grayscale PNG -> the row sampler retains luma. The algorithm-matched reference is
+        // the SAME content re-encoded as a color (RGB, R=G=B) PNG, which takes the RGBA row
+        // sampler with the identical index maps — so the ColorImages must be bit-identical.
+        let side = 2600u32;
+        let gray_bytes = encode(
+            DynamicImage::ImageLuma8(gray_luma_image(side, side)),
+            ImageFormat::Png,
+        );
+        let rgb_bytes = encode(
+            DynamicImage::ImageRgb8(gray_as_rgb_image(side, side)),
+            ImageFormat::Png,
+        );
+
+        let luma = prepare_image_with_options(
+            &gray_bytes,
+            1024,
+            options_with_png(DecoderPreference::Default),
+        )
+        .expect("luma png");
+        assert!(luma.pixels.is_luma(), "backend {:?}", luma.decode_backend);
+        assert_eq!(luma.decode_backend, DecodeBackend::PngSampled);
+        assert_eq!(luma.byte_size, luma.display_width * luma.display_height);
+        assert_color_image_matches_expanded_rgba(&luma);
+
+        let reference = prepare_image_with_options(
+            &rgb_bytes,
+            1024,
+            options_with_png(DecoderPreference::Default),
+        )
+        .expect("rgba png");
+        assert!(!reference.pixels.is_luma());
+        assert_eq!(reference.decode_backend, DecodeBackend::PngSampled);
+        assert_eq!(luma.image_size(), reference.image_size());
+        assert_eq!(luma.color_image(), reference.color_image());
+    }
+
+    #[test]
+    fn original_inspection_gray_png_is_retained_as_luma() {
+        // Original-inspection target (> MAX_TARGET_LONG_EDGE) exercises the exact-rows luma writer.
+        // Reference is the same content as a color PNG through the RGBA exact-rows writer.
+        let side = 64u32;
+        let gray_bytes = encode(
+            DynamicImage::ImageLuma8(gray_luma_image(side, side)),
+            ImageFormat::Png,
+        );
+        let rgb_bytes = encode(
+            DynamicImage::ImageRgb8(gray_as_rgb_image(side, side)),
+            ImageFormat::Png,
+        );
+        let target = MAX_TARGET_LONG_EDGE + 1;
+
+        let luma = prepare_image_with_options(
+            &gray_bytes,
+            target,
+            options_with_png(DecoderPreference::Default),
+        )
+        .expect("luma png");
+        assert!(luma.pixels.is_luma());
+        assert_eq!(luma.decode_backend, DecodeBackend::PngExactRows);
+        assert_eq!(luma.byte_size, (side * side) as usize);
+        assert_color_image_matches_expanded_rgba(&luma);
+
+        let reference = prepare_image_with_options(
+            &rgb_bytes,
+            target,
+            options_with_png(DecoderPreference::Default),
+        )
+        .expect("rgba png");
+        assert_eq!(reference.decode_backend, DecodeBackend::PngExactRows);
+        assert_eq!(luma.color_image(), reference.color_image());
+    }
+
+    #[test]
+    fn grayscale_alpha_png_stays_rgba() {
+        // GrayscaleAlpha carries a real alpha channel and must not collapse to single-channel luma.
+        let side = 2600u32;
+        let image = GrayAlphaImage::from_fn(side, side, |x, y| LumaA([gray_value(x, y), 128]));
+        let bytes = encode(DynamicImage::ImageLumaA8(image), ImageFormat::Png);
+
+        let page =
+            prepare_image_with_options(&bytes, 1024, options_with_png(DecoderPreference::Default))
+                .expect("gray-alpha png");
+        assert!(!page.pixels.is_luma());
+        assert_eq!(page.byte_size, page.display_width * page.display_height * 4);
+    }
+
+    #[test]
+    fn scaled_gray_jpeg_is_retained_as_luma() {
+        // Large grayscale JPEG -> the scaled decoder reports L8 and we retain luma. JPEG is lossy
+        // and a grayscale JPEG has no chroma planes, so there is no algorithm-matched RGBA fixture
+        // to diff against; instead we assert the retention (is_luma + byte_size) and that
+        // color_image() is bit-identical to expanding the retained luma to RGBA.
+        let side = 2304u32;
+        let bytes = encode(
+            DynamicImage::ImageLuma8(gray_luma_image(side, side)),
+            ImageFormat::Jpeg,
+        );
+
+        let luma =
+            prepare_image_with_options(&bytes, 1024, options_with_jpeg(DecoderPreference::Default))
+                .expect("luma jpeg");
+        assert!(luma.pixels.is_luma(), "backend {:?}", luma.decode_backend);
+        assert_eq!(luma.decode_backend, DecodeBackend::JpegScaled);
+        assert_eq!(luma.byte_size, luma.display_width * luma.display_height);
+        assert_color_image_matches_expanded_rgba(&luma);
+    }
+
+    #[test]
+    fn image_crate_gray_is_retained_as_luma() {
+        // Forcing the image crate on a grayscale PNG yields DynamicImage::ImageLuma8 -> retained as
+        // luma. The reference is the same gray values expanded to RGBA by hand.
+        let side = 40u32;
+        let bytes = encode(
+            DynamicImage::ImageLuma8(gray_luma_image(side, side)),
+            ImageFormat::Png,
+        );
+
+        let luma = prepare_image_with_options(
+            &bytes,
+            1024,
+            options_with_png(DecoderPreference::ImageCrate),
+        )
+        .expect("luma png via image crate");
+        assert!(luma.pixels.is_luma(), "backend {:?}", luma.decode_backend);
+        assert_eq!(luma.decode_backend, DecodeBackend::ImageCrate);
+        assert_eq!(luma.byte_size, (side * side) as usize);
+        assert_color_image_matches_expanded_rgba(&luma);
+
+        let expected: RgbaImage = RgbaImage::from_fn(side, side, |x, y| {
+            let g = gray_value(x, y);
+            Rgba([g, g, g, 255])
+        });
+        assert_eq!(
+            luma.pixels.to_rgba_vec(side as usize, side as usize),
+            expected.into_raw()
+        );
+    }
+
+    #[test]
+    fn icc_gray_image_stays_rgba() {
+        // When an ICC profile is present and ICC application is enabled, the gray image is routed
+        // through the ICC (RGBA) path and must NOT be retained as luma — the lcms transform would
+        // otherwise be skipped and change the pixels.
+        let side = 40u32;
+        let mut luma = gray_luma_image(side, side);
+        let png_with_icc = encode_gray_png_with_srgb_icc(&mut luma);
+
+        let page = prepare_image_with_options(
+            &png_with_icc,
+            1024,
+            DecodeOptions {
+                strategy: DecodeStrategy::ImageCrate,
+                apply_embedded_icc: true,
+                ..DecodeOptions::default()
+            },
+        )
+        .expect("icc gray png");
+        assert!(!page.pixels.is_luma());
+        assert_eq!(page.byte_size, page.display_width * page.display_height * 4);
+    }
+
+    #[test]
+    fn luma_page_reports_quarter_byte_size_of_equivalent_rgba() {
+        // Cache-budget accounting keys off `byte_size`. A grayscale page retained as luma must cost
+        // exactly a quarter of the same-dimensioned color page, so the eviction math stays honest.
+        let side = 40u32;
+        let gray_png = encode(
+            DynamicImage::ImageLuma8(gray_luma_image(side, side)),
+            ImageFormat::Png,
+        );
+        let color_png = encode(
+            DynamicImage::ImageRgb8(gray_as_rgb_image(side, side)),
+            ImageFormat::Png,
+        );
+
+        let luma = prepare_image_with_options(
+            &gray_png,
+            1024,
+            options_with_png(DecoderPreference::ImageCrate),
+        )
+        .expect("luma png");
+        let rgba = prepare_image_with_options(
+            &color_png,
+            1024,
+            options_with_png(DecoderPreference::ImageCrate),
+        )
+        .expect("rgba png");
+
+        assert!(luma.pixels.is_luma());
+        assert!(!rgba.pixels.is_luma());
+        assert_eq!(luma.image_size(), rgba.image_size());
+        assert_eq!(rgba.byte_size, luma.byte_size * 4);
+        assert_eq!(luma.byte_size, (side * side) as usize);
+    }
+
+    #[test]
+    fn color_image_crate_source_stays_rgba() {
+        // A genuinely colored image decoded via the image crate must remain RGBA.
+        let side = 40u32;
+        let image = RgbImage::from_fn(side, side, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 200])
+        });
+        let bytes = encode(DynamicImage::ImageRgb8(image), ImageFormat::Png);
+
+        let page = prepare_image_with_options(
+            &bytes,
+            1024,
+            options_with_png(DecoderPreference::ImageCrate),
+        )
+        .expect("rgb png");
+        assert!(!page.pixels.is_luma());
+        assert_eq!(page.byte_size, page.display_width * page.display_height * 4);
+    }
+
+    /// Encode a grayscale PNG that carries an sRGB ICC profile chunk, so the ICC-application path
+    /// is exercised. Uses the `png` crate directly since `image`'s encoder does not attach ICC.
+    fn encode_gray_png_with_srgb_icc(image: &mut GrayImage) -> Vec<u8> {
+        let srgb = lcms2::Profile::new_srgb();
+        let icc = srgb.icc().expect("serialize sRGB ICC profile");
+
+        let mut info = png::Info::with_size(image.width(), image.height());
+        info.color_type = png::ColorType::Grayscale;
+        info.bit_depth = png::BitDepth::Eight;
+        info.icc_profile = Some(std::borrow::Cow::Owned(icc));
+
+        let mut bytes = Vec::new();
+        {
+            let encoder =
+                png::Encoder::with_info(&mut bytes, info).expect("png encoder with ICC info");
+            let mut writer = encoder.write_header().expect("png header");
+            writer.write_image_data(image.as_raw()).expect("png data");
+        }
+        bytes
     }
 }

@@ -1,9 +1,9 @@
 use super::{
-    clamp_target_long_edge, display_dimensions_with_upscale, prepared_page_from_rgba,
-    reject_oversized_dimensions, resize_rgba, DecodeBackend, DecodeOptions, PreparedPage,
-    JPEG_SCALED_MIN_RATIO,
+    clamp_target_long_edge, display_dimensions_with_upscale, prepared_page_from_luma,
+    prepared_page_from_rgba, reject_oversized_dimensions, resize_luma, resize_rgba, DecodeBackend,
+    DecodeOptions, PreparedPage, JPEG_SCALED_MIN_RATIO,
 };
-use image::RgbaImage;
+use image::{GrayImage, RgbaImage};
 use jpeg_decoder::{Decoder as JpegDecoder, PixelFormat};
 use std::io::Cursor;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -96,6 +96,34 @@ pub(super) fn prepare_image_with_scaled_jpeg(
         scaled_height,
     );
 
+    // Grayscale JPEGs (L8) are retained as 1 byte/px luma instead of being expanded to RGBA. This
+    // path is only reached when no ICC transform applies (the caller routes ICC images through
+    // image-crate), so keeping luma cannot break color management.
+    if scaled_info.pixel_format == PixelFormat::L8 {
+        let luma = jpeg_pixels_to_luma(&pixels, scaled_width, scaled_height)?;
+        let display = if scaled_width == display_width && scaled_height == display_height {
+            luma
+        } else {
+            let resize_filter = options.scale_filter_for(
+                scaled_width,
+                scaled_height,
+                display_width,
+                display_height,
+            );
+            resize_luma(&luma, display_width, display_height, resize_filter)
+        };
+        return prepared_page_from_luma(
+            display.into_raw(),
+            original_width,
+            original_height,
+            display_width,
+            display_height,
+            target_long_edge,
+            DecodeBackend::JpegScaled,
+        )
+        .map(Some);
+    }
+
     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
     let rgba_started = Instant::now();
     let rgba = jpeg_pixels_to_rgba(
@@ -149,6 +177,17 @@ pub(super) fn prepare_image_with_scaled_jpeg(
         DecodeBackend::JpegScaled,
     )
     .map(Some)
+}
+
+fn jpeg_pixels_to_luma(pixels: &[u8], width: u32, height: u32) -> Result<GrayImage, String> {
+    let pixel_count = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| "JPEG dimensions overflow memory limits".to_owned())?;
+    if pixels.len() != pixel_count {
+        return Err("JPEG decoder returned an unexpected luma buffer size".to_owned());
+    }
+    GrayImage::from_raw(width, height, pixels.to_vec())
+        .ok_or_else(|| "JPEG luma buffer did not match dimensions".to_owned())
 }
 
 pub(super) fn is_jpeg(bytes: &[u8]) -> bool {

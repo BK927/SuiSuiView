@@ -162,7 +162,8 @@ mod tests {
     };
     use crate::app::PageCacheKey;
     use crate::core::worker::{
-        DecodeBackend, DecodeOptions, PreparedPage, MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
+        DecodeBackend, DecodeOptions, PagePixels, PreparedPage, MAX_TARGET_LONG_EDGE,
+        PREVIEW_TARGET_LONG_EDGE,
     };
     use lru::LruCache;
     use std::num::NonZeroUsize;
@@ -243,7 +244,7 @@ mod tests {
 
     fn test_prepared_page(target_long_edge: u32, byte_size: usize) -> Arc<PreparedPage> {
         Arc::new(PreparedPage {
-            rgba: Arc::<[u8]>::from([255, 255, 255, 255]),
+            pixels: PagePixels::Rgba(Arc::<[u8]>::from([255, 255, 255, 255])),
             original_width: 1,
             original_height: 1,
             display_width: 1,
