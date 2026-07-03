@@ -157,6 +157,39 @@ impl WgpuDownscaleMethod {
         Self::PyramidLanczos3,
     ];
 
+    /// The subset of methods exposed as user-facing choices in the settings UI,
+    /// quick-pick pool, and top-bar filter. `ALL` remains the full set for
+    /// internal logic and tests. Serialization stays backward compatible: every
+    /// `ALL` variant still deserializes; non-selectable ones are folded onto a
+    /// `SELECTABLE` member by [`selectable_fallback`](Self::selectable_fallback)
+    /// during settings sanitize.
+    pub const SELECTABLE: [Self; 6] = [
+        Self::Bilinear,
+        Self::Hamming,
+        Self::CatmullRom,
+        Self::Lanczos3,
+        Self::PyramidHamming,
+        Self::PyramidLanczos3,
+    ];
+
+    /// Maps any method onto a [`SELECTABLE`](Self::SELECTABLE) member, preserving
+    /// perceptual/cost intent. `SELECTABLE` members map to themselves.
+    /// `HardwareMipmapLinear` folds to `Bilinear` (not a pyramid) to preserve its
+    /// low cost and avoid a zoom regression on low-end GPUs.
+    pub fn selectable_fallback(self) -> Self {
+        match self {
+            Self::Nearest => Self::Bilinear,
+            Self::Box => Self::Hamming,
+            Self::Mitchell => Self::CatmullRom,
+            Self::Lanczos2 => Self::Lanczos3,
+            Self::HardwareMipmapLinear => Self::Bilinear,
+            Self::PyramidBoxTent => Self::PyramidHamming,
+            Self::PyramidMitchell => Self::PyramidLanczos3,
+            Self::PyramidLanczos2 => Self::PyramidLanczos3,
+            selectable => selectable,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Nearest => "Nearest",

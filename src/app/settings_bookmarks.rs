@@ -132,7 +132,7 @@ pub(in crate::app) fn show_view_settings(
                 ui,
                 &i18n.text("settings.view.top_bar_scalers.wgpu_down"),
                 &mut draft.top_bar_wgpu_downscale_methods,
-                WgpuDownscaleMethod::ALL,
+                WgpuDownscaleMethod::SELECTABLE,
                 &DEFAULT_TOP_BAR_WGPU_DOWNSCALE_METHODS,
                 |method| method.label().to_owned(),
                 changed,

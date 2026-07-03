@@ -48,7 +48,7 @@ pub const DEFAULT_TOP_BAR_WGPU_DOWNSCALE_METHODS: [WgpuDownscaleMethod; 6] = [
     WgpuDownscaleMethod::Bilinear,
     WgpuDownscaleMethod::Hamming,
     WgpuDownscaleMethod::Lanczos3,
-    WgpuDownscaleMethod::HardwareMipmapLinear,
+    WgpuDownscaleMethod::CatmullRom,
     WgpuDownscaleMethod::PyramidHamming,
     WgpuDownscaleMethod::PyramidLanczos3,
 ];
@@ -398,6 +398,19 @@ impl AppSettings {
         if !self.wgpu_upscale_method.user_selectable() {
             self.wgpu_upscale_method = WgpuUpscaleMethod::Auto;
         }
+
+        self.wgpu_downscale_method = self.wgpu_downscale_method.selectable_fallback();
+
+        let mut seen = Vec::new();
+        self.top_bar_wgpu_downscale_methods.retain_mut(|method| {
+            *method = method.selectable_fallback();
+            if seen.contains(method) {
+                false
+            } else {
+                seen.push(*method);
+                true
+            }
+        });
     }
 
     pub fn effective_page_transition_style(&self) -> PageTransitionStyle {

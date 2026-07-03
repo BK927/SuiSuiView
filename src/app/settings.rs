@@ -790,7 +790,7 @@ fn show_rendering_settings(
                         egui::ComboBox::from_id_salt("wgpu_downscale_method")
                             .selected_text(draft.wgpu_downscale_method.label())
                             .show_ui(ui, |ui| {
-                                for downscaler in WgpuDownscaleMethod::ALL {
+                                for downscaler in WgpuDownscaleMethod::SELECTABLE {
                                     *changed |= ui
                                         .selectable_value(
                                             &mut draft.wgpu_downscale_method,

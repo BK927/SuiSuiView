@@ -218,6 +218,120 @@ fn persisted_wgpu_downscale_method_values_still_load() {
     );
 }
 
+fn serde_variant_name(method: WgpuDownscaleMethod) -> String {
+    match serde_json::to_value(method).unwrap() {
+        serde_json::Value::String(name) => name,
+        other => panic!("unexpected serialization for {method:?}: {other:?}"),
+    }
+}
+
+fn settings_with_wgpu_downscale_method(variant: &str) -> AppSettings {
+    let json = format!(
+        r#"{{"version":1,"settings":{{"wgpu_downscale_method":"{variant}"}},"books":{{}}}}"#
+    );
+    serde_json::from_str::<PersistedState>(&json)
+        .unwrap()
+        .settings
+}
+
+#[test]
+fn removed_wgpu_downscale_methods_normalize_to_fallbacks() {
+    // token deserializes fine (variant kept), then normalize folds onto SELECTABLE.
+    let cases = [
+        (WgpuDownscaleMethod::Nearest, WgpuDownscaleMethod::Bilinear),
+        (WgpuDownscaleMethod::Box, WgpuDownscaleMethod::Hamming),
+        (
+            WgpuDownscaleMethod::Mitchell,
+            WgpuDownscaleMethod::CatmullRom,
+        ),
+        (WgpuDownscaleMethod::Lanczos2, WgpuDownscaleMethod::Lanczos3),
+        (
+            WgpuDownscaleMethod::HardwareMipmapLinear,
+            WgpuDownscaleMethod::Bilinear,
+        ),
+        (
+            WgpuDownscaleMethod::PyramidBoxTent,
+            WgpuDownscaleMethod::PyramidHamming,
+        ),
+        (
+            WgpuDownscaleMethod::PyramidMitchell,
+            WgpuDownscaleMethod::PyramidLanczos3,
+        ),
+        (
+            WgpuDownscaleMethod::PyramidLanczos2,
+            WgpuDownscaleMethod::PyramidLanczos3,
+        ),
+    ];
+
+    for (removed, expected) in cases {
+        let mut settings = settings_with_wgpu_downscale_method(&serde_variant_name(removed));
+        assert_eq!(settings.wgpu_downscale_method, removed);
+        settings.normalize_product_choices();
+        assert_eq!(
+            settings.wgpu_downscale_method, expected,
+            "{removed:?} should fold to {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn selectable_wgpu_downscale_methods_survive_normalize_and_round_trip() {
+    for kept in WgpuDownscaleMethod::SELECTABLE {
+        let mut settings = AppSettings {
+            wgpu_downscale_method: kept,
+            ..AppSettings::default()
+        };
+        settings.normalize_product_choices();
+        assert_eq!(settings.wgpu_downscale_method, kept);
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.wgpu_downscale_method, kept);
+    }
+}
+
+#[test]
+fn normalize_dedups_top_bar_wgpu_downscale_methods_in_order() {
+    let mut settings = AppSettings {
+        top_bar_wgpu_downscale_methods: vec![
+            WgpuDownscaleMethod::HardwareMipmapLinear,
+            WgpuDownscaleMethod::PyramidMitchell,
+            WgpuDownscaleMethod::Bilinear,
+        ],
+        ..AppSettings::default()
+    };
+    settings.normalize_product_choices();
+
+    assert_eq!(
+        settings.top_bar_wgpu_downscale_methods,
+        vec![
+            WgpuDownscaleMethod::Bilinear,
+            WgpuDownscaleMethod::PyramidLanczos3,
+        ]
+    );
+}
+
+#[test]
+fn default_top_bar_wgpu_downscale_methods_are_all_selectable() {
+    for method in default_top_bar_wgpu_downscale_methods() {
+        assert!(
+            WgpuDownscaleMethod::SELECTABLE.contains(&method),
+            "{method:?} in defaults is not SELECTABLE"
+        );
+    }
+}
+
+#[test]
+fn normalized_wgpu_downscale_method_reserializes_to_kept_token() {
+    let mut settings = settings_with_wgpu_downscale_method(&serde_variant_name(
+        WgpuDownscaleMethod::PyramidMitchell,
+    ));
+    settings.normalize_product_choices();
+
+    let value = serde_json::to_value(&settings).unwrap();
+    assert_eq!(value["wgpu_downscale_method"], "PyramidLanczos3");
+}
+
 #[test]
 fn language_setting_round_trips() {
     let json = serde_json::to_string(&AppSettings {

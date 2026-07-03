@@ -192,7 +192,7 @@ fn wgpu_downscale_candidates(
         configured
             .iter()
             .copied()
-            .filter(|method| WgpuDownscaleMethod::ALL.contains(method)),
+            .filter(|method| WgpuDownscaleMethod::SELECTABLE.contains(method)),
         current,
     )
 }

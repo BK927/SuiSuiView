@@ -784,6 +784,8 @@ impl GpuPaintResources {
             );
         }
 
+        // Unreachable in product after settings sanitize (HardwareMipmapLinear folds
+        // to Bilinear); retained for tests and potential future re-exposure.
         if effective_downscaler.is_hardware_mipmap() {
             return self.prepare_hardware_mipmap_draw_state(
                 device,
@@ -953,6 +955,8 @@ impl GpuPaintResources {
         let sr_output_size = output_size_for_effects(intermediate.size, effects);
         let post_downscaler =
             post_realtime_sr_downscale_method(sr_output_size, display_rect.full_size, downscaler);
+        // Unreachable in product after settings sanitize (HardwareMipmapLinear folds
+        // to Bilinear); retained for tests and potential future re-exposure.
         if post_downscaler.is_hardware_mipmap() {
             return self
                 .prepare_hardware_mipmap_draw_state(
