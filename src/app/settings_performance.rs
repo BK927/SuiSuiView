@@ -236,6 +236,7 @@ pub(in crate::app) fn show_decoder_settings(
 pub(in crate::app) fn show_performance_settings(
     ui: &mut egui::Ui,
     draft: &mut AppSettings,
+    live_memory_bytes: (usize, usize),
     changed: &mut bool,
     i18n: I18n,
 ) {
@@ -301,6 +302,19 @@ pub(in crate::app) fn show_performance_settings(
                     &[
                         ("mode", draft.cache_memory_mode.label_i18n(i18n)),
                         ("cache", format!("{:.0}", mib(cache_budget_bytes(draft)))),
+                    ],
+                ))
+                .size(12.0)
+                .color(theme::TEXT_MUTED),
+            );
+
+            let (live_ram_bytes, live_gpu_bytes) = live_memory_bytes;
+            ui.label(
+                RichText::new(i18n.with_vars(
+                    "settings.performance.memory_usage_live",
+                    &[
+                        ("ram", format!("{:.0}", mib(live_ram_bytes))),
+                        ("gpu", format!("{:.0}", mib(live_gpu_bytes))),
                     ],
                 ))
                 .size(12.0)

@@ -17,6 +17,7 @@ use lru::LruCache;
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -33,6 +34,25 @@ const EXPERIMENT_WGPU_UPSCALE_METHOD_ENV: &str = "SUISUIVIEW_EXPERIMENT_WGPU_UPS
 const EXPERIMENT_SPAN_DISPLAY_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_DISPLAY";
 const EXPERIMENT_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_SPAN_MANIFEST";
 const SR_LAB_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_MANIFEST";
+
+// Read-only mirrors of the render-thread-owned `GpuPaintResources` byte counters, so the
+// app/UI thread can display live GPU pool usage. These are purely for visibility: budget and
+// eviction logic still runs off the owning fields. Each mutating method republishes the field
+// values via `publish_gpu_pool_bytes`, and `GpuPaintResources::new` resets them to 0.
+static GPU_SOURCE_TEXTURE_BYTES_LIVE: AtomicUsize = AtomicUsize::new(0);
+static GPU_INTERMEDIATE_TEXTURE_BYTES_LIVE: AtomicUsize = AtomicUsize::new(0);
+static GPU_DRAW_STATE_BYTES_LIVE: AtomicUsize = AtomicUsize::new(0);
+
+/// Live GPU pool usage in bytes as `(source_textures, intermediate_textures, draw_states)`.
+/// Reflects the most recent state published by the render thread; returns zeros before any
+/// GPU paint resources exist.
+pub(crate) fn gpu_pool_bytes_live() -> (usize, usize, usize) {
+    (
+        GPU_SOURCE_TEXTURE_BYTES_LIVE.load(Ordering::Relaxed),
+        GPU_INTERMEDIATE_TEXTURE_BYTES_LIVE.load(Ordering::Relaxed),
+        GPU_DRAW_STATE_BYTES_LIVE.load(Ordering::Relaxed),
+    )
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct GpuPaintSourceKey {
@@ -568,6 +588,9 @@ impl GpuPaintResources {
                 texture_format_label(target_format),
             )],
         );
+        // Reset the read-only mirrors so a recreation (e.g. target-format change) does not leave
+        // stale byte counts visible to the UI thread.
+        resources.publish_gpu_pool_bytes();
         resources
     }
 
@@ -1551,6 +1574,15 @@ impl GpuPaintResources {
         pass.draw(0..3, 0..1);
     }
 
+    /// Mirror the current byte counters into the read-only `*_LIVE` statics so the app/UI thread
+    /// can display live GPU pool usage. Display-only; does not affect budget or eviction logic.
+    fn publish_gpu_pool_bytes(&self) {
+        GPU_SOURCE_TEXTURE_BYTES_LIVE.store(self.source_texture_bytes, Ordering::Relaxed);
+        GPU_INTERMEDIATE_TEXTURE_BYTES_LIVE
+            .store(self.intermediate_texture_bytes, Ordering::Relaxed);
+        GPU_DRAW_STATE_BYTES_LIVE.store(self.draw_state_intermediate_bytes, Ordering::Relaxed);
+    }
+
     fn prune_source_textures(&mut self) {
         while self.source_texture_bytes > GPU_SOURCE_TEXTURE_BUDGET_BYTES
             && self.source_textures.len() > 1
@@ -1560,6 +1592,7 @@ impl GpuPaintResources {
             };
             self.source_texture_bytes = self.source_texture_bytes.saturating_sub(texture.byte_size);
         }
+        self.publish_gpu_pool_bytes();
     }
 
     fn drop_original_inspection_sources(&mut self) {
@@ -1586,6 +1619,7 @@ impl GpuPaintResources {
         self.draw_state_intermediate_bytes = 0;
         self.intermediate_textures.clear();
         self.intermediate_texture_bytes = 0;
+        self.publish_gpu_pool_bytes();
     }
 
     fn prune_intermediate_textures(&mut self) {
@@ -1599,6 +1633,7 @@ impl GpuPaintResources {
                 .intermediate_texture_bytes
                 .saturating_sub(texture.byte_size);
         }
+        self.publish_gpu_pool_bytes();
     }
 
     fn prune_draw_states(&mut self) {
@@ -1612,6 +1647,7 @@ impl GpuPaintResources {
                 .draw_state_intermediate_bytes
                 .saturating_sub(draw_state.intermediate_byte_size);
         }
+        self.publish_gpu_pool_bytes();
     }
 }
 

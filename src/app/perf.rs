@@ -439,6 +439,9 @@ pub(super) struct AppCacheSnapshot {
     pub(super) decoded_budget_bytes: usize,
     pub(super) textures: usize,
     pub(super) texture_bytes: usize,
+    pub(super) gpu_source_texture_bytes: usize,
+    pub(super) gpu_intermediate_texture_bytes: usize,
+    pub(super) gpu_draw_state_bytes: usize,
 }
 
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -456,6 +459,15 @@ pub(super) fn record_app_cache_snapshot(snapshot: AppCacheSnapshot) {
             PerfField::Usize("decoded_budget_bytes", snapshot.decoded_budget_bytes),
             PerfField::Usize("textures", snapshot.textures),
             PerfField::Usize("texture_bytes", snapshot.texture_bytes),
+            PerfField::Usize(
+                "gpu_source_texture_bytes",
+                snapshot.gpu_source_texture_bytes,
+            ),
+            PerfField::Usize(
+                "gpu_intermediate_texture_bytes",
+                snapshot.gpu_intermediate_texture_bytes,
+            ),
+            PerfField::Usize("gpu_draw_state_bytes", snapshot.gpu_draw_state_bytes),
             PerfField::Usize("process_memory_bytes", process_memory_bytes),
         ],
     );

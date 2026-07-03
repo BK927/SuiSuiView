@@ -1,7 +1,7 @@
 use super::ui::{dialog, icons, theme};
 use super::{
     fast_start::{self, FastStartReportAction},
-    platform, settings_bookmarks, settings_input, settings_performance, SuiSuiViewApp,
+    gpu_paint, platform, settings_bookmarks, settings_input, settings_performance, SuiSuiViewApp,
 };
 use crate::core::i18n::I18n;
 use crate::core::state::{
@@ -112,6 +112,12 @@ impl SuiSuiViewApp {
         }
         let mut active_section = self.settings_section;
         let i18n = self.i18n();
+        // Read-only live memory usage for the performance section summary. Captured here while
+        // `self` is accessible; GPU figures mirror the render thread's pool byte counters.
+        let live_ram_bytes = self.decoded_bytes + self.texture_cache_bytes();
+        let (gpu_source_bytes, gpu_intermediate_bytes, gpu_draw_state_bytes) =
+            gpu_paint::gpu_pool_bytes_live();
+        let live_gpu_bytes = gpu_source_bytes + gpu_intermediate_bytes + gpu_draw_state_bytes;
         let dialog_size = dialog::bounded_dialog_size(
             ctx,
             dialog::SPLIT_DIALOG_SIZE,
@@ -196,6 +202,7 @@ impl SuiSuiViewApp {
                                             &mut self.pending_gpu_acceleration,
                                             fast_start_failure_notice.as_ref(),
                                             &mut fast_start_action,
+                                            (live_ram_bytes, live_gpu_bytes),
                                             &mut changed,
                                             i18n,
                                         );
@@ -603,6 +610,7 @@ fn show_rendering_settings(
     pending_gpu_acceleration: &mut Option<bool>,
     fast_start_failure_notice: Option<&crate::core::state::FastStartFailureNotice>,
     fast_start_action: &mut Option<FastStartReportAction>,
+    live_memory_bytes: (usize, usize),
     changed: &mut bool,
     i18n: I18n,
 ) {
@@ -850,7 +858,7 @@ fn show_rendering_settings(
     );
 
     ui.add_space(8.0);
-    settings_performance::show_performance_settings(ui, draft, changed, i18n);
+    settings_performance::show_performance_settings(ui, draft, live_memory_bytes, changed, i18n);
 }
 
 pub(in crate::app) fn setting_group(

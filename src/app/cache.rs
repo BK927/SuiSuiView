@@ -210,6 +210,8 @@ impl SuiSuiViewApp {
 
     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
     pub(in crate::app) fn record_cache_snapshot(&self, reason: &'static str) {
+        let (gpu_source_texture_bytes, gpu_intermediate_texture_bytes, gpu_draw_state_bytes) =
+            super::gpu_paint::gpu_pool_bytes_live();
         perf::record_app_cache_snapshot(perf::AppCacheSnapshot {
             reason,
             current_page: self.current_page,
@@ -219,6 +221,9 @@ impl SuiSuiViewApp {
             decoded_budget_bytes: self.cpu_cache_budget_bytes(),
             textures: self.textures.len(),
             texture_bytes: self.texture_cache_bytes(),
+            gpu_source_texture_bytes,
+            gpu_intermediate_texture_bytes,
+            gpu_draw_state_bytes,
         });
     }
 

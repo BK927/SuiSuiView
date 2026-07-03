@@ -359,6 +359,10 @@ const CATALOG_KO_KR: &[(&str, &str)] = &[
     ("settings.performance.page_cache", "페이지 캐시 메모리"),
     ("settings.performance.page_cache.help", "캐시가 클수록 다시 보는 페이지가 빨리 뜨지만 메모리를 더 사용합니다. 수동 입력 범위는 64-2048 MB입니다."),
     ("settings.performance.cache_summary", "{mode} {cache} MB"),
+    (
+        "settings.performance.memory_usage_live",
+        "현재 사용량: RAM {ram} MB · GPU {gpu} MB",
+    ),
     ("settings.bookmarks.resume.title", "이어보기"),
     ("settings.bookmarks.resume.desc", "마지막으로 보던 책 위치와 압축파일 내부 위치를 기억합니다."),
     ("settings.bookmarks.auto_save", "보고 있던 이미지 위치를 자동 저장"),
@@ -929,6 +933,10 @@ const CATALOG_EN_US: &[(&str, &str)] = &[
     ("settings.performance.page_cache", "Page cache memory"),
     ("settings.performance.page_cache.help", "A larger cache makes revisited pages appear faster but uses more memory. Manual input range is 64-2048 MB."),
     ("settings.performance.cache_summary", "{mode} {cache} MB"),
+    (
+        "settings.performance.memory_usage_live",
+        "Current usage: RAM {ram} MB · GPU {gpu} MB",
+    ),
     ("settings.bookmarks.resume.title", "Resume"),
     ("settings.bookmarks.resume.desc", "Remember the last book position and archive-internal page location."),
     ("settings.bookmarks.auto_save", "Automatically save reading position"),
