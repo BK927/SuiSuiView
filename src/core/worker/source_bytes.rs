@@ -11,6 +11,12 @@ use std::sync::Arc;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::time::{Duration, Instant};
 
+// Experiment status (2026-07): opt-in, default OFF. This cache only runs inside
+// the page worker loop, so the CLI perf harnesses never exercise it and cannot
+// judge it. Its expected beneficiaries are repeat source reads: the progressive
+// preview + full-quality double read of the same page and the settle-to-exact
+// re-prepare burst after a window resize. Promote to default-on or remove once
+// an in-worker benchmark exists.
 const SOURCE_BYTES_CACHE_ENV: &str = "SUISUIVIEW_EXPERIMENT_SOURCE_BYTES_CACHE";
 const SOURCE_BYTES_CACHE_MB_ENV: &str = "SUISUIVIEW_EXPERIMENT_SOURCE_BYTES_CACHE_MB";
 const DEFAULT_SOURCE_BYTES_CACHE_MB: usize = 64;

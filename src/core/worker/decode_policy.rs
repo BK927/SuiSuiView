@@ -6,6 +6,9 @@ use std::env;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+// Experiment status (2026-07): graduated. With the env var unset the mode is
+// Adaptive, so decode-ahead is active in the product by default; the variable
+// remains only as an override (off/forced) for diagnosis.
 const DECODE_AHEAD_ENV: &str = "SUISUIVIEW_EXPERIMENT_DECODE_AHEAD";
 const ADAPTIVE_SLOW_PREPARE: Duration = Duration::from_millis(750);
 const ADAPTIVE_FAST_PREPARE: Duration = Duration::from_millis(180);
