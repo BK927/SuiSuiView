@@ -44,10 +44,7 @@ pub(crate) fn enabled_for_settings(settings: &AppSettings) -> bool {
     matches!(settings.renderer_mode, RendererMode::Wgpu)
 }
 
-pub(crate) fn run(
-    options: HandoffPreviewOptions,
-    wgpu_direct: bool,
-) -> Result<(), HandoffFailure> {
+pub(crate) fn run(options: HandoffPreviewOptions, wgpu_direct: bool) -> Result<(), HandoffFailure> {
     let event_loop = winit::event_loop::EventLoop::<()>::new()
         .map_err(|error| HandoffFailure::new(HandoffFailureStage::Unknown, error.to_string()))?;
     let wake_proxy = event_loop.create_proxy();
@@ -464,8 +461,9 @@ impl HandoffPreviewApp {
         self.metrics.wgpu_painter_new_ms = Some(elapsed_ms(painter_started.elapsed()));
 
         let set_window_started = Instant::now();
-        let set_window_result =
-            unsafe { pollster::block_on(painter.set_window_unsafe(ViewportId::ROOT, Some(&window))) };
+        let set_window_result = unsafe {
+            pollster::block_on(painter.set_window_unsafe(ViewportId::ROOT, Some(&window)))
+        };
         if let Err(error) = set_window_result {
             return Err(format!("failed to attach WGPU surface: {error}"));
         }

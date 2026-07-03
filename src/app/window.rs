@@ -253,7 +253,11 @@ fn native_window_state(ppp: f32) -> Option<NativeWindowState> {
             let mut buffer = [0u16; 64];
             let len = GetClassNameW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
             let len = usize::try_from(len).unwrap_or(0);
-            if buffer[..len].iter().copied().eq(MAIN_WINDOW_CLASS.encode_utf16()) {
+            if buffer[..len]
+                .iter()
+                .copied()
+                .eq(MAIN_WINDOW_CLASS.encode_utf16())
+            {
                 found.1 = hwnd;
                 return 0;
             }
