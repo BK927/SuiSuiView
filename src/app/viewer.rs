@@ -23,7 +23,9 @@ mod model;
 mod paint_helpers;
 mod transition;
 
-pub(in crate::app) use interaction::{target_long_edge_for_view, OriginalPageSize};
+pub(in crate::app) use interaction::{
+    target_long_edge_for_view, OriginalPageSize, ViewTargetSettle,
+};
 #[cfg(test)]
 pub(in crate::app) use model::relative_difference;
 pub(in crate::app) use model::{
@@ -38,7 +40,6 @@ pub(in crate::app) use transition::{
 
 const TRANSITION_MS: f32 = 120.0;
 pub(in crate::app) const SPREAD_GAP_POINTS: f32 = 14.0;
-const TARGET_EDGE_HYSTERESIS: u32 = 512;
 const WGPU_PRESENT_CONFIRM_REPAINT_DELAY: Duration = Duration::from_millis(16);
 const WGPU_SIBLING_VISIBLE_HOLD: Duration = Duration::from_millis(260);
 

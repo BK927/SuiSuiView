@@ -96,7 +96,7 @@ use viewer::{
 pub(in crate::app) use viewer::{
     page_visual_size, texture_options_for_sampling, transition_screen_sign,
     worker_center_page_for_mode, CurrentViewState, PageMetrics, PageRenderInfo, PageVisual,
-    Transition, ViewMode,
+    Transition, ViewMode, ViewTargetSettle,
 };
 
 #[cfg(test)]
@@ -221,7 +221,7 @@ pub struct SuiSuiViewApp {
     sibling_book_visual_pending: bool,
     sibling_book_wgpu_present_wait: Option<(u64, usize)>,
     sibling_book_visual_hold_until: Option<Instant>,
-    pending_target_long_edge_increase: Option<(u32, Instant)>,
+    view_target_settle: ViewTargetSettle,
     pending_original_inspection_cache_cleanup_at: Option<Instant>,
     pending_gpu_original_inspection_cleanup: bool,
     fullscreen: bool,
@@ -362,7 +362,7 @@ impl SuiSuiViewApp {
             sibling_book_visual_pending: false,
             sibling_book_wgpu_present_wait: None,
             sibling_book_visual_hold_until: None,
-            pending_target_long_edge_increase: None,
+            view_target_settle: ViewTargetSettle::default(),
             pending_original_inspection_cache_cleanup_at: None,
             pending_gpu_original_inspection_cleanup: false,
             fullscreen: false,

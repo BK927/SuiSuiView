@@ -1,15 +1,19 @@
-use super::{SPREAD_GAP_POINTS, TARGET_EDGE_HYSTERESIS};
+use super::{ViewMode, SPREAD_GAP_POINTS};
 use crate::app::commands::command_for_mouse_gesture;
 use crate::app::{perf, ui, SuiSuiViewApp};
 use crate::core::state::{FitMode, MouseGesture, WheelMode};
 use crate::core::worker::{
     clamp_navigation_target_long_edge, clamp_target_long_edge, NavigationDirection,
-    MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
 use egui::{self, Align2, Color32, Rect, Vec2};
 use std::time::{Duration, Instant};
 
-const LARGE_TARGET_INCREASE_STABILITY_DELAY: Duration = Duration::from_millis(16);
+/// How long the page viewport (page rect x pixels-per-point) must hold steady
+/// before an exact display-sized target is applied. During a resize drag the
+/// viewport keeps changing, so the timer keeps restarting and the existing
+/// prepared target stays frozen (scaled by the sampler); once the drag settles
+/// the exact new target is applied in a single re-prepare burst.
+const VIEW_TARGET_SETTLE_DELAY: Duration = Duration::from_millis(250);
 
 impl SuiSuiViewApp {
     pub(super) fn paint_page_arrows(
@@ -85,35 +89,46 @@ impl SuiSuiViewApp {
             return;
         }
 
+        let page_viewport = self.page_viewport_for_target(viewport);
+        let pixels_per_point = ctx.pixels_per_point();
+        let signature = ViewTargetSignature::new(
+            self.fit_mode,
+            self.view_mode,
+            page_viewport,
+            pixels_per_point,
+        );
         let previous_intent = self.current_prepared_target_intent();
-        let next = self.target_long_edge_for(ctx, viewport);
+        let next = self.target_long_edge_for(page_viewport, pixels_per_point);
         let next_intent = self.prepared_target_intent_for_target(next);
-        let original_inspection_target =
-            previous_intent.is_original_inspection() || next_intent.is_original_inspection();
-        if next == self.target_long_edge
-            || (!original_inspection_target
-                && next.abs_diff(self.target_long_edge) < TARGET_EDGE_HYSTERESIS)
-        {
-            self.pending_target_long_edge_increase = None;
+        if next == self.target_long_edge {
+            self.view_target_settle.pending = None;
+            self.view_target_settle.applied = Some(signature);
             return;
         }
+
+        // Freeze the target while the page viewport is still in motion (e.g. a
+        // resize drag) and only settle to the exact new size once it has held
+        // steady for `VIEW_TARGET_SETTLE_DELAY`. The debounce is bypassed when
+        // the change is not driven by viewport motion: the first prepare, a fit
+        // or view mode switch, and page turns that keep the same viewport but
+        // change the source pages.
         let now = Instant::now();
-        if should_defer_large_normal_target_increase(
-            &mut self.pending_target_long_edge_increase,
-            self.target_long_edge,
-            next,
-            now,
-        ) {
-            self.record_view_target_update(ctx, viewport, "defer_large_increase", next);
-            ctx.request_repaint_after(LARGE_TARGET_INCREASE_STABILITY_DELAY);
-            return;
+        if !self.view_target_change_applies_immediately(signature) {
+            if let Some(remaining) =
+                view_target_settle_wait(&mut self.view_target_settle.pending, next, now)
+            {
+                self.record_view_target_update(ctx, viewport, "settle_wait", next);
+                ctx.request_repaint_after(remaining);
+                return;
+            }
         }
 
         let leaving_high_target_intent = previous_intent.keeps_exact_prefetch_lightweight()
             && !next_intent.keeps_exact_prefetch_lightweight();
         self.record_view_target_update(ctx, viewport, "apply", next);
         self.target_long_edge = next;
-        self.pending_target_long_edge_increase = None;
+        self.view_target_settle.pending = None;
+        self.view_target_settle.applied = Some(signature);
         if leaving_high_target_intent {
             self.schedule_original_inspection_cache_cleanup(ctx);
         }
@@ -127,6 +142,19 @@ impl SuiSuiViewApp {
         );
         self.request_adjacent_seed_prefetch();
         ctx.request_repaint();
+    }
+
+    /// Whether the pending target change should skip the settle debounce and
+    /// apply on this frame: the first prepared target (`applied` is `None`), a
+    /// fit/view mode change, or a page turn (same viewport, different source
+    /// pages) — none of which are the resize-motion case the debounce guards.
+    fn view_target_change_applies_immediately(&self, signature: ViewTargetSignature) -> bool {
+        match self.view_target_settle.applied {
+            None => true,
+            Some(applied) => {
+                applied.mode != signature.mode || applied.viewport == signature.viewport
+            }
+        }
     }
 
     fn record_view_target_update(
@@ -160,17 +188,20 @@ impl SuiSuiViewApp {
         false
     }
 
-    fn target_long_edge_for(&self, ctx: &egui::Context, viewport: Vec2) -> u32 {
-        let page_viewport = if self.page_viewport_count_for_target() <= 1 {
+    fn page_viewport_for_target(&self, viewport: Vec2) -> Vec2 {
+        if self.page_viewport_count_for_target() <= 1 {
             viewport
         } else {
             Vec2::new((viewport.x - SPREAD_GAP_POINTS).max(1.0) * 0.5, viewport.y)
-        };
+        }
+    }
+
+    fn target_long_edge_for(&self, page_viewport: Vec2, pixels_per_point: f32) -> u32 {
         target_long_edge_for_view(
             self.fit_mode,
             self.manual_zoom,
             page_viewport,
-            ctx.pixels_per_point(),
+            pixels_per_point,
             &self.visible_original_page_sizes(),
         )
     }
@@ -279,37 +310,33 @@ impl SuiSuiViewApp {
     }
 }
 
-fn should_defer_large_normal_target_increase(
+/// Debounces a target change until the requested value has held steady for
+/// `VIEW_TARGET_SETTLE_DELAY`. Returns `Some(remaining)` while the change should
+/// be held (target frozen), where `remaining` is how much longer the value must
+/// stay put — the caller schedules a repaint after it so the settle is not
+/// missed once input stops. Returns `None` once the value has held long enough
+/// and should be applied. Any different `next` restarts the timer, so a viewport
+/// that keeps churning during a resize never settles until it stops moving.
+fn view_target_settle_wait(
     pending: &mut Option<(u32, Instant)>,
-    current: u32,
     next: u32,
     now: Instant,
-) -> bool {
-    if !is_large_normal_target_increase(current, next) {
-        *pending = None;
-        return false;
-    }
-
+) -> Option<Duration> {
     match *pending {
-        Some((pending_target, first_seen_at))
-            if pending_target == next
-                && now.duration_since(first_seen_at) >= LARGE_TARGET_INCREASE_STABILITY_DELAY =>
-        {
-            false
+        Some((pending_target, first_seen_at)) if pending_target == next => {
+            let elapsed = now.duration_since(first_seen_at);
+            if elapsed >= VIEW_TARGET_SETTLE_DELAY {
+                *pending = None;
+                None
+            } else {
+                Some(VIEW_TARGET_SETTLE_DELAY - elapsed)
+            }
         }
-        Some((pending_target, _)) if pending_target == next => true,
         _ => {
             *pending = Some((next, now));
-            true
+            Some(VIEW_TARGET_SETTLE_DELAY)
         }
     }
-}
-
-fn is_large_normal_target_increase(current: u32, next: u32) -> bool {
-    current > PREVIEW_TARGET_LONG_EDGE
-        && current <= MAX_TARGET_LONG_EDGE
-        && next <= MAX_TARGET_LONG_EDGE
-        && next.saturating_sub(current) > TARGET_EDGE_HYSTERESIS
 }
 
 fn ctrl_wheel_gesture(scroll_y: f32, zoom_delta: f32) -> Option<MouseGesture> {
@@ -375,12 +402,10 @@ fn display_target_long_edge_for_view(
         FitMode::Manual | FitMode::Original => 1.5,
     };
     let raw = viewport_pixels * oversample * zoom_multiplier;
-    let quantized = ((raw / 256.0).ceil() * 256.0) as u32;
+    let exact = raw.ceil() as u32;
     let viewport_target = match fit_mode {
-        FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight => {
-            clamp_target_long_edge(quantized)
-        }
-        FitMode::Manual | FitMode::Original => clamp_navigation_target_long_edge(quantized),
+        FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight => clamp_target_long_edge(exact),
+        FitMode::Manual | FitMode::Original => clamp_navigation_target_long_edge(exact),
     };
     fit_axis_target_long_edge(fit_mode, page_viewport, pixels_per_point, original_pages)
         .map_or(viewport_target, |axis_target| {
@@ -411,15 +436,15 @@ fn fit_axis_target_long_edge(
             }
             .max(1.0);
             let source_long_edge = size.long_edge().max(1.0);
-            let prepared_axis = quantize_display_axis(target_axis_pixels, source_axis);
+            let prepared_axis = display_axis_pixels(target_axis_pixels, source_axis);
             let target = (source_long_edge * prepared_axis / source_axis).ceil() as u32;
             Some(clamp_target_long_edge(target))
         })
         .max()
 }
 
-fn quantize_display_axis(axis_pixels: f32, source_axis: f32) -> f32 {
-    ((axis_pixels.max(1.0) / 256.0).ceil() * 256.0).min(source_axis.max(1.0))
+fn display_axis_pixels(axis_pixels: f32, source_axis: f32) -> f32 {
+    axis_pixels.max(1.0).ceil().min(source_axis.max(1.0))
 }
 
 fn original_inspection_target_long_edge(
@@ -441,6 +466,43 @@ fn original_inspection_target_long_edge(
         .max()
 }
 
+/// Freeze/debounce state for the settle-to-exact prepared target. `applied`
+/// records the view signature of the currently applied target so the update
+/// point can tell resize motion (viewport changed) apart from mode switches and
+/// page turns (which apply immediately). `pending` holds the debounced target
+/// value and the instant it was first requested.
+#[derive(Debug, Default)]
+pub(in crate::app) struct ViewTargetSettle {
+    applied: Option<ViewTargetSignature>,
+    pending: Option<(u32, Instant)>,
+}
+
+/// A comparable fingerprint of the inputs that drive the display target: the
+/// fit/view mode and the page viewport in whole device pixels. Sub-pixel float
+/// noise is rounded away so an unchanged layout compares equal frame to frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ViewTargetSignature {
+    mode: (FitMode, ViewMode),
+    viewport: [u32; 3],
+}
+
+impl ViewTargetSignature {
+    fn new(
+        fit_mode: FitMode,
+        view_mode: ViewMode,
+        page_viewport: Vec2,
+        pixels_per_point: f32,
+    ) -> Self {
+        let width_px = (page_viewport.x * pixels_per_point).round().max(0.0) as u32;
+        let height_px = (page_viewport.y * pixels_per_point).round().max(0.0) as u32;
+        let ppp = (pixels_per_point * 1000.0).round().max(0.0) as u32;
+        Self {
+            mode: (fit_mode, view_mode),
+            viewport: [width_px, height_px, ppp],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(in crate::app) struct OriginalPageSize {
     pub(in crate::app) width: f32,
@@ -456,10 +518,11 @@ impl OriginalPageSize {
 #[cfg(test)]
 mod tests {
     use super::{
-        ctrl_wheel_gesture, should_defer_large_normal_target_increase, target_long_edge_for_view,
-        zoom_delta_gesture, OriginalPageSize, LARGE_TARGET_INCREASE_STABILITY_DELAY,
+        ctrl_wheel_gesture, target_long_edge_for_view, view_target_settle_wait, zoom_delta_gesture,
+        OriginalPageSize, ViewTargetSignature, VIEW_TARGET_SETTLE_DELAY,
     };
-    use crate::core::state::{FitMode, MouseGesture};
+    use super::{FitMode, ViewMode};
+    use crate::core::state::MouseGesture;
     use egui::Vec2;
     use std::time::Instant;
 
@@ -473,7 +536,7 @@ mod tests {
                 1.0,
                 &[page_size(8192.0, 8192.0)],
             ),
-            10_240
+            10_000
         );
     }
 
@@ -487,7 +550,7 @@ mod tests {
                 1.0,
                 &[page_size(8192.0, 8192.0)],
             ),
-            3840
+            3600
         );
     }
 
@@ -515,7 +578,7 @@ mod tests {
                 1.0,
                 &[page_size(1600.0, 20_000.0)],
             ),
-            16_000
+            15_000
         );
     }
 
@@ -529,7 +592,7 @@ mod tests {
                 1.0,
                 &[page_size(20_000.0, 1600.0)],
             ),
-            16_000
+            15_000
         );
     }
 
@@ -565,74 +628,140 @@ mod tests {
     fn original_mode_without_metrics_uses_display_target() {
         assert_eq!(
             target_long_edge_for_view(FitMode::Original, 1.0, Vec2::new(1200.0, 1600.0), 1.0, &[],),
-            2560
+            2400
         );
     }
 
     #[test]
-    fn large_normal_target_increase_waits_for_one_stable_frame() {
-        let now = Instant::now();
-        let mut pending = None;
-
-        assert!(should_defer_large_normal_target_increase(
-            &mut pending,
-            1536,
-            3840,
-            now,
-        ));
-        assert!(should_defer_large_normal_target_increase(
-            &mut pending,
-            1536,
-            3840,
-            now + LARGE_TARGET_INCREASE_STABILITY_DELAY / 2,
-        ));
-        assert!(!should_defer_large_normal_target_increase(
-            &mut pending,
-            1536,
-            3840,
-            now + LARGE_TARGET_INCREASE_STABILITY_DELAY,
-        ));
+    fn fit_target_uses_exact_display_pixels_without_quantization() {
+        // A viewport that lands between the old 256px steps must resolve to its
+        // exact pixel long edge (clamped to MIN 1024) rather than a rounded-up
+        // multiple of 256.
+        assert_eq!(
+            target_long_edge_for_view(
+                FitMode::FitPage,
+                1.0,
+                Vec2::new(1500.0, 1400.0),
+                1.0,
+                &[page_size(8192.0, 8192.0)],
+            ),
+            1500
+        );
+        assert_eq!(
+            target_long_edge_for_view(
+                FitMode::FitPage,
+                1.0,
+                Vec2::new(1500.4, 1400.0),
+                1.0,
+                &[page_size(8192.0, 8192.0)],
+            ),
+            1501
+        );
     }
 
     #[test]
-    fn ordinary_target_increase_applies_immediately() {
-        let now = Instant::now();
-        let mut pending = Some((3840, now));
+    fn fit_width_axis_target_uses_exact_prepared_axis() {
+        // FitWidth on a source narrower than the viewport is capped at the
+        // source width and scaled with a plain ceil (no 256 quantization).
+        assert_eq!(
+            target_long_edge_for_view(
+                FitMode::FitWidth,
+                1.0,
+                Vec2::new(1000.0, 1600.0),
+                1.0,
+                &[page_size(1300.0, 5000.0)],
+            ),
+            // prepared axis = 1000 (< source 1300); long edge = ceil(5000 * 1000 / 1300)
+            3847
+        );
+    }
 
-        assert!(!should_defer_large_normal_target_increase(
-            &mut pending,
-            1024,
-            1536,
-            now,
-        ));
+    #[test]
+    fn view_target_change_waits_for_a_stable_settle_window() {
+        let now = Instant::now();
+        let mut pending = None;
+
+        // First sight of the new target holds it for the full settle window.
+        assert_eq!(
+            view_target_settle_wait(&mut pending, 1500, now),
+            Some(VIEW_TARGET_SETTLE_DELAY)
+        );
+        // Half way through, only the remaining time is requested.
+        assert_eq!(
+            view_target_settle_wait(&mut pending, 1500, now + VIEW_TARGET_SETTLE_DELAY / 2),
+            Some(VIEW_TARGET_SETTLE_DELAY / 2)
+        );
+        // Once it has held for the whole window the change is applied.
+        assert_eq!(
+            view_target_settle_wait(&mut pending, 1500, now + VIEW_TARGET_SETTLE_DELAY),
+            None
+        );
         assert!(pending.is_none());
     }
 
     #[test]
-    fn first_promotion_from_preview_target_applies_immediately() {
+    fn view_target_change_that_keeps_moving_never_settles() {
+        // A resize drag produces a slightly different exact target each frame;
+        // every change restarts the timer so the target stays frozen.
         let now = Instant::now();
         let mut pending = None;
 
-        assert!(!should_defer_large_normal_target_increase(
+        assert_eq!(
+            view_target_settle_wait(&mut pending, 1500, now),
+            Some(VIEW_TARGET_SETTLE_DELAY)
+        );
+        // A new value even after the delay restarts the full window.
+        assert_eq!(
+            view_target_settle_wait(&mut pending, 1512, now + VIEW_TARGET_SETTLE_DELAY),
+            Some(VIEW_TARGET_SETTLE_DELAY)
+        );
+        // The latest value has only just been seen, so it is still held.
+        assert!(view_target_settle_wait(
             &mut pending,
-            1024,
-            2304,
-            now,
-        ));
-        assert!(pending.is_none());
+            1512,
+            now + VIEW_TARGET_SETTLE_DELAY + VIEW_TARGET_SETTLE_DELAY / 2,
+        )
+        .is_some());
     }
 
     #[test]
-    fn moderate_transient_target_increase_is_deferred() {
-        let now = Instant::now();
-        let mut pending = None;
-
-        assert!(should_defer_large_normal_target_increase(
-            &mut pending,
-            1536,
-            2304,
-            now,
-        ));
+    fn view_target_signature_detects_mode_and_viewport_changes() {
+        let base = ViewTargetSignature::new(
+            FitMode::FitPage,
+            ViewMode::Single,
+            Vec2::new(1000.0, 800.0),
+            1.0,
+        );
+        // Sub-pixel noise on an otherwise identical layout compares equal.
+        assert_eq!(
+            base,
+            ViewTargetSignature::new(
+                FitMode::FitPage,
+                ViewMode::Single,
+                Vec2::new(1000.2, 799.8),
+                1.0,
+            )
+        );
+        // A fit-mode switch is a different signature (immediate-apply case).
+        assert_ne!(
+            base.mode,
+            ViewTargetSignature::new(
+                FitMode::FitWidth,
+                ViewMode::Single,
+                Vec2::new(1000.0, 800.0),
+                1.0,
+            )
+            .mode
+        );
+        // A resize keeps the mode but changes the viewport fingerprint.
+        let resized = ViewTargetSignature::new(
+            FitMode::FitPage,
+            ViewMode::Single,
+            Vec2::new(1100.0, 800.0),
+            1.0,
+        );
+        assert_eq!(base.mode, resized.mode);
+        assert_ne!(base.viewport, resized.viewport);
     }
 
     #[test]

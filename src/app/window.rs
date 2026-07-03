@@ -1,4 +1,4 @@
-use super::{SuiSuiViewApp, STATE_SAVE_DEBOUNCE};
+use super::{viewer::ViewTargetSettle, SuiSuiViewApp, STATE_SAVE_DEBOUNCE};
 use crate::core::state::WindowPlacement;
 use egui::{self, Pos2, Rect, Vec2};
 use std::time::{Duration, Instant};
@@ -157,7 +157,7 @@ impl SuiSuiViewApp {
         ) {
             self.window_size_save_block_until = Some(now + DPI_SIZE_GUARD_DURATION);
             self.view_target_update_block_until = Some(now + DPI_VIEW_TARGET_STABILITY_DELAY);
-            self.pending_target_long_edge_increase = None;
+            self.view_target_settle = ViewTargetSettle::default();
             self.egui_ctx
                 .request_repaint_after(DPI_VIEW_TARGET_STABILITY_DELAY);
             if let Some(previous_scale) = self.window_last_native_pixels_per_point {

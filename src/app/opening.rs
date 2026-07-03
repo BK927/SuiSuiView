@@ -1,7 +1,7 @@
 use super::{
     adjacent_seed::{prepare_seeded_first_page, SeedTargetView},
     perf,
-    viewer::SPREAD_GAP_POINTS,
+    viewer::{ViewTargetSettle, SPREAD_GAP_POINTS},
     PendingBookmarkJump, SeededPreparedPage, SuiSuiViewApp,
 };
 use crate::core::effects::ViewEffects;
@@ -532,7 +532,7 @@ impl SuiSuiViewApp {
         self.transition = None;
         self.clear_pending_page_turns();
         self.last_nav_direction = initial_direction;
-        self.pending_target_long_edge_increase = None;
+        self.view_target_settle = ViewTargetSettle::default();
         self.target_long_edge = seeded_page
             .as_ref()
             .map_or(PREVIEW_TARGET_LONG_EDGE, |seed| seed.key.target_long_edge);
