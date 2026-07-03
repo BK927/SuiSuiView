@@ -368,6 +368,71 @@ fn wgpu_scale_plan_uses_bilinear_for_mixed_axis_resize() {
 }
 
 #[test]
+fn wgpu_scale_plan_treats_near_one_residual_shrink_as_native() {
+    // ~0.95 residual (e.g. 256px-quantized 1536 source drawn to a 1460 rect) stays
+    // on the egui sampler instead of taking the WGSL downscale pass.
+    let near_native = WgpuScalePlan::resolve(
+        [1536, 1536],
+        [1460, 1460],
+        WgpuUpscaleMethod::None,
+        WgpuDownscaleMethod::PyramidLanczos3,
+    );
+    assert_eq!(near_native.direction, WgpuScaleDirection::Native);
+    assert_eq!(
+        near_native.effective_downscale_method,
+        WgpuDownscaleMethod::Bilinear
+    );
+
+    // A real ~0.85 shrink still earns the requested WGSL downscaler.
+    let true_downscale = WgpuScalePlan::resolve(
+        [1536, 1536],
+        [1306, 1306],
+        WgpuUpscaleMethod::None,
+        WgpuDownscaleMethod::PyramidLanczos3,
+    );
+    assert_eq!(true_downscale.direction, WgpuScaleDirection::Downscale);
+    assert_eq!(
+        true_downscale.effective_downscale_method,
+        WgpuDownscaleMethod::PyramidLanczos3
+    );
+
+    // The 0.90 boundary is inclusive (>= threshold => Native).
+    let boundary = WgpuScalePlan::resolve(
+        [1000, 1000],
+        [900, 900],
+        WgpuUpscaleMethod::None,
+        WgpuDownscaleMethod::PyramidLanczos3,
+    );
+    assert_eq!(boundary.direction, WgpuScaleDirection::Native);
+    assert_eq!(
+        boundary.effective_downscale_method,
+        WgpuDownscaleMethod::Bilinear
+    );
+
+    // Upscale / mixed directions are untouched by the near-native downscale gate.
+    assert_eq!(
+        WgpuScalePlan::resolve(
+            [1000, 1000],
+            [1090, 1090],
+            WgpuUpscaleMethod::WgslFsr1EasuRcas,
+            WgpuDownscaleMethod::PyramidLanczos3
+        )
+        .direction,
+        WgpuScaleDirection::Upscale
+    );
+    assert_eq!(
+        WgpuScalePlan::resolve(
+            [1000, 1000],
+            [1090, 950],
+            WgpuUpscaleMethod::None,
+            WgpuDownscaleMethod::PyramidLanczos3
+        )
+        .direction,
+        WgpuScaleDirection::Mixed
+    );
+}
+
+#[test]
 fn wgpu_scale_plan_keeps_upscalers_out_of_downscale_and_native_paths() {
     for method in [
         WgpuUpscaleMethod::WgslFsr1EasuRcas,

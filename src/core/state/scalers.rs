@@ -5,6 +5,7 @@ use super::display::WgpuUpscaleMethod;
 pub const FIXED_2X_SR_SMALL_SCALE_MIN: f32 = 1.10;
 pub const FIXED_2X_SR_STACK_SCALE_MIN: f32 = 2.25;
 pub const FIXED_2X_SR_MAX_STACK_PASSES: usize = 2;
+pub const NEAR_NATIVE_DOWNSCALE_MIN_SCALE: f32 = 0.90;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ResizeFilter {
@@ -340,6 +341,16 @@ impl WgpuScalePlan {
             };
         }
         if target_is_smaller(output_size, target_size) {
+            // A near-1 residual shrink (e.g. 256px-quantized source drawn to fit) is
+            // handled well enough by the egui sampler; routing it through the WGSL
+            // downscale pipeline would waste a pass with no visible benefit.
+            if wgpu_target_min_scale(output_size, target_size) >= NEAR_NATIVE_DOWNSCALE_MIN_SCALE {
+                return Self {
+                    direction: WgpuScaleDirection::Native,
+                    effective_upscale_method: WgpuUpscaleMethod::None,
+                    effective_downscale_method: WgpuDownscaleMethod::Bilinear,
+                };
+            }
             return Self {
                 direction: WgpuScaleDirection::Downscale,
                 effective_upscale_method: WgpuUpscaleMethod::None,
