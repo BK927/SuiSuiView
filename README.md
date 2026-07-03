@@ -82,14 +82,17 @@ backends. They are off by default.
 
 ## Settings
 
-`F5` opens the settings window. Settings are saved with bookmarks in the app
-state file.
+`F5` opens the settings window. Settings and window state are saved to
+`state.json`; each book's reading position and page bookmarks live in their own
+per-book file.
 
 - General: UI language, in-app delete confirmation, ESC exit, always-on-top,
   and first/last page behavior; Ask prompts auto-dismiss unless hovered.
 - Rendering: transition effect, fast sampled/scaled decode, GPU
   acceleration, scaler/filter controls, EXIF orientation, embedded ICC
-  conversion, prefetch, and cache memory. Manifest-backed SR Lab SPAN x2 is
+  conversion, prefetch, and a total memory budget (Saver/Standard/Ample presets,
+  an automatic renderer-aware default, or a manual limit) with a live RAM/GPU
+  usage readout. Manifest-backed SR Lab SPAN x2 is
   available as a slow manual GPU upscaler when local SPAN weights are present.
   Fixed 2x GPU SR upscalers skip tiny enlargements, can auto-stack once for
   large enlargement, and reuse the selected WGPU downscaler when their 2x/4x
@@ -112,11 +115,21 @@ technical names such as JPEG and ZIP/CBZ stay in English.
 
 ## Bookmarks And State
 
-Bookmarks and viewer preferences are saved to the platform data directory. On
-Windows, this resolves to an AppData `SuiSuiView/state.json` location.
+State is saved to the platform data directory. On Windows this resolves to an
+AppData `SuiSuiView/` folder: `state.json` holds settings and window state, and
+each book's data lives in its own file under `books/`.
 
-For ZIP and CBZ files, the bookmark key is based on archive contents, not the
-archive path. Moving or renaming the same archive should keep the bookmark.
+Two things are remembered per book:
+
+- Reading position ("이어보기"/resume) is saved automatically as you turn pages,
+  so reopening a book returns to where you left off. It can be disabled in
+  settings.
+- Manual page bookmarks are toggled explicitly and listed in the bookmark
+  popover.
+
+For ZIP and CBZ files, the per-book key is based on archive contents, not the
+archive path, so moving or renaming the same archive keeps your place and its
+bookmarks.
 
 - `B`: toggle a bookmark for the current page.
 - `Ctrl+B`: open the bookmark popover.
