@@ -71,6 +71,16 @@ pub(super) struct GpuPaintRequest {
     pub(super) opacity: f32,
 }
 
+/// GPU pool budgets (bytes) carried from the app/settings thread into the render thread. The
+/// render thread owns eviction, so each paint restates the current caps and the prune routines
+/// enforce them; [`GPU_SOURCE_TEXTURE_BUDGET_BYTES`] / [`GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES`]
+/// remain as the built-in floor if a paint ever arrives before the caps are published.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct GpuPoolBudgets {
+    pub(super) source_texture_bytes: usize,
+    pub(super) intermediate_texture_bytes: usize,
+}
+
 impl SuiSuiViewApp {
     pub(super) fn gpu_paint_book_key(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -119,6 +129,12 @@ impl SuiSuiViewApp {
         let Some(target_format) = self.gpu_target_format else {
             return false;
         };
+        let pool_budgets = GpuPoolBudgets {
+            source_texture_bytes: super::gpu_source_texture_budget_bytes(&self.settings),
+            intermediate_texture_bytes: super::gpu_intermediate_texture_budget_bytes(
+                &self.settings,
+            ),
+        };
         let callback = GpuEffectCallback {
             source_key: request.source_key,
             image_size: request.image_size,
@@ -127,6 +143,7 @@ impl SuiSuiViewApp {
             wgpu_upscale_method: request.wgpu_upscale_method,
             wgpu_downscale_method: request.wgpu_downscale_method,
             opacity: request.opacity.clamp(0.0, 1.0),
+            pool_budgets,
             rect: request.rect,
             target_format,
             draw_id: draw_id(
@@ -267,6 +284,7 @@ struct GpuEffectCallback {
     wgpu_upscale_method: WgpuUpscaleMethod,
     wgpu_downscale_method: WgpuDownscaleMethod,
     opacity: f32,
+    pool_budgets: GpuPoolBudgets,
     rect: Rect,
     target_format: wgpu::TextureFormat,
     draw_id: u64,
@@ -319,6 +337,11 @@ impl CallbackTrait for GpuEffectCallback {
                 resources_recreated = true;
             }
         }
+        // Restate the settings-derived pool caps before any upload/prune this frame. The app side
+        // already floored them at the functional minimum (current page + SR round-trip), so the
+        // total budget dominates from here.
+        resources.source_texture_budget_bytes = self.pool_budgets.source_texture_bytes;
+        resources.intermediate_texture_budget_bytes = self.pool_budgets.intermediate_texture_bytes;
         let source_uploaded = resources.ensure_source_texture(
             device,
             queue,
@@ -425,6 +448,10 @@ struct GpuPaintResources {
     draw_state_intermediate_bytes: usize,
     intermediate_textures: LruCache<u64, Arc<GpuIntermediateTexture>>,
     intermediate_texture_bytes: usize,
+    // Current pool caps, restated by the app on every paint. Seeded with the built-in constants so
+    // eviction is well-defined even before the first `prepare` publishes the settings-derived caps.
+    source_texture_budget_bytes: usize,
+    intermediate_texture_budget_bytes: usize,
     deferred_realtime_sr_first_frames: LruCache<u64, ()>,
     realtime_sr: RealtimeSrResources,
 }
@@ -574,6 +601,8 @@ impl GpuPaintResources {
                 NonZeroUsize::new(GPU_INTERMEDIATE_TEXTURE_CACHE_LIMIT).unwrap(),
             ),
             intermediate_texture_bytes: 0,
+            source_texture_budget_bytes: GPU_SOURCE_TEXTURE_BUDGET_BYTES,
+            intermediate_texture_budget_bytes: GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES,
             deferred_realtime_sr_first_frames: LruCache::new(
                 NonZeroUsize::new(GPU_REALTIME_SR_DEFER_CACHE_LIMIT).unwrap(),
             ),
@@ -1584,7 +1613,7 @@ impl GpuPaintResources {
     }
 
     fn prune_source_textures(&mut self) {
-        while self.source_texture_bytes > GPU_SOURCE_TEXTURE_BUDGET_BYTES
+        while self.source_texture_bytes > self.source_texture_budget_bytes
             && self.source_textures.len() > 1
         {
             let Some((_key, texture)) = self.source_textures.pop_lru() else {
@@ -1623,7 +1652,7 @@ impl GpuPaintResources {
     }
 
     fn prune_intermediate_textures(&mut self) {
-        while self.intermediate_texture_bytes > GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES
+        while self.intermediate_texture_bytes > self.intermediate_texture_budget_bytes
             && self.intermediate_textures.len() > 1
         {
             let Some((_key, texture)) = self.intermediate_textures.pop_lru() else {
@@ -1637,7 +1666,7 @@ impl GpuPaintResources {
     }
 
     fn prune_draw_states(&mut self) {
-        while self.draw_state_intermediate_bytes > GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES
+        while self.draw_state_intermediate_bytes > self.intermediate_texture_budget_bytes
             && self.draw_bind_groups.len() > 1
         {
             let Some((_key, draw_state)) = self.draw_bind_groups.pop_lru() else {

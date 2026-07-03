@@ -180,6 +180,9 @@ impl Default for TopBarItems {
 pub enum CacheMemoryMode {
     #[default]
     Auto,
+    Saver,
+    Standard,
+    Ample,
     Manual,
 }
 
@@ -187,10 +190,19 @@ pub const MANUAL_CACHE_MB_MIN: u32 = 64;
 pub const MANUAL_CACHE_MB_MAX: u32 = 2048;
 pub const DEFAULT_MANUAL_CACHE_MB: u32 = 160;
 
+/// Fixed total-memory budgets (bytes) for the preset modes. These caps dominate every cache
+/// pool; the current-page working set is always exempt so display never breaks.
+pub const SAVER_TOTAL_BUDGET_BYTES: usize = 128 * 1024 * 1024;
+pub const STANDARD_TOTAL_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+pub const AMPLE_TOTAL_BUDGET_BYTES: usize = 768 * 1024 * 1024;
+
 impl CacheMemoryMode {
     pub fn label_i18n(self, i18n: I18n) -> String {
         match self {
             Self::Auto => i18n.text("state.auto"),
+            Self::Saver => i18n.text("state.cache.saver"),
+            Self::Standard => i18n.text("state.cache.standard"),
+            Self::Ample => i18n.text("state.cache.ample"),
             Self::Manual => i18n.text("state.manual"),
         }
     }

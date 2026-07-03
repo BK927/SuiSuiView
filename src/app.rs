@@ -66,14 +66,16 @@ use crate::core::worker::preview_prefetch_indices;
 pub(in crate::app) use adjacent_seed::{AdjacentSeedCache, AdjacentSeedEvent, SeededPreparedPage};
 #[cfg(test)]
 use cache::{
-    automatic_cache_budget_bytes_for_total, best_page_key_excluding_preview_fallback_in_cache,
-    best_page_key_in_cache, final_quality_page_key_in_cache, lower_resolution_page_keys,
-    page_cache_state_from_hit, prepared_target_intent_for_view, texture_cache_budget_bytes_for,
+    automatic_total_budget_bytes_for, best_page_key_excluding_preview_fallback_in_cache,
+    best_page_key_in_cache, cache_budget_bytes, final_quality_page_key_in_cache,
+    lower_resolution_page_keys, page_cache_state_from_hit, prepared_target_intent_for_view,
+    texture_cache_budget_bytes_for, texture_cache_budget_cap_bytes,
     touch_normal_navigation_page_keys,
 };
 pub(in crate::app) use cache::{
-    cache_budget_bytes, gpu_visual_needs_wgsl, rect_target_size, should_allow_cpu_display_upscale,
-    PageCacheKey, TextureCacheKey, TextureEntry, TextureSampling, BYTES_PER_RGBA_PIXEL,
+    gpu_intermediate_texture_budget_bytes, gpu_source_texture_budget_bytes, gpu_visual_needs_wgsl,
+    rect_target_size, should_allow_cpu_display_upscale, total_memory_budget_bytes, PageCacheKey,
+    TextureCacheKey, TextureEntry, TextureSampling, BYTES_PER_RGBA_PIXEL,
 };
 pub(in crate::app) use delete_dialog::PendingDeleteDialog;
 pub(in crate::app) use edge_prompt::EdgePrompt;
@@ -1119,8 +1121,9 @@ mod tests {
     };
     use crate::core::state::{
         AppSettings, CacheMemoryMode, CpuScaleFilter, FitMode, KeyCode, KeyShortcut,
-        PageTransitionStyle, ReadingDirection, WgpuDownscaleMethod, WgpuUpscaleMethod,
-        MANUAL_CACHE_MB_MAX, MANUAL_CACHE_MB_MIN,
+        PageTransitionStyle, ReadingDirection, RendererMode, WgpuDownscaleMethod,
+        WgpuUpscaleMethod, AMPLE_TOTAL_BUDGET_BYTES, MANUAL_CACHE_MB_MAX, MANUAL_CACHE_MB_MIN,
+        SAVER_TOTAL_BUDGET_BYTES, STANDARD_TOTAL_BUDGET_BYTES,
     };
     use crate::core::worker::{
         DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PreparedPage,
@@ -1778,21 +1781,30 @@ mod tests {
 
     #[test]
     fn texture_cache_budget_keeps_visible_and_transition_pages_bounded() {
+        // A generous cap lets the content-derived goal (and its MIN floor) decide.
+        let cap = 512 * 1024 * 1024;
         assert_eq!(
-            texture_cache_budget_bytes_for(1024, 1, false),
+            texture_cache_budget_bytes_for(1024, 1, false, cap),
             64 * 1024 * 1024
         );
         assert_eq!(
-            texture_cache_budget_bytes_for(4096, 1, false),
+            texture_cache_budget_bytes_for(4096, 1, false, cap),
             128 * 1024 * 1024
         );
+        // Transition doubles the visible-page goal (1 + 1 transition + 1 = 3 pages at 64 MB each).
         assert_eq!(
-            texture_cache_budget_bytes_for(4096, 1, true),
-            128 * 1024 * 1024
+            texture_cache_budget_bytes_for(4096, 1, true, cap),
+            192 * 1024 * 1024
         );
+        // A tight total-budget cap dominates the larger content goal.
         assert_eq!(
-            texture_cache_budget_bytes_for(8192, 2, true),
-            128 * 1024 * 1024
+            texture_cache_budget_bytes_for(8192, 2, true, 80 * 1024 * 1024),
+            80 * 1024 * 1024
+        );
+        // The MIN texture floor always wins, even below a sub-minimum cap.
+        assert_eq!(
+            texture_cache_budget_bytes_for(1024, 1, false, 16 * 1024 * 1024),
+            64 * 1024 * 1024
         );
     }
 
@@ -1825,7 +1837,7 @@ mod tests {
     }
 
     #[test]
-    fn manual_cache_budget_is_clamped() {
+    fn manual_total_budget_is_clamped() {
         let mut settings = AppSettings {
             cache_memory_mode: CacheMemoryMode::Manual,
             manual_cache_mb: MANUAL_CACHE_MB_MIN - 1,
@@ -1833,24 +1845,130 @@ mod tests {
         };
 
         assert_eq!(
-            super::cache_budget_bytes(&settings),
+            super::total_memory_budget_bytes(&settings),
             MANUAL_CACHE_MB_MIN as usize * 1024 * 1024
         );
         settings.manual_cache_mb = MANUAL_CACHE_MB_MAX + 1;
         assert_eq!(
-            super::cache_budget_bytes(&settings),
+            super::total_memory_budget_bytes(&settings),
             MANUAL_CACHE_MB_MAX as usize * 1024 * 1024
         );
     }
 
     #[test]
-    fn automatic_cache_budget_is_bounded_for_viewer_responsiveness() {
+    fn preset_total_budgets_are_fixed_regardless_of_renderer() {
+        for renderer_mode in RendererMode::ALL {
+            let settings = |mode| AppSettings {
+                cache_memory_mode: mode,
+                renderer_mode,
+                ..AppSettings::default()
+            };
+            assert_eq!(
+                super::total_memory_budget_bytes(&settings(CacheMemoryMode::Saver)),
+                SAVER_TOTAL_BUDGET_BYTES
+            );
+            assert_eq!(
+                super::total_memory_budget_bytes(&settings(CacheMemoryMode::Standard)),
+                STANDARD_TOTAL_BUDGET_BYTES
+            );
+            assert_eq!(
+                super::total_memory_budget_bytes(&settings(CacheMemoryMode::Ample)),
+                AMPLE_TOTAL_BUDGET_BYTES
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_total_budget_is_mode_aware_and_bounded() {
+        // Glow: 2% of RAM, clamped to [128, 256] MB.
         assert_eq!(
-            super::automatic_cache_budget_bytes_for_total(8 * 1024 * 1024 * 1024),
-            (8 * 1024 * 1024 * 1024) / 100
+            super::automatic_total_budget_bytes_for(
+                RendererMode::LowMemoryGlow,
+                8 * 1024 * 1024 * 1024
+            ),
+            (8 * 1024 * 1024 * 1024) / 50
         );
         assert_eq!(
-            super::automatic_cache_budget_bytes_for_total(64 * 1024 * 1024 * 1024),
+            super::automatic_total_budget_bytes_for(
+                RendererMode::LowMemoryGlow,
+                2 * 1024 * 1024 * 1024
+            ),
+            128 * 1024 * 1024
+        );
+        assert_eq!(
+            super::automatic_total_budget_bytes_for(
+                RendererMode::LowMemoryGlow,
+                64 * 1024 * 1024 * 1024
+            ),
+            256 * 1024 * 1024
+        );
+        // Wgpu: 4% of RAM, clamped to [256, 768] MB.
+        assert_eq!(
+            super::automatic_total_budget_bytes_for(RendererMode::Wgpu, 8 * 1024 * 1024 * 1024),
+            (8 * 1024 * 1024 * 1024) / 25
+        );
+        assert_eq!(
+            super::automatic_total_budget_bytes_for(RendererMode::Wgpu, 2 * 1024 * 1024 * 1024),
+            256 * 1024 * 1024
+        );
+        assert_eq!(
+            super::automatic_total_budget_bytes_for(RendererMode::Wgpu, 64 * 1024 * 1024 * 1024),
+            768 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn pool_derivations_split_total_by_renderer_mode() {
+        let base = |renderer_mode| AppSettings {
+            cache_memory_mode: CacheMemoryMode::Ample,
+            renderer_mode,
+            ..AppSettings::default()
+        };
+        // Ample = 768 MB total, divides by 100 cleanly at the MB scale.
+        let total = AMPLE_TOTAL_BUDGET_BYTES;
+        let share = |numer: usize| total / 100 * numer;
+
+        let wgpu = base(RendererMode::Wgpu);
+        assert_eq!(super::cache_budget_bytes(&wgpu), share(35));
+        assert_eq!(super::texture_cache_budget_cap_bytes(&wgpu), share(25));
+        assert_eq!(super::gpu_source_texture_budget_bytes(&wgpu), share(25));
+        assert_eq!(
+            super::gpu_intermediate_texture_budget_bytes(&wgpu),
+            share(15)
+        );
+
+        // Glow redistributes the unused 40% GPU share into decode + texture.
+        let glow = base(RendererMode::LowMemoryGlow);
+        assert_eq!(super::cache_budget_bytes(&glow), share(55));
+        assert_eq!(super::texture_cache_budget_cap_bytes(&glow), share(45));
+    }
+
+    #[test]
+    fn pool_derivations_respect_minimum_floors_at_smallest_budget() {
+        // 64 MB total (Manual floor) is below every pool's MIN, so the floors dominate.
+        let settings = AppSettings {
+            cache_memory_mode: CacheMemoryMode::Manual,
+            manual_cache_mb: MANUAL_CACHE_MB_MIN,
+            renderer_mode: RendererMode::Wgpu,
+            ..AppSettings::default()
+        };
+        assert_eq!(
+            super::total_memory_budget_bytes(&settings),
+            64 * 1024 * 1024
+        );
+        // Decode + texture floors are both 64 MB.
+        assert_eq!(super::cache_budget_bytes(&settings), 64 * 1024 * 1024);
+        assert_eq!(
+            super::texture_cache_budget_cap_bytes(&settings),
+            64 * 1024 * 1024
+        );
+        // GPU floors keep the current page + SR round-trip viable.
+        assert_eq!(
+            super::gpu_source_texture_budget_bytes(&settings),
+            64 * 1024 * 1024
+        );
+        assert_eq!(
+            super::gpu_intermediate_texture_budget_bytes(&settings),
             96 * 1024 * 1024
         );
     }

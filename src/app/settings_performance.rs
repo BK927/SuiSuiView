@@ -1,5 +1,5 @@
-use super::cache_budget_bytes;
 use super::settings::{checkbox_with_help, grid_label_with_help, info_icon, setting_group};
+use super::total_memory_budget_bytes;
 use super::ui::theme;
 use crate::core::i18n::I18n;
 use crate::core::state::{
@@ -269,20 +269,17 @@ pub(in crate::app) fn show_performance_settings(
             ui.horizontal_wrapped(|ui| {
                 ui.label(i18n.text("settings.performance.page_cache"));
                 info_icon(ui, &i18n.text("settings.performance.page_cache.help"));
-                *changed |= ui
-                    .radio_value(
-                        &mut draft.cache_memory_mode,
-                        CacheMemoryMode::Auto,
-                        CacheMemoryMode::Auto.label_i18n(i18n),
-                    )
-                    .changed();
-                *changed |= ui
-                    .radio_value(
-                        &mut draft.cache_memory_mode,
-                        CacheMemoryMode::Manual,
-                        CacheMemoryMode::Manual.label_i18n(i18n),
-                    )
-                    .changed();
+                for mode in [
+                    CacheMemoryMode::Auto,
+                    CacheMemoryMode::Saver,
+                    CacheMemoryMode::Standard,
+                    CacheMemoryMode::Ample,
+                    CacheMemoryMode::Manual,
+                ] {
+                    *changed |= ui
+                        .radio_value(&mut draft.cache_memory_mode, mode, mode.label_i18n(i18n))
+                        .changed();
+                }
                 ui.add_enabled_ui(draft.cache_memory_mode == CacheMemoryMode::Manual, |ui| {
                     *changed |= ui
                         .add(
@@ -301,7 +298,10 @@ pub(in crate::app) fn show_performance_settings(
                     "settings.performance.cache_summary",
                     &[
                         ("mode", draft.cache_memory_mode.label_i18n(i18n)),
-                        ("cache", format!("{:.0}", mib(cache_budget_bytes(draft)))),
+                        (
+                            "cache",
+                            format!("{:.0}", mib(total_memory_budget_bytes(draft))),
+                        ),
                     ],
                 ))
                 .size(12.0)

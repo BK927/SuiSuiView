@@ -190,6 +190,49 @@ fn settings_normalization_does_not_rewrite_manual_cache_mb() {
 }
 
 #[test]
+fn legacy_cache_memory_mode_tokens_still_deserialize() {
+    let auto: PersistedState =
+        serde_json::from_str(r#"{"version":1,"settings":{"cache_memory_mode":"Auto"},"books":{}}"#)
+            .unwrap();
+    let manual: PersistedState = serde_json::from_str(
+        r#"{"version":1,"settings":{"cache_memory_mode":"Manual"},"books":{}}"#,
+    )
+    .unwrap();
+
+    assert_eq!(auto.settings.cache_memory_mode, CacheMemoryMode::Auto);
+    assert_eq!(manual.settings.cache_memory_mode, CacheMemoryMode::Manual);
+}
+
+#[test]
+fn new_cache_memory_mode_presets_round_trip() {
+    for mode in [
+        CacheMemoryMode::Auto,
+        CacheMemoryMode::Saver,
+        CacheMemoryMode::Standard,
+        CacheMemoryMode::Ample,
+        CacheMemoryMode::Manual,
+    ] {
+        let json = serde_json::to_string(&mode).unwrap();
+        let round_trip: CacheMemoryMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_trip, mode);
+    }
+
+    // The three preset variants use their own serde tokens.
+    assert_eq!(
+        serde_json::to_string(&CacheMemoryMode::Saver).unwrap(),
+        r#""Saver""#
+    );
+    assert_eq!(
+        serde_json::to_string(&CacheMemoryMode::Standard).unwrap(),
+        r#""Standard""#
+    );
+    assert_eq!(
+        serde_json::to_string(&CacheMemoryMode::Ample).unwrap(),
+        r#""Ample""#
+    );
+}
+
+#[test]
 fn old_settings_without_language_load_auto_default() {
     let state: PersistedState =
         serde_json::from_str(r#"{"version":1,"settings":{},"books":{}}"#).unwrap();
