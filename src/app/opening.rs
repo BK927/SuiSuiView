@@ -1,8 +1,9 @@
 use super::{
     adjacent_seed::{prepare_seeded_first_page, SeedTargetView},
     perf,
+    sibling_books::{same_path, sibling_book_path},
     viewer::{ViewTargetSettle, SPREAD_GAP_POINTS},
-    PendingBookmarkJump, SeededPreparedPage, SuiSuiViewApp,
+    PendingBookmarkJump, SeededPreparedPage, SiblingOpenRetry, SuiSuiViewApp,
 };
 use crate::core::effects::ViewEffects;
 use crate::core::formats::unsupported_message_for_extension;
@@ -177,6 +178,7 @@ pub(crate) fn start_startup_open_loader(path: PathBuf, store: &StateStore) -> Op
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn open_path(&mut self, path: PathBuf) {
+        self.sibling_open_retry = None;
         self.clear_pending_sibling_book_turns();
         self.open_path_with_initial_direction(path, NavigationDirection::Forward);
     }
@@ -220,6 +222,7 @@ impl SuiSuiViewApp {
         book_id: String,
         page: usize,
     ) {
+        self.sibling_open_retry = None;
         self.clear_pending_sibling_book_turns();
         self.pending_bookmark_jump = Some(PendingBookmarkJump {
             book_id,
@@ -243,6 +246,7 @@ impl SuiSuiViewApp {
         explicit_page: Option<usize>,
         view_fallback: Option<OpenViewFallback>,
     ) {
+        self.sibling_open_retry = None;
         self.pending_bookmark_jump = None;
         self.clear_adjacent_seed_cache();
         self.open_path_inner(
@@ -261,6 +265,7 @@ impl SuiSuiViewApp {
         explicit_page: Option<usize>,
         view_fallback: Option<OpenViewFallback>,
     ) {
+        self.sibling_open_retry = None;
         self.pending_bookmark_jump = None;
         self.clear_adjacent_seed_cache();
         self.open_path_inner(
@@ -423,6 +428,38 @@ impl SuiSuiViewApp {
                     event.explicit_page,
                 ),
                 Err(message) => {
+                    if let Some(retry) = self.sibling_open_retry.take() {
+                        if retry.attempts_left > 0 {
+                            if let Some(next) = sibling_book_path(&event.path, retry.direction) {
+                                let full_circle = retry
+                                    .origin_book
+                                    .as_ref()
+                                    .is_some_and(|origin| same_path(&next, origin));
+                                if !full_circle {
+                                    let skipped = event
+                                        .path
+                                        .file_name()
+                                        .map(|name| name.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                    self.set_status(self.i18n().with_vars(
+                                        "status.sibling_book_skipped",
+                                        &[("name", skipped)],
+                                    ));
+                                    self.sibling_open_retry = Some(SiblingOpenRetry {
+                                        attempts_left: retry.attempts_left - 1,
+                                        ..retry
+                                    });
+                                    self.open_sibling_path_with_initial_direction(
+                                        next,
+                                        event.initial_direction,
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                        // exhausted / no candidate / full circle: state stays cleared
+                        // (take()) and control falls through to the failure handling below.
+                    }
                     if self
                         .pending_bookmark_jump
                         .as_ref()
@@ -463,6 +500,7 @@ impl SuiSuiViewApp {
         view_fallback: Option<OpenViewFallback>,
         explicit_page: Option<usize>,
     ) {
+        self.sibling_open_retry = None;
         let book_id = source.book_id().to_owned();
         let page_count = source.page_count();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]

@@ -87,6 +87,7 @@ pub(in crate::app) use opening::{LoaderEvent, OpenOrigin};
 pub(crate) fn restart_current_process() -> Result<(), String> {
     platform::restart_current_process()
 }
+pub(in crate::app) use navigation::SiblingOpenRetry;
 #[cfg(test)]
 use sibling_books::adjacent_sibling_book_paths;
 pub(in crate::app) use sibling_books::{adjacent_sibling_book_paths_ordered, sibling_book_path};
@@ -223,6 +224,7 @@ pub struct SuiSuiViewApp {
     sibling_book_visual_pending: bool,
     sibling_book_wgpu_present_wait: Option<(u64, usize)>,
     sibling_book_visual_hold_until: Option<Instant>,
+    sibling_open_retry: Option<SiblingOpenRetry>,
     view_target_settle: ViewTargetSettle,
     pending_original_inspection_cache_cleanup_at: Option<Instant>,
     pending_gpu_original_inspection_cleanup: bool,
@@ -364,6 +366,7 @@ impl SuiSuiViewApp {
             sibling_book_visual_pending: false,
             sibling_book_wgpu_present_wait: None,
             sibling_book_visual_hold_until: None,
+            sibling_open_retry: None,
             view_target_settle: ViewTargetSettle::default(),
             pending_original_inspection_cache_cleanup_at: None,
             pending_gpu_original_inspection_cleanup: false,
