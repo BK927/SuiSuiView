@@ -4,7 +4,7 @@ use super::prepare::{prepare_page_with_perf, PreparedPageWithTiming};
 use super::read_ahead::{next_job, record_page_read};
 use super::scheduler::PageJob;
 use super::{DecodeOptions, PreparedPage, WorkerCommand, WorkerOptions};
-use crate::core::source::SharedSource;
+use crate::core::source::{PageId, SharedSource};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::{perf_trace, perf_trace::PerfField};
 use crossbeam_channel::Receiver;
@@ -20,6 +20,7 @@ const DECODE_AHEAD_CANCELLED: &str = "Page decode-ahead was cancelled";
 pub(super) struct DecodeAhead {
     book_id: String,
     book_epoch: usize,
+    page_id: PageId,
     index: usize,
     target_long_edge: u32,
     decode: DecodeOptions,
@@ -37,6 +38,7 @@ impl DecodeAhead {
         source: SharedSource,
         book_id: String,
         book_epoch: usize,
+        page_id: PageId,
         job: PageJob,
         decode: DecodeOptions,
         measure_prepare_timing: bool,
@@ -88,6 +90,7 @@ impl DecodeAhead {
         Self {
             book_id,
             book_epoch,
+            page_id,
             index: job.index,
             target_long_edge: job.target_long_edge,
             decode,
@@ -101,14 +104,14 @@ impl DecodeAhead {
         &self,
         book_id: &str,
         book_epoch: usize,
-        index: usize,
+        page_id: PageId,
         target_long_edge: u32,
         decode: DecodeOptions,
     ) -> bool {
         !self.is_cancelled()
             && self.book_id == book_id
             && self.book_epoch == book_epoch
-            && self.index == index
+            && self.page_id == page_id
             && self.target_long_edge == target_long_edge
             && self.decode == decode
     }
@@ -140,8 +143,8 @@ impl DecodeAhead {
         self.cancel.load(Ordering::Acquire)
     }
 
-    fn matches_job(&self, job: PageJob) -> bool {
-        self.index == job.index && self.target_long_edge == job.target_long_edge
+    fn matches_job(&self, page_id: PageId, target_long_edge: u32) -> bool {
+        self.page_id == page_id && self.target_long_edge == target_long_edge
     }
 
     fn join(&mut self, reason: &'static str) -> Result<PreparedPageWithTiming, String> {
@@ -213,11 +216,15 @@ pub(super) fn maybe_start_decode(
     if !candidate.matches_job(source, job.index) {
         return false;
     }
+    let Some(page_id) = source.page_id(job.index) else {
+        return false;
+    };
 
     *decode_ahead = Some(DecodeAhead::start(
         source.clone(),
         book_id.to_owned(),
         book_epoch,
+        page_id,
         job,
         options.decode,
         measure_prepare_timing,
@@ -229,12 +236,12 @@ pub(super) fn consume_matching_decode(
     pending: &mut Option<DecodeAhead>,
     book_id: &str,
     book_epoch: usize,
-    index: usize,
+    page_id: PageId,
     target_long_edge: u32,
     decode: DecodeOptions,
 ) -> Option<Result<PreparedPageWithTiming, String>> {
     if pending.as_ref().is_some_and(|decode_ahead| {
-        decode_ahead.matches(book_id, book_epoch, index, target_long_edge, decode)
+        decode_ahead.matches(book_id, book_epoch, page_id, target_long_edge, decode)
     }) {
         return pending
             .take()
@@ -299,7 +306,11 @@ pub(super) fn cancel_pending_decode_if_not_scheduled(
         }
 
         jobs.iter()
-            .position(|job| decode_ahead.matches_job(*job))
+            .position(|job| {
+                source
+                    .page_id(job.index)
+                    .is_some_and(|page_id| decode_ahead.matches_job(page_id, job.target_long_edge))
+            })
             .and_then(|position| {
                 next_job(
                     source,
@@ -313,7 +324,11 @@ pub(super) fn cancel_pending_decode_if_not_scheduled(
                     published_app_cache_hints,
                 )
             })
-            .is_some_and(|job| decode_ahead.matches_job(job))
+            .is_some_and(|job| {
+                source
+                    .page_id(job.index)
+                    .is_some_and(|page_id| decode_ahead.matches_job(page_id, job.target_long_edge))
+            })
     }) {
         return;
     }
@@ -385,7 +400,7 @@ mod tests {
         clear_pending_decode_if_context_changed, consume_matching_decode, maybe_start_decode,
         DecodeAhead,
     };
-    use crate::core::source::{BookSource, SharedSource, SourceError};
+    use crate::core::source::{BookSource, PageId, SharedSource, SourceError};
     use crate::core::worker::cache::PublishedAppCacheHints;
     use crate::core::worker::decode_policy::DecodeAheadCandidate;
     use crate::core::worker::scheduler::PageJob;
@@ -443,7 +458,7 @@ mod tests {
         );
 
         assert!(
-            consume_matching_decode(&mut pending, "book", 7, 1, 2048, options.decode)
+            consume_matching_decode(&mut pending, "book", 7, PageId(1), 2048, options.decode)
                 .unwrap()
                 .is_err()
         );
@@ -505,6 +520,46 @@ mod tests {
     }
 
     #[test]
+    fn decode_ahead_consume_matches_page_id_not_index_and_rejects_post_swap_epoch() {
+        // A decode spawned pre-swap carries page_id 5 while sitting at index 0.
+        // consume_matching_decode keys on page_id (not index), and a post-swap
+        // request (bumped epoch) no longer matches even at the same page_id.
+        let decode = DecodeOptions::default();
+        let spawn = || {
+            let source: SharedSource = Arc::new(StaticSource {
+                path: PathBuf::from("static-source"),
+                bytes: vec![1, 2, 3, 4],
+            });
+            Some(DecodeAhead::start(
+                source,
+                "book".to_owned(),
+                7,
+                PageId(5),
+                PageJob {
+                    index: 0,
+                    target_long_edge: 2048,
+                },
+                decode,
+                false,
+            ))
+        };
+
+        // Wrong page_id (the index value) does not match.
+        let mut pending = spawn();
+        assert!(
+            consume_matching_decode(&mut pending, "book", 7, PageId(0), 2048, decode).is_none()
+        );
+        clear_pending_decode(&mut pending, "test");
+
+        // Post-swap epoch (bumped) does not match the same page_id.
+        let mut pending = spawn();
+        assert!(
+            consume_matching_decode(&mut pending, "book", 8, PageId(5), 2048, decode).is_none()
+        );
+        clear_pending_decode(&mut pending, "test");
+    }
+
+    #[test]
     fn clear_pending_decode_detaches_without_waiting_for_slow_decode_read() {
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -520,6 +575,7 @@ mod tests {
             source,
             "book".to_owned(),
             7,
+            PageId(1),
             PageJob {
                 index: 1,
                 target_long_edge: 2048,
@@ -547,6 +603,7 @@ mod tests {
             source,
             "book".to_owned(),
             7,
+            PageId(1),
             PageJob {
                 index: 1,
                 target_long_edge: 2048,
@@ -583,6 +640,7 @@ mod tests {
             source,
             "book".to_owned(),
             7,
+            PageId(1),
             PageJob {
                 index: 1,
                 target_long_edge: 2048,
@@ -597,7 +655,7 @@ mod tests {
             &mut pending,
             "book",
             7,
-            1,
+            PageId(1),
             2048,
             DecodeOptions::default()
         )
@@ -618,6 +676,7 @@ mod tests {
             source.clone(),
             "book".to_owned(),
             7,
+            PageId(1),
             PageJob {
                 index: 1,
                 target_long_edge: 2048,
@@ -627,7 +686,11 @@ mod tests {
         ));
         let options = WorkerOptions {
             progressive_preview_enabled: false,
-            app_cached_pages: vec![CachedPageKey::new(1, 2048, DecodeOptions::default())],
+            app_cached_pages: vec![CachedPageKey::new(
+                PageId(1),
+                2048,
+                DecodeOptions::default(),
+            )],
             ..WorkerOptions::default()
         };
         let cache = LruCache::new(NonZeroUsize::new(4).unwrap());

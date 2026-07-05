@@ -1,7 +1,7 @@
 use super::read_ahead::{clear_matching as clear_matching_read_ahead, consume_matching, ReadAhead};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::source::PageReadHint;
-use crate::core::source::SharedSource;
+use crate::core::source::{PageId, SharedSource};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::{perf_trace, perf_trace::PerfField};
 use lru::LruCache;
@@ -57,8 +57,14 @@ impl SourceBytesCache {
         }
     }
 
-    fn get(&mut self, book_id: &str, index: usize, book_epoch: usize) -> Option<Arc<[u8]>> {
-        let key = source_bytes_key(book_id, index);
+    fn get(
+        &mut self,
+        book_id: &str,
+        page_id: PageId,
+        index: usize,
+        book_epoch: usize,
+    ) -> Option<Arc<[u8]>> {
+        let key = source_bytes_key(book_id, page_id);
         let hit = self.entries.get(&key).cloned();
         record_source_bytes_cache(
             if hit.is_some() { "hit" } else { "miss" },
@@ -75,6 +81,7 @@ impl SourceBytesCache {
     fn insert(
         &mut self,
         book_id: &str,
+        page_id: PageId,
         index: usize,
         book_epoch: usize,
         bytes: Vec<u8>,
@@ -94,7 +101,7 @@ impl SourceBytesCache {
         }
 
         let shared = Arc::<[u8]>::from(bytes);
-        let key = source_bytes_key(book_id, index);
+        let key = source_bytes_key(book_id, page_id);
         if let Some((_evicted_key, evicted_bytes)) = self.entries.push(key, shared.clone()) {
             self.bytes = self.bytes.saturating_sub(evicted_bytes.len());
         }
@@ -129,24 +136,26 @@ pub(super) fn read_source_bytes(
     source: &SharedSource,
     book_id: &str,
     book_epoch: usize,
+    page_id: PageId,
     index: usize,
 ) -> Result<SourcePageBytes, String> {
     if let Some(cache) = cache {
-        if let Some(bytes) = cache.get(book_id, index, book_epoch) {
+        if let Some(bytes) = cache.get(book_id, page_id, index, book_epoch) {
             clear_matching_read_ahead(
                 read_ahead,
                 book_id,
                 book_epoch,
-                index,
+                page_id,
                 "source_bytes_cache_hit",
             );
             return Ok(SourcePageBytes::Shared(bytes));
         }
-        let bytes = read_uncached_source_bytes(read_ahead, source, book_id, book_epoch, index)?;
-        return Ok(cache.insert(book_id, index, book_epoch, bytes));
+        let bytes =
+            read_uncached_source_bytes(read_ahead, source, book_id, book_epoch, page_id, index)?;
+        return Ok(cache.insert(book_id, page_id, index, book_epoch, bytes));
     }
 
-    read_uncached_source_bytes(read_ahead, source, book_id, book_epoch, index)
+    read_uncached_source_bytes(read_ahead, source, book_id, book_epoch, page_id, index)
         .map(SourcePageBytes::Owned)
 }
 
@@ -155,9 +164,10 @@ fn read_uncached_source_bytes(
     source: &SharedSource,
     book_id: &str,
     book_epoch: usize,
+    page_id: PageId,
     index: usize,
 ) -> Result<Vec<u8>, String> {
-    consume_matching(read_ahead, book_id, book_epoch, index).unwrap_or_else(|| {
+    consume_matching(read_ahead, book_id, book_epoch, page_id).unwrap_or_else(|| {
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let read_hint = source.page_read_hint(index);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -205,8 +215,8 @@ fn enabled_value(value: &str) -> bool {
     )
 }
 
-fn source_bytes_key(book_id: &str, index: usize) -> String {
-    format!("{book_id}:{index}")
+fn source_bytes_key(book_id: &str, page_id: PageId) -> String {
+    format!("{book_id}:{}", page_id.0)
 }
 
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -286,8 +296,11 @@ fn record_source_bytes_cache(
 
 #[cfg(test)]
 mod tests {
-    use super::{enabled_value, read_source_bytes, source_bytes_cache_budget, SourceBytesCache};
-    use crate::core::source::{BookSource, SharedSource, SourceError};
+    use super::{
+        enabled_value, read_source_bytes, source_bytes_cache_budget, source_bytes_key,
+        SourceBytesCache,
+    };
+    use crate::core::source::{BookSource, PageId, SharedSource, SourceError};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -295,30 +308,36 @@ mod tests {
     #[test]
     fn source_bytes_cache_reuses_inserted_page_bytes() {
         let mut cache = SourceBytesCache::new(32);
-        let bytes = cache.insert("book", 3, 1, vec![1, 2, 3, 4]);
+        let bytes = cache.insert("book", PageId(3), 3, 1, vec![1, 2, 3, 4]);
 
-        assert_eq!(cache.get("book", 3, 1).as_deref(), Some(&[1, 2, 3, 4][..]));
-        assert_eq!(cache.get("book", 4, 1), None);
+        assert_eq!(
+            cache.get("book", PageId(3), 3, 1).as_deref(),
+            Some(&[1, 2, 3, 4][..])
+        );
+        assert_eq!(cache.get("book", PageId(4), 4, 1), None);
         assert_eq!(bytes.as_ref(), &[1, 2, 3, 4]);
     }
 
     #[test]
     fn source_bytes_cache_prunes_to_budget() {
         let mut cache = SourceBytesCache::new(6);
-        cache.insert("book", 1, 1, vec![1, 1, 1, 1]);
-        cache.insert("book", 2, 1, vec![2, 2, 2, 2]);
+        cache.insert("book", PageId(1), 1, 1, vec![1, 1, 1, 1]);
+        cache.insert("book", PageId(2), 2, 1, vec![2, 2, 2, 2]);
 
-        assert_eq!(cache.get("book", 1, 1), None);
-        assert_eq!(cache.get("book", 2, 1).as_deref(), Some(&[2, 2, 2, 2][..]));
+        assert_eq!(cache.get("book", PageId(1), 1, 1), None);
+        assert_eq!(
+            cache.get("book", PageId(2), 2, 1).as_deref(),
+            Some(&[2, 2, 2, 2][..])
+        );
     }
 
     #[test]
     fn source_bytes_cache_skips_oversize_pages() {
         let mut cache = SourceBytesCache::new(3);
-        let bytes = cache.insert("book", 1, 1, vec![1, 2, 3, 4]);
+        let bytes = cache.insert("book", PageId(1), 1, 1, vec![1, 2, 3, 4]);
 
         assert_eq!(bytes.as_ref(), &[1, 2, 3, 4]);
-        assert_eq!(cache.get("book", 1, 1), None);
+        assert_eq!(cache.get("book", PageId(1), 1, 1), None);
     }
 
     #[test]
@@ -337,6 +356,7 @@ mod tests {
             &source,
             "counting-source",
             1,
+            PageId(2),
             2,
         )
         .unwrap();
@@ -346,6 +366,7 @@ mod tests {
             &source,
             "counting-source",
             1,
+            PageId(2),
             2,
         )
         .unwrap();
@@ -353,6 +374,21 @@ mod tests {
         assert_eq!(first.as_ref(), &[2, 3, 4]);
         assert_eq!(second.as_ref(), &[2, 3, 4]);
         assert_eq!(source_impl.reads.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn source_bytes_key_survives_same_book_snapshot_swap() {
+        // Same page identity across a refresh keeps the same source-bytes key
+        // even when its positional index shifts (a page inserted at the front).
+        let before_index = 0;
+        let after_index = 1;
+        assert_ne!(before_index, after_index);
+        let page_id = PageId(0);
+
+        let before_key = source_bytes_key("same-book", page_id);
+        let after_key = source_bytes_key("same-book", page_id);
+        assert_eq!(before_key, after_key);
+        assert_eq!(before_key, "same-book:0");
     }
 
     #[test]

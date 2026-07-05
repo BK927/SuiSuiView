@@ -88,9 +88,19 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn app_cached_page_keys(&self) -> Vec<CachedPageKey> {
+        let Some(source) = self.source.as_ref() else {
+            return Vec::new();
+        };
         self.decoded_pages
             .iter()
-            .map(|(key, _)| CachedPageKey::new(key.index, key.target_long_edge, key.decode))
+            .filter_map(|(key, _)| {
+                let page_id = source.page_id(key.index)?;
+                Some(CachedPageKey::new(
+                    page_id,
+                    key.target_long_edge,
+                    key.decode,
+                ))
+            })
             .collect()
     }
 

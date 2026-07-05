@@ -591,6 +591,7 @@ impl SuiSuiViewApp {
         match event {
             WorkerEvent::PageReady {
                 book_id,
+                page_id: _,
                 index,
                 decode,
                 page,
@@ -620,6 +621,7 @@ impl SuiSuiViewApp {
         match event {
             WorkerEvent::PageReady {
                 book_id,
+                page_id: _,
                 index,
                 decode,
                 page,
@@ -651,6 +653,7 @@ impl SuiSuiViewApp {
             }
             WorkerEvent::PageFailed {
                 book_id,
+                page_id: _,
                 index,
                 target_long_edge,
                 decode,

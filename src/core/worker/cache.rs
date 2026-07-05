@@ -1,7 +1,7 @@
 use super::{clamp_target_long_edge, CachedPageKey, DecodeOptions, PreparedPage};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
-use crate::core::source::SharedSource;
+use crate::core::source::{PageId, SharedSource};
 use lru::LruCache;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -14,12 +14,13 @@ pub(super) type PublishedAppCacheHints = VecDeque<CachedPageKey>;
 
 pub(super) fn page_cache_key(
     book_id: &str,
-    index: usize,
+    page_id: PageId,
     target_long_edge: u32,
     decode: DecodeOptions,
 ) -> String {
     format!(
-        "{book_id}:{index}:{}:{}",
+        "{book_id}:{}:{}:{}",
+        page_id.0,
         clamp_target_long_edge(target_long_edge),
         decode.cache_token()
     )
@@ -81,14 +82,14 @@ pub(super) fn clear_published_app_cache_hints_on_context_change(
 pub(super) fn should_skip_published_app_cache_hint(
     hints: &PublishedAppCacheHints,
     visible: bool,
-    index: usize,
+    page_id: PageId,
     target_long_edge: u32,
     decode: DecodeOptions,
 ) -> bool {
     !visible
         && hints
             .iter()
-            .any(|cached| cached.covers(index, target_long_edge, decode))
+            .any(|cached| cached.covers(page_id, target_long_edge, decode))
 }
 
 pub(super) fn remember_published_app_cache_hint(
@@ -108,9 +109,17 @@ pub(super) fn update_book_epoch(
     book_epoch: &mut usize,
     source: &Option<SharedSource>,
     previous_book_id: Option<&str>,
+    previous_instance_id: Option<u64>,
 ) {
     let current_book_id = source.as_ref().map(|source| source.book_id());
-    if current_book_id.is_some() && previous_book_id != current_book_id {
+    let current_instance_id = source.as_ref().map(|source| source.source_instance_id());
+    // Bump when the instance id changes (a same-book_id snapshot refresh, which
+    // must kill in-flight results keyed to the old snapshot) OR when book_id
+    // changes (a book switch). Test fakes all report instance 0, so the book_id
+    // change still bumps and preserves existing behavior.
+    if current_book_id.is_some()
+        && (previous_book_id != current_book_id || previous_instance_id != current_instance_id)
+    {
         *book_epoch = book_epoch.saturating_add(1);
     }
 }
@@ -157,23 +166,25 @@ pub(super) fn record_worker_cache_snapshot(
 mod tests {
     use super::{
         insert_worker_cache_with_budget, page_cache_key, remember_published_app_cache_hint,
-        should_skip_published_app_cache_hint, PublishedAppCacheHints,
+        should_skip_published_app_cache_hint, update_book_epoch, PublishedAppCacheHints,
         PUBLISHED_APP_CACHE_HINT_LIMIT,
     };
+    use crate::core::source::{BookSource, PageId, SharedSource, SourceError};
     use crate::core::state::{CpuScaleFilter, DecoderPreference, DecoderPreferences};
     use crate::core::worker::{
         CachedPageKey, DecodeBackend, DecodeOptions, PagePixels, PreparedPage, MAX_TARGET_LONG_EDGE,
     };
     use lru::LruCache;
     use std::num::NonZeroUsize;
+    use std::path::Path;
     use std::sync::Arc;
 
     #[test]
     fn worker_cache_key_tracks_decode_options() {
-        let normal = page_cache_key("book", 1, 2048, DecodeOptions::default());
+        let normal = page_cache_key("book", PageId(1), 2048, DecodeOptions::default());
         let exif = page_cache_key(
             "book",
-            1,
+            PageId(1),
             2048,
             DecodeOptions {
                 apply_exif_orientation: true,
@@ -182,7 +193,7 @@ mod tests {
         );
         let icc = page_cache_key(
             "book",
-            1,
+            PageId(1),
             2048,
             DecodeOptions {
                 apply_embedded_icc: true,
@@ -191,7 +202,7 @@ mod tests {
         );
         let lanczos = page_cache_key(
             "book",
-            1,
+            PageId(1),
             2048,
             DecodeOptions {
                 cpu_downscale_filter: CpuScaleFilter::Lanczos3,
@@ -200,7 +211,7 @@ mod tests {
         );
         let upscaled = page_cache_key(
             "book",
-            1,
+            PageId(1),
             2048,
             DecodeOptions {
                 allow_display_upscale: true,
@@ -209,7 +220,7 @@ mod tests {
         );
         let conservative_prepare = page_cache_key(
             "book",
-            1,
+            PageId(1),
             2048,
             DecodeOptions {
                 fast_sampled_scaled_decode: false,
@@ -225,7 +236,7 @@ mod tests {
 
         let zune_jpeg = page_cache_key(
             "book",
-            1,
+            PageId(1),
             2048,
             DecodeOptions {
                 decoder_preferences: DecoderPreferences {
@@ -243,8 +254,8 @@ mod tests {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let mut cache_bytes = 0usize;
         let decode = DecodeOptions::default();
-        let small_key = page_cache_key("book", 1, 2048, decode);
-        let huge_key = page_cache_key("book", 1, MAX_TARGET_LONG_EDGE + 1, decode);
+        let small_key = page_cache_key("book", PageId(1), 2048, decode);
+        let huge_key = page_cache_key("book", PageId(1), MAX_TARGET_LONG_EDGE + 1, decode);
 
         assert!(insert_worker_cache_with_budget(
             &mut cache,
@@ -272,13 +283,21 @@ mod tests {
     fn published_app_cache_hint_skips_only_prefetch_pages() {
         let decode = DecodeOptions::default();
         let mut hints = PublishedAppCacheHints::new();
-        remember_published_app_cache_hint(&mut hints, CachedPageKey::new(6, 4096, decode));
+        remember_published_app_cache_hint(&mut hints, CachedPageKey::new(PageId(6), 4096, decode));
 
         assert!(should_skip_published_app_cache_hint(
-            &hints, false, 6, 4096, decode
+            &hints,
+            false,
+            PageId(6),
+            4096,
+            decode
         ));
         assert!(!should_skip_published_app_cache_hint(
-            &hints, true, 6, 4096, decode
+            &hints,
+            true,
+            PageId(6),
+            4096,
+            decode
         ));
     }
 
@@ -287,20 +306,137 @@ mod tests {
         let decode = DecodeOptions::default();
         let mut hints = PublishedAppCacheHints::new();
         for index in 0..=PUBLISHED_APP_CACHE_HINT_LIMIT {
-            remember_published_app_cache_hint(&mut hints, CachedPageKey::new(index, 4096, decode));
+            remember_published_app_cache_hint(
+                &mut hints,
+                CachedPageKey::new(PageId(index as u32), 4096, decode),
+            );
         }
 
         assert_eq!(hints.len(), PUBLISHED_APP_CACHE_HINT_LIMIT);
         assert!(!should_skip_published_app_cache_hint(
-            &hints, false, 0, 4096, decode
+            &hints,
+            false,
+            PageId(0),
+            4096,
+            decode
         ));
         assert!(should_skip_published_app_cache_hint(
             &hints,
             false,
-            PUBLISHED_APP_CACHE_HINT_LIMIT,
+            PageId(PUBLISHED_APP_CACHE_HINT_LIMIT as u32),
             4096,
             decode
         ));
+    }
+
+    #[test]
+    fn worker_cache_key_survives_same_book_snapshot_swap() {
+        // A refresh inserts a new page at the front: the page interned as id 0
+        // keeps id 0 but moves from index 0 to index 1. Its worker LRU key is
+        // built from (book_id, page_id), so it must be identical across the swap
+        // even though the index changed.
+        let before: SharedSource = Arc::new(RemapSource {
+            book_id: "same-book".to_owned(),
+            instance_id: 1,
+            index_to_id: vec![0, 1],
+        });
+        let after: SharedSource = Arc::new(RemapSource {
+            book_id: "same-book".to_owned(),
+            instance_id: 2,
+            index_to_id: vec![2, 0, 1],
+        });
+        let decode = DecodeOptions::default();
+
+        let before_index = 0;
+        let after_index = 1;
+        assert_ne!(before_index, after_index);
+        let before_id = before.page_id(before_index).unwrap();
+        let after_id = after.page_id(after_index).unwrap();
+        assert_eq!(before_id, after_id);
+
+        let before_key = page_cache_key(before.book_id(), before_id, 2048, decode);
+        let after_key = page_cache_key(after.book_id(), after_id, 2048, decode);
+        assert_eq!(before_key, after_key);
+    }
+
+    #[test]
+    fn update_book_epoch_bumps_on_instance_change_and_book_change_only() {
+        let decode_source = |book_id: &str, instance_id: u64| -> SharedSource {
+            Arc::new(RemapSource {
+                book_id: book_id.to_owned(),
+                instance_id,
+                index_to_id: vec![0],
+            })
+        };
+
+        // Same book_id, instance id changes (a real refresh): bump.
+        let mut epoch = 0;
+        let source = Some(decode_source("book", 2));
+        update_book_epoch(&mut epoch, &source, Some("book"), Some(1));
+        assert_eq!(epoch, 1);
+
+        // book_id changes with test-fake instance 0 on both sides: bump.
+        let mut epoch = 0;
+        let source = Some(decode_source("next", 0));
+        update_book_epoch(&mut epoch, &source, Some("book"), Some(0));
+        assert_eq!(epoch, 1);
+
+        // Nothing changed: no bump.
+        let mut epoch = 0;
+        let source = Some(decode_source("book", 5));
+        update_book_epoch(&mut epoch, &source, Some("book"), Some(5));
+        assert_eq!(epoch, 0);
+    }
+
+    struct RemapSource {
+        book_id: String,
+        instance_id: u64,
+        index_to_id: Vec<u32>,
+    }
+
+    impl BookSource for RemapSource {
+        fn title(&self) -> &str {
+            "remap"
+        }
+
+        fn source_path(&self) -> &Path {
+            Path::new("remap-source")
+        }
+
+        fn book_id(&self) -> &str {
+            &self.book_id
+        }
+
+        fn page_count(&self) -> usize {
+            self.index_to_id.len()
+        }
+
+        fn page_name(&self, index: usize) -> Option<&str> {
+            (index < self.index_to_id.len()).then_some("page.png")
+        }
+
+        fn read_page(&self, index: usize) -> Result<Vec<u8>, SourceError> {
+            if index < self.index_to_id.len() {
+                Ok(vec![0])
+            } else {
+                Err(SourceError::InvalidPage {
+                    index,
+                    page_count: self.index_to_id.len(),
+                })
+            }
+        }
+
+        fn page_id(&self, index: usize) -> Option<PageId> {
+            self.index_to_id.get(index).copied().map(PageId)
+        }
+
+        fn page_index_for_id(&self, id: PageId) -> Option<usize> {
+            self.index_to_id.iter().position(|&mapped| mapped == id.0)
+        }
+
+        fn source_instance_id(&self) -> u64 {
+            self.instance_id
+        }
     }
 
     fn test_prepared_page(byte_size: usize, target_long_edge: u32) -> PreparedPage {

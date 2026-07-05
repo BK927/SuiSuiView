@@ -1,7 +1,7 @@
 use super::cache::{page_cache_key, should_skip_published_app_cache_hint, PublishedAppCacheHints};
 use super::scheduler::{is_visible_page_index, should_skip_ai_preview_or_prefetch, PageJob};
 use super::{PreparedPage, WorkerCommand, WorkerOptions};
-use crate::core::source::{PageReadHint, SharedSource};
+use crate::core::source::{PageId, PageReadHint, SharedSource};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::{perf_trace, perf_trace::PerfField};
 use crossbeam_channel::Receiver;
@@ -15,6 +15,7 @@ const READ_AHEAD_STACK_BYTES: usize = 256 * 1024;
 pub(super) struct ReadAhead {
     book_id: String,
     book_epoch: usize,
+    page_id: PageId,
     index: usize,
     handle: Option<JoinHandle<ReadAheadResult>>,
 }
@@ -28,6 +29,7 @@ impl ReadAhead {
         source: SharedSource,
         book_id: String,
         book_epoch: usize,
+        page_id: PageId,
         index: usize,
     ) -> Self {
         let handle = thread::Builder::new()
@@ -53,13 +55,14 @@ impl ReadAhead {
         Self {
             book_id,
             book_epoch,
+            page_id,
             index,
             handle: Some(handle),
         }
     }
 
-    pub(super) fn matches(&self, book_id: &str, book_epoch: usize, index: usize) -> bool {
-        self.book_id == book_id && self.book_epoch == book_epoch && self.index == index
+    pub(super) fn matches(&self, book_id: &str, book_epoch: usize, page_id: PageId) -> bool {
+        self.book_id == book_id && self.book_epoch == book_epoch && self.page_id == page_id
     }
 
     pub(super) fn finish(mut self, reason: &'static str) -> Result<Vec<u8>, String> {
@@ -134,11 +137,15 @@ pub(super) fn maybe_start(
     ) else {
         return;
     };
+    let Some(page_id) = source.page_id(job.index) else {
+        return;
+    };
 
     *read_ahead = Some(ReadAhead::start(
         source.clone(),
         book_id.to_owned(),
         book_epoch,
+        page_id,
         job.index,
     ));
 }
@@ -164,17 +171,20 @@ pub(super) fn next_job(
         ) {
             return false;
         }
-        let key = page_cache_key(book_id, job.index, job.target_long_edge, options.decode);
+        let Some(page_id) = source.page_id(job.index) else {
+            return false;
+        };
+        let key = page_cache_key(book_id, page_id, job.target_long_edge, options.decode);
         if cache.peek(&key).is_some() {
             return false;
         }
-        if options.app_cache_covers(job.index, job.target_long_edge) {
+        if options.app_cache_covers(page_id, job.target_long_edge) {
             return false;
         }
         !should_skip_published_app_cache_hint(
             published_app_cache_hints,
             is_visible_page_index(job.index, center, visible_pages),
-            job.index,
+            page_id,
             job.target_long_edge,
             options.decode,
         )
@@ -185,11 +195,11 @@ pub(super) fn consume_matching(
     pending: &mut Option<ReadAhead>,
     book_id: &str,
     book_epoch: usize,
-    index: usize,
+    page_id: PageId,
 ) -> Option<Result<Vec<u8>, String>> {
     if pending
         .as_ref()
-        .is_some_and(|read| read.matches(book_id, book_epoch, index))
+        .is_some_and(|read| read.matches(book_id, book_epoch, page_id))
     {
         return pending.take().map(|read| read.finish("consume"));
     }
@@ -202,12 +212,12 @@ pub(super) fn clear_matching(
     pending: &mut Option<ReadAhead>,
     book_id: &str,
     book_epoch: usize,
-    index: usize,
+    page_id: PageId,
     reason: &'static str,
 ) {
     if pending
         .as_ref()
-        .is_some_and(|read| read.matches(book_id, book_epoch, index))
+        .is_some_and(|read| read.matches(book_id, book_epoch, page_id))
     {
         clear_pending(pending, reason);
     }
@@ -324,7 +334,7 @@ mod tests {
         clear_pending, consume_matching, maybe_start, PageJob, PublishedAppCacheHints, ReadAhead,
         WorkerCommand, WorkerOptions,
     };
-    use crate::core::source::{BookSource, SharedSource, SourceError};
+    use crate::core::source::{BookSource, PageId, SharedSource, SourceError};
     use crossbeam_channel::unbounded;
     use lru::LruCache;
     use std::num::NonZeroUsize;
@@ -339,13 +349,30 @@ mod tests {
             path: PathBuf::from("static-source"),
             bytes: vec![1, 2, 3, 4],
         });
-        let read = ReadAhead::start(source, "book".to_owned(), 7, 1);
+        let read = ReadAhead::start(source, "book".to_owned(), 7, PageId(1), 1);
 
-        assert!(read.matches("book", 7, 1));
-        assert!(!read.matches("book", 8, 1));
-        assert!(!read.matches("other", 7, 1));
-        assert!(!read.matches("book", 7, 2));
+        assert!(read.matches("book", 7, PageId(1)));
+        assert!(!read.matches("book", 8, PageId(1)));
+        assert!(!read.matches("other", 7, PageId(1)));
+        assert!(!read.matches("book", 7, PageId(2)));
         assert_eq!(read.finish("test").unwrap(), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn read_ahead_matches_page_id_not_index_and_rejects_post_swap_epoch() {
+        // A read spawned pre-swap carries page_id 5 while sitting at index 0. It
+        // matches on page_id (not index), and a post-swap request (bumped epoch)
+        // no longer matches even at the same page_id.
+        let source: SharedSource = Arc::new(StaticSource {
+            path: PathBuf::from("static-source"),
+            bytes: vec![1, 2, 3, 4],
+        });
+        let read = ReadAhead::start(source, "book".to_owned(), 7, PageId(5), 0);
+
+        assert!(read.matches("book", 7, PageId(5)));
+        assert!(!read.matches("book", 7, PageId(0)));
+        assert!(!read.matches("book", 8, PageId(5)));
+        let _ = read.finish("test");
     }
 
     #[test]
@@ -391,7 +418,7 @@ mod tests {
         );
 
         assert_eq!(
-            consume_matching(&mut pending, "book", 7, 1)
+            consume_matching(&mut pending, "book", 7, PageId(1))
                 .unwrap()
                 .unwrap(),
             vec![1, 2, 3, 4]
@@ -414,7 +441,7 @@ mod tests {
             release_rx: Mutex::new(release_rx),
             done_tx,
         });
-        let mut pending = Some(ReadAhead::start(source, "book".to_owned(), 7, 1));
+        let mut pending = Some(ReadAhead::start(source, "book".to_owned(), 7, PageId(1), 1));
         started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
 
         let started = Instant::now();

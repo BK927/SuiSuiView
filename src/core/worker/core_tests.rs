@@ -5,7 +5,7 @@ use super::{
     DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, WorkerCommand, WorkerEvent,
     WorkerOptions, MAX_ORIGINAL_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE,
 };
-use crate::core::source::{BookSource, SharedSource, SourceError};
+use crate::core::source::{BookSource, PageId, SharedSource, SourceError};
 use crate::core::state::{CpuScaleFilter, DecoderPreference, DecoderPreferences};
 use crossbeam_channel::unbounded;
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
@@ -395,14 +395,14 @@ fn worker_publishes_completed_page_before_handling_queued_command() {
 #[test]
 fn cached_page_key_covers_same_page_decode_and_sufficient_size() {
     let decode = DecodeOptions::default();
-    let key = CachedPageKey::new(3, 2048, decode);
+    let key = CachedPageKey::new(PageId(3), 2048, decode);
 
-    assert!(key.covers(3, 1024, decode));
-    assert!(key.covers(3, 2048, decode));
-    assert!(!key.covers(3, 4096, decode));
-    assert!(!key.covers(4, 1024, decode));
+    assert!(key.covers(PageId(3), 1024, decode));
+    assert!(key.covers(PageId(3), 2048, decode));
+    assert!(!key.covers(PageId(3), 4096, decode));
+    assert!(!key.covers(PageId(4), 1024, decode));
     assert!(!key.covers(
-        3,
+        PageId(3),
         1024,
         DecodeOptions {
             apply_embedded_icc: true,
@@ -410,9 +410,9 @@ fn cached_page_key_covers_same_page_decode_and_sufficient_size() {
         }
     ));
 
-    let original_key = CachedPageKey::new(3, MAX_TARGET_LONG_EDGE + 1, decode);
-    assert!(original_key.covers(3, MAX_TARGET_LONG_EDGE + 1, decode));
-    assert!(!original_key.covers(3, MAX_TARGET_LONG_EDGE, decode));
+    let original_key = CachedPageKey::new(PageId(3), MAX_TARGET_LONG_EDGE + 1, decode);
+    assert!(original_key.covers(PageId(3), MAX_TARGET_LONG_EDGE + 1, decode));
+    assert!(!original_key.covers(PageId(3), MAX_TARGET_LONG_EDGE, decode));
 }
 
 fn encoded_test_image(format: ImageFormat) -> Vec<u8> {

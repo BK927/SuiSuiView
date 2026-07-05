@@ -1,7 +1,7 @@
 use crate::core::decoder_backend::{self, DecoderFormat};
 use crate::core::formats::unsupported_message_for_bytes;
 use crate::core::perf_trace::{self, PerfField};
-use crate::core::source::SharedSource;
+use crate::core::source::{PageId, SharedSource};
 use crate::core::state::{CpuScaleFilter, DecoderPreferences};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use egui::{Color32, ColorImage, Context};
@@ -374,27 +374,29 @@ impl DecodeOptions {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CachedPageKey {
-    pub index: usize,
+    pub page_id: PageId,
     pub target_long_edge: u32,
     pub decode: DecodeOptions,
 }
 
 impl CachedPageKey {
-    pub fn new(index: usize, target_long_edge: u32, decode: DecodeOptions) -> Self {
+    pub fn new(page_id: PageId, target_long_edge: u32, decode: DecodeOptions) -> Self {
         Self {
-            index,
+            page_id,
             target_long_edge: clamp_target_long_edge(target_long_edge),
             decode,
         }
     }
 
-    fn covers(self, index: usize, target_long_edge: u32, decode: DecodeOptions) -> bool {
+    fn covers(self, page_id: PageId, target_long_edge: u32, decode: DecodeOptions) -> bool {
         let requested_target = clamp_target_long_edge(target_long_edge);
         if requested_target <= MAX_TARGET_LONG_EDGE && self.target_long_edge > MAX_TARGET_LONG_EDGE
         {
             return false;
         }
-        self.index == index && self.decode == decode && self.target_long_edge >= requested_target
+        self.page_id == page_id
+            && self.decode == decode
+            && self.target_long_edge >= requested_target
     }
 }
 
@@ -429,10 +431,10 @@ impl WorkerOptions {
         }
     }
 
-    fn app_cache_covers(&self, index: usize, target_long_edge: u32) -> bool {
+    fn app_cache_covers(&self, page_id: PageId, target_long_edge: u32) -> bool {
         self.app_cached_pages
             .iter()
-            .any(|cached| cached.covers(index, target_long_edge, self.decode))
+            .any(|cached| cached.covers(page_id, target_long_edge, self.decode))
     }
 }
 
@@ -520,12 +522,14 @@ impl DecodeBackend {
 pub enum WorkerEvent {
     PageReady {
         book_id: String,
+        page_id: PageId,
         index: usize,
         decode: DecodeOptions,
         page: Arc<PreparedPage>,
     },
     PageFailed {
         book_id: String,
+        page_id: PageId,
         index: usize,
         target_long_edge: u32,
         decode: DecodeOptions,
@@ -960,6 +964,7 @@ fn run_worker(
         };
         clear_pending_read_ahead(&mut read_ahead, "command");
         let previous_book_id = source.as_ref().map(|source| source.book_id().to_owned());
+        let previous_instance_id = source.as_ref().map(|source| source.source_instance_id());
         let previous_decode = options.decode;
         let previous_target_long_edge = target_long_edge;
         if !apply_command(
@@ -973,7 +978,12 @@ fn run_worker(
         ) {
             break;
         }
-        update_book_epoch(&mut book_epoch, &source, previous_book_id.as_deref());
+        update_book_epoch(
+            &mut book_epoch,
+            &source,
+            previous_book_id.as_deref(),
+            previous_instance_id,
+        );
         clear_published_app_cache_hints_on_context_change(
             &source,
             previous_book_id.as_deref(),
@@ -1049,6 +1059,9 @@ fn run_worker(
                 if shutdown_requested.load(Ordering::Acquire) {
                     break 'work;
                 }
+                let Some(page_id) = active_source.page_id(job.index) else {
+                    continue;
+                };
                 if should_skip_ai_preview_or_prefetch(
                     active_source.page_name(job.index),
                     center,
@@ -1062,6 +1075,8 @@ fn run_worker(
                     clear_pending_read_ahead(&mut read_ahead, "command");
                     let previous_book_id =
                         source.as_ref().map(|source| source.book_id().to_owned());
+                    let previous_instance_id =
+                        source.as_ref().map(|source| source.source_instance_id());
                     let previous_decode = options.decode;
                     let previous_target_long_edge = target_long_edge;
                     if !apply_command(
@@ -1075,7 +1090,12 @@ fn run_worker(
                     ) {
                         return;
                     }
-                    update_book_epoch(&mut book_epoch, &source, previous_book_id.as_deref());
+                    update_book_epoch(
+                        &mut book_epoch,
+                        &source,
+                        previous_book_id.as_deref(),
+                        previous_instance_id,
+                    );
                     clear_published_app_cache_hints_on_context_change(
                         &source,
                         previous_book_id.as_deref(),
@@ -1118,7 +1138,7 @@ fn run_worker(
                     continue 'work;
                 }
 
-                let key = page_cache_key(&book_id, job.index, job.target_long_edge, options.decode);
+                let key = page_cache_key(&book_id, page_id, job.target_long_edge, options.decode);
                 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
                 perf_trace::record_duration(
                     "page_worker_job_start",
@@ -1132,6 +1152,7 @@ fn run_worker(
                 if let Some(page) = cache.get(&key).cloned() {
                     let _ = event_tx.send(WorkerEvent::PageReady {
                         book_id: book_id.clone(),
+                        page_id,
                         index: job.index,
                         decode: options.decode,
                         page,
@@ -1160,15 +1181,15 @@ fn run_worker(
                     ctx.request_repaint();
                     remember_published_app_cache_hint(
                         &mut published_app_cache_hints,
-                        CachedPageKey::new(job.index, job.target_long_edge, options.decode),
+                        CachedPageKey::new(page_id, job.target_long_edge, options.decode),
                     );
                     continue;
                 }
-                if options.app_cache_covers(job.index, job.target_long_edge)
+                if options.app_cache_covers(page_id, job.target_long_edge)
                     || should_skip_published_app_cache_hint(
                         &published_app_cache_hints,
                         is_visible_page_index(job.index, center, visible_pages),
-                        job.index,
+                        page_id,
                         job.target_long_edge,
                         options.decode,
                     )
@@ -1180,7 +1201,7 @@ fn run_worker(
                     &mut decode_ahead,
                     &book_id,
                     book_epoch,
-                    job.index,
+                    page_id,
                     job.target_long_edge,
                     options.decode,
                 )
@@ -1191,6 +1212,7 @@ fn run_worker(
                         &active_source,
                         &book_id,
                         book_epoch,
+                        page_id,
                         job.index,
                     );
                     if shutdown_requested.load(Ordering::Acquire) {
@@ -1282,13 +1304,14 @@ fn run_worker(
                         }
                         let _ = event_tx.send(WorkerEvent::PageReady {
                             book_id: book_id.clone(),
+                            page_id,
                             index: job.index,
                             decode: options.decode,
                             page: page.clone(),
                         });
                         remember_published_app_cache_hint(
                             &mut published_app_cache_hints,
-                            CachedPageKey::new(job.index, job.target_long_edge, options.decode),
+                            CachedPageKey::new(page_id, job.target_long_edge, options.decode),
                         );
                         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
                         perf_trace::record_duration(
@@ -1331,6 +1354,8 @@ fn run_worker(
                             clear_pending_read_ahead(&mut read_ahead, "command");
                             let previous_book_id =
                                 source.as_ref().map(|source| source.book_id().to_owned());
+                            let previous_instance_id =
+                                source.as_ref().map(|source| source.source_instance_id());
                             let previous_decode = options.decode;
                             let previous_target_long_edge = target_long_edge;
                             if !apply_command(
@@ -1348,6 +1373,7 @@ fn run_worker(
                                 &mut book_epoch,
                                 &source,
                                 previous_book_id.as_deref(),
+                                previous_instance_id,
                             );
                             clear_published_app_cache_hints_on_context_change(
                                 &source,
@@ -1394,6 +1420,7 @@ fn run_worker(
                     Err(message) => {
                         let _ = event_tx.send(WorkerEvent::PageFailed {
                             book_id: book_id.clone(),
+                            page_id,
                             index: job.index,
                             target_long_edge: job.target_long_edge,
                             decode: options.decode,
