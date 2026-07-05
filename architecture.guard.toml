@@ -52,9 +52,9 @@ remediation = [
 # when the referenced work settles, then lower the baseline.
 
 [[files]]
-path = "src/app/gpu_paint.rs"
+path = "src/app/gpu_paint/mod.rs"
 kind = "legacy-large"
-baseline_lines = 2703
+baseline_lines = 2074
 growth_warn_lines = 80
 growth_fail_lines = 160
 purpose = "WGPU paint bridge: display upscaler/downscaler routing, real-time SR pass wiring, and egui-wgpu callback state."
