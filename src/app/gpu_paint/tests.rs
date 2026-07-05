@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::core::worker::DecodeOptions;
 use egui::{pos2, vec2};
