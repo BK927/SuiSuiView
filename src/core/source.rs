@@ -3,6 +3,7 @@ use crate::core::formats::{
 };
 use crate::core::natural::cmp_natural;
 use blake3::Hasher;
+use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -10,6 +11,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 use zip::ZipArchive;
+
+mod page_identity;
+use page_identity::next_source_instance_id;
+pub use page_identity::{PageId, PageIdInterner};
 
 pub type SharedSource = Arc<dyn BookSource>;
 const MAX_SOURCE_PAGE_BYTES: u64 = 256 * 1024 * 1024;
@@ -42,6 +47,25 @@ pub trait BookSource: Send + Sync {
             .map(|name| format!("{}::{name}", self.source_path().display()))
     }
     fn read_page(&self, index: usize) -> Result<Vec<u8>, SourceError>;
+    /// Stable identity of the page at `index` in this snapshot.
+    fn page_id(&self, index: usize) -> Option<PageId> {
+        (index < self.page_count()).then_some(PageId(index as u32))
+    }
+    /// Current position of `id` in this snapshot (None if the page vanished).
+    fn page_index_for_id(&self, id: PageId) -> Option<usize> {
+        let index = id.0 as usize;
+        (index < self.page_count()).then_some(index)
+    }
+    /// Monotonic per-snapshot instance id; changes whenever a rebuilt snapshot is
+    /// swapped in. 0 = source kind that never refreshes and predates instancing.
+    fn source_instance_id(&self) -> u64 {
+        0
+    }
+    /// Folder sources rebuild a fresh snapshot of the same book (shared interner,
+    /// frozen book_id, new instance id). None = source kind cannot refresh.
+    fn refresh_snapshot(&self) -> Option<Result<SharedSource, SourceError>> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,6 +327,11 @@ pub struct FolderSource {
     title: String,
     book_id: String,
     pages: Vec<FolderPage>,
+    page_ids: Vec<PageId>,
+    index_by_id: HashMap<PageId, usize>,
+    interner: Arc<PageIdInterner>,
+    instance_id: u64,
+    recursive: bool,
 }
 
 struct FolderPage {
@@ -316,17 +345,23 @@ impl FolderSource {
         let root = path.as_ref().to_path_buf();
         let mut pages = Vec::new();
         collect_folder_pages(&root, &root, &mut pages)?;
-        Self::from_pages(root, pages)
+        Self::from_pages_with(root, pages, Arc::new(PageIdInterner::new()), None, true)
     }
 
     pub fn open_direct(path: impl AsRef<Path>) -> Result<Self, SourceError> {
         let root = path.as_ref().to_path_buf();
         let mut pages = Vec::new();
         collect_direct_folder_pages(&root, &mut pages)?;
-        Self::from_pages(root, pages)
+        Self::from_pages_with(root, pages, Arc::new(PageIdInterner::new()), None, false)
     }
 
-    fn from_pages(root: PathBuf, mut pages: Vec<FolderPage>) -> Result<Self, SourceError> {
+    fn from_pages_with(
+        root: PathBuf,
+        mut pages: Vec<FolderPage>,
+        interner: Arc<PageIdInterner>,
+        frozen_book_id: Option<String>,
+        recursive: bool,
+    ) -> Result<Self, SourceError> {
         pages.sort_by(|a, b| cmp_natural(&a.relative_name, &b.relative_name));
         if pages.is_empty() {
             return Err(SourceError::NoPages(root));
@@ -337,13 +372,29 @@ impl FolderSource {
             .and_then(|name| name.to_str())
             .unwrap_or("Folder")
             .to_owned();
-        let book_id = folder_book_id(&pages);
+        let book_id = frozen_book_id.unwrap_or_else(|| folder_book_id(&pages));
+
+        let page_ids: Vec<PageId> = pages
+            .iter()
+            .map(|page| interner.intern(&page.relative_name))
+            .collect();
+        let index_by_id = page_ids
+            .iter()
+            .enumerate()
+            .map(|(index, &id)| (id, index))
+            .collect();
+        let instance_id = next_source_instance_id();
 
         Ok(Self {
             root,
             title,
             book_id,
             pages,
+            page_ids,
+            index_by_id,
+            interner,
+            instance_id,
+            recursive,
         })
     }
 
@@ -421,6 +472,44 @@ impl BookSource for FolderSource {
             .read_to_end(&mut bytes)?;
         Ok(bytes)
     }
+
+    fn page_id(&self, index: usize) -> Option<PageId> {
+        self.page_ids.get(index).copied()
+    }
+
+    fn page_index_for_id(&self, id: PageId) -> Option<usize> {
+        self.index_by_id.get(&id).copied()
+    }
+
+    fn source_instance_id(&self) -> u64 {
+        self.instance_id
+    }
+
+    fn refresh_snapshot(&self) -> Option<Result<SharedSource, SourceError>> {
+        let root = self.root.clone();
+        let mut pages = Vec::new();
+        let collected = if self.recursive {
+            collect_folder_pages(&root, &root, &mut pages)
+        } else {
+            collect_direct_folder_pages(&root, &mut pages)
+        };
+        if let Err(error) = collected {
+            return Some(Err(error));
+        }
+        if pages.is_empty() {
+            return Some(Err(SourceError::NoPages(root)));
+        }
+        Some(
+            Self::from_pages_with(
+                root,
+                pages,
+                self.interner.clone(),
+                Some(self.book_id.clone()),
+                self.recursive,
+            )
+            .map(|source| Arc::new(source) as SharedSource),
+        )
+    }
 }
 
 pub struct ZipCbzSource {
@@ -429,6 +518,7 @@ pub struct ZipCbzSource {
     book_id: String,
     pages: Vec<ZipPage>,
     archive: Mutex<ZipArchive<File>>,
+    instance_id: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -489,6 +579,7 @@ impl ZipCbzSource {
             book_id,
             pages,
             archive: Mutex::new(archive),
+            instance_id: next_source_instance_id(),
         })
     }
 }
@@ -575,6 +666,10 @@ impl BookSource for ZipCbzSource {
             .take(max_bytes as u64)
             .read_to_end(&mut bytes)?;
         Ok(bytes)
+    }
+
+    fn source_instance_id(&self) -> u64 {
+        self.instance_id
     }
 }
 
