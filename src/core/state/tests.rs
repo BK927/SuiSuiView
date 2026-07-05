@@ -18,6 +18,34 @@ fn old_state_without_settings_loads_defaults() {
 }
 
 #[test]
+fn window_placement_without_physical_position_loads_none() {
+    let state: PersistedState = serde_json::from_str(
+        r#"{"version":1,"window":{"inner_size":[1280.0,820.0],"outer_position":[100.0,120.0],"maximized":false},"books":{}}"#,
+    )
+    .unwrap();
+
+    assert_eq!(state.window.inner_size, Some([1280.0, 820.0]));
+    assert_eq!(state.window.outer_position, Some([100.0, 120.0]));
+    assert_eq!(state.window.outer_position_px, None);
+}
+
+#[test]
+fn window_placement_round_trip_keeps_physical_position() {
+    let placement = WindowPlacement {
+        inner_size: Some([1280.0, 820.0]),
+        outer_position: Some([100.0, 120.0]),
+        outer_position_px: Some([150, 180]),
+        maximized: false,
+    };
+
+    let json = serde_json::to_string(&placement).unwrap();
+    let round_trip: WindowPlacement = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(round_trip, placement);
+    assert_eq!(round_trip.outer_position_px, Some([150, 180]));
+}
+
+#[test]
 fn old_settings_without_decoder_preferences_load_defaults() {
     let state: PersistedState =
         serde_json::from_str(r#"{"version":1,"settings":{},"books":{}}"#).unwrap();

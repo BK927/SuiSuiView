@@ -450,6 +450,8 @@ pub struct WindowPlacement {
     #[serde(default)]
     pub outer_position: Option<[f32; 2]>,
     #[serde(default)]
+    pub outer_position_px: Option<[i32; 2]>,
+    #[serde(default)]
     pub maximized: bool,
 }
 

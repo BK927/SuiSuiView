@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use crate::core::state::StateStore;
+use crate::core::state::{StateStore, WindowPlacement};
 use egui_winit::winit;
 use std::ffi::{c_void, CString};
 use std::num::NonZeroU32;
@@ -182,16 +182,57 @@ fn startup_window_attributes(
         .with_title("SuiSuiView")
         .with_window_icon(window_icon(icon))
         .with_visible(false);
-    if let Some(position) = valid_window_position(placement) {
-        attributes = attributes.with_position(winit::dpi::LogicalPosition::new(
-            f64::from(position[0]),
-            f64::from(position[1]),
-        ));
+    match startup_position(placement) {
+        StartupPosition::Physical([x, y]) => {
+            attributes = attributes.with_position(winit::dpi::PhysicalPosition::new(x, y));
+        }
+        StartupPosition::Logical([x, y]) => {
+            attributes = attributes
+                .with_position(winit::dpi::LogicalPosition::new(f64::from(x), f64::from(y)));
+        }
+        StartupPosition::OsDefault => {}
     }
     if placement.maximized {
         attributes = attributes.with_maximized(true);
     }
     attributes
+}
+
+/// How the saved outer position should be restored. Physical is preferred
+/// because it is scale-free on Windows and survives mixed-DPI restarts; the
+/// legacy logical value is a fallback for state saved by an older build, and
+/// `OsDefault` leaves placement to the OS when nothing valid was saved.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum StartupPosition {
+    Physical([i32; 2]),
+    Logical([f32; 2]),
+    OsDefault,
+}
+
+/// Choose the restore position, preferring the scale-free physical value over
+/// the legacy logical one. The physical value is only probed on Windows, where
+/// `valid_window_position_px` checks it still lands on the connected desktop.
+fn startup_position(placement: &WindowPlacement) -> StartupPosition {
+    #[cfg(target_os = "windows")]
+    let valid_px = valid_window_position_px(placement);
+    #[cfg(not(target_os = "windows"))]
+    let valid_px = None;
+    select_startup_position(valid_px, valid_window_position(placement))
+}
+
+/// Pure position-selection order (physical over legacy logical over OS
+/// default), split out so the preference is unit-testable without Win32.
+fn select_startup_position(
+    valid_px: Option<[i32; 2]>,
+    valid_logical: Option<[f32; 2]>,
+) -> StartupPosition {
+    if let Some(position) = valid_px {
+        return StartupPosition::Physical(position);
+    }
+    if let Some(position) = valid_logical {
+        return StartupPosition::Logical(position);
+    }
+    StartupPosition::OsDefault
 }
 
 /// Create a plain winit window (no OpenGL context) for the WGPU-direct startup
@@ -268,4 +309,141 @@ fn valid_window_size(
 fn valid_window_position(placement: &crate::core::state::WindowPlacement) -> Option<[f32; 2]> {
     let [x, y] = placement.outer_position?;
     (x.is_finite() && y.is_finite()).then_some([x, y])
+}
+
+/// Physical position of the virtual screen (the union of all monitors), in the
+/// same scale-free coordinate space as the saved physical outer position.
+#[derive(Debug, Clone, Copy)]
+struct ScreenRect {
+    left: i32,
+    top: i32,
+    width: i32,
+    height: i32,
+}
+
+/// Saved physical position, if it still lands on the connected desktop. The
+/// probe point (a spot inside the title bar) must lie within the virtual
+/// screen, so a stale position from a disconnected monitor is discarded and
+/// the OS default placement is used instead.
+#[cfg(target_os = "windows")]
+fn valid_window_position_px(placement: &WindowPlacement) -> Option<[i32; 2]> {
+    let position = placement.outer_position_px?;
+    let screen = virtual_screen_rect()?;
+    position_probe_on_virtual_screen(position, screen).then_some(position)
+}
+
+/// The desktop bounding box spanning every monitor, read from Win32. Returns
+/// `None` if the reported size is degenerate (no usable desktop).
+#[cfg(target_os = "windows")]
+fn virtual_screen_rect() -> Option<ScreenRect> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+        SM_YVIRTUALSCREEN,
+    };
+
+    let (left, top, width, height) = unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        )
+    };
+    (width > 0 && height > 0).then_some(ScreenRect {
+        left,
+        top,
+        width,
+        height,
+    })
+}
+
+/// Pure check that a saved physical position still lands on the desktop: a
+/// point just inside the title bar (32 px right, 16 px down from the corner)
+/// must fall within `screen`. The right/bottom edges are exclusive, matching
+/// the half-open virtual-screen span.
+fn position_probe_on_virtual_screen(position: [i32; 2], screen: ScreenRect) -> bool {
+    let probe_x = position[0] + 32;
+    let probe_y = position[1] + 16;
+    probe_x >= screen.left
+        && probe_y >= screen.top
+        && probe_x < screen.left + screen.width
+        && probe_y < screen.top + screen.height
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        position_probe_on_virtual_screen, select_startup_position, ScreenRect, StartupPosition,
+    };
+
+    const SCREEN: ScreenRect = ScreenRect {
+        left: 0,
+        top: 0,
+        width: 1920,
+        height: 1080,
+    };
+
+    #[test]
+    fn probe_accepts_position_inside_virtual_screen() {
+        assert!(position_probe_on_virtual_screen([100, 120], SCREEN));
+    }
+
+    #[test]
+    fn probe_rejects_position_left_of_virtual_screen() {
+        // Probe adds +32 to x; -64 leaves the probe point at x = -32.
+        assert!(!position_probe_on_virtual_screen([-64, 120], SCREEN));
+    }
+
+    #[test]
+    fn probe_rejects_position_below_virtual_screen() {
+        // Probe adds +16 to y; 1080 leaves the probe point at y = 1096.
+        assert!(!position_probe_on_virtual_screen([100, 1080], SCREEN));
+    }
+
+    #[test]
+    fn probe_accepts_position_with_probe_point_exactly_on_top_left_edge() {
+        // Probe point [-32 + 32, -16 + 16] = [0, 0] lands on the inclusive
+        // top-left edge of the screen.
+        assert!(position_probe_on_virtual_screen([-32, -16], SCREEN));
+    }
+
+    #[test]
+    fn probe_rejects_position_with_probe_point_on_exclusive_right_edge() {
+        // Probe point x = 1920 sits on the exclusive right edge.
+        assert!(!position_probe_on_virtual_screen([1888, 120], SCREEN));
+    }
+
+    #[test]
+    fn startup_position_prefers_physical_when_both_present() {
+        assert_eq!(
+            select_startup_position(Some([200, 150]), Some([120.0, 90.0])),
+            StartupPosition::Physical([200, 150])
+        );
+    }
+
+    #[test]
+    fn startup_position_uses_legacy_logical_when_physical_absent() {
+        assert_eq!(
+            select_startup_position(None, Some([120.0, 90.0])),
+            StartupPosition::Logical([120.0, 90.0])
+        );
+    }
+
+    #[test]
+    fn startup_position_falls_back_to_legacy_when_physical_probe_fails() {
+        // `startup_position` passes `None` for the physical slot when the probe
+        // rejects a stale off-screen position, so the legacy value is used.
+        assert_eq!(
+            select_startup_position(None, Some([120.0, 90.0])),
+            StartupPosition::Logical([120.0, 90.0])
+        );
+    }
+
+    #[test]
+    fn startup_position_uses_os_default_when_nothing_valid() {
+        assert_eq!(
+            select_startup_position(None, None),
+            StartupPosition::OsDefault
+        );
+    }
 }

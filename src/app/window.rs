@@ -144,6 +144,12 @@ impl SuiSuiViewApp {
             }
         }
 
+        // egui reports no physical geometry on Windows, so the scale-free
+        // physical position comes solely from the native Win32 read.
+        if let Some(position_px) = native.and_then(|state| state.outer_position_px) {
+            placement.outer_position_px = Some(position_px);
+        }
+
         placement.inner_size.map(|_| placement)
     }
 
@@ -228,6 +234,7 @@ struct NativeWindowState {
     minimized: bool,
     maximized: bool,
     outer_position_points: Option<Pos2>,
+    outer_position_px: Option<[i32; 2]>,
 }
 
 // egui/winit (0.32) leaves `ViewportInfo` geometry and minimized/maximized
@@ -278,21 +285,23 @@ fn native_window_state(ppp: f32) -> Option<NativeWindowState> {
         HWND_CACHE.store(hwnd as isize, Ordering::Relaxed);
     }
 
-    let outer_position_points = if ppp.is_finite() && ppp > 0.0 {
-        let mut rect = unsafe { std::mem::zeroed::<RECT>() };
+    let mut rect = unsafe { std::mem::zeroed::<RECT>() };
+    let (outer_position_px, outer_position_points) =
         if unsafe { GetWindowRect(hwnd, &mut rect) } != 0 {
-            Some(egui::pos2(rect.left as f32 / ppp, rect.top as f32 / ppp))
+            // The physical position is scale-free and stored as-is; the logical
+            // position is only meaningful when the current scale is known.
+            let points = (ppp.is_finite() && ppp > 0.0)
+                .then(|| egui::pos2(rect.left as f32 / ppp, rect.top as f32 / ppp));
+            (Some([rect.left, rect.top]), points)
         } else {
-            None
-        }
-    } else {
-        None
-    };
+            (None, None)
+        };
 
     Some(NativeWindowState {
         minimized: unsafe { IsIconic(hwnd) } != 0,
         maximized: unsafe { IsZoomed(hwnd) } != 0,
         outer_position_points,
+        outer_position_px,
     })
 }
 

@@ -12,6 +12,7 @@ fn startup_seed_target_keeps_default_floor_for_normal_windows() {
     let placement = WindowPlacement {
         inner_size: Some([1280.0, 820.0]),
         outer_position: None,
+        outer_position_px: None,
         maximized: false,
     };
 
@@ -26,6 +27,7 @@ fn startup_seed_target_uses_larger_floor_for_maximized_windows() {
     let placement = WindowPlacement {
         inner_size: Some([1280.0, 820.0]),
         outer_position: None,
+        outer_position_px: None,
         maximized: true,
     };
 
@@ -37,6 +39,7 @@ fn startup_seed_target_uses_default_without_stored_size() {
     let placement = WindowPlacement {
         inner_size: None,
         outer_position: None,
+        outer_position_px: None,
         maximized: false,
     };
 

@@ -215,6 +215,7 @@ mod tests {
         let maximized = WindowPlacement {
             inner_size: Some([1280.0, 820.0]),
             outer_position: None,
+            outer_position_px: None,
             maximized: true,
         };
         let windowed = WindowPlacement {
