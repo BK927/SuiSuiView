@@ -117,9 +117,12 @@ impl SuiSuiViewApp {
     }
 
     /// Folder pages can vanish underneath the open snapshot (external delete).
-    /// For user-driven turns, slide over missing files in the same direction.
-    /// Other origins return the target unchanged (ZIP pages cannot individually
-    /// vanish; a single image is one page).
+    /// For user-driven turns, slide over missing files in the same direction —
+    /// this is the responsive half of the vanish handling: the caller
+    /// (`navigate_to_page_turn_target`) also requests an off-thread snapshot
+    /// refresh (`request_folder_refresh`) that converges the page list, count,
+    /// and position by page identity. Other origins return the target unchanged
+    /// (ZIP pages cannot individually vanish; a single image is one page).
     fn skip_missing_page_target(
         &self,
         target: usize,

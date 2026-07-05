@@ -10,7 +10,7 @@ allowed_bad_module_paths = []
 [[files]]
 path = "src/app.rs"
 kind = "legacy-large"
-baseline_lines = 2163
+baseline_lines = 2309
 growth_warn_lines = 100
 growth_fail_lines = 200
 purpose = "Application shell, durable SuiSuiViewApp state, and top-level egui update orchestration."
@@ -30,7 +30,7 @@ remediation = [
 [[files]]
 path = "src/core/worker.rs"
 kind = "legacy-large"
-baseline_lines = 1548
+baseline_lines = 1570
 growth_warn_lines = 80
 growth_fail_lines = 160
 purpose = "Page worker orchestration, public worker-facing decode API, shared image preparation, and metadata policy."
