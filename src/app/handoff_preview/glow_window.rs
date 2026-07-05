@@ -217,7 +217,20 @@ fn startup_position(placement: &WindowPlacement) -> StartupPosition {
     let valid_px = valid_window_position_px(placement);
     #[cfg(not(target_os = "windows"))]
     let valid_px = None;
-    select_startup_position(valid_px, valid_window_position(placement))
+    // The legacy logical value predates the physical field and can carry
+    // garbage accumulated by the old drift bug (observed: -2321 logical from a
+    // desktop whose leftmost physical edge is -1440). Its exact physical spot
+    // depends on a scale we cannot know here, but scales are bounded, so
+    // probing the raw value against the virtual screen rejects far-off-screen
+    // garbage while keeping sane one-time migrations.
+    #[cfg(target_os = "windows")]
+    let valid_logical = valid_window_position(placement).filter(|&[x, y]| {
+        virtual_screen_rect()
+            .is_some_and(|screen| position_probe_on_virtual_screen([x as i32, y as i32], screen))
+    });
+    #[cfg(not(target_os = "windows"))]
+    let valid_logical = valid_window_position(placement);
+    select_startup_position(valid_px, valid_logical)
 }
 
 /// Pure position-selection order (physical over legacy logical over OS
@@ -309,6 +322,39 @@ fn valid_window_size(
 fn valid_window_position(placement: &crate::core::state::WindowPlacement) -> Option<[f32; 2]> {
     let [x, y] = placement.outer_position?;
     (x.is_finite() && y.is_finite()).then_some([x, y])
+}
+
+// TEMP diagnostic: log DPI-relevant window events to a file when SUISUI_DPIDBG
+// is set, to characterize the cross-monitor drag instability.
+pub(super) fn dbg_dpi_event(event: &winit::event::WindowEvent) {
+    use std::sync::OnceLock;
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    if std::env::var_os("SUISUI_DPIDBG").is_none() {
+        return;
+    }
+    let line = match event {
+        winit::event::WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+            format!("ScaleFactorChanged scale={scale_factor}")
+        }
+        winit::event::WindowEvent::Resized(size) => {
+            format!("Resized {}x{}", size.width, size.height)
+        }
+        winit::event::WindowEvent::Moved(pos) => format!("Moved {},{}", pos.x, pos.y),
+        _ => return,
+    };
+    let t = START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f64()
+        * 1000.0;
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("suisui_dpidbg.log"))
+    {
+        let _ = writeln!(f, "t={t:9.2}ms {line}");
+    }
 }
 
 /// Physical position of the virtual screen (the union of all monitors), in the
@@ -411,6 +457,23 @@ mod tests {
     fn probe_rejects_position_with_probe_point_on_exclusive_right_edge() {
         // Probe point x = 1920 sits on the exclusive right edge.
         assert!(!position_probe_on_virtual_screen([1888, 120], SCREEN));
+    }
+
+    #[test]
+    fn probe_rejects_drift_garbage_from_the_field() {
+        // Regression: a real state file carried legacy logical -2321,953
+        // accumulated by the old drift bug; the desktop's leftmost physical
+        // edge was -1440. The legacy fallback must reject it (as-if-physical
+        // probe) instead of restoring the window off-screen.
+        let two_monitor = ScreenRect {
+            left: -1440,
+            top: 0,
+            width: 1440 + 3840,
+            height: 2560,
+        };
+        assert!(!position_probe_on_virtual_screen([-2321, 953], two_monitor));
+        // A sane on-screen legacy value keeps working.
+        assert!(position_probe_on_virtual_screen([200, 150], two_monitor));
     }
 
     #[test]

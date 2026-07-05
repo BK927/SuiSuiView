@@ -654,6 +654,7 @@ impl winit::application::ApplicationHandler<()> for HandoffPreviewApp {
         _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
+        dbg_dpi_event(&event);
         if matches!(
             event,
             winit::event::WindowEvent::CloseRequested | winit::event::WindowEvent::Destroyed
@@ -857,6 +858,8 @@ fn set_process_visible_window_title(title: &str) {
 
 #[cfg(not(target_os = "windows"))]
 fn set_process_visible_window_title(_title: &str) {}
+
+use glow_window::dbg_dpi_event;
 
 fn app_requested_close(viewport_info: &egui::ViewportInfo) -> bool {
     viewport_info
