@@ -17,7 +17,10 @@ impl SuiSuiViewApp {
     pub(in crate::app) fn next_page(&mut self) {
         let direction = NavigationDirection::Forward;
         if let Some(target) = self.page_turn_target(direction) {
-            self.set_page(target, direction);
+            match self.skip_missing_page_target(target, direction) {
+                Some(resolved) => self.set_page(resolved, direction),
+                None => self.handle_edge_page(direction),
+            }
         } else {
             self.handle_edge_page(direction);
         }
@@ -26,7 +29,10 @@ impl SuiSuiViewApp {
     pub(in crate::app) fn previous_page(&mut self) {
         let direction = NavigationDirection::Backward;
         if let Some(target) = self.page_turn_target(direction) {
-            self.set_page(target, direction);
+            match self.skip_missing_page_target(target, direction) {
+                Some(resolved) => self.set_page(resolved, direction),
+                None => self.handle_edge_page(direction),
+            }
         } else {
             self.handle_edge_page(direction);
         }
@@ -85,7 +91,32 @@ impl SuiSuiViewApp {
             self.handle_edge_page(direction);
             return;
         }
-        self.set_page(target, direction);
+        match self.skip_missing_page_target(target, direction) {
+            Some(resolved) => self.set_page(resolved, direction),
+            None => self.handle_edge_page(direction),
+        }
+    }
+
+    /// Folder pages can vanish underneath the open snapshot (external delete).
+    /// For user-driven turns, slide over missing files in the same direction.
+    /// Other origins return the target unchanged (ZIP pages cannot individually
+    /// vanish; a single image is one page).
+    fn skip_missing_page_target(
+        &self,
+        target: usize,
+        direction: NavigationDirection,
+    ) -> Option<usize> {
+        if self.open_origin != Some(OpenOrigin::Folder) {
+            return Some(target);
+        }
+        let source = self.source.as_ref()?;
+        skip_missing_target(
+            target,
+            direction,
+            |i| source.page_file_path(i).is_some_and(|p| p.exists()),
+            |page, dir| self.page_turn_target_from(page, dir),
+            source.page_count(),
+        )
     }
 
     pub(in crate::app) fn handle_edge_page(&mut self, direction: NavigationDirection) {
@@ -684,12 +715,37 @@ fn push_queued_sibling_book_turn(queue: &mut std::collections::VecDeque<isize>, 
     queue.push_back(normalize_sibling_book_direction(direction));
 }
 
+/// Walks `step` from `start` in `direction` until `exists(candidate)` holds,
+/// bounded by `max_steps`. Returns the first existing candidate, or `None`
+/// when the boundary (`step` returns `None`) or the bound is reached.
+fn skip_missing_target(
+    start: usize,
+    direction: NavigationDirection,
+    exists: impl Fn(usize) -> bool,
+    step: impl Fn(usize, NavigationDirection) -> Option<usize>,
+    max_steps: usize,
+) -> Option<usize> {
+    let mut current = start;
+    let mut examined = 0;
+    loop {
+        if exists(current) {
+            return Some(current);
+        }
+        if examined >= max_steps {
+            return None;
+        }
+        current = step(current, direction)?;
+        examined += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::QueuedPageTurns;
     use super::{
         normalize_sibling_book_direction, push_queued_page_turn, push_queued_sibling_book_turn,
-        should_open_edge_prompt, EdgePrompt, MAX_QUEUED_PAGE_TURNS, MAX_QUEUED_SIBLING_BOOK_TURNS,
+        should_open_edge_prompt, skip_missing_target, EdgePrompt, MAX_QUEUED_PAGE_TURNS,
+        MAX_QUEUED_SIBLING_BOOK_TURNS,
     };
     use crate::core::worker::NavigationDirection;
     use std::collections::VecDeque;
@@ -764,5 +820,80 @@ mod tests {
             Some(prompt),
             NavigationDirection::Forward
         ));
+    }
+
+    fn forward_step(page: usize, _dir: NavigationDirection) -> Option<usize> {
+        (page < 10).then(|| page + 1)
+    }
+
+    fn backward_step(page: usize, _dir: NavigationDirection) -> Option<usize> {
+        (page > 0).then(|| page - 1)
+    }
+
+    #[test]
+    fn skip_missing_returns_start_when_present() {
+        let target =
+            skip_missing_target(5, NavigationDirection::Forward, |_| true, forward_step, 10);
+        assert_eq!(target, Some(5));
+    }
+
+    #[test]
+    fn skip_missing_slides_over_single_gap_forward() {
+        let target = skip_missing_target(
+            3,
+            NavigationDirection::Forward,
+            |i| i != 3,
+            forward_step,
+            10,
+        );
+        assert_eq!(target, Some(4));
+    }
+
+    #[test]
+    fn skip_missing_slides_over_run_forward() {
+        let target = skip_missing_target(
+            2,
+            NavigationDirection::Forward,
+            |i| i >= 6,
+            forward_step,
+            10,
+        );
+        assert_eq!(target, Some(6));
+    }
+
+    #[test]
+    fn skip_missing_all_forward_gone_returns_none() {
+        let target = skip_missing_target(
+            0,
+            NavigationDirection::Forward,
+            |_| false,
+            forward_step,
+            100,
+        );
+        assert_eq!(target, None);
+    }
+
+    #[test]
+    fn skip_missing_backward_hits_boundary() {
+        let target = skip_missing_target(
+            3,
+            NavigationDirection::Backward,
+            |_| false,
+            backward_step,
+            100,
+        );
+        assert_eq!(target, None);
+    }
+
+    #[test]
+    fn skip_missing_respects_max_steps() {
+        let target = skip_missing_target(
+            0,
+            NavigationDirection::Forward,
+            |_| false,
+            |page, _dir| Some(page + 1),
+            4,
+        );
+        assert_eq!(target, None);
     }
 }
