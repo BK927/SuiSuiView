@@ -2116,12 +2116,21 @@ mod tests {
     }
 
     #[test]
-    fn sibling_book_path_does_not_guess_when_current_is_missing() {
+    fn sibling_book_path_falls_back_to_sort_position_when_current_is_missing() {
         let dir = temp_test_dir("siblings-missing-current");
         fs::create_dir_all(dir.join("book-2")).unwrap();
         fs::write(dir.join("book-1.cbz"), b"placeholder").unwrap();
 
-        assert_eq!(sibling_book_path(&dir.join("missing.cbz"), 1), None);
+        // "missing.cbz" sorts after both siblings, so it anchors past the end:
+        // next wraps to the first entry, previous lands on the last.
+        assert_eq!(
+            sibling_book_path(&dir.join("missing.cbz"), 1),
+            Some(dir.join("book-1.cbz"))
+        );
+        assert_eq!(
+            sibling_book_path(&dir.join("missing.cbz"), -1),
+            Some(dir.join("book-2"))
+        );
     }
 
     #[test]
