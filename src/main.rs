@@ -50,7 +50,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if wants_wgpu {
         let mut handoff_store = store.clone();
         handoff_store.clear_fast_start_failure_notice();
-        match run_host(handoff_store, true, ipc_rx.clone(), startup_open_path.clone()) {
+        match run_host(
+            handoff_store,
+            true,
+            ipc_rx.clone(),
+            startup_open_path.clone(),
+        ) {
             Ok(()) => Ok(()),
             Err(failure) => {
                 eprintln!(
@@ -227,7 +232,10 @@ mod tests {
 
         if cfg!(target_os = "windows") {
             assert_eq!(glow_maximized, StartupWindowGuardMode::MaskMainUntilStable);
-            assert_eq!(wgpu_maximized, StartupWindowGuardMode::MaskMainUntilRevealed);
+            assert_eq!(
+                wgpu_maximized,
+                StartupWindowGuardMode::MaskMainUntilRevealed
+            );
             assert_eq!(wgpu_windowed, StartupWindowGuardMode::MaskMainUntilRevealed);
         } else {
             assert_eq!(glow_maximized, StartupWindowGuardMode::AuxiliaryOnly);

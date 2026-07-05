@@ -18,7 +18,9 @@ mod scalers;
 mod tests;
 pub use crate::core::i18n::Language;
 use bookmarks::path_key;
-pub use bookmarks::{BookRecord, BookRecordInput, PageBookmark, PageBookmarkEntry, ReadingPosition};
+pub use bookmarks::{
+    BookRecord, BookRecordInput, PageBookmark, PageBookmarkEntry, ReadingPosition,
+};
 pub use decoders::{DecodeMode, DecoderPreference, DecoderPreferences};
 pub use display::{GpuEffectMode, WgpuUpscaleMethod};
 pub use fast_start::FastStartFailureNotice;
@@ -583,10 +585,7 @@ impl StateStore {
         if allow_identity_match {
             return Some(ReadingPosition::from_record(&record));
         }
-        record
-            .path_positions
-            .get(path_key(path).as_str())
-            .cloned()
+        record.path_positions.get(path_key(path).as_str()).cloned()
     }
 
     pub fn settings(&self) -> &AppSettings {

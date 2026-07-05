@@ -12,12 +12,12 @@ mod imp {
     use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, EnumWindows, GetClassNameW, GetWindowLongPtrW,
-        GetWindowThreadProcessId, IsWindowVisible, PeekMessageW,
-        SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, ShowWindow,
-        TranslateMessage, UnhookWindowsHookEx, CWPRETSTRUCT, CWPSTRUCT, EVENT_OBJECT_CREATE,
-        EVENT_OBJECT_SHOW, GWL_EXSTYLE, HHOOK, LWA_ALPHA, MSG, OBJID_WINDOW, PM_REMOVE,
-        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE,
-        WH_CALLWNDPROC, WH_CALLWNDPROCRET, WINEVENT_OUTOFCONTEXT, WS_EX_LAYERED,
+        GetWindowThreadProcessId, IsWindowVisible, PeekMessageW, SetLayeredWindowAttributes,
+        SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, ShowWindow, TranslateMessage,
+        UnhookWindowsHookEx, CWPRETSTRUCT, CWPSTRUCT, EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW,
+        GWL_EXSTYLE, HHOOK, LWA_ALPHA, MSG, OBJID_WINDOW, PM_REMOVE, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, WH_CALLWNDPROC,
+        WH_CALLWNDPROCRET, WINEVENT_OUTOFCONTEXT, WS_EX_LAYERED,
     };
 
     const MAIN_WINDOW_CLASS: &str = "Window Class";
@@ -45,7 +45,10 @@ mod imp {
 
     impl StartupWindowGuardMode {
         fn masks_main_window(self) -> bool {
-            matches!(self, Self::MaskMainUntilStable | Self::MaskMainUntilRevealed)
+            matches!(
+                self,
+                Self::MaskMainUntilStable | Self::MaskMainUntilRevealed
+            )
         }
     }
 
