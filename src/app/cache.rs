@@ -2,6 +2,7 @@
 use super::perf;
 use super::SuiSuiViewApp;
 use crate::core::effects::ViewEffects;
+use crate::core::source::PageId;
 use crate::core::state::{
     AppSettings, CacheMemoryMode, CpuScaleFilter, FitMode, RendererMode, WgpuDownscaleMethod,
     WgpuScalePlan, WgpuUpscaleMethod, AMPLE_TOTAL_BUDGET_BYTES, MANUAL_CACHE_MB_MAX,
@@ -21,7 +22,7 @@ mod original;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(in crate::app) struct PageCacheKey {
-    pub(in crate::app) index: usize,
+    pub(in crate::app) page_id: PageId,
     pub(in crate::app) target_long_edge: u32,
     pub(in crate::app) decode: DecodeOptions,
 }
@@ -87,20 +88,24 @@ impl SuiSuiViewApp {
         }
     }
 
+    /// Identity cache key for the page currently at `index`, or None when the
+    /// index does not map (page vanished from the snapshot).
+    pub(in crate::app) fn page_key_at(
+        &self,
+        index: usize,
+        target_long_edge: u32,
+    ) -> Option<PageCacheKey> {
+        Some(PageCacheKey {
+            page_id: self.source.as_ref()?.page_id(index)?,
+            target_long_edge,
+            decode: self.decode_options(),
+        })
+    }
+
     pub(in crate::app) fn app_cached_page_keys(&self) -> Vec<CachedPageKey> {
-        let Some(source) = self.source.as_ref() else {
-            return Vec::new();
-        };
         self.decoded_pages
             .iter()
-            .filter_map(|(key, _)| {
-                let page_id = source.page_id(key.index)?;
-                Some(CachedPageKey::new(
-                    page_id,
-                    key.target_long_edge,
-                    key.decode,
-                ))
-            })
+            .map(|(key, _)| CachedPageKey::new(key.page_id, key.target_long_edge, key.decode))
             .collect()
     }
 
@@ -123,7 +128,7 @@ impl SuiSuiViewApp {
     ) {
         self.drop_lower_resolution_pages_for(key);
         if key.target_long_edge > MAX_TARGET_LONG_EDGE {
-            let visible = self.spread_indices();
+            let visible = self.visible_page_ids();
             let decode = self.decode_options();
             touch_normal_navigation_page_keys(&mut self.decoded_pages, &visible, decode);
         }
@@ -345,10 +350,8 @@ impl SuiSuiViewApp {
         let mut keys = HashSet::new();
         let mut pinned_bytes = 0usize;
         for index in indices {
-            let key = PageCacheKey {
-                index: *index,
-                target_long_edge: self.target_long_edge,
-                decode: self.decode_options(),
+            let Some(key) = self.page_key_at(*index, self.target_long_edge) else {
+                continue;
             };
             let Some(byte_size) = self.decoded_page_byte_size(key) else {
                 continue;
@@ -394,29 +397,37 @@ impl SuiSuiViewApp {
     ) -> HashSet<PageCacheKey> {
         let mut keys = HashSet::with_capacity(indices.len() * 2);
         for index in indices {
-            keys.insert(PageCacheKey {
-                index: *index,
-                target_long_edge,
-                decode: self.decode_options(),
-            });
+            let Some(key) = self.page_key_at(*index, target_long_edge) else {
+                continue;
+            };
+            keys.insert(key);
             if self.settings.progressive_preview_enabled
                 && target_long_edge > PREVIEW_TARGET_LONG_EDGE
                 && target_long_edge <= MAX_TARGET_LONG_EDGE
             {
                 keys.insert(PageCacheKey {
-                    index: *index,
                     target_long_edge: PREVIEW_TARGET_LONG_EDGE,
-                    decode: self.decode_options(),
+                    ..key
                 });
             }
         }
         keys
     }
 
+    fn visible_page_ids(&self) -> Vec<PageId> {
+        let Some(source) = self.source.as_ref() else {
+            return Vec::new();
+        };
+        self.spread_indices()
+            .into_iter()
+            .filter_map(|index| source.page_id(index))
+            .collect()
+    }
+
     fn normal_navigation_pin_keys_for_visible_pages(&self) -> HashSet<PageCacheKey> {
         normal_navigation_page_keys_in_cache(
             &self.decoded_pages,
-            &self.spread_indices(),
+            &self.visible_page_ids(),
             self.decode_options(),
         )
     }
@@ -430,10 +441,8 @@ impl SuiSuiViewApp {
         let mut keys = HashSet::with_capacity(indices.len());
         let mut pinned_bytes = 0usize;
         for index in indices {
-            let key = PageCacheKey {
-                index: *index,
-                target_long_edge: PREVIEW_TARGET_LONG_EDGE,
-                decode: self.decode_options(),
+            let Some(key) = self.page_key_at(*index, PREVIEW_TARGET_LONG_EDGE) else {
+                continue;
             };
             if already_pinned.contains(&key) {
                 continue;
@@ -793,7 +802,7 @@ pub(in crate::app) fn best_page_key_in_cache(
     let mut smallest_any = None;
     let requested_allows_original = requested.target_long_edge > MAX_TARGET_LONG_EDGE;
     for (key, _page) in cache.iter() {
-        if key.index != requested.index || key.decode != requested.decode {
+        if key.page_id != requested.page_id || key.decode != requested.decode {
             continue;
         }
         if key.target_long_edge <= requested.target_long_edge
@@ -832,7 +841,7 @@ pub(in crate::app) fn best_page_key_excluding_preview_fallback_in_cache(
     cache
         .iter()
         .filter_map(|(key, _page)| {
-            (key.index == requested.index
+            (key.page_id == requested.page_id
                 && key.decode == requested.decode
                 && key.target_long_edge > PREVIEW_TARGET_LONG_EDGE
                 && key.target_long_edge <= requested.target_long_edge)
@@ -849,7 +858,7 @@ pub(in crate::app) fn final_quality_page_key_in_cache(
     cache
         .iter()
         .filter_map(|(key, _page)| {
-            if key.index != requested.index || key.decode != requested.decode {
+            if key.page_id != requested.page_id || key.decode != requested.decode {
                 return None;
             }
             if key.target_long_edge < requested.target_long_edge {
@@ -871,7 +880,7 @@ pub(in crate::app) fn lower_resolution_page_keys(
     cache
         .iter()
         .filter_map(|(key, _page)| {
-            (key.index == inserted.index
+            (key.page_id == inserted.page_id
                 && key.decode == inserted.decode
                 && key.target_long_edge < inserted.target_long_edge
                 && (!inserted_is_original || key.target_long_edge > MAX_TARGET_LONG_EDGE))
@@ -882,13 +891,13 @@ pub(in crate::app) fn lower_resolution_page_keys(
 
 pub(in crate::app) fn normal_navigation_page_keys_in_cache(
     cache: &LruCache<PageCacheKey, Arc<crate::core::worker::PreparedPage>>,
-    visible_indices: &[usize],
+    visible_ids: &[PageId],
     decode: DecodeOptions,
 ) -> HashSet<PageCacheKey> {
     cache
         .iter()
         .filter_map(|(key, _page)| {
-            (visible_indices.contains(&key.index)
+            (visible_ids.contains(&key.page_id)
                 && key.decode == decode
                 && key.target_long_edge > PREVIEW_TARGET_LONG_EDGE
                 && key.target_long_edge <= MAX_TARGET_LONG_EDGE)
@@ -899,10 +908,10 @@ pub(in crate::app) fn normal_navigation_page_keys_in_cache(
 
 pub(in crate::app) fn touch_normal_navigation_page_keys(
     cache: &mut LruCache<PageCacheKey, Arc<crate::core::worker::PreparedPage>>,
-    visible_indices: &[usize],
+    visible_ids: &[PageId],
     decode: DecodeOptions,
 ) {
-    let keys = normal_navigation_page_keys_in_cache(cache, visible_indices, decode);
+    let keys = normal_navigation_page_keys_in_cache(cache, visible_ids, decode);
     for key in keys {
         let _ = cache.get(&key);
     }

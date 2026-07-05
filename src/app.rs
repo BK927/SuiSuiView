@@ -202,7 +202,7 @@ pub struct SuiSuiViewApp {
     pan: Vec2,
     decoded_pages: LruCache<PageCacheKey, Arc<PreparedPage>>,
     decoded_bytes: usize,
-    page_metrics: HashMap<usize, PageMetrics>,
+    page_metrics: HashMap<crate::core::source::PageId, PageMetrics>,
     page_errors: HashMap<PageCacheKey, String>,
     textures: LruCache<TextureCacheKey, TextureEntry>,
     debug_compare: DebugCompareState,
@@ -591,19 +591,18 @@ impl SuiSuiViewApp {
         match event {
             WorkerEvent::PageReady {
                 book_id,
-                page_id: _,
-                index,
+                page_id,
                 decode,
                 page,
             } => {
                 self.book_id.as_deref() == Some(book_id.as_str())
                     && *decode == self.decode_options()
                     && self.target_is_relevant(page.target_long_edge)
-                    && self.spread_indices().contains(index)
+                    && self.event_page_id_in_current_spread(*page_id)
             }
             WorkerEvent::PageFailed {
                 book_id,
-                index,
+                page_id,
                 target_long_edge,
                 decode,
                 ..
@@ -611,9 +610,21 @@ impl SuiSuiViewApp {
                 self.book_id.as_deref() == Some(book_id.as_str())
                     && *decode == self.decode_options()
                     && self.target_is_relevant(*target_long_edge)
-                    && self.spread_indices().contains(index)
+                    && self.event_page_id_in_current_spread(*page_id)
             }
         }
+    }
+
+    /// True when the page identified by `page_id` still maps to an index in the
+    /// current snapshot and that index is part of the visible spread.
+    fn event_page_id_in_current_spread(&self, page_id: crate::core::source::PageId) -> bool {
+        let Some(source) = self.source.as_ref() else {
+            return false;
+        };
+        let Some(index) = source.page_index_for_id(page_id) else {
+            return false;
+        };
+        self.spread_indices().contains(&index)
     }
 
     fn handle_worker_event(&mut self, event: WorkerEvent) -> bool {
@@ -621,16 +632,21 @@ impl SuiSuiViewApp {
         match event {
             WorkerEvent::PageReady {
                 book_id,
-                page_id: _,
-                index,
+                page_id,
                 decode,
                 page,
             } if self.book_id.as_deref() == Some(book_id.as_str())
                 && decode == self.decode_options()
                 && self.target_is_relevant(page.target_long_edge) =>
             {
+                // Drop events for pages that vanished from the current snapshot
+                // mid-flight so orphaned ids never enter the cache.
+                let Some(index) = resolve_worker_event_index(self.source.as_deref(), page_id)
+                else {
+                    return false;
+                };
                 let key = PageCacheKey {
-                    index,
+                    page_id,
                     target_long_edge: page.target_long_edge,
                     decode,
                 };
@@ -639,7 +655,7 @@ impl SuiSuiViewApp {
                     self.set_status(notice.clone());
                 }
                 self.page_metrics
-                    .insert(index, PageMetrics::from_page(&page));
+                    .insert(page_id, PageMetrics::from_page(&page));
                 self.insert_prepared_page(key, page.clone());
                 decoded_cache_changed = true;
                 self.maybe_enqueue_auto_kind(key, page);
@@ -653,8 +669,7 @@ impl SuiSuiViewApp {
             }
             WorkerEvent::PageFailed {
                 book_id,
-                page_id: _,
-                index,
+                page_id,
                 target_long_edge,
                 decode,
                 message,
@@ -662,9 +677,12 @@ impl SuiSuiViewApp {
                 && decode == self.decode_options()
                 && self.target_is_relevant(target_long_edge) =>
             {
+                if resolve_worker_event_index(self.source.as_deref(), page_id).is_none() {
+                    return false;
+                }
                 self.page_errors.insert(
                     PageCacheKey {
-                        index,
+                        page_id,
                         target_long_edge,
                         decode,
                     },
@@ -1108,6 +1126,16 @@ impl SuiSuiViewApp {
     }
 }
 
+/// Current index of a worker event's page in `source`, or None when the page
+/// vanished from the snapshot mid-flight (the event must then be dropped so an
+/// orphaned id never enters the cache).
+fn resolve_worker_event_index(
+    source: Option<&dyn BookSource>,
+    page_id: crate::core::source::PageId,
+) -> Option<usize> {
+    source?.page_index_for_id(page_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::commands::DeleteMode;
@@ -1125,6 +1153,7 @@ mod tests {
         transition_screen_sign, worker_center_page_for_mode, AppCommand, ImageFilter, PageCacheKey,
         PageMetrics, TextureCacheKey, TextureSampling, ViewEffects, ViewMode, ViewTransform,
     };
+    use crate::core::source::PageId;
     use crate::core::state::{
         AppSettings, CacheMemoryMode, CpuScaleFilter, FitMode, KeyCode, KeyShortcut,
         PageTransitionStyle, ReadingDirection, RendererMode, WgpuDownscaleMethod,
@@ -1137,6 +1166,7 @@ mod tests {
     };
     use egui::{Color32, ColorImage, Pos2, Rect, Vec2};
     use lru::LruCache;
+    use std::collections::HashMap;
     use std::fs;
     use std::num::NonZeroUsize;
     use std::path::{Path, PathBuf};
@@ -1176,7 +1206,7 @@ mod tests {
 
     #[test]
     fn smart_spread_pairs_even_pages_without_cover_assumption() {
-        let metrics = [
+        let metrics: HashMap<usize, PageMetrics> = [
             (0, page_metrics(900.0, 1400.0)),
             (1, page_metrics(910.0, 1410.0)),
             (2, page_metrics(900.0, 1400.0)),
@@ -1184,15 +1214,16 @@ mod tests {
         ]
         .into_iter()
         .collect();
+        let at = |index: usize| metrics.get(&index).copied();
 
-        assert_eq!(smart_spread_indices_for_metrics(0, 4, &metrics), vec![0, 1]);
-        assert_eq!(smart_spread_indices_for_metrics(1, 4, &metrics), vec![0, 1]);
-        assert_eq!(smart_spread_indices_for_metrics(2, 4, &metrics), vec![2, 3]);
+        assert_eq!(smart_spread_indices_for_metrics(0, 4, at), vec![0, 1]);
+        assert_eq!(smart_spread_indices_for_metrics(1, 4, at), vec![0, 1]);
+        assert_eq!(smart_spread_indices_for_metrics(2, 4, at), vec![2, 3]);
     }
 
     #[test]
     fn smart_spread_solos_wide_tall_and_mismatched_pages() {
-        let metrics = [
+        let metrics: HashMap<usize, PageMetrics> = [
             (0, page_metrics(1600.0, 1000.0)),
             (1, page_metrics(900.0, 1400.0)),
             (2, page_metrics(500.0, 1300.0)),
@@ -1202,21 +1233,24 @@ mod tests {
         ]
         .into_iter()
         .collect();
+        let at = |index: usize| metrics.get(&index).copied();
 
-        assert_eq!(smart_spread_indices_for_metrics(0, 6, &metrics), vec![0]);
-        assert_eq!(smart_spread_indices_for_metrics(1, 6, &metrics), vec![1]);
-        assert_eq!(smart_spread_indices_for_metrics(2, 6, &metrics), vec![2]);
-        assert_eq!(smart_spread_indices_for_metrics(3, 6, &metrics), vec![3]);
-        assert_eq!(smart_spread_indices_for_metrics(4, 6, &metrics), vec![4]);
-        assert_eq!(smart_spread_indices_for_metrics(5, 6, &metrics), vec![5]);
+        assert_eq!(smart_spread_indices_for_metrics(0, 6, at), vec![0]);
+        assert_eq!(smart_spread_indices_for_metrics(1, 6, at), vec![1]);
+        assert_eq!(smart_spread_indices_for_metrics(2, 6, at), vec![2]);
+        assert_eq!(smart_spread_indices_for_metrics(3, 6, at), vec![3]);
+        assert_eq!(smart_spread_indices_for_metrics(4, 6, at), vec![4]);
+        assert_eq!(smart_spread_indices_for_metrics(5, 6, at), vec![5]);
     }
 
     #[test]
     fn smart_spread_falls_back_to_current_page_until_metrics_arrive() {
-        let metrics = [(0, page_metrics(900.0, 1400.0))].into_iter().collect();
+        let metrics: HashMap<usize, PageMetrics> =
+            [(0, page_metrics(900.0, 1400.0))].into_iter().collect();
+        let at = |index: usize| metrics.get(&index).copied();
 
-        assert_eq!(smart_spread_indices_for_metrics(0, 2, &metrics), vec![0]);
-        assert_eq!(smart_spread_indices_for_metrics(1, 2, &metrics), vec![1]);
+        assert_eq!(smart_spread_indices_for_metrics(0, 2, at), vec![0]);
+        assert_eq!(smart_spread_indices_for_metrics(1, 2, at), vec![1]);
     }
 
     #[test]
@@ -1265,12 +1299,12 @@ mod tests {
     fn best_page_key_uses_preview_until_exact_target_arrives() {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let preview_key = PageCacheKey {
-            index: 7,
+            page_id: PageId(7),
             target_long_edge: PREVIEW_TARGET_LONG_EDGE,
             decode: DecodeOptions::default(),
         };
         let exact_key = PageCacheKey {
-            index: 7,
+            page_id: PageId(7),
             target_long_edge: 4096,
             decode: DecodeOptions::default(),
         };
@@ -1286,7 +1320,7 @@ mod tests {
     fn best_page_key_keeps_original_targets_out_of_navigation_fallback() {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let requested = PageCacheKey {
-            index: 7,
+            page_id: PageId(7),
             target_long_edge: MAX_TARGET_LONG_EDGE,
             decode: DecodeOptions::default(),
         };
@@ -1305,7 +1339,7 @@ mod tests {
     fn best_page_key_without_preview_uses_smaller_navigation_target_for_resize_recovery() {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let cached = PageCacheKey {
-            index: 7,
+            page_id: PageId(7),
             target_long_edge: 1536,
             decode: DecodeOptions::default(),
         };
@@ -1326,7 +1360,7 @@ mod tests {
     fn best_page_key_without_preview_uses_larger_navigation_target_for_dpi_downshift() {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let requested = PageCacheKey {
-            index: 7,
+            page_id: PageId(7),
             target_long_edge: 1536,
             decode: DecodeOptions::default(),
         };
@@ -1347,7 +1381,7 @@ mod tests {
     fn best_page_key_without_preview_does_not_promote_preview_target() {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let preview = PageCacheKey {
-            index: 7,
+            page_id: PageId(7),
             target_long_edge: PREVIEW_TARGET_LONG_EDGE,
             decode: DecodeOptions::default(),
         };
@@ -1368,7 +1402,7 @@ mod tests {
     fn best_page_key_without_preview_keeps_original_targets_out_of_navigation_fallback() {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let requested = PageCacheKey {
-            index: 7,
+            page_id: PageId(7),
             target_long_edge: MAX_TARGET_LONG_EDGE,
             decode: DecodeOptions::default(),
         };
@@ -1389,7 +1423,7 @@ mod tests {
     fn final_quality_page_key_rejects_previews_for_navigation_commit() {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let requested = PageCacheKey {
-            index: 7,
+            page_id: PageId(7),
             target_long_edge: 2048,
             decode: DecodeOptions::default(),
         };
@@ -1420,7 +1454,7 @@ mod tests {
     fn final_quality_page_key_rejects_original_for_navigation_commit() {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let requested = PageCacheKey {
-            index: 7,
+            page_id: PageId(7),
             target_long_edge: MAX_TARGET_LONG_EDGE,
             decode: DecodeOptions::default(),
         };
@@ -1443,7 +1477,7 @@ mod tests {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let decode = DecodeOptions::default();
         let inserted = PageCacheKey {
-            index: 7,
+            page_id: PageId(7),
             target_long_edge: 4096,
             decode,
         };
@@ -1452,7 +1486,7 @@ mod tests {
             ..inserted
         };
         let other_page = PageCacheKey {
-            index: 8,
+            page_id: PageId(8),
             ..preview
         };
         let other_decode = PageCacheKey {
@@ -1479,7 +1513,7 @@ mod tests {
     fn lower_resolution_page_keys_keeps_navigation_keys_for_original_insert() {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let inserted = PageCacheKey {
-            index: 7,
+            page_id: PageId(7),
             target_long_edge: MAX_TARGET_LONG_EDGE + 2,
             decode: DecodeOptions::default(),
         };
@@ -1511,20 +1545,20 @@ mod tests {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let decode = DecodeOptions::default();
         let navigation = PageCacheKey {
-            index: 7,
+            page_id: PageId(7),
             target_long_edge: MAX_TARGET_LONG_EDGE,
             decode,
         };
         let filler_a = PageCacheKey {
-            index: 8,
+            page_id: PageId(8),
             ..navigation
         };
         let filler_b = PageCacheKey {
-            index: 9,
+            page_id: PageId(9),
             ..navigation
         };
         let filler_c = PageCacheKey {
-            index: 10,
+            page_id: PageId(10),
             ..navigation
         };
         let original = PageCacheKey {
@@ -1537,7 +1571,7 @@ mod tests {
         cache.put(filler_b, dummy_page(MAX_TARGET_LONG_EDGE));
         cache.put(filler_c, dummy_page(MAX_TARGET_LONG_EDGE));
 
-        touch_normal_navigation_page_keys(&mut cache, &[navigation.index], decode);
+        touch_normal_navigation_page_keys(&mut cache, &[navigation.page_id], decode);
         let evicted = cache.push(original, dummy_page(MAX_TARGET_LONG_EDGE + 1));
 
         assert_eq!(evicted.map(|(key, _page)| key), Some(filler_a));
@@ -1548,7 +1582,7 @@ mod tests {
     #[test]
     fn page_cache_state_tracks_exact_preview_and_fallback() {
         let requested = PageCacheKey {
-            index: 3,
+            page_id: PageId(3),
             target_long_edge: 2048,
             decode: DecodeOptions::default(),
         };
@@ -1582,7 +1616,7 @@ mod tests {
     #[test]
     fn texture_cache_key_tracks_effects_without_changing_page_key() {
         let page = PageCacheKey {
-            index: 1,
+            page_id: PageId(1),
             target_long_edge: 2048,
             decode: DecodeOptions::default(),
         };
@@ -1607,7 +1641,7 @@ mod tests {
     #[test]
     fn texture_cache_key_tracks_sampling_without_changing_page_key() {
         let page = PageCacheKey {
-            index: 1,
+            page_id: PageId(1),
             target_long_edge: 4096,
             decode: DecodeOptions::default(),
         };
@@ -1764,7 +1798,7 @@ mod tests {
     #[test]
     fn effects_filter_is_part_of_texture_key() {
         let page = PageCacheKey {
-            index: 0,
+            page_id: PageId(0),
             target_long_edge: 1024,
             decode: DecodeOptions::default(),
         };
@@ -1825,7 +1859,7 @@ mod tests {
     #[test]
     fn page_cache_key_tracks_decode_options() {
         let normal = PageCacheKey {
-            index: 0,
+            page_id: PageId(0),
             target_long_edge: 2048,
             decode: DecodeOptions::default(),
         };
@@ -2189,6 +2223,44 @@ mod tests {
             };
             assert!(!bytes.is_empty());
         }
+    }
+
+    #[test]
+    fn unmappable_worker_event_index_is_dropped() {
+        use super::resolve_worker_event_index;
+        use crate::core::source::{BookSource, SourceError};
+
+        // A source whose only page is id 0: an event for a vanished id (5)
+        // resolves to None so `handle_worker_event` drops it before caching.
+        struct OnePageSource;
+        impl BookSource for OnePageSource {
+            fn title(&self) -> &str {
+                "one"
+            }
+            fn source_path(&self) -> &Path {
+                Path::new("one")
+            }
+            fn book_id(&self) -> &str {
+                "one"
+            }
+            fn page_count(&self) -> usize {
+                1
+            }
+            fn page_name(&self, _index: usize) -> Option<&str> {
+                Some("page.png")
+            }
+            fn read_page(&self, _index: usize) -> Result<Vec<u8>, SourceError> {
+                Ok(Vec::new())
+            }
+        }
+
+        let source = OnePageSource;
+        assert_eq!(
+            resolve_worker_event_index(Some(&source), PageId(0)),
+            Some(0)
+        );
+        assert_eq!(resolve_worker_event_index(Some(&source), PageId(5)), None);
+        assert_eq!(resolve_worker_event_index(None, PageId(0)), None);
     }
 
     fn dummy_page(target_long_edge: u32) -> Arc<PreparedPage> {

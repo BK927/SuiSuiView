@@ -212,8 +212,15 @@ impl SuiSuiViewApp {
             })
             .unwrap_or_default();
         for event in events {
+            let Some(page_id) = self
+                .source
+                .as_ref()
+                .and_then(|source| source.page_id(event.page_index))
+            else {
+                continue;
+            };
             let key = PageCacheKey {
-                index: event.page_index,
+                page_id,
                 target_long_edge: event.target_long_edge,
                 decode: event.decode,
             };
@@ -400,10 +407,10 @@ impl SuiSuiViewApp {
                 message: "WGSL 업스케일러를 사용할 수 없습니다.".to_owned(),
             };
         }
-        let requested = PageCacheKey {
-            index: self.current_page,
-            target_long_edge: self.target_long_edge,
-            decode: self.decode_options(),
+        let Some(requested) = self.page_key_at(self.current_page, self.target_long_edge) else {
+            return PageVisual::Loading {
+                index: self.current_page,
+            };
         };
         let Some(best_key) = self.best_page_key(requested) else {
             self.request_debug_compare_page(requested);
@@ -441,8 +448,17 @@ impl SuiSuiViewApp {
                 index: self.current_page,
             };
         };
+        let Some(page_id) = self
+            .source
+            .as_ref()
+            .and_then(|source| source.page_id(self.current_page))
+        else {
+            return PageVisual::Loading {
+                index: self.current_page,
+            };
+        };
         let requested = PageCacheKey {
-            index: self.current_page,
+            page_id,
             target_long_edge: self.target_long_edge,
             decode,
         };
@@ -488,7 +504,7 @@ impl SuiSuiViewApp {
         let texture = ctx.load_texture(
             format!(
                 "compare-page-{}-{}",
-                best_key.index, best_key.target_long_edge
+                self.current_page, best_key.target_long_edge
             ),
             ImageData::Color(Arc::new(page.color_image())),
             texture_options_for_sampling(texture_key.sampling),
@@ -525,6 +541,9 @@ impl SuiSuiViewApp {
         let Some(source) = self.source.as_ref().cloned() else {
             return;
         };
+        let Some(page_index) = source.page_index_for_id(key.page_id) else {
+            return;
+        };
         let Some(book_id) = self.book_id.clone() else {
             return;
         };
@@ -532,7 +551,7 @@ impl SuiSuiViewApp {
         let request = DebugCompareRequest {
             book_id,
             source,
-            page_index: key.index,
+            page_index,
             target_long_edge: key.target_long_edge,
             decode: key.decode,
         };
@@ -543,11 +562,18 @@ impl SuiSuiViewApp {
         if !self.debug_compare.enabled {
             return Vec::new();
         }
+        let Some(page_id) = self
+            .source
+            .as_ref()
+            .and_then(|source| source.page_id(self.current_page))
+        else {
+            return Vec::new();
+        };
         [self.debug_compare.left, self.debug_compare.right]
             .into_iter()
             .filter_map(|target| target.decode_options(self.decode_options()))
             .map(|decode| PageCacheKey {
-                index: self.current_page,
+                page_id,
                 target_long_edge: self.target_long_edge,
                 decode,
             })
@@ -556,7 +582,6 @@ impl SuiSuiViewApp {
 
     fn is_relevant_debug_compare_key(&self, key: PageCacheKey) -> bool {
         self.debug_compare.enabled
-            && key.index == self.current_page
             && self.target_is_relevant(key.target_long_edge)
             && self.debug_compare_pin_keys().contains(&key)
     }

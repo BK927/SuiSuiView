@@ -137,7 +137,7 @@ fn record_auto_kind_classify(
         "auto_kind_classify",
         started.elapsed(),
         &[
-            PerfField::Usize("page", key.index),
+            PerfField::Usize("page", key.page_id.0 as usize),
             PerfField::U32("target_long_edge", key.target_long_edge),
             PerfField::Usize("width", width),
             PerfField::Usize("height", height),

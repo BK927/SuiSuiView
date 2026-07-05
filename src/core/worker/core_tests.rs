@@ -379,7 +379,7 @@ fn worker_publishes_completed_page_before_handling_queued_command() {
     let first_event = event_rx.recv_timeout(Duration::from_secs(2)).unwrap();
 
     match first_event {
-        WorkerEvent::PageReady { index, .. } => assert_eq!(index, 0),
+        WorkerEvent::PageReady { page_id, .. } => assert_eq!(page_id, PageId(0)),
         WorkerEvent::PageFailed { message, .. } => panic!("page failed: {message}"),
     }
 

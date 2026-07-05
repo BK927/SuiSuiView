@@ -523,14 +523,12 @@ pub enum WorkerEvent {
     PageReady {
         book_id: String,
         page_id: PageId,
-        index: usize,
         decode: DecodeOptions,
         page: Arc<PreparedPage>,
     },
     PageFailed {
         book_id: String,
         page_id: PageId,
-        index: usize,
         target_long_edge: u32,
         decode: DecodeOptions,
         message: String,
@@ -1153,7 +1151,6 @@ fn run_worker(
                     let _ = event_tx.send(WorkerEvent::PageReady {
                         book_id: book_id.clone(),
                         page_id,
-                        index: job.index,
                         decode: options.decode,
                         page,
                     });
@@ -1305,7 +1302,6 @@ fn run_worker(
                         let _ = event_tx.send(WorkerEvent::PageReady {
                             book_id: book_id.clone(),
                             page_id,
-                            index: job.index,
                             decode: options.decode,
                             page: page.clone(),
                         });
@@ -1421,7 +1417,6 @@ fn run_worker(
                         let _ = event_tx.send(WorkerEvent::PageFailed {
                             book_id: book_id.clone(),
                             page_id,
-                            index: job.index,
                             target_long_edge: job.target_long_edge,
                             decode: options.decode,
                             message,

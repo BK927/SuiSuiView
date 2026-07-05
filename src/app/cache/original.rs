@@ -81,12 +81,9 @@ impl SuiSuiViewApp {
             return;
         }
 
-        let decode = self.decode_options();
         let missing_visible_original = self.spread_indices().iter().any(|index| {
-            let key = PageCacheKey {
-                index: *index,
-                target_long_edge: self.target_long_edge,
-                decode,
+            let Some(key) = self.page_key_at(*index, self.target_long_edge) else {
+                return false;
             };
             !self.page_errors.contains_key(&key) && self.decoded_pages.peek(&key).is_none()
         });
@@ -161,6 +158,7 @@ mod tests {
         drop_original_page_after_texture_upload_from_cache, original_inspection_page_keys,
     };
     use crate::app::PageCacheKey;
+    use crate::core::source::PageId;
     use crate::core::worker::{
         DecodeBackend, DecodeOptions, PagePixels, PreparedPage, MAX_TARGET_LONG_EDGE,
         PREVIEW_TARGET_LONG_EDGE,
@@ -174,7 +172,7 @@ mod tests {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let decode = DecodeOptions::default();
         let preview = PageCacheKey {
-            index: 7,
+            page_id: PageId(7),
             target_long_edge: PREVIEW_TARGET_LONG_EDGE,
             decode,
         };
@@ -187,7 +185,7 @@ mod tests {
             ..preview
         };
         let other_original = PageCacheKey {
-            index: 8,
+            page_id: PageId(8),
             ..original
         };
 
@@ -200,11 +198,11 @@ mod tests {
         );
 
         let mut keys = original_inspection_page_keys(&cache);
-        keys.sort_by_key(|key| key.index);
+        keys.sort_by_key(|key| key.page_id.0);
         assert_eq!(keys, vec![original, other_original]);
 
         let mut dropped = drop_original_inspection_pages_from_cache(&mut cache);
-        dropped.sort_by_key(|(key, _byte_size)| key.index);
+        dropped.sort_by_key(|(key, _byte_size)| key.page_id.0);
 
         assert_eq!(dropped, vec![(original, 16), (other_original, 32)]);
         assert!(cache.peek(&preview).is_some());
@@ -218,7 +216,7 @@ mod tests {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let decode = DecodeOptions::default();
         let original = PageCacheKey {
-            index: 3,
+            page_id: PageId(3),
             target_long_edge: MAX_TARGET_LONG_EDGE + 1,
             decode,
         };

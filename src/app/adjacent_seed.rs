@@ -98,7 +98,7 @@ impl SuiSuiViewApp {
             return;
         }
         self.page_metrics
-            .insert(seed.index, PageMetrics::from_page(&seed.page));
+            .insert(seed.key.page_id, PageMetrics::from_page(&seed.page));
         self.insert_prepared_page(seed.key, seed.page);
         self.prune_decoded_cache();
     }
@@ -470,6 +470,7 @@ pub(in crate::app) fn prepare_seeded_first_page(
         return None;
     }
     let index = index.min(page_count - 1);
+    let page_id = source.page_id(index)?;
     if large_source_guard && should_skip_memory_aware_adjacent_seed_source(source, index) {
         return None;
     }
@@ -482,7 +483,7 @@ pub(in crate::app) fn prepare_seeded_first_page(
     Some(SeededPreparedPage {
         index,
         key: PageCacheKey {
-            index,
+            page_id,
             target_long_edge,
             decode,
         },

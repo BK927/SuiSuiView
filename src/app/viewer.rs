@@ -58,11 +58,7 @@ impl SuiSuiViewApp {
         index: usize,
         target_long_edge: u32,
     ) -> Option<ColorImage> {
-        let key = PageCacheKey {
-            index,
-            target_long_edge,
-            decode: self.decode_options(),
-        };
+        let key = self.page_key_at(index, target_long_edge)?;
         let best_key = self.best_page_key(key)?;
         let page = self.decoded_pages.peek(&best_key)?;
         Some(apply_effects_to_image(&page.color_image(), self.effects))
@@ -118,7 +114,14 @@ impl SuiSuiViewApp {
         page: usize,
         page_count: usize,
     ) -> Vec<usize> {
-        smart_spread_indices_for_metrics(page, page_count, &self.page_metrics)
+        smart_spread_indices_for_metrics(page, page_count, |index| self.page_metrics_at(index))
+    }
+
+    /// Metrics for the page currently at `index`, resolved through the page's
+    /// stable id (None when the index does not map or metrics have not arrived).
+    pub(in crate::app) fn page_metrics_at(&self, index: usize) -> Option<PageMetrics> {
+        let page_id = self.source.as_ref()?.page_id(index)?;
+        self.page_metrics.get(&page_id).copied()
     }
 
     pub(in crate::app) fn visible_page_count(&self) -> usize {
@@ -135,12 +138,10 @@ impl SuiSuiViewApp {
         index: usize,
         target_long_edge: u32,
     ) -> PageVisual {
-        let key = PageCacheKey {
-            index,
-            target_long_edge,
-            decode: self.decode_options(),
+        let Some(key) = self.page_key_at(index, target_long_edge) else {
+            return PageVisual::Loading { index };
         };
-        if let Some(visual) = self.original_texture_only_visual(key) {
+        if let Some(visual) = self.original_texture_only_visual(index, key) {
             return visual;
         }
         let Some(best_key) = self.best_page_key(key) else {
@@ -301,7 +302,11 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn original_texture_only_visual(&mut self, requested: PageCacheKey) -> Option<PageVisual> {
+    fn original_texture_only_visual(
+        &mut self,
+        index: usize,
+        requested: PageCacheKey,
+    ) -> Option<PageVisual> {
         if !perf::original_texture_only_enabled()
             || !self
                 .current_prepared_target_intent()
@@ -319,12 +324,14 @@ impl SuiSuiViewApp {
             .textures
             .get(&texture_key)
             .map(|entry| entry.texture.clone())?;
-        let metrics = self.page_metrics.get(&requested.index).copied()?;
+        let metrics = self.page_metrics.get(&requested.page_id).copied()?;
+        #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
+        let _ = index;
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::record_open_to_first_visible_if_pending(
             &mut self.open_to_first_visible_trace,
             self.book_id.as_deref(),
-            requested.index,
+            index,
             requested.target_long_edge,
             false,
         );

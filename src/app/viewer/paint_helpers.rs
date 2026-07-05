@@ -103,7 +103,7 @@ impl SuiSuiViewApp {
         let texture = ctx.load_texture(
             format!(
                 "page-{}-{}-{:?}",
-                source_key.page.index, source_key.page.target_long_edge, effects
+                source_key.page.page_id.0, source_key.page.target_long_edge, effects
             ),
             ImageData::Color(image),
             texture_options_for_sampling(texture_key.sampling),

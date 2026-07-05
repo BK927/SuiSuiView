@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::source::PageId;
 use crate::core::worker::DecodeOptions;
 use egui::{pos2, vec2};
 
@@ -7,7 +8,7 @@ fn draw_id_separates_same_page_in_different_panes() {
     let source_key = GpuPaintSourceKey {
         book: 7,
         page: PageCacheKey {
-            index: 3,
+            page_id: PageId(3),
             target_long_edge: 2048,
             decode: DecodeOptions::default(),
         },
@@ -151,7 +152,7 @@ fn realtime_sr_stage_texture_keys_separate_stack_stages() {
     let source_key = GpuPaintSourceKey {
         book: 1,
         page: PageCacheKey {
-            index: 0,
+            page_id: PageId(0),
             target_long_edge: 512,
             decode: DecodeOptions::default(),
         },
@@ -426,7 +427,7 @@ impl DownscaleSmokeFixture {
         let source_key = GpuPaintSourceKey {
             book: 1,
             page: PageCacheKey {
-                index: source_size[0],
+                page_id: PageId(source_size[0] as u32),
                 target_long_edge: source_size[0] as u32,
                 decode: DecodeOptions::default(),
             },

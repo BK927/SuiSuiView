@@ -1,6 +1,6 @@
 use super::perf;
 use super::{
-    texture_options_for_sampling, PageCacheKey, SuiSuiViewApp, TextureCacheKey, TextureEntry,
+    texture_options_for_sampling, SuiSuiViewApp, TextureCacheKey, TextureEntry,
     BYTES_PER_RGBA_PIXEL,
 };
 use crate::core::effects::ViewEffects;
@@ -73,10 +73,8 @@ impl SuiSuiViewApp {
     }
 
     fn prewarm_page_texture(&mut self, ctx: &egui::Context, index: usize) -> bool {
-        let requested = PageCacheKey {
-            index,
-            target_long_edge: self.target_long_edge,
-            decode: self.decode_options(),
+        let Some(requested) = self.page_key_at(index, self.target_long_edge) else {
+            return false;
         };
         let Some(best_key) = self.final_quality_page_key(requested) else {
             return false;

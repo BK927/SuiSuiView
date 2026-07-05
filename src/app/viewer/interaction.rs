@@ -210,7 +210,7 @@ impl SuiSuiViewApp {
         self.spread_indices()
             .into_iter()
             .filter_map(|index| {
-                let metrics = self.page_metrics.get(&index)?;
+                let metrics = self.page_metrics_at(index)?;
                 Some(OriginalPageSize {
                     width: metrics.width,
                     height: metrics.height,
@@ -235,7 +235,7 @@ impl SuiSuiViewApp {
         let Some(next) = anchor.checked_add(1).filter(|next| *next < page_count) else {
             return 1;
         };
-        if self.page_metrics.contains_key(&anchor) && self.page_metrics.contains_key(&next) {
+        if self.page_metrics_at(anchor).is_some() && self.page_metrics_at(next).is_some() {
             self.smart_spread_indices_for(page, page_count).len()
         } else {
             2

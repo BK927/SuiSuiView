@@ -1,6 +1,6 @@
 use super::{
     perf, sibling_book_path, transition_screen_sign, worker_center_page_for_mode, EdgePrompt,
-    OpenOrigin, PageCacheKey, SuiSuiViewApp, Transition, ViewMode, SIBLING_BOOK_TURN_REPAINT_DELAY,
+    OpenOrigin, SuiSuiViewApp, Transition, ViewMode, SIBLING_BOOK_TURN_REPAINT_DELAY,
 };
 use crate::core::effects::ViewEffects;
 use crate::core::state::{EdgePageAction, FitMode, PageTransitionStyle, ReadingDirection};
@@ -209,14 +209,11 @@ impl SuiSuiViewApp {
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let turn_started = Instant::now();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        let cache_state = {
-            let requested_key = PageCacheKey {
-                index: target,
-                target_long_edge: self.target_long_edge,
-                decode: self.decode_options(),
-            };
-            self.page_turn_cache_state(requested_key)
-        };
+        let cache_state = self
+            .page_key_at(target, self.target_long_edge)
+            .map_or(perf::PageCacheState::Miss, |requested_key| {
+                self.page_turn_cache_state(requested_key)
+            });
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::record_page_turn_request(cache_state, target, self.target_long_edge);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -378,12 +375,9 @@ impl SuiSuiViewApp {
         if indices.is_empty() {
             return false;
         }
-        let decode = self.decode_options();
         indices.iter().all(|index| {
-            let key = PageCacheKey {
-                index: *index,
-                target_long_edge: self.target_long_edge,
-                decode,
+            let Some(key) = self.page_key_at(*index, self.target_long_edge) else {
+                return false;
             };
             self.page_errors.contains_key(&key) || self.final_quality_page_key(key).is_some()
         })

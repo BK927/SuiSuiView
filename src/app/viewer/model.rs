@@ -7,7 +7,6 @@ use crate::core::state::{
 };
 use crate::core::worker::{DecodeBackend, PagePixels, PreparedPage, PreparedTargetIntent};
 use egui::{TextureHandle, Vec2};
-use std::collections::HashMap;
 use std::time::Instant;
 
 const SMART_WIDE_ASPECT: f32 = 1.20;
@@ -130,7 +129,7 @@ pub(in crate::app) fn double_spread_indices(page: usize, page_count: usize) -> V
 pub(in crate::app) fn smart_spread_indices_for_metrics(
     page: usize,
     page_count: usize,
-    metrics: &HashMap<usize, PageMetrics>,
+    metrics_at: impl Fn(usize) -> Option<PageMetrics>,
 ) -> Vec<usize> {
     if page_count == 0 {
         return Vec::new();
@@ -140,10 +139,10 @@ pub(in crate::app) fn smart_spread_indices_for_metrics(
     let Some(next) = anchor.checked_add(1).filter(|next| *next < page_count) else {
         return vec![page];
     };
-    let Some(anchor_metrics) = metrics.get(&anchor).copied() else {
+    let Some(anchor_metrics) = metrics_at(anchor) else {
         return vec![page];
     };
-    let Some(next_metrics) = metrics.get(&next).copied() else {
+    let Some(next_metrics) = metrics_at(next) else {
         return vec![page];
     };
     if anchor_metrics.can_pair_with(next_metrics) {
