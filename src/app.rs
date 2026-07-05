@@ -47,6 +47,7 @@ mod opening;
 mod perf;
 mod platform;
 mod realtime_sr;
+mod refresh;
 mod runtime;
 mod settings;
 mod settings_bookmarks;
@@ -88,6 +89,7 @@ pub(crate) fn restart_current_process() -> Result<(), String> {
     platform::restart_current_process()
 }
 pub(in crate::app) use navigation::SiblingOpenRetry;
+pub(in crate::app) use refresh::{RefreshOutcome, RefreshTicket};
 #[cfg(test)]
 use sibling_books::adjacent_sibling_book_paths;
 pub(in crate::app) use sibling_books::{adjacent_sibling_book_paths_ordered, sibling_book_path};
@@ -178,6 +180,9 @@ pub struct SuiSuiViewApp {
     loader_tx: Sender<LoaderEvent>,
     loader_rx: Receiver<LoaderEvent>,
     loader_pending: bool,
+    refresh_tx: Sender<RefreshOutcome>,
+    refresh_rx: Receiver<RefreshOutcome>,
+    refresh_inflight: Option<RefreshTicket>,
     adjacent_seed_tx: Sender<AdjacentSeedEvent>,
     adjacent_seed_rx: Receiver<AdjacentSeedEvent>,
     adjacent_seed_generation: u64,
@@ -291,6 +296,7 @@ impl SuiSuiViewApp {
                 }
             };
         let (adjacent_seed_tx, adjacent_seed_rx) = unbounded();
+        let (refresh_tx, refresh_rx) = unbounded();
         let settings = store.settings().clone();
         let fast_start_failure_notice = store.fast_start_failure_notice().cloned();
         let initial_window_size = store.window_placement().inner_size;
@@ -318,6 +324,9 @@ impl SuiSuiViewApp {
             loader_tx,
             loader_rx,
             loader_pending,
+            refresh_tx,
+            refresh_rx,
+            refresh_inflight: None,
             adjacent_seed_tx,
             adjacent_seed_rx,
             adjacent_seed_generation: 0,
@@ -677,9 +686,10 @@ impl SuiSuiViewApp {
                 && decode == self.decode_options()
                 && self.target_is_relevant(target_long_edge) =>
             {
-                if resolve_worker_event_index(self.source.as_deref(), page_id).is_none() {
+                let Some(index) = resolve_worker_event_index(self.source.as_deref(), page_id)
+                else {
                     return false;
-                }
+                };
                 self.page_errors.insert(
                     PageCacheKey {
                         page_id,
@@ -688,6 +698,16 @@ impl SuiSuiViewApp {
                     },
                     message,
                 );
+                // A folder page that failed because its file vanished (not a
+                // corrupt decode) means the snapshot is stale; rebuild it.
+                if self.open_origin == Some(OpenOrigin::Folder)
+                    && self
+                        .source
+                        .as_deref()
+                        .is_some_and(|source| refresh::folder_page_file_vanished(source, index))
+                {
+                    self.request_folder_refresh();
+                }
                 self.commit_pending_page_turn_if_ready();
             }
             _ => {}

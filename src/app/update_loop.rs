@@ -25,6 +25,9 @@ impl SuiSuiViewApp {
         self.drain_loader_events();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("drain_loader_events");
+        self.drain_refresh_outcomes();
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        record_update_phase!("drain_refresh_outcomes");
         self.drain_worker_events();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("drain_worker_events");

@@ -27,10 +27,7 @@ impl SuiSuiViewApp {
     pub(in crate::app) fn next_page(&mut self) {
         let direction = NavigationDirection::Forward;
         if let Some(target) = self.page_turn_target(direction) {
-            match self.skip_missing_page_target(target, direction) {
-                Some(resolved) => self.set_page(resolved, direction),
-                None => self.handle_edge_page(direction),
-            }
+            self.navigate_to_page_turn_target(target, direction);
         } else {
             self.handle_edge_page(direction);
         }
@@ -39,12 +36,27 @@ impl SuiSuiViewApp {
     pub(in crate::app) fn previous_page(&mut self) {
         let direction = NavigationDirection::Backward;
         if let Some(target) = self.page_turn_target(direction) {
-            match self.skip_missing_page_target(target, direction) {
-                Some(resolved) => self.set_page(resolved, direction),
-                None => self.handle_edge_page(direction),
-            }
+            self.navigate_to_page_turn_target(target, direction);
         } else {
             self.handle_edge_page(direction);
+        }
+    }
+
+    /// Resolve `target` past any vanished folder pages, then navigate. When a
+    /// missing file was skipped (or ran off the edge), the open folder snapshot
+    /// is stale, so kick off an off-thread rebuild.
+    fn navigate_to_page_turn_target(&mut self, target: usize, direction: NavigationDirection) {
+        match self.skip_missing_page_target(target, direction) {
+            Some(resolved) => {
+                if resolved != target {
+                    self.request_folder_refresh();
+                }
+                self.set_page(resolved, direction);
+            }
+            None => {
+                self.request_folder_refresh();
+                self.handle_edge_page(direction);
+            }
         }
     }
 
@@ -101,10 +113,7 @@ impl SuiSuiViewApp {
             self.handle_edge_page(direction);
             return;
         }
-        match self.skip_missing_page_target(target, direction) {
-            Some(resolved) => self.set_page(resolved, direction),
-            None => self.handle_edge_page(direction),
-        }
+        self.navigate_to_page_turn_target(target, direction);
     }
 
     /// Folder pages can vanish underneath the open snapshot (external delete).
