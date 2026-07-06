@@ -54,14 +54,21 @@ remediation = [
 [[files]]
 path = "src/app/gpu_paint/mod.rs"
 kind = "legacy-large"
-baseline_lines = 2074
+baseline_lines = 527
 growth_warn_lines = 80
 growth_fail_lines = 160
-purpose = "WGPU paint bridge: display upscaler/downscaler routing, real-time SR pass wiring, and egui-wgpu callback state."
+purpose = "WGPU paint bridge coordination: public surface, egui-wgpu callbacks, display-upscaler settings/env parsing, and shared types. Pool bookkeeping lives in pools.rs and render-pass preparation in passes.rs."
 remediation = [
-  "Split the display-upscaler routing and experimental override helpers out of the paint bridge.",
-  "Move GPU pool/cache bookkeeping into a focused module as the SR experiments settle."
+  "GPU pool/cache bookkeeping and render-pass preparation are already split into pools.rs and passes.rs; keep new code in the matching module."
 ]
+
+[[files]]
+path = "src/app/gpu_paint/passes.rs"
+kind = "legacy-large"
+baseline_lines = 960
+growth_warn_lines = 80
+growth_fail_lines = 160
+purpose = "Render-pass preparation and recording for the WGPU paint bridge."
 
 [[files]]
 path = "src/app/realtime_sr/mod.rs"
