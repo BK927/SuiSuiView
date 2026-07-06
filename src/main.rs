@@ -154,26 +154,23 @@ fn startup_window_guard_mode(store: &StateStore) -> startup_window::StartupWindo
 }
 
 fn startup_window_guard_mode_for(
-    renderer_mode: RendererMode,
-    placement: &WindowPlacement,
+    _renderer_mode: RendererMode,
+    _placement: &WindowPlacement,
 ) -> startup_window::StartupWindowGuardMode {
-    use startup_window::StartupWindowGuardMode::{
-        AuxiliaryOnly, MaskMainUntilRevealed, MaskMainUntilStable,
-    };
+    use startup_window::StartupWindowGuardMode::{AuxiliaryOnly, MaskMainUntilRevealed};
     if !cfg!(target_os = "windows") {
         return AuxiliaryOnly;
     }
     // winit shows the window *inside* create_window (before any post-create Rust
     // code can mask it), so the main-window flash can only be caught by the
-    // guard's WH_CALLWNDPROC hook. WGPU-direct holds that mask until the host
-    // reveals it on the first rendered frame; the Glow path additionally re-issues
-    // SW_MAXIMIZE and reveals on a stability timer, so it only needs masking when
-    // the saved placement is maximized.
-    match renderer_mode {
-        RendererMode::Wgpu => MaskMainUntilRevealed,
-        RendererMode::LowMemoryGlow if placement.maximized => MaskMainUntilStable,
-        RendererMode::LowMemoryGlow => AuxiliaryOnly,
-    }
+    // guard's WH_CALLWNDPROC hook. Every renderer/placement combination holds
+    // that mask until the host reveals it on the first rendered frame via
+    // `reveal_main_windows()`. The retired MaskMainUntilStable mode instead
+    // revealed the Glow-maximized window as soon as it reported visible, but
+    // that state is winit's transient pre-paint show inside create_window, so
+    // the reveal exposed an unpainted frame that winit then hid again — a
+    // visible ~26ms blink at startup.
+    MaskMainUntilRevealed
 }
 
 fn window_icon() -> egui::IconData {
@@ -223,26 +220,18 @@ mod tests {
             ..maximized.clone()
         };
 
-        let glow_maximized = startup_window_guard_mode_for(RendererMode::LowMemoryGlow, &maximized);
-        let glow_windowed = startup_window_guard_mode_for(RendererMode::LowMemoryGlow, &windowed);
-        // WGPU-direct always masks the main window via the guard hook (the flash
-        // happens inside create_window) and reveals on the first frame, windowed
-        // or maximized.
-        let wgpu_maximized = startup_window_guard_mode_for(RendererMode::Wgpu, &maximized);
-        let wgpu_windowed = startup_window_guard_mode_for(RendererMode::Wgpu, &windowed);
-
-        if cfg!(target_os = "windows") {
-            assert_eq!(glow_maximized, StartupWindowGuardMode::MaskMainUntilStable);
-            assert_eq!(
-                wgpu_maximized,
-                StartupWindowGuardMode::MaskMainUntilRevealed
-            );
-            assert_eq!(wgpu_windowed, StartupWindowGuardMode::MaskMainUntilRevealed);
+        // Every renderer/placement combination masks the main window via the
+        // guard hook (the flash happens inside create_window) and holds the mask
+        // until the host reveals it on the first rendered frame.
+        let expected = if cfg!(target_os = "windows") {
+            StartupWindowGuardMode::MaskMainUntilRevealed
         } else {
-            assert_eq!(glow_maximized, StartupWindowGuardMode::AuxiliaryOnly);
-            assert_eq!(wgpu_maximized, StartupWindowGuardMode::AuxiliaryOnly);
-            assert_eq!(wgpu_windowed, StartupWindowGuardMode::AuxiliaryOnly);
+            StartupWindowGuardMode::AuxiliaryOnly
+        };
+        for placement in [&maximized, &windowed] {
+            for renderer in [RendererMode::LowMemoryGlow, RendererMode::Wgpu] {
+                assert_eq!(startup_window_guard_mode_for(renderer, placement), expected);
+            }
         }
-        assert_eq!(glow_windowed, StartupWindowGuardMode::AuxiliaryOnly);
     }
 }

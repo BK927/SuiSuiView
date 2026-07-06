@@ -12,12 +12,11 @@ mod imp {
     use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, EnumWindows, GetClassNameW, GetWindowLongPtrW,
-        GetWindowThreadProcessId, IsWindowVisible, PeekMessageW, SetLayeredWindowAttributes,
-        SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, ShowWindow, TranslateMessage,
-        UnhookWindowsHookEx, CWPRETSTRUCT, CWPSTRUCT, EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW,
-        GWL_EXSTYLE, HHOOK, LWA_ALPHA, MSG, OBJID_WINDOW, PM_REMOVE, SWP_FRAMECHANGED,
-        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, WH_CALLWNDPROC,
-        WH_CALLWNDPROCRET, WINEVENT_OUTOFCONTEXT, WS_EX_LAYERED,
+        GetWindowThreadProcessId, PeekMessageW, SetLayeredWindowAttributes, SetWindowLongPtrW,
+        SetWindowPos, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, CWPRETSTRUCT,
+        CWPSTRUCT, EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, GWL_EXSTYLE, HHOOK, LWA_ALPHA, MSG,
+        OBJID_WINDOW, PM_REMOVE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_NOZORDER, WH_CALLWNDPROC, WH_CALLWNDPROCRET, WINEVENT_OUTOFCONTEXT, WS_EX_LAYERED,
     };
 
     const MAIN_WINDOW_CLASS: &str = "Window Class";
@@ -25,30 +24,25 @@ mod imp {
     const AUXILIARY_GUARD_DURATION: Duration = Duration::from_millis(1_500);
     const MAXIMIZED_GUARD_DURATION: Duration = Duration::from_millis(3_000);
     const AUXILIARY_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(2);
-    const MASK_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(1);
     const MAIN_REVEAL_FORCE_DURATION: Duration = Duration::from_millis(500);
     static MASK_MAIN_WINDOWS: AtomicBool = AtomicBool::new(false);
-    static REVEAL_MAIN_ON_RAW_VISIBLE: AtomicBool = AtomicBool::new(false);
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum StartupWindowGuardMode {
         AuxiliaryOnly,
-        /// Glow maximized: mask the main window, re-issue `SW_MAXIMIZE`, and
-        /// reveal once the maximized frame is stable.
-        MaskMainUntilStable,
-        /// WGPU-direct: mask the main window synchronously (the hook catches the
-        /// show that happens *inside* winit's `create_window`), then hold the
-        /// mask until the host reveals it on the first rendered frame via
-        /// `reveal_main_windows()`. No maximize, no stability timer.
+        /// Mask the main window synchronously (the hook catches the show that
+        /// happens *inside* winit's `create_window`), then hold the mask until
+        /// the host reveals it on the first rendered frame via
+        /// `reveal_main_windows()`. No maximize, no stability timer: the retired
+        /// MaskMainUntilStable mode revealed on the first raw-visible state,
+        /// which is winit's transient pre-paint show inside `create_window`, so
+        /// it blinked an unpainted frame.
         MaskMainUntilRevealed,
     }
 
     impl StartupWindowGuardMode {
         fn masks_main_window(self) -> bool {
-            matches!(
-                self,
-                Self::MaskMainUntilStable | Self::MaskMainUntilRevealed
-            )
+            self == Self::MaskMainUntilRevealed
         }
     }
 
@@ -61,7 +55,6 @@ mod imp {
     impl StartupFlashGuard {
         pub(crate) fn start(mode: StartupWindowGuardMode) -> Self {
             MASK_MAIN_WINDOWS.store(mode.masks_main_window(), Ordering::Release);
-            REVEAL_MAIN_ON_RAW_VISIBLE.store(false, Ordering::Release);
             let (callwnd_hook, callwnd_ret_hook) = install_main_thread_hooks(mode);
             let hooks = Arc::new(MainThreadHooks::new(callwnd_hook, callwnd_ret_hook));
             let worker_hooks = hooks.clone();
@@ -90,7 +83,6 @@ mod imp {
                 let _ = join.join();
             }
             MASK_MAIN_WINDOWS.store(false, Ordering::Release);
-            REVEAL_MAIN_ON_RAW_VISIBLE.store(false, Ordering::Release);
         }
     }
 
@@ -178,13 +170,9 @@ mod imp {
         mask_startup_windows(pid);
         let _ = ready.send(());
         while Instant::now() < deadline && !stop.load(Ordering::Acquire) {
-            let snapshot = mask_startup_windows(pid);
-            match main_reveal.update(snapshot, Instant::now()) {
+            mask_startup_windows(pid);
+            match main_reveal.update(Instant::now()) {
                 MainRevealAction::None => {}
-                MainRevealAction::Reveal => {
-                    main_thread_hooks.unhook();
-                    reveal_main_windows();
-                }
                 MainRevealAction::ForceReveal => force_reveal_main_windows(),
             }
             if mode.masks_main_window() && main_reveal.observe_external_reveal(Instant::now()) {
@@ -195,7 +183,7 @@ mod imp {
                 break;
             }
             pump_startup_window_events();
-            wait_for_startup_window_event(mode);
+            wait_for_startup_window_event();
         }
         reveal_main_windows();
         main_thread_hooks.unhook();
@@ -233,29 +221,15 @@ mod imp {
         }
     }
 
-    fn mask_startup_windows(pid: u32) -> WindowScanSnapshot {
-        let mut snapshot = WindowScanSnapshot::default();
-        let mut context = WindowScanContext {
-            snapshot: &mut snapshot,
-            pid,
-        };
+    fn mask_startup_windows(pid: u32) {
         unsafe {
-            EnumWindows(
-                Some(enum_windows_for_startup_mask),
-                &mut context as *mut WindowScanContext as LPARAM,
-            );
+            EnumWindows(Some(enum_windows_for_startup_mask), pid as LPARAM);
         }
-        snapshot
     }
 
     unsafe extern "system" fn enum_windows_for_startup_mask(hwnd: HWND, lparam: LPARAM) -> i32 {
-        let context = &mut *(lparam as *mut WindowScanContext);
-        if window_process_id(hwnd) == context.pid {
+        if window_process_id(hwnd) == lparam as u32 {
             let class_name = window_class_name(hwnd);
-            if class_name == MAIN_WINDOW_CLASS {
-                context.snapshot.main_visible |= IsWindowVisible(hwnd) != 0;
-                context.snapshot.main_hwnd = hwnd;
-            }
             mask_startup_window(hwnd, &class_name);
         }
         1
@@ -300,26 +274,12 @@ mod imp {
         }
     }
 
-    fn wait_for_startup_window_event(mode: StartupWindowGuardMode) {
-        let interval = if mode == StartupWindowGuardMode::MaskMainUntilStable {
-            MASK_GUARD_POLL_INTERVAL
-        } else {
-            AUXILIARY_GUARD_POLL_INTERVAL
-        };
-        thread::sleep(interval);
+    fn wait_for_startup_window_event() {
+        thread::sleep(AUXILIARY_GUARD_POLL_INTERVAL);
     }
 
     unsafe fn mask_startup_window(hwnd: HWND, class_name: &str) {
         let masks_main_window = class_name == MAIN_WINDOW_CLASS;
-        if masks_main_window
-            && REVEAL_MAIN_ON_RAW_VISIBLE.load(Ordering::Acquire)
-            && IsWindowVisible(hwnd) != 0
-        {
-            REVEAL_MAIN_ON_RAW_VISIBLE.store(false, Ordering::Release);
-            MASK_MAIN_WINDOWS.store(false, Ordering::Release);
-            reveal_main_window(hwnd);
-            return;
-        }
         if class_name == WINIT_EVENT_TARGET_CLASS
             || (masks_main_window && MASK_MAIN_WINDOWS.load(Ordering::Acquire))
         {
@@ -338,7 +298,6 @@ mod imp {
     }
 
     pub(crate) fn reveal_main_windows() {
-        REVEAL_MAIN_ON_RAW_VISIBLE.store(false, Ordering::Release);
         if !MASK_MAIN_WINDOWS.swap(false, Ordering::AcqRel) {
             return;
         }
@@ -399,66 +358,26 @@ mod imp {
         buffer[..len].iter().copied().eq(target.encode_utf16())
     }
 
-    #[derive(Default)]
-    struct WindowScanSnapshot {
-        main_visible: bool,
-        main_hwnd: HWND,
-    }
-
-    struct WindowScanContext<'a> {
-        snapshot: &'a mut WindowScanSnapshot,
-        pid: u32,
-    }
-
     struct MainRevealState {
-        mode: StartupWindowGuardMode,
         revealed: bool,
-        maximize_requested: bool,
         force_reveal_until: Option<Instant>,
     }
 
     impl MainRevealState {
         fn new(mode: StartupWindowGuardMode) -> Self {
             Self {
-                mode,
-                // Both mask modes start masked (not yet revealed); AuxiliaryOnly
+                // The mask mode starts masked (not yet revealed); AuxiliaryOnly
                 // never masks main, so it is effectively already revealed.
                 revealed: !mode.masks_main_window(),
-                // Only the Glow "stable" mode re-issues SW_MAXIMIZE; the others
-                // skip it (WGPU-direct maximizes via winit's window attributes).
-                maximize_requested: mode != StartupWindowGuardMode::MaskMainUntilStable,
                 force_reveal_until: None,
             }
         }
 
-        fn update(&mut self, snapshot: WindowScanSnapshot, now: Instant) -> MainRevealAction {
+        fn update(&mut self, now: Instant) -> MainRevealAction {
             if self.force_reveal_until.is_some_and(|until| now <= until) {
                 return MainRevealAction::ForceReveal;
             }
             self.force_reveal_until = None;
-            if self.revealed {
-                return MainRevealAction::None;
-            }
-            if self.mode == StartupWindowGuardMode::MaskMainUntilStable
-                && !self.maximize_requested
-                && !snapshot.main_hwnd.is_null()
-                && snapshot.main_visible
-            {
-                unsafe {
-                    let _ = ShowWindow(snapshot.main_hwnd, SW_MAXIMIZE);
-                }
-                REVEAL_MAIN_ON_RAW_VISIBLE.store(true, Ordering::Release);
-                self.maximize_requested = true;
-                return MainRevealAction::None;
-            }
-            // Only the "stable" (Glow maximized) mode auto-reveals when the
-            // window first appears; MaskMainUntilRevealed holds the mask until the
-            // host reveals it explicitly on the first rendered frame.
-            if self.mode == StartupWindowGuardMode::MaskMainUntilStable && snapshot.main_visible {
-                self.revealed = true;
-                self.force_reveal_until = Some(now + MAIN_REVEAL_FORCE_DURATION);
-                return MainRevealAction::Reveal;
-            }
             MainRevealAction::None
         }
 
@@ -478,7 +397,6 @@ mod imp {
 
     enum MainRevealAction {
         None,
-        Reveal,
         ForceReveal,
     }
 }
@@ -488,7 +406,6 @@ mod imp {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum StartupWindowGuardMode {
         AuxiliaryOnly,
-        MaskMainUntilStable,
         MaskMainUntilRevealed,
     }
 
