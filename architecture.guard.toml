@@ -177,19 +177,7 @@ reason = "Settings panel just over budget after the memory-budget UI landed; spl
 expires = "2026-09-30"
 
 [[waivers]]
-path = "src/core/state.rs"
-rule = "large_new_file"
-reason = "State store crossed the budget with the per-book sharded store and single total memory budget; split its file IO/migration helpers once the state batch settles."
-expires = "2026-09-30"
-
-[[waivers]]
 path = "src/app/cache.rs"
 rule = "large_new_file"
 reason = "Cache pool derivation from the single total memory budget pushed it over; split the pool-share math out once the budget model settles."
-expires = "2026-09-30"
-
-[[waivers]]
-path = "src/core/state/tests.rs"
-rule = "large_new_file"
-reason = "State test module grew with per-book sharding and budget coverage; split by scenario once the state batch settles."
 expires = "2026-09-30"
