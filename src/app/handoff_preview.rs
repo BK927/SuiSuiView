@@ -142,6 +142,10 @@ struct HandoffPreviewApp {
     /// Authoritative logical inner size, defended against winit 0.30's mixed-DPI
     /// drag storms (see DpiSizeGuard docs).
     dpi_size_guard: DpiSizeGuard,
+    // Last window title the Glow stage broadcast. A change must go through
+    // `schedule_process_visible_window_title` so its generation bump kills any
+    // stale timed re-assert that would otherwise restore the old title.
+    glow_synced_title: Option<String>,
 }
 
 enum Stage {
@@ -201,6 +205,7 @@ impl HandoffPreviewApp {
             redraw_deadline: Arc::new(Mutex::new(None)),
             wake_proxy,
             dpi_size_guard: DpiSizeGuard::new(),
+            glow_synced_title: None,
         }
     }
 
@@ -313,9 +318,23 @@ impl HandoffPreviewApp {
         if self.metrics.first_glow_present_ms.is_none() {
             self.metrics.first_glow_present_ms = Some(now_ms);
             gl_window.reveal_after_first_frame();
-            schedule_process_visible_window_title("SuiSuiView".to_owned());
         }
-        sync_visible_window_title(gl_window.window());
+        // egui_glow applies Title viewport commands itself, so detect changes from
+        // the winit side. A change re-schedules the timed re-assert with the new
+        // title (killing the pending one, which would clobber it back — the book
+        // title used to vanish ~900ms after a fresh open until the next input).
+        let title = gl_window.window().title();
+        let title = if title.is_empty() {
+            "SuiSuiView".to_owned()
+        } else {
+            title
+        };
+        if self.glow_synced_title.as_ref() != Some(&title) {
+            self.glow_synced_title = Some(title.clone());
+            schedule_process_visible_window_title(title);
+        } else {
+            sync_visible_window_title(gl_window.window());
+        }
 
         // The Glow host is reactive: the next redraw is scheduled by egui's
         // repaint deadline (see `about_to_wait`) or by input in `window_event`.
