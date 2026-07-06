@@ -115,7 +115,7 @@ remediation = [
 ]
 
 [[files]]
-path = "src/app/handoff_preview.rs"
+path = "src/app/winit_host.rs"
 kind = "legacy-large"
 baseline_lines = 910
 growth_warn_lines = 80
@@ -123,8 +123,7 @@ growth_fail_lines = 160
 purpose = "Custom winit host: event loop, Glow/WGPU stages, reactive control flow, and DPI defense wiring."
 remediation = [
   "Split the Glow and Wgpu stage handlers (redraw/window_event arms) into per-stage submodules.",
-  "Move the title-sync Win32 helpers into a platform-side module.",
-  "Rename away from the historical handoff name when the split lands (ADR 0003)."
+  "Move the title-sync Win32 helpers into a platform-side module."
 ]
 
 [[routing]]

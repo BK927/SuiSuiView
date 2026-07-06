@@ -45,8 +45,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // WGPU fast-start handoff; LowMemoryGlow runs the Glow-only host; a handoff
     // failure persists the demotion and relaunches into the Glow-only host
     // (winit forbids a second event loop in one process).
-    let wants_wgpu = app::handoff_preview::requested()
-        || app::handoff_preview::enabled_for_settings(store.settings());
+    let wants_wgpu = app::winit_host::requested()
+        || app::winit_host::enabled_for_settings(store.settings());
     if wants_wgpu {
         let mut handoff_store = store.clone();
         handoff_store.clear_fast_start_failure_notice();
@@ -90,18 +90,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-#[allow(clippy::result_large_err)] // mirrors handoff_preview::run's return type
+#[allow(clippy::result_large_err)] // mirrors winit_host::run's return type
 fn run_host(
     store: StateStore,
     handoff_enabled: bool,
     ipc_rx: Option<Receiver<Option<PathBuf>>>,
     startup_open_path: Option<PathBuf>,
-) -> Result<(), app::handoff_preview::HandoffFailure> {
+) -> Result<(), app::winit_host::HostFailure> {
     let startup_open = startup_open_path
         .as_ref()
         .and_then(|path| app::start_startup_open_loader(path.clone(), &store));
-    app::handoff_preview::run(
-        app::handoff_preview::HandoffPreviewOptions {
+    app::winit_host::run(
+        app::winit_host::WinitHostOptions {
             store,
             ipc_rx,
             startup_open_path,

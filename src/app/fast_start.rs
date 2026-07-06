@@ -20,7 +20,7 @@ pub(in crate::app) enum FastStartReportAction {
 
 pub(crate) fn disable_gpu_after_handoff_failure(
     mut store: StateStore,
-    failure: &super::handoff_preview::HandoffFailure,
+    failure: &super::winit_host::HostFailure,
     startup_open_path: Option<&Path>,
 ) -> StateStore {
     let timestamp = UtcTimestamp::now();
@@ -293,7 +293,7 @@ fn open_diagnostics_path(notice: &FastStartFailureNotice) -> Result<(), String> 
 
 fn write_diagnostic(
     store: &StateStore,
-    failure: &super::handoff_preview::HandoffFailure,
+    failure: &super::winit_host::HostFailure,
     startup_open_path: Option<&Path>,
     timestamp: &UtcTimestamp,
 ) -> Result<PathBuf, String> {
@@ -334,7 +334,7 @@ struct FastStartDiagnostic<'a> {
     user_reason_key: &'a str,
     error: &'a str,
     gpu: GpuDiagnostic<'a>,
-    metrics: &'a super::handoff_preview::HandoffPreviewMetrics,
+    metrics: &'a super::winit_host::WinitHostMetrics,
     fallback: &'a str,
     startup_source: Option<StartupSourceDiagnostic>,
 }

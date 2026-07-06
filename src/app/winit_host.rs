@@ -22,13 +22,15 @@ use dpi_guard::DpiSizeGuard;
 use glow_window::{create_gl_display, create_plain_window, GlutinWindowContext};
 use prewarm::{run_wgpu_prewarm, PrewarmReport, PrewarmedWgpu};
 
+// The "handoff" naming in these external-facing strings (CLI arg + env vars) is
+// kept for external compatibility even though the module was renamed to winit_host.
 const REQUEST_ARG: &str = "--experimental-app-handoff";
 const REQUEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_APP_HANDOFF";
 const FAIL_STAGE_ENV: &str = "SUISUIVIEW_HANDOFF_FAIL_STAGE";
 #[cfg(target_os = "windows")]
 static TITLE_SYNC_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-pub(crate) struct HandoffPreviewOptions {
+pub(crate) struct WinitHostOptions {
     pub(crate) store: StateStore,
     pub(crate) ipc_rx: Option<Receiver<Option<PathBuf>>>,
     pub(crate) startup_open_path: Option<PathBuf>,
@@ -46,20 +48,20 @@ pub(crate) fn enabled_for_settings(settings: &AppSettings) -> bool {
     matches!(settings.renderer_mode, RendererMode::Wgpu)
 }
 
-// HandoffFailure is intentionally rich diagnostic data; boxing it would only obscure the error path.
+// HostFailure is intentionally rich diagnostic data; boxing it would only obscure the error path.
 #[allow(clippy::result_large_err)]
-pub(crate) fn run(options: HandoffPreviewOptions, wgpu_direct: bool) -> Result<(), HandoffFailure> {
+pub(crate) fn run(options: WinitHostOptions, wgpu_direct: bool) -> Result<(), HostFailure> {
     let event_loop = winit::event_loop::EventLoop::<()>::new()
-        .map_err(|error| HandoffFailure::new(HandoffFailureStage::Unknown, error.to_string()))?;
+        .map_err(|error| HostFailure::new(HostFailureStage::Unknown, error.to_string()))?;
     let wake_proxy = event_loop.create_proxy();
-    let mut app = HandoffPreviewApp::new(options, wgpu_direct, wake_proxy);
+    let mut app = WinitHostApp::new(options, wgpu_direct, wake_proxy);
     let result = event_loop.run_app(&mut app);
     if let Some(failure) = app.failure.take() {
         return Err(failure);
     }
     result.map_err(|error| {
-        HandoffFailure::with_metrics(
-            HandoffFailureStage::Unknown,
+        HostFailure::with_metrics(
+            HostFailureStage::Unknown,
             format!("failed to run app handoff preview: {error}"),
             app.metrics.clone(),
         )
@@ -67,28 +69,28 @@ pub(crate) fn run(options: HandoffPreviewOptions, wgpu_direct: bool) -> Result<(
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct HandoffFailure {
-    pub(crate) stage: HandoffFailureStage,
+pub(crate) struct HostFailure {
+    pub(crate) stage: HostFailureStage,
     pub(crate) error: String,
-    pub(crate) metrics: HandoffPreviewMetrics,
+    pub(crate) metrics: WinitHostMetrics,
 }
 
-impl HandoffFailure {
-    fn new(stage: HandoffFailureStage, error: String) -> Self {
+impl HostFailure {
+    fn new(stage: HostFailureStage, error: String) -> Self {
         Self {
             stage,
             error: error.clone(),
-            metrics: HandoffPreviewMetrics {
+            metrics: WinitHostMetrics {
                 error: Some(error),
-                ..HandoffPreviewMetrics::default()
+                ..WinitHostMetrics::default()
             },
         }
     }
 
     fn with_metrics(
-        stage: HandoffFailureStage,
+        stage: HostFailureStage,
         error: String,
-        mut metrics: HandoffPreviewMetrics,
+        mut metrics: WinitHostMetrics,
     ) -> Self {
         metrics.error = Some(error.clone());
         Self {
@@ -100,7 +102,7 @@ impl HandoffFailure {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub(crate) enum HandoffFailureStage {
+pub(crate) enum HostFailureStage {
     GlCreate,
     GlSwap,
     WgpuPrewarm,
@@ -108,7 +110,7 @@ pub(crate) enum HandoffFailureStage {
     Unknown,
 }
 
-impl HandoffFailureStage {
+impl HostFailureStage {
     pub(crate) fn key(self) -> &'static str {
         match self {
             Self::GlCreate => "gl_create",
@@ -120,8 +122,8 @@ impl HandoffFailureStage {
     }
 }
 
-struct HandoffPreviewApp {
-    options: Option<HandoffPreviewOptions>,
+struct WinitHostApp {
+    options: Option<WinitHostOptions>,
     // true: build the window and attach a WGPU surface directly (renderer_mode
     // Wgpu). false: run the Glow-only host (LowMemoryGlow) for the whole session.
     wgpu_direct: bool,
@@ -129,8 +131,8 @@ struct HandoffPreviewApp {
     stage: Option<Stage>,
     prewarm_rx: Option<mpsc::Receiver<PrewarmReport>>,
     prewarmed_wgpu: Option<PrewarmedWgpu>,
-    metrics: HandoffPreviewMetrics,
-    failure: Option<HandoffFailure>,
+    metrics: WinitHostMetrics,
+    failure: Option<HostFailure>,
     summary_printed: bool,
     // Reactive control flow for the steady-state host (Glow-only, or the WGPU
     // stage after handoff): egui's repaint callback records the next requested
@@ -167,7 +169,7 @@ enum Stage {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
-pub(crate) struct HandoffPreviewMetrics {
+pub(crate) struct WinitHostMetrics {
     pub(crate) first_glow_present_ms: Option<f64>,
     pub(crate) last_glow_present_ms: Option<f64>,
     pub(crate) handoff_started_ms: Option<f64>,
@@ -188,9 +190,9 @@ pub(crate) struct HandoffPreviewMetrics {
     pub(crate) error: Option<String>,
 }
 
-impl HandoffPreviewApp {
+impl WinitHostApp {
     fn new(
-        options: HandoffPreviewOptions,
+        options: WinitHostOptions,
         wgpu_direct: bool,
         wake_proxy: winit::event_loop::EventLoopProxy<()>,
     ) -> Self {
@@ -201,7 +203,7 @@ impl HandoffPreviewApp {
             stage: None,
             prewarm_rx: None,
             prewarmed_wgpu: None,
-            metrics: HandoffPreviewMetrics::default(),
+            metrics: WinitHostMetrics::default(),
             failure: None,
             summary_printed: false,
             redraw_deadline: Arc::new(Mutex::new(None)),
@@ -215,7 +217,7 @@ impl HandoffPreviewApp {
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
     ) -> Result<(), String> {
-        if let Some(error) = injected_failure(HandoffFailureStage::GlCreate) {
+        if let Some(error) = injected_failure(HostFailureStage::GlCreate) {
             return Err(error);
         }
         let options = self
@@ -287,7 +289,7 @@ impl HandoffPreviewApp {
     ) {
         self.poll_prewarm();
         if let Some(error) = self.metrics.prewarm_error.clone() {
-            self.fail(event_loop, HandoffFailureStage::WgpuPrewarm, error);
+            self.fail(event_loop, HostFailureStage::WgpuPrewarm, error);
             return;
         }
         // Cleared before the frame so the app's repaint requests during
@@ -306,12 +308,12 @@ impl HandoffPreviewApp {
             gl.clear(glow::COLOR_BUFFER_BIT);
         }
         egui_glow.paint(gl_window.window());
-        if let Some(error) = injected_failure(HandoffFailureStage::GlSwap) {
-            self.fail(event_loop, HandoffFailureStage::GlSwap, error);
+        if let Some(error) = injected_failure(HostFailureStage::GlSwap) {
+            self.fail(event_loop, HostFailureStage::GlSwap, error);
             return;
         }
         if let Err(error) = gl_window.swap_buffers() {
-            self.fail(event_loop, HandoffFailureStage::GlSwap, error);
+            self.fail(event_loop, HostFailureStage::GlSwap, error);
             return;
         }
 
@@ -378,8 +380,8 @@ impl HandoffPreviewApp {
         egui_state.handle_platform_output(&window, full_output.platform_output);
         let clipped_primitives =
             egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
-        if let Some(error) = injected_failure(HandoffFailureStage::FirstWgpuFrame) {
-            self.fail(event_loop, HandoffFailureStage::FirstWgpuFrame, error);
+        if let Some(error) = injected_failure(HostFailureStage::FirstWgpuFrame) {
+            self.fail(event_loop, HostFailureStage::FirstWgpuFrame, error);
             return;
         }
         painter.paint_and_update_textures(
@@ -564,7 +566,7 @@ impl HandoffPreviewApp {
         self.metrics.prewarm_device_type = report.device_type;
         match report.result {
             Ok(prewarmed) => {
-                if let Some(error) = injected_failure(HandoffFailureStage::WgpuPrewarm) {
+                if let Some(error) = injected_failure(HostFailureStage::WgpuPrewarm) {
                     self.metrics.prewarm_error = Some(error);
                 } else {
                     self.prewarmed_wgpu = Some(prewarmed);
@@ -609,11 +611,11 @@ impl HandoffPreviewApp {
     fn fail(
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
-        stage: HandoffFailureStage,
+        stage: HostFailureStage,
         error: String,
     ) {
         self.metrics.error = Some(error.clone());
-        self.failure = Some(HandoffFailure::with_metrics(
+        self.failure = Some(HostFailure::with_metrics(
             stage,
             error,
             self.metrics.clone(),
@@ -661,7 +663,7 @@ impl HandoffPreviewApp {
     }
 }
 
-impl winit::application::ApplicationHandler<()> for HandoffPreviewApp {
+impl winit::application::ApplicationHandler<()> for WinitHostApp {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         if self.stage.is_some() {
             return;
@@ -674,7 +676,7 @@ impl winit::application::ApplicationHandler<()> for HandoffPreviewApp {
             self.start_glow(event_loop)
         };
         if let Err(error) = result {
-            self.fail(event_loop, HandoffFailureStage::GlCreate, error);
+            self.fail(event_loop, HostFailureStage::GlCreate, error);
         }
     }
 
@@ -922,7 +924,7 @@ fn elapsed_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
-fn injected_failure(stage: HandoffFailureStage) -> Option<String> {
+fn injected_failure(stage: HostFailureStage) -> Option<String> {
     let requested = std::env::var(FAIL_STAGE_ENV).ok()?;
     (requested == stage.key()).then(|| format!("injected handoff failure at {}", stage.key()))
 }

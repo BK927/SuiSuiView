@@ -39,7 +39,7 @@ pub(crate) mod fast_start;
 #[cfg(target_os = "windows")]
 mod file_associations;
 mod gpu_paint;
-pub(crate) mod handoff_preview;
+pub(crate) mod winit_host;
 mod image_header;
 mod image_info;
 mod navigation;
