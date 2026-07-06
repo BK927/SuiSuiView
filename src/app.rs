@@ -53,6 +53,7 @@ mod settings;
 mod settings_bookmarks;
 mod settings_input;
 mod settings_performance;
+mod settings_rendering;
 mod sibling_books;
 mod texture_prewarm;
 mod ui;

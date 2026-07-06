@@ -164,20 +164,3 @@ signals = ["prioritized_jobs", "prioritized_indices", "prune_worker_cache", "cle
 # rule = "legacy_growth"
 # reason = "Temporary wiring while extracting app/ui modules."
 # expires = "2026-06-15"
-
-# Short-lived waivers for files the memory-budget/state batch nudged just over
-# the 900-line budget. These have genuine near-term split intent (unlike the
-# chronic files above, now registered as legacy-large ratchets). Split or renew
-# with a fresh reason before the expiry.
-
-[[waivers]]
-path = "src/app/settings.rs"
-rule = "large_new_file"
-reason = "Settings panel just over budget after the memory-budget UI landed; split panels in a focused settings refactor."
-expires = "2026-09-30"
-
-[[waivers]]
-path = "src/app/cache.rs"
-rule = "large_new_file"
-reason = "Cache pool derivation from the single total memory budget pushed it over; split the pool-share math out once the budget model settles."
-expires = "2026-09-30"
