@@ -138,6 +138,7 @@ fn decode_options_from_current_settings() -> DecodeOptions {
         allow_display_upscale: false,
         apply_exif_orientation: settings.apply_exif_orientation,
         apply_embedded_icc: settings.apply_embedded_icc,
+        fast_sampled_scaled_decode: settings.fast_sampled_scaled_decode,
     }
 }
 
