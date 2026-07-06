@@ -385,8 +385,19 @@ impl SuiSuiViewApp {
         }
 
         let current_indices = self.spread_indices();
-        if let Some(transition) = self.transition.take() {
-            let elapsed_ms = transition.started_at.elapsed().as_secs_f32() * 1000.0;
+        // A completed transition must not paint from_indices: no further repaint is
+        // requested once it drops, so the reactive host would freeze the ghost frame.
+        // Elapsed is read once and reused below so the completion check and the
+        // painted `t` cannot disagree across the TRANSITION_MS boundary.
+        let transition = self
+            .transition
+            .take()
+            .map(|transition| {
+                let elapsed_ms = transition.started_at.elapsed().as_secs_f32() * 1000.0;
+                (transition, elapsed_ms)
+            })
+            .filter(|(_, elapsed_ms)| *elapsed_ms < TRANSITION_MS);
+        if let Some((transition, elapsed_ms)) = transition {
             let t = (elapsed_ms / TRANSITION_MS).clamp(0.0, 1.0);
             let paint = transition_paint_params(transition.style, t, transition.screen_sign, rect);
             let current_target_long_edge = self.target_long_edge;
