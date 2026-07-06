@@ -620,7 +620,7 @@ fn cunny_variant_sources(
 ) -> impl Iterator<Item = &'static CunnyVariantSource> {
     CUNNY_VARIANTS
         .iter()
-        .filter(move |variant| method_filter.map_or(true, |method| variant.method == method))
+        .filter(move |variant| method_filter.is_none_or(|method| variant.method == method))
 }
 
 const CUNNY_VERYFAST_NVL_ENTRY_POINTS: [&str; 4] = [

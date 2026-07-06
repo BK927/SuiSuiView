@@ -58,6 +58,8 @@ impl SpanDisplaySkipStats {
     }
 }
 
+// established metrics call surface; a params struct would be pure boilerplate
+#[allow(clippy::too_many_arguments)]
 pub(super) fn record_span_display_encode(
     duration: Duration,
     source_size: [usize; 2],
@@ -98,6 +100,7 @@ pub(super) fn record_span_display_encode(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn record_span_display_prepare(
     duration: Duration,
     source_size: [usize; 2],
@@ -136,6 +139,7 @@ pub(super) fn record_span_display_prepare(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn record_span_display_tile_batch(
     duration: Duration,
     source_size: [usize; 2],
@@ -168,6 +172,7 @@ pub(super) fn record_span_display_tile_batch(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn record_span_display_cancel(
     reason: &'static str,
     duration: Duration,

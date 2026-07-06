@@ -103,6 +103,8 @@ impl Drop for ReadAhead {
     }
 }
 
+// established call surface; a params struct would be pure boilerplate
+#[allow(clippy::too_many_arguments)]
 pub(super) fn maybe_start(
     read_ahead: &mut Option<ReadAhead>,
     command_rx: &Receiver<WorkerCommand>,
@@ -150,6 +152,7 @@ pub(super) fn maybe_start(
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn next_job(
     source: &SharedSource,
     book_id: &str,
@@ -548,10 +551,12 @@ mod tests {
         }
     }
 
+    type ReadLog = Arc<Mutex<Vec<(usize, Option<String>)>>>;
+
     struct ThreadRecordingSource {
         path: PathBuf,
         bytes: Vec<u8>,
-        read_log: Arc<Mutex<Vec<(usize, Option<String>)>>>,
+        read_log: ReadLog,
     }
 
     impl BookSource for ThreadRecordingSource {

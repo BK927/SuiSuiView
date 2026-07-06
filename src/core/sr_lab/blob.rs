@@ -147,7 +147,7 @@ pub fn parse_weights(bytes: &[u8]) -> Result<SrLabWeights, String> {
         }
         let shape4 = [cursor.u32()?, cursor.u32()?, cursor.u32()?, cursor.u32()?];
         let shape = shape4[..rank].to_vec();
-        if shape.iter().any(|dimension| *dimension == 0) {
+        if shape.contains(&0) {
             return Err(format!("SR Lab tensor {name} has a zero dimension"));
         }
 

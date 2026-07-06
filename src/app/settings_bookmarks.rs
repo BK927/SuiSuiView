@@ -179,6 +179,8 @@ fn top_bar_item_checkbox(
     checkbox_with_help(ui, value, &i18n.text(label_key), &i18n.text(help_key))
 }
 
+// established call surface; a params struct would be pure boilerplate
+#[allow(clippy::too_many_arguments)]
 fn show_quick_scaler_candidates<T, I>(
     ui: &mut egui::Ui,
     title: &str,

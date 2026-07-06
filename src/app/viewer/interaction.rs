@@ -289,7 +289,7 @@ impl SuiSuiViewApp {
                 self.apply_command(ui.ctx(), command);
             }
         } else if scroll_y.abs() < 1.0 {
-            return;
+            // Swallow sub-pixel scroll noise.
         } else if self.settings.wheel_mode == WheelMode::ScrollWhenZoomed
             && self.fit_mode == FitMode::Manual
             && self.manual_zoom > 1.01

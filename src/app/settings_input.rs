@@ -383,15 +383,12 @@ impl SuiSuiViewApp {
         };
         dialog::setting_card(ui, |ui| {
             ui.label(
-                RichText::new(format!(
-                    "{}",
-                    i18n.with_vars(
-                        "settings.keyboard.conflict",
-                        &[
-                            ("shortcut", conflict.shortcut.label()),
-                            ("command", conflict.existing_command.label_i18n(i18n)),
-                        ],
-                    )
+                RichText::new(i18n.with_vars(
+                    "settings.keyboard.conflict",
+                    &[
+                        ("shortcut", conflict.shortcut.label()),
+                        ("command", conflict.existing_command.label_i18n(i18n)),
+                    ],
                 ))
                 .color(theme::TEXT_PRIMARY),
             );

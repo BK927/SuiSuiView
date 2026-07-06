@@ -485,10 +485,10 @@ fn reference_from_results(
     })
 }
 
-fn preferred_reference_result<'a>(
+fn preferred_reference_result(
     format: BenchFormat,
-    results: &'a [DecoderCandidateResult],
-) -> Option<&'a DecoderCandidateResult> {
+    results: &[DecoderCandidateResult],
+) -> Option<&DecoderCandidateResult> {
     let has_animation_result = results
         .iter()
         .any(|result| result.error.is_none() && result.frames_decoded.unwrap_or(1) > 1);

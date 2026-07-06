@@ -338,6 +338,8 @@ impl GpuEffectBench {
     }
 }
 
+// established call surface; a params struct would be pure boilerplate
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn params_for_effects(
     source_size: [usize; 2],
     output_size: [usize; 2],

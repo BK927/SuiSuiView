@@ -43,23 +43,18 @@ impl ResizeFilter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum CpuScaleFilter {
     Nearest,
     Box,
     Bilinear,
+    #[default]
     Hamming,
     CatmullRom,
     Mitchell,
     Gaussian,
     Lanczos2,
     Lanczos3,
-}
-
-impl Default for CpuScaleFilter {
-    fn default() -> Self {
-        Self::Hamming
-    }
 }
 
 impl CpuScaleFilter {
@@ -115,7 +110,7 @@ impl From<ResizeFilter> for CpuScaleFilter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum WgpuDownscaleMethod {
     Nearest,
     Bilinear,
@@ -130,13 +125,8 @@ pub enum WgpuDownscaleMethod {
     PyramidHamming,
     PyramidMitchell,
     PyramidLanczos2,
+    #[default]
     PyramidLanczos3,
-}
-
-impl Default for WgpuDownscaleMethod {
-    fn default() -> Self {
-        Self::PyramidLanczos3
-    }
 }
 
 impl WgpuDownscaleMethod {

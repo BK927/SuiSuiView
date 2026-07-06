@@ -219,10 +219,10 @@ fn parse_experimental_wgpu_upscale_method(
         {
             return Some(method);
         }
-        if value.eq_ignore_ascii_case(WgpuUpscaleMethod::WgslSrLabSpanX2.token()) {
-            if span_manifest_present {
-                return Some(WgpuUpscaleMethod::WgslSrLabSpanX2);
-            }
+        if value.eq_ignore_ascii_case(WgpuUpscaleMethod::WgslSrLabSpanX2.token())
+            && span_manifest_present
+        {
+            return Some(WgpuUpscaleMethod::WgslSrLabSpanX2);
         }
     }
     if explicit_span && span_manifest_present {

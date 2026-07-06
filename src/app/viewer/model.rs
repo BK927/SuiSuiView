@@ -295,6 +295,8 @@ impl CurrentViewState {
         }
     }
 
+    // established call surface; a params struct would be pure boilerplate
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::app) fn from_gpu(
         render: PageRenderInfo,
         image_size: [usize; 2],

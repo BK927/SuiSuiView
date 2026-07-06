@@ -352,7 +352,7 @@ fn pixel_shuffle(input: &FeatureMap, scale: usize) -> Result<FeatureMap, String>
         return Err("pixel shuffle scale must be positive".to_owned());
     }
     let scale_sq = scale * scale;
-    if input.channels % scale_sq != 0 {
+    if !input.channels.is_multiple_of(scale_sq) {
         return Err("pixel shuffle input channels are not divisible by scale^2".to_owned());
     }
     let output_channels = input.channels / scale_sq;

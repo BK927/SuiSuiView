@@ -1061,11 +1061,11 @@ impl Drop for SuiSuiViewApp {
         let debug_compare_stopped = self
             .debug_compare_worker
             .as_mut()
-            .map_or(true, DebugCompareWorker::request_shutdown);
+            .is_none_or(DebugCompareWorker::request_shutdown);
         let thumbnails_stopped = self
             .bookmark_thumbnails
             .as_mut()
-            .map_or(true, BookmarkThumbnails::request_shutdown);
+            .is_none_or(BookmarkThumbnails::request_shutdown);
         self.flush_deferred_state_save();
         perf::record_app_shutdown(
             shutdown_started,

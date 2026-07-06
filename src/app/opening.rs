@@ -489,6 +489,8 @@ impl SuiSuiViewApp {
         }
     }
 
+    // established call surface; a params struct would be pure boilerplate
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::app) fn install_source(
         &mut self,
         source: SharedSource,

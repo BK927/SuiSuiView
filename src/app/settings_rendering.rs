@@ -9,6 +9,8 @@ use crate::core::state::{
 };
 use egui::{self, RichText};
 
+// established call surface; a params struct would be pure boilerplate
+#[allow(clippy::too_many_arguments)]
 pub(in crate::app) fn show_rendering_settings(
     ui: &mut egui::Ui,
     draft: &mut AppSettings,

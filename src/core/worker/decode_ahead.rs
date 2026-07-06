@@ -176,6 +176,7 @@ impl Drop for DecodeAhead {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // established call surface; a params struct would be pure boilerplate
 pub(super) fn maybe_start_decode(
     decode_ahead: &mut Option<DecodeAhead>,
     command_rx: &Receiver<WorkerCommand>,
@@ -284,6 +285,7 @@ pub(super) fn clear_pending_decode_if_context_changed(
     cancel_pending_decode(pending, "context");
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn cancel_pending_decode_if_not_scheduled(
     pending: &mut Option<DecodeAhead>,
     source: &SharedSource,
@@ -713,7 +715,7 @@ mod tests {
             &hints,
         );
 
-        assert!(pending.as_ref().map_or(true, DecodeAhead::is_cancelled));
+        assert!(pending.as_ref().is_none_or(DecodeAhead::is_cancelled));
         clear_pending_decode(&mut pending, "test");
     }
 
@@ -813,10 +815,11 @@ mod tests {
         }
     }
 
+    type ReadLog = Arc<Mutex<Vec<(usize, Option<String>)>>>;
     struct ThreadRecordingSource {
         path: PathBuf,
         bytes: Vec<u8>,
-        read_log: Arc<Mutex<Vec<(usize, Option<String>)>>>,
+        read_log: ReadLog,
     }
 
     struct NamedSource {

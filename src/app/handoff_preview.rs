@@ -46,6 +46,8 @@ pub(crate) fn enabled_for_settings(settings: &AppSettings) -> bool {
     matches!(settings.renderer_mode, RendererMode::Wgpu)
 }
 
+// HandoffFailure is intentionally rich diagnostic data; boxing it would only obscure the error path.
+#[allow(clippy::result_large_err)]
 pub(crate) fn run(options: HandoffPreviewOptions, wgpu_direct: bool) -> Result<(), HandoffFailure> {
     let event_loop = winit::event_loop::EventLoop::<()>::new()
         .map_err(|error| HandoffFailure::new(HandoffFailureStage::Unknown, error.to_string()))?;

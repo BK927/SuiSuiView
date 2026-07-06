@@ -104,6 +104,17 @@ remediation = [
 ]
 
 [[files]]
+path = "src/core/worker/decode_ahead.rs"
+kind = "legacy-large"
+baseline_lines = 901
+growth_warn_lines = 80
+growth_fail_lines = 160
+purpose = "Decode-ahead prefetch: pending-decode lifecycle, scheduling, and the decode worker loop."
+remediation = [
+  "Split the decode worker thread body and the pending-decode bookkeeping into separate submodules once the prefetch policy settles."
+]
+
+[[files]]
 path = "src/app/handoff_preview.rs"
 kind = "legacy-large"
 baseline_lines = 910

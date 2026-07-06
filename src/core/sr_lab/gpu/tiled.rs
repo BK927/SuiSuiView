@@ -98,16 +98,16 @@ impl SpanGpuTiledRunner {
         for spec in tile_specs.iter().copied() {
             let crop = crop_input(input, spec);
             let shape = (crop.width, crop.height);
-            if !sessions.contains_key(&shape) {
-                let session =
-                    self.executor
-                        .create_readback_session(manifest, &self.model, &crop)?;
-                sessions.insert(shape, session);
+            let gpu = match sessions.entry(shape) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let session =
+                        self.executor
+                            .create_readback_session(manifest, &self.model, &crop)?;
+                    entry.insert(session)
+                }
             }
-            let gpu = sessions
-                .get(&shape)
-                .ok_or_else(|| "SPAN GPU tiled session cache lookup failed".to_owned())?
-                .run(&crop)?;
+            .run(&crop)?;
             stitch_tile_output(&mut stitched, &gpu.output, spec, scale)?;
         }
 
@@ -115,6 +115,8 @@ impl SpanGpuTiledRunner {
     }
 }
 
+// established call surface; a params struct would be pure boilerplate
+#[allow(clippy::too_many_arguments)]
 pub fn run_span_gpu_tiled_reference(
     manifest_path: &Path,
     input_path: &Path,
@@ -166,14 +168,14 @@ pub fn run_span_gpu_tiled_reference(
     for (tile_index, spec) in tile_specs.iter().copied().enumerate() {
         let crop = crop_input(&input, spec);
         let shape = (crop.width, crop.height);
-        if !sessions.contains_key(&shape) {
-            let session = executor.create_readback_session(&manifest, &model, &crop)?;
-            sessions.insert(shape, session);
+        let gpu = match sessions.entry(shape) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let session = executor.create_readback_session(&manifest, &model, &crop)?;
+                entry.insert(session)
+            }
         }
-        let gpu = sessions
-            .get(&shape)
-            .ok_or_else(|| "SPAN GPU tiled session cache lookup failed".to_owned())?
-            .run(&crop)?;
+        .run(&crop)?;
         stitch_tile_output(&mut stitched, &gpu.output, spec, scale)?;
         samples.push(gpu.elapsed_ms);
         tile_reports.push(SpanGpuTileReport {

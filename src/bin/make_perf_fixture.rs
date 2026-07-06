@@ -327,12 +327,14 @@ fn write_simple_gif(path: &Path) -> Result<(), String> {
                 pixels[y as usize * width as usize + x as usize] = 1 + (index % 3) as u8;
             }
         }
-        let mut frame = GifFrame::default();
-        frame.width = width;
-        frame.height = height;
-        frame.delay = 4 + index as u16;
-        frame.dispose = GifDisposalMethod::Keep;
-        frame.buffer = Cow::Owned(pixels);
+        let frame = GifFrame {
+            width,
+            height,
+            delay: 4 + index as u16,
+            dispose: GifDisposalMethod::Keep,
+            buffer: Cow::Owned(pixels),
+            ..Default::default()
+        };
         encoder
             .write_frame(&frame)
             .map_err(|error| error.to_string())?;
@@ -364,19 +366,21 @@ fn write_dispose_gif(path: &Path) -> Result<(), String> {
                     if edge { 3 } else { 1 + (index % 3) as u8 };
             }
         }
-        let mut frame = GifFrame::default();
-        frame.left = left;
-        frame.top = top;
-        frame.width = frame_width;
-        frame.height = frame_height;
-        frame.delay = 6;
-        frame.dispose = if index % 2 == 0 {
-            GifDisposalMethod::Background
-        } else {
-            GifDisposalMethod::Previous
+        let frame = GifFrame {
+            left,
+            top,
+            width: frame_width,
+            height: frame_height,
+            delay: 6,
+            dispose: if index % 2 == 0 {
+                GifDisposalMethod::Background
+            } else {
+                GifDisposalMethod::Previous
+            },
+            transparent: Some(0),
+            buffer: Cow::Owned(pixels),
+            ..Default::default()
         };
-        frame.transparent = Some(0);
-        frame.buffer = Cow::Owned(pixels);
         encoder
             .write_frame(&frame)
             .map_err(|error| error.to_string())?;

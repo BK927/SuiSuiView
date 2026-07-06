@@ -11,6 +11,8 @@ pub(super) struct PageJob {
     pub(super) target_long_edge: u32,
 }
 
+// established call surface; a params struct would be pure boilerplate
+#[allow(clippy::too_many_arguments)]
 pub(super) fn prioritized_jobs(
     center: usize,
     page_count: usize,

@@ -104,8 +104,7 @@ fn sample_indexed_gif_to_rgba(
         .checked_mul(4)
         .ok_or_else(|| "GIF output row size overflows memory limits".to_owned())?;
 
-    for out_y in 0..display_height {
-        let source_y = y_indices[out_y];
+    for (out_y, &source_y) in y_indices.iter().enumerate() {
         let source_row = source_y
             .checked_mul(source_width)
             .ok_or_else(|| "GIF source row offset overflows memory limits".to_owned())?;

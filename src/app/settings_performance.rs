@@ -324,6 +324,8 @@ pub(in crate::app) fn show_performance_settings(
     );
 }
 
+// established call surface; a params struct would be pure boilerplate
+#[allow(clippy::too_many_arguments)]
 fn decoder_row(
     ui: &mut egui::Ui,
     changed: &mut bool,

@@ -520,6 +520,8 @@ pub(in crate::app) fn prepare_seeded_followup_page(
     Some(page)
 }
 
+// established call surface; a params struct would be pure boilerplate
+#[allow(clippy::too_many_arguments)]
 pub(in crate::app) fn prepare_adjacent_seed_cache(
     base_path: PathBuf,
     path: PathBuf,
@@ -618,7 +620,7 @@ fn should_skip_memory_aware_adjacent_seed_source(source: &dyn BookSource, index:
     let Ok(header) = source.read_page_prefix(index, ADJACENT_SEED_HEADER_BYTES) else {
         return true;
     };
-    image_header::dimensions_from_header(&header).map_or(true, |(width, height)| {
+    image_header::dimensions_from_header(&header).is_none_or(|(width, height)| {
         width.max(height) >= ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE
     })
 }

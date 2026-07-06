@@ -513,7 +513,7 @@ impl GpuUpscaleBench {
 }
 
 fn wants_method(filter: Option<WgpuUpscaleMethod>, method: WgpuUpscaleMethod) -> bool {
-    filter.map_or(true, |selected| selected == method)
+    filter.is_none_or(|selected| selected == method)
 }
 
 fn wants_artcnn_variant(filter: Option<WgpuUpscaleMethod>, variant: ArtcnnVariant) -> bool {
@@ -524,7 +524,7 @@ fn wants_group(
     filter: Option<WgpuUpscaleMethod>,
     group_predicate: fn(WgpuUpscaleMethod) -> bool,
 ) -> bool {
-    filter.map_or(true, group_predicate)
+    filter.is_none_or(group_predicate)
 }
 
 fn is_acnet_method(method: WgpuUpscaleMethod) -> bool {

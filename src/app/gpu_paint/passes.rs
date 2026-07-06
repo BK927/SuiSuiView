@@ -650,15 +650,10 @@ impl GpuPaintResources {
         if let Some(intermediate) = self.intermediate_textures.get(&key).cloned() {
             return Some(intermediate);
         }
-        let Some(source) = self.source_textures.peek(&source_key) else {
-            return None;
-        };
-        let Some(output) =
+        let source = self.source_textures.peek(&source_key)?;
+        let output =
             self.realtime_sr
-                .render(method, key, device, encoder, &source.view, source_size)
-        else {
-            return None;
-        };
+                .render(method, key, device, encoder, &source.view, source_size)?;
         Some(self.insert_realtime_sr_stage_texture(device, key, method, source_size, output))
     }
 
@@ -674,12 +669,9 @@ impl GpuPaintResources {
         if let Some(intermediate) = self.intermediate_textures.get(&key).cloned() {
             return Some(intermediate);
         }
-        let Some(output) =
+        let output =
             self.realtime_sr
-                .render(method, key, device, encoder, source_view, source_size)
-        else {
-            return None;
-        };
+                .render(method, key, device, encoder, source_view, source_size)?;
         Some(self.insert_realtime_sr_stage_texture(device, key, method, source_size, output))
     }
 
@@ -863,7 +855,7 @@ fn next_pyramid_stage_dimension(current: usize, target: u32) -> u32 {
     if target >= current {
         current as u32
     } else if current > target.saturating_mul(2) {
-        ((current + 1) / 2).max(target) as u32
+        current.div_ceil(2).max(target) as u32
     } else {
         target as u32
     }

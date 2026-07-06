@@ -377,17 +377,7 @@ impl LoadedSpanRenderer {
     ) -> Option<RealtimeSrOutput> {
         let batch_started = Instant::now();
         let tiles_per_frame = span_display_tiles_per_frame();
-        let (
-            source_size,
-            output_size,
-            tile_count,
-            workspace_shapes,
-            workspace_cache_limit_bytes,
-            tile_edge,
-            encoded_tiles,
-            next_tile,
-            completed,
-        ) = match {
+        let batch_result = {
             let job = self.pending_render.as_mut()?;
             let start_tile = job.next_tile;
             let end_tile = job
@@ -438,7 +428,18 @@ impl LoadedSpanRenderer {
                     job.next_tile >= job.tile_plans.len(),
                 ))
             }
-        } {
+        };
+        let (
+            source_size,
+            output_size,
+            tile_count,
+            workspace_shapes,
+            workspace_cache_limit_bytes,
+            tile_edge,
+            encoded_tiles,
+            next_tile,
+            completed,
+        ) = match batch_result {
             Ok(batch) => batch,
             Err(reason) => return self.abort_pending_render(reason),
         };

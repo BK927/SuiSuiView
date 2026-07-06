@@ -123,8 +123,7 @@ fn sample_bmp_to_rgba(
         .checked_mul(4)
         .ok_or_else(|| "BMP output row size overflows memory limits".to_owned())?;
 
-    for out_y in 0..display_height {
-        let source_y = y_indices[out_y];
+    for (out_y, &source_y) in y_indices.iter().enumerate() {
         let row_y = if header.top_down {
             source_y
         } else {
