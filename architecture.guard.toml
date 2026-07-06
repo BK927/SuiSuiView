@@ -96,6 +96,19 @@ remediation = [
   "Split locale catalogs into per-language modules after translation coverage stabilizes."
 ]
 
+[[files]]
+path = "src/app/handoff_preview.rs"
+kind = "legacy-large"
+baseline_lines = 910
+growth_warn_lines = 80
+growth_fail_lines = 160
+purpose = "Custom winit host: event loop, Glow/WGPU stages, reactive control flow, and DPI defense wiring."
+remediation = [
+  "Split the Glow and Wgpu stage handlers (redraw/window_event arms) into per-stage submodules.",
+  "Move the title-sync Win32 helpers into a platform-side module.",
+  "Rename away from the historical handoff name when the split lands (ADR 0003)."
+]
+
 [[routing]]
 name = "App commands and shortcuts"
 avoid_paths = ["src/app.rs"]

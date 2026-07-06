@@ -14,9 +14,11 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod dpi_guard;
 mod glow_window;
 mod prewarm;
 
+use dpi_guard::DpiSizeGuard;
 use glow_window::{create_gl_display, create_plain_window, GlutinWindowContext};
 use prewarm::{run_wgpu_prewarm, PrewarmReport, PrewarmedWgpu};
 
@@ -137,6 +139,9 @@ struct HandoffPreviewApp {
     // another thread, so background work (image loads, thumbnails) is shown
     // without waiting for the next input event.
     wake_proxy: winit::event_loop::EventLoopProxy<()>,
+    /// Authoritative logical inner size, defended against winit 0.30's mixed-DPI
+    /// drag storms (see DpiSizeGuard docs).
+    dpi_size_guard: DpiSizeGuard,
 }
 
 enum Stage {
@@ -195,6 +200,7 @@ impl HandoffPreviewApp {
             summary_printed: false,
             redraw_deadline: Arc::new(Mutex::new(None)),
             wake_proxy,
+            dpi_size_guard: DpiSizeGuard::new(),
         }
     }
 
@@ -216,6 +222,7 @@ impl HandoffPreviewApp {
             options.default_window_size,
             options.min_window_size,
         )?;
+        self.dpi_size_guard.seed_initial(gl_window.window());
         let gl = Arc::new(gl);
         let egui_glow = egui_glow::EguiGlow::new(
             event_loop,
@@ -440,6 +447,8 @@ impl HandoffPreviewApp {
         )?;
         self.wait_for_prewarm();
 
+        self.dpi_size_guard.seed_initial(&window);
+
         let egui_ctx = egui::Context::default();
         self.install_repaint_callback(&egui_ctx);
 
@@ -652,9 +661,21 @@ impl winit::application::ApplicationHandler<()> for HandoffPreviewApp {
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
         _window_id: winit::window::WindowId,
-        event: winit::event::WindowEvent,
+        mut event: winit::event::WindowEvent,
     ) {
-        dbg_dpi_event(&event);
+        // Non-consuming: the event still flows to egui below (see the method doc).
+        if let Some((w, h)) = self.dpi_size_guard.defend_scale_change(&mut event) {
+            // A stale DPI suggested rect was applied as a plain Resized with no
+            // scale event to hang the correction on; re-request the tracked size.
+            let window = match self.stage.as_ref() {
+                Some(Stage::Glow { gl_window, .. }) => Some(gl_window.window()),
+                Some(Stage::Wgpu { window, .. }) => Some(window),
+                None => None,
+            };
+            if let Some(window) = window {
+                let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(w, h));
+            }
+        }
         if matches!(
             event,
             winit::event::WindowEvent::CloseRequested | winit::event::WindowEvent::Destroyed
@@ -858,8 +879,6 @@ fn set_process_visible_window_title(title: &str) {
 
 #[cfg(not(target_os = "windows"))]
 fn set_process_visible_window_title(_title: &str) {}
-
-use glow_window::dbg_dpi_event;
 
 fn app_requested_close(viewport_info: &egui::ViewportInfo) -> bool {
     viewport_info

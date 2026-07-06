@@ -324,39 +324,6 @@ fn valid_window_position(placement: &crate::core::state::WindowPlacement) -> Opt
     (x.is_finite() && y.is_finite()).then_some([x, y])
 }
 
-// TEMP diagnostic: log DPI-relevant window events to a file when SUISUI_DPIDBG
-// is set, to characterize the cross-monitor drag instability.
-pub(super) fn dbg_dpi_event(event: &winit::event::WindowEvent) {
-    use std::sync::OnceLock;
-    static START: OnceLock<std::time::Instant> = OnceLock::new();
-    if std::env::var_os("SUISUI_DPIDBG").is_none() {
-        return;
-    }
-    let line = match event {
-        winit::event::WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-            format!("ScaleFactorChanged scale={scale_factor}")
-        }
-        winit::event::WindowEvent::Resized(size) => {
-            format!("Resized {}x{}", size.width, size.height)
-        }
-        winit::event::WindowEvent::Moved(pos) => format!("Moved {},{}", pos.x, pos.y),
-        _ => return,
-    };
-    let t = START
-        .get_or_init(std::time::Instant::now)
-        .elapsed()
-        .as_secs_f64()
-        * 1000.0;
-    use std::io::Write as _;
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(std::env::temp_dir().join("suisui_dpidbg.log"))
-    {
-        let _ = writeln!(f, "t={t:9.2}ms {line}");
-    }
-}
-
 /// Physical position of the virtual screen (the union of all monitors), in the
 /// same scale-free coordinate space as the saved physical outer position.
 #[derive(Debug, Clone, Copy)]
