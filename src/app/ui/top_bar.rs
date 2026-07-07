@@ -418,6 +418,7 @@ impl SuiSuiViewApp {
         if entering_strip || leaving_strip {
             self.strip_anchor = None;
             self.strip_scroll_pending_px = 0.0;
+            self.strip_flick_pending_px = 0.0;
         }
         if entering_strip {
             self.clear_pending_page_turns();

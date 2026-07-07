@@ -3,9 +3,10 @@
 //! layout/scroll math it calls lives in the parent `strip` module.
 
 use super::{
-    accumulate_edge_overscroll, clamp_pan_x, column_width, display_height, jump_to_page,
-    layout_visible, median_known_height, page_at_viewport_center, recenter_target, scroll_by,
-    smooth_scroll_step, StripAnchor, StripPageDims,
+    accumulate_edge_overscroll, clamp_pan_x, column_width, display_height, flick_debt,
+    jump_to_page, layout_visible, median_known_height, page_at_viewport_center, recenter_target,
+    scroll_by, smooth_scroll_step, StripAnchor, StripPageDims, STRIP_FLICK_DECAY_PER_SEC,
+    STRIP_SCROLL_DECAY_PER_SEC,
 };
 use crate::app::commands::{command_for_mouse_gesture, AppCommand};
 use crate::app::navigation::MAX_QUEUED_WORKER_VISIBLE_PAGES;
@@ -135,12 +136,34 @@ impl SuiSuiViewApp {
                 self.apply_command(ui.ctx(), command);
             }
         }
+        if response.drag_started() {
+            // Grabbing the strip stops any in-flight glide, like catching a
+            // scrolling touch surface.
+            self.strip_scroll_pending_px = 0.0;
+            self.strip_flick_pending_px = 0.0;
+        }
         if response.dragged() {
             let delta = ui.input(|input| input.pointer.delta());
             // Horizontal drag pans the column (only visible when it is wider than
             // the viewport; `clamp_pan_x` zeroes it otherwise, each paint).
             self.pan.x += delta.x;
             self.strip_scroll_by(-delta.y * self.settings.strip_drag_scroll_multiplier());
+        }
+        if response.drag_stopped() {
+            // Release inertia: coast on from the release velocity with the slower
+            // flick decay. Sub-threshold releases add nothing (see `flick_debt`).
+            let velocity_y = ui.input(|input| input.pointer.velocity()).y;
+            let viewport_height = self
+                .last_viewer_size_points
+                .map_or(STRIP_FALLBACK_VIEWPORT.y, |size| size.y);
+            let debt = flick_debt(
+                -velocity_y * self.settings.strip_drag_scroll_multiplier(),
+                viewport_height,
+            );
+            if debt != 0.0 {
+                self.strip_flick_pending_px += debt;
+                self.egui_ctx.request_repaint();
+            }
         }
         if !response.hovered() {
             return;
@@ -181,14 +204,18 @@ impl SuiSuiViewApp {
     /// than immediate: unthrottled it spins near 200fps for frames a 60Hz panel
     /// never shows, and the dt clamp bounds the jump a hitched frame can take.
     fn drain_strip_scroll_pending(&mut self, ctx: &egui::Context) {
-        if self.strip_scroll_pending_px == 0.0 {
+        if self.strip_scroll_pending_px == 0.0 && self.strip_flick_pending_px == 0.0 {
             return;
         }
         let dt = ctx.input(|input| input.stable_dt).min(0.025);
-        let (step, remaining) = smooth_scroll_step(self.strip_scroll_pending_px, dt);
+        let (step, remaining) =
+            smooth_scroll_step(self.strip_scroll_pending_px, dt, STRIP_SCROLL_DECAY_PER_SEC);
+        let (flick_step, flick_remaining) =
+            smooth_scroll_step(self.strip_flick_pending_px, dt, STRIP_FLICK_DECAY_PER_SEC);
         self.strip_scroll_pending_px = remaining;
-        self.strip_scroll_by(step);
-        if self.strip_scroll_pending_px != 0.0 {
+        self.strip_flick_pending_px = flick_remaining;
+        self.strip_scroll_by(step + flick_step);
+        if self.strip_scroll_pending_px != 0.0 || self.strip_flick_pending_px != 0.0 {
             ctx.request_repaint_after(std::time::Duration::from_millis(8));
         }
     }
@@ -243,6 +270,7 @@ impl SuiSuiViewApp {
             // keep pushing into the edge and turn the book on its own.
             Some(direction) if !moved => {
                 self.strip_scroll_pending_px = 0.0;
+                self.strip_flick_pending_px = 0.0;
                 if accumulate_edge_overscroll(
                     &mut self.strip_edge_overscroll_px,
                     &mut self.strip_edge_overscroll_at,
@@ -283,6 +311,7 @@ impl SuiSuiViewApp {
         self.strip_edge_overscroll_px = 0.0;
         self.strip_edge_overscroll_at = None;
         self.strip_scroll_pending_px = 0.0;
+        self.strip_flick_pending_px = 0.0;
         self.persist_reading_position_deferred();
         self.worker.set_page(
             index,

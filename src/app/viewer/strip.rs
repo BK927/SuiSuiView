@@ -381,27 +381,53 @@ pub(in crate::app) fn recenter_target(current: usize, derived: usize) -> Option<
 /// Exponential ease-out rate for smooth scrolling: the pending debt decays with
 /// time constant 1/rate (~143ms), so a wheel notch glides out over roughly half
 /// a second instead of teleporting.
-const STRIP_SCROLL_DECAY_PER_SEC: f32 = 7.0;
+pub(in crate::app) const STRIP_SCROLL_DECAY_PER_SEC: f32 = 7.0;
+/// Slower decay for drag-release inertia, so a flick coasts noticeably longer
+/// than a wheel notch (~1s tail) the way touch scrolling is expected to.
+pub(in crate::app) const STRIP_FLICK_DECAY_PER_SEC: f32 = 4.0;
 /// Below this remaining debt the tail is snapped in one step so the animation
 /// (and its repaint chain) terminates.
 const STRIP_SCROLL_SNAP_PX: f32 = 0.5;
+/// A drag released slower than this (points/sec) is a positioning release, not
+/// a flick; no inertia is added.
+const STRIP_FLICK_MIN_VELOCITY: f32 = 150.0;
+/// A flick may coast at most this many viewports so a spurious velocity spike
+/// cannot fling the reader across the book.
+const STRIP_FLICK_MAX_VIEWPORTS: f32 = 3.0;
 
-/// Portion of the pending smooth-scroll debt to apply this frame. Pure: returns
-/// `(step, remaining)`; `remaining == 0.0` means the animation is finished.
-pub(in crate::app) fn smooth_scroll_step(pending_px: f32, dt_seconds: f32) -> (f32, f32) {
+/// Portion of the pending smooth-scroll debt to apply this frame at the given
+/// decay rate. Pure: returns `(step, remaining)`; `remaining == 0.0` means the
+/// animation is finished.
+pub(in crate::app) fn smooth_scroll_step(
+    pending_px: f32,
+    dt_seconds: f32,
+    decay_per_sec: f32,
+) -> (f32, f32) {
     if pending_px == 0.0 {
         return (0.0, 0.0);
     }
     if pending_px.abs() <= STRIP_SCROLL_SNAP_PX {
         return (pending_px, 0.0);
     }
-    let step = pending_px * (1.0 - (-dt_seconds.max(0.0) * STRIP_SCROLL_DECAY_PER_SEC).exp());
+    let step = pending_px * (1.0 - (-dt_seconds.max(0.0) * decay_per_sec).exp());
     let remaining = pending_px - step;
     if remaining.abs() <= STRIP_SCROLL_SNAP_PX {
         (pending_px, 0.0)
     } else {
         (step, remaining)
     }
+}
+
+/// Inertia debt for a drag released at `velocity_px_per_sec` (scroll direction
+/// already applied): the distance an exponentially-decaying glide starting at
+/// that velocity covers, `v / decay`. Sub-threshold releases produce no debt,
+/// and the coast is capped to a few viewports.
+pub(in crate::app) fn flick_debt(velocity_px_per_sec: f32, viewport_height: f32) -> f32 {
+    if velocity_px_per_sec.abs() < STRIP_FLICK_MIN_VELOCITY {
+        return 0.0;
+    }
+    let cap = STRIP_FLICK_MAX_VIEWPORTS * viewport_height.max(1.0);
+    (velocity_px_per_sec / STRIP_FLICK_DECAY_PER_SEC).clamp(-cap, cap)
 }
 
 fn placement_rect(column_left: f32, column: f32, top: f32, height: f32) -> Rect {

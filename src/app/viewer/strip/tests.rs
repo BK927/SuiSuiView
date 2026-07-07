@@ -325,11 +325,12 @@ fn overscroll_direction_reversal_resets_before_accumulating() {
 
 #[test]
 fn smooth_scroll_step_drains_monotonically_and_keeps_sign() {
-    let (step, remaining) = smooth_scroll_step(160.0, 1.0 / 60.0);
+    let (step, remaining) = smooth_scroll_step(160.0, 1.0 / 60.0, STRIP_SCROLL_DECAY_PER_SEC);
     assert!(step > 0.0 && step < 160.0);
     assert!((step + remaining - 160.0).abs() < 1e-3);
 
-    let (neg_step, neg_remaining) = smooth_scroll_step(-160.0, 1.0 / 60.0);
+    let (neg_step, neg_remaining) =
+        smooth_scroll_step(-160.0, 1.0 / 60.0, STRIP_SCROLL_DECAY_PER_SEC);
     assert!(neg_step < 0.0 && neg_remaining < 0.0);
     assert!((neg_step - -step).abs() < 1e-3);
 }
@@ -337,14 +338,20 @@ fn smooth_scroll_step_drains_monotonically_and_keeps_sign() {
 #[test]
 fn smooth_scroll_step_snaps_the_tail_and_terminates() {
     // A sub-snap debt is applied whole.
-    assert_eq!(smooth_scroll_step(0.4, 1.0 / 60.0), (0.4, 0.0));
-    assert_eq!(smooth_scroll_step(0.0, 1.0 / 60.0), (0.0, 0.0));
+    assert_eq!(
+        smooth_scroll_step(0.4, 1.0 / 60.0, STRIP_SCROLL_DECAY_PER_SEC),
+        (0.4, 0.0)
+    );
+    assert_eq!(
+        smooth_scroll_step(0.0, 1.0 / 60.0, STRIP_SCROLL_DECAY_PER_SEC),
+        (0.0, 0.0)
+    );
 
     // A full wheel notch drains to exactly zero within a bounded frame count.
     let mut pending = 160.0;
     let mut frames = 0;
     while pending != 0.0 {
-        let (_, remaining) = smooth_scroll_step(pending, 1.0 / 60.0);
+        let (_, remaining) = smooth_scroll_step(pending, 1.0 / 60.0, STRIP_SCROLL_DECAY_PER_SEC);
         pending = remaining;
         frames += 1;
         assert!(frames < 120, "animation must terminate");
@@ -476,4 +483,34 @@ fn anchor_offset_frac_is_preserved_across_column_change() {
     // same fractional reading position regardless of how tall the page renders.
     assert!((fraction_above(100.0) - offset).abs() < 1e-6);
     assert!((fraction_above(40.0) - offset).abs() < 1e-6);
+}
+
+#[test]
+fn flick_debt_thresholds_scales_and_caps() {
+    // A slow positioning release adds no inertia.
+    assert_eq!(flick_debt(100.0, 800.0), 0.0);
+    // A real flick coasts v / flick-decay in the release direction.
+    let debt = flick_debt(2000.0, 800.0);
+    assert!((debt - 2000.0 / STRIP_FLICK_DECAY_PER_SEC).abs() < 1e-3);
+    assert!(flick_debt(-2000.0, 800.0) < 0.0);
+    // A spurious velocity spike is capped to a few viewports.
+    assert_eq!(flick_debt(1_000_000.0, 800.0), 3.0 * 800.0);
+}
+
+#[test]
+fn flick_decay_coasts_longer_than_wheel_decay() {
+    let frames_to_drain = |decay: f32| {
+        let mut pending = 500.0;
+        let mut frames = 0;
+        while pending != 0.0 {
+            let (_, remaining) = smooth_scroll_step(pending, 1.0 / 60.0, decay);
+            pending = remaining;
+            frames += 1;
+            assert!(frames < 600, "must terminate");
+        }
+        frames
+    };
+    assert!(
+        frames_to_drain(STRIP_FLICK_DECAY_PER_SEC) > frames_to_drain(STRIP_SCROLL_DECAY_PER_SEC)
+    );
 }
