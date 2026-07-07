@@ -367,7 +367,9 @@ const CATALOG_KO_KR: &[(&str, &str)] = &[
     ("settings.performance.memory.title", "메모리"),
     ("settings.performance.memory.desc", "준비된 페이지 이미지를 얼마나 오래 보관할지 정합니다."),
     ("settings.performance.page_cache", "페이지 캐시 메모리"),
-    ("settings.performance.page_cache.help", "이 앱에 허락하는 메모리 상한입니다. 현재 페이지 표시에 필요한 최소 메모리는 항상 사용됩니다. 직접 입력 범위는 64-2048 MB입니다."),
+    ("settings.performance.page_cache.help", "이 앱에 허락하는 메모리 상한입니다. 현재 페이지 표시에 필요한 최소 메모리는 항상 사용됩니다. 자동은 시스템 메모리와 렌더러에 맞춰 절약~여유 사이에서 조정합니다. 직접 입력 범위는 64-2048 MB입니다."),
+    ("settings.performance.memory.preset_mb", "{label} ({mb}MB)"),
+    ("settings.performance.memory.auto_mb", "{label} (현재 {mb}MB)"),
     ("settings.performance.cache_summary", "{mode} {cache} MB"),
     (
         "settings.performance.memory_usage_live",
@@ -956,7 +958,9 @@ const CATALOG_EN_US: &[(&str, &str)] = &[
     ("settings.performance.memory.title", "Memory"),
     ("settings.performance.memory.desc", "Choose how long prepared page images are kept."),
     ("settings.performance.page_cache", "Page cache memory"),
-    ("settings.performance.page_cache.help", "The memory limit you allow this app. The minimum needed to display the current page is always used. Custom input range is 64-2048 MB."),
+    ("settings.performance.page_cache.help", "The memory limit you allow this app. The minimum needed to display the current page is always used. Auto adjusts between Saver and Ample based on system memory and the renderer. Custom input range is 64-2048 MB."),
+    ("settings.performance.memory.preset_mb", "{label} ({mb} MB)"),
+    ("settings.performance.memory.auto_mb", "{label} (now {mb} MB)"),
     ("settings.performance.cache_summary", "{mode} {cache} MB"),
     (
         "settings.performance.memory_usage_live",

@@ -276,8 +276,9 @@ pub(in crate::app) fn show_performance_settings(
                     CacheMemoryMode::Ample,
                     CacheMemoryMode::Manual,
                 ] {
+                    let label = memory_mode_radio_label(mode, draft, i18n);
                     *changed |= ui
-                        .radio_value(&mut draft.cache_memory_mode, mode, mode.label_i18n(i18n))
+                        .radio_value(&mut draft.cache_memory_mode, mode, label)
                         .changed();
                 }
                 ui.add_enabled_ui(draft.cache_memory_mode == CacheMemoryMode::Manual, |ui| {
@@ -360,4 +361,35 @@ fn decoder_row(
 
 fn mib(bytes: usize) -> f32 {
     bytes as f32 / (1024.0 * 1024.0)
+}
+
+/// Radio label with the mode's actual budget: fixed presets show their size,
+/// and Auto shows what it currently resolves to (it depends on system RAM and
+/// the renderer, and on most machines coincides with one of the presets —
+/// showing the number is what makes the difference legible). Manual stays
+/// bare; its DragValue sits right next to it.
+fn memory_mode_radio_label(mode: CacheMemoryMode, draft: &AppSettings, i18n: I18n) -> String {
+    let budget_bytes = match mode {
+        CacheMemoryMode::Manual => return mode.label_i18n(i18n),
+        CacheMemoryMode::Auto => total_memory_budget_bytes(&AppSettings {
+            cache_memory_mode: CacheMemoryMode::Auto,
+            ..draft.clone()
+        }),
+        _ => total_memory_budget_bytes(&AppSettings {
+            cache_memory_mode: mode,
+            ..draft.clone()
+        }),
+    };
+    let key = if mode == CacheMemoryMode::Auto {
+        "settings.performance.memory.auto_mb"
+    } else {
+        "settings.performance.memory.preset_mb"
+    };
+    i18n.with_vars(
+        key,
+        &[
+            ("label", mode.label_i18n(i18n)),
+            ("mb", format!("{:.0}", mib(budget_bytes))),
+        ],
+    )
 }
