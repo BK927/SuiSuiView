@@ -165,17 +165,19 @@ impl SuiSuiViewApp {
     }
 
     /// Apply this frame's slice of the queued smooth scroll and keep the repaint
-    /// chain alive until the debt is drained.
+    /// chain alive until the debt is drained. The chain is paced at ~8ms rather
+    /// than immediate: unthrottled it spins near 200fps for frames a 60Hz panel
+    /// never shows, and the dt clamp bounds the jump a hitched frame can take.
     fn drain_strip_scroll_pending(&mut self, ctx: &egui::Context) {
         if self.strip_scroll_pending_px == 0.0 {
             return;
         }
-        let dt = ctx.input(|input| input.stable_dt).min(0.05);
+        let dt = ctx.input(|input| input.stable_dt).min(0.025);
         let (step, remaining) = smooth_scroll_step(self.strip_scroll_pending_px, dt);
         self.strip_scroll_pending_px = remaining;
         self.strip_scroll_by(step);
         if self.strip_scroll_pending_px != 0.0 {
-            ctx.request_repaint();
+            ctx.request_repaint_after(std::time::Duration::from_millis(8));
         }
     }
 
@@ -245,7 +247,9 @@ impl SuiSuiViewApp {
                 self.strip_edge_overscroll_at = None;
             }
         }
-        self.egui_ctx.request_repaint();
+        // No repaint request here: direct callers run inside an input-driven
+        // frame that paints the moved anchor itself, and the smooth-scroll drain
+        // paces its own repaint chain (an immediate request here would defeat it).
     }
 
     pub(in crate::app) fn strip_jump_to_page(&mut self, index: usize) {

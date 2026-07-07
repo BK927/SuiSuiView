@@ -316,9 +316,9 @@ pub(in crate::app) fn recenter_target(current: usize, derived: usize) -> Option<
 }
 
 /// Exponential ease-out rate for smooth scrolling: the pending debt decays with
-/// time constant 1/rate (~83ms), so a wheel notch glides out over roughly a
-/// quarter second instead of teleporting.
-const STRIP_SCROLL_DECAY_PER_SEC: f32 = 12.0;
+/// time constant 1/rate (~143ms), so a wheel notch glides out over roughly half
+/// a second instead of teleporting.
+const STRIP_SCROLL_DECAY_PER_SEC: f32 = 7.0;
 /// Below this remaining debt the tail is snapped in one step so the animation
 /// (and its repaint chain) terminates.
 const STRIP_SCROLL_SNAP_PX: f32 = 0.5;
