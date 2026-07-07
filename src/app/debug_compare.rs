@@ -338,6 +338,7 @@ impl SuiSuiViewApp {
                         effects,
                         wgpu_upscale_method,
                         wgpu_downscale_method,
+                        fixed_2x_sr_min_scale_pct: self.settings.fixed_2x_sr_min_scale_pct,
                         opacity: 1.0,
                     },
                 ) {

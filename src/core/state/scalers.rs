@@ -317,10 +317,11 @@ impl WgpuUpscaleMethod {
         self,
         output_size: [usize; 2],
         target_size: [u32; 2],
+        fixed_2x_sr_min_scale: f32,
     ) -> Option<Self> {
         let method = self.resolve_for_upscale()?;
         if method.is_fixed_2x_sr()
-            && wgpu_target_min_scale(output_size, target_size) < FIXED_2X_SR_SMALL_SCALE_MIN
+            && wgpu_target_min_scale(output_size, target_size) < fixed_2x_sr_min_scale
         {
             Some(Self::WgslFsr1EasuRcas)
         } else {
@@ -353,12 +354,13 @@ impl WgpuScalePlan {
         target_size: [u32; 2],
         requested_upscale: WgpuUpscaleMethod,
         requested_downscale: WgpuDownscaleMethod,
+        fixed_2x_sr_min_scale: f32,
     ) -> Self {
         if target_is_larger(output_size, target_size) {
             return Self {
                 direction: WgpuScaleDirection::Upscale,
                 effective_upscale_method: requested_upscale
-                    .resolve_for_upscale_target(output_size, target_size)
+                    .resolve_for_upscale_target(output_size, target_size, fixed_2x_sr_min_scale)
                     .unwrap_or(WgpuUpscaleMethod::None),
                 effective_downscale_method: WgpuDownscaleMethod::Bilinear,
             };

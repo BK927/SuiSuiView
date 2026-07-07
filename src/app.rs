@@ -2110,6 +2110,7 @@ mod tests {
             ViewEffects::default(),
             WgpuUpscaleMethod::Auto,
             WgpuDownscaleMethod::Bilinear,
+            1.10,
         ));
         assert!(gpu_visual_needs_wgsl(
             [2000, 3000],
@@ -2117,6 +2118,7 @@ mod tests {
             ViewEffects::default(),
             WgpuUpscaleMethod::Auto,
             WgpuDownscaleMethod::Hamming,
+            1.10,
         ));
     }
 
@@ -2128,6 +2130,7 @@ mod tests {
             ViewEffects::default(),
             WgpuUpscaleMethod::Auto,
             WgpuDownscaleMethod::Bilinear,
+            1.10,
         ));
         assert!(gpu_visual_needs_wgsl(
             [800, 1200],
@@ -2135,6 +2138,7 @@ mod tests {
             ViewEffects::default(),
             WgpuUpscaleMethod::WgslNisStyle,
             WgpuDownscaleMethod::Bilinear,
+            1.10,
         ));
         assert!(gpu_visual_needs_wgsl(
             [2000, 3000],
@@ -2145,6 +2149,7 @@ mod tests {
             },
             WgpuUpscaleMethod::Auto,
             WgpuDownscaleMethod::Bilinear,
+            1.10,
         ));
     }
 

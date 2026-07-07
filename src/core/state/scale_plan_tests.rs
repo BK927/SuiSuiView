@@ -2,6 +2,8 @@ use super::scalers::WgpuScaleDirection;
 use super::{DecoderPreference, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod};
 use crate::core::i18n::{I18n, ResolvedLanguage};
 
+const DEFAULT_MIN_SCALE: f32 = 1.10;
+
 #[test]
 fn wgpu_scale_plan_activates_only_the_matching_direction() {
     assert_eq!(
@@ -9,7 +11,8 @@ fn wgpu_scale_plan_activates_only_the_matching_direction() {
             [800, 1200],
             [1600, 2400],
             WgpuUpscaleMethod::Auto,
-            WgpuDownscaleMethod::Hamming
+            WgpuDownscaleMethod::Hamming,
+            DEFAULT_MIN_SCALE
         ),
         WgpuScalePlan {
             direction: WgpuScaleDirection::Upscale,
@@ -22,7 +25,8 @@ fn wgpu_scale_plan_activates_only_the_matching_direction() {
             [1600, 2400],
             [800, 1200],
             WgpuUpscaleMethod::WgslArtcnnC4F16,
-            WgpuDownscaleMethod::Hamming
+            WgpuDownscaleMethod::Hamming,
+            DEFAULT_MIN_SCALE
         ),
         WgpuScalePlan {
             direction: WgpuScaleDirection::Downscale,
@@ -35,7 +39,8 @@ fn wgpu_scale_plan_activates_only_the_matching_direction() {
             [1600, 2400],
             [1600, 2400],
             WgpuUpscaleMethod::WgslArtcnnC4F16,
-            WgpuDownscaleMethod::Hamming
+            WgpuDownscaleMethod::Hamming,
+            DEFAULT_MIN_SCALE
         ),
         WgpuScalePlan {
             direction: WgpuScaleDirection::Native,
@@ -52,7 +57,8 @@ fn wgpu_scale_plan_uses_bilinear_for_mixed_axis_resize() {
             [1000, 1000],
             [1200, 800],
             WgpuUpscaleMethod::WgslFsr1EasuRcas,
-            WgpuDownscaleMethod::PyramidLanczos3
+            WgpuDownscaleMethod::PyramidLanczos3,
+            DEFAULT_MIN_SCALE
         ),
         WgpuScalePlan {
             direction: WgpuScaleDirection::Mixed,
@@ -71,6 +77,7 @@ fn wgpu_scale_plan_treats_near_one_residual_shrink_as_native() {
         [1460, 1460],
         WgpuUpscaleMethod::None,
         WgpuDownscaleMethod::PyramidLanczos3,
+        DEFAULT_MIN_SCALE,
     );
     assert_eq!(near_native.direction, WgpuScaleDirection::Native);
     assert_eq!(
@@ -84,6 +91,7 @@ fn wgpu_scale_plan_treats_near_one_residual_shrink_as_native() {
         [1306, 1306],
         WgpuUpscaleMethod::None,
         WgpuDownscaleMethod::PyramidLanczos3,
+        DEFAULT_MIN_SCALE,
     );
     assert_eq!(true_downscale.direction, WgpuScaleDirection::Downscale);
     assert_eq!(
@@ -97,6 +105,7 @@ fn wgpu_scale_plan_treats_near_one_residual_shrink_as_native() {
         [900, 900],
         WgpuUpscaleMethod::None,
         WgpuDownscaleMethod::PyramidLanczos3,
+        DEFAULT_MIN_SCALE,
     );
     assert_eq!(boundary.direction, WgpuScaleDirection::Native);
     assert_eq!(
@@ -110,7 +119,8 @@ fn wgpu_scale_plan_treats_near_one_residual_shrink_as_native() {
             [1000, 1000],
             [1090, 1090],
             WgpuUpscaleMethod::WgslFsr1EasuRcas,
-            WgpuDownscaleMethod::PyramidLanczos3
+            WgpuDownscaleMethod::PyramidLanczos3,
+            DEFAULT_MIN_SCALE
         )
         .direction,
         WgpuScaleDirection::Upscale
@@ -120,7 +130,8 @@ fn wgpu_scale_plan_treats_near_one_residual_shrink_as_native() {
             [1000, 1000],
             [1090, 950],
             WgpuUpscaleMethod::None,
-            WgpuDownscaleMethod::PyramidLanczos3
+            WgpuDownscaleMethod::PyramidLanczos3,
+            DEFAULT_MIN_SCALE
         )
         .direction,
         WgpuScaleDirection::Mixed
@@ -142,7 +153,8 @@ fn wgpu_scale_plan_keeps_upscalers_out_of_downscale_and_native_paths() {
                 [1600, 2400],
                 [800, 1200],
                 method,
-                WgpuDownscaleMethod::PyramidLanczos3
+                WgpuDownscaleMethod::PyramidLanczos3,
+                DEFAULT_MIN_SCALE
             )
             .effective_upscale_method,
             WgpuUpscaleMethod::None
@@ -152,7 +164,8 @@ fn wgpu_scale_plan_keeps_upscalers_out_of_downscale_and_native_paths() {
                 [1600, 2400],
                 [1600, 2400],
                 method,
-                WgpuDownscaleMethod::PyramidLanczos3
+                WgpuDownscaleMethod::PyramidLanczos3,
+                DEFAULT_MIN_SCALE
             )
             .effective_upscale_method,
             WgpuUpscaleMethod::None
@@ -438,6 +451,7 @@ fn resolve_wgpu_upscale_for_test(
         target_size,
         method,
         WgpuDownscaleMethod::Hamming,
+        DEFAULT_MIN_SCALE,
     );
     (plan.effective_upscale_method != WgpuUpscaleMethod::None)
         .then_some(plan.effective_upscale_method)
@@ -460,6 +474,49 @@ fn fixed_2x_sr_falls_back_for_tiny_display_upscale() {
             [1100, 1100]
         ),
         Some(WgpuUpscaleMethod::WgslAnime4kV32CnnX2M)
+    );
+}
+
+#[test]
+fn fixed_2x_sr_min_scale_threshold_controls_substitution() {
+    // Threshold 1.00 ("honest mode"): a 1.01x-needed upscale keeps the selected fixed-2x
+    // model rather than substituting FSR.
+    assert_eq!(
+        WgpuScalePlan::resolve(
+            [1000, 1000],
+            [1010, 1010],
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2M,
+            WgpuDownscaleMethod::Hamming,
+            1.00,
+        )
+        .effective_upscale_method,
+        WgpuUpscaleMethod::WgslAnime4kV32CnnX2M
+    );
+
+    // Threshold 1.30: a 1.29x-needed upscale is below the boundary and substitutes FSR.
+    assert_eq!(
+        WgpuScalePlan::resolve(
+            [1000, 1000],
+            [1290, 1290],
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2M,
+            WgpuDownscaleMethod::Hamming,
+            1.30,
+        )
+        .effective_upscale_method,
+        WgpuUpscaleMethod::WgslFsr1EasuRcas
+    );
+
+    // Threshold 1.30: a 1.31x-needed upscale meets the boundary and keeps the model.
+    assert_eq!(
+        WgpuScalePlan::resolve(
+            [1000, 1000],
+            [1310, 1310],
+            WgpuUpscaleMethod::WgslAnime4kV32CnnX2M,
+            WgpuDownscaleMethod::Hamming,
+            1.30,
+        )
+        .effective_upscale_method,
+        WgpuUpscaleMethod::WgslAnime4kV32CnnX2M
     );
 }
 

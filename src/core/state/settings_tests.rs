@@ -217,6 +217,20 @@ fn settings_normalization_does_not_rewrite_manual_cache_mb() {
 }
 
 #[test]
+fn settings_normalization_clamps_fixed_2x_sr_min_scale_pct() {
+    let mut settings = AppSettings {
+        fixed_2x_sr_min_scale_pct: 50,
+        ..AppSettings::default()
+    };
+    settings.normalize_product_choices();
+    assert_eq!(settings.fixed_2x_sr_min_scale_pct, 100);
+
+    settings.fixed_2x_sr_min_scale_pct = 999;
+    settings.normalize_product_choices();
+    assert_eq!(settings.fixed_2x_sr_min_scale_pct, 200);
+}
+
+#[test]
 fn legacy_cache_memory_mode_tokens_still_deserialize() {
     let auto: PersistedState =
         serde_json::from_str(r#"{"version":1,"settings":{"cache_memory_mode":"Auto"},"books":{}}"#)

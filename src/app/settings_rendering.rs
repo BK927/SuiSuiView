@@ -219,6 +219,23 @@ pub(in crate::app) fn show_rendering_settings(
                     .response
                     .on_hover_text(i18n.text("settings.rendering.wgpu_downscale_method.help"));
                     ui.end_row();
+
+                    grid_label_with_help(
+                        ui,
+                        &i18n.text("settings.rendering.fixed_2x_min_scale"),
+                        &i18n.text("settings.rendering.fixed_2x_min_scale.help"),
+                    );
+                    ui.add_enabled_ui(gpu_enabled, |ui| {
+                        *changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut draft.fixed_2x_sr_min_scale_pct)
+                                    .range(100..=200)
+                                    .speed(1)
+                                    .suffix("%"),
+                            )
+                            .changed();
+                    });
+                    ui.end_row();
                 });
             ui.add_space(4.0);
             ui.label(

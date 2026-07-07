@@ -193,6 +193,9 @@ pub const MANUAL_CACHE_MB_MIN: u32 = 64;
 pub const MANUAL_CACHE_MB_MAX: u32 = 2048;
 pub const DEFAULT_MANUAL_CACHE_MB: u32 = 160;
 
+pub const FIXED_2X_SR_MIN_SCALE_PCT_MIN: u32 = 100;
+pub const FIXED_2X_SR_MIN_SCALE_PCT_MAX: u32 = 200;
+
 /// Fixed total-memory budgets (bytes) for the preset modes. These caps dominate every cache
 /// pool; the current-page working set is always exempt so display never breaks.
 pub const SAVER_TOTAL_BUDGET_BYTES: usize = 128 * 1024 * 1024;
@@ -367,6 +370,8 @@ pub struct AppSettings {
     pub wgpu_upscale_method: WgpuUpscaleMethod,
     #[serde(default = "default_wgpu_downscale_method")]
     pub wgpu_downscale_method: WgpuDownscaleMethod,
+    #[serde(default = "default_fixed_2x_sr_min_scale_pct")]
+    pub fixed_2x_sr_min_scale_pct: u32,
     #[serde(default = "default_true")]
     pub prefetch_enabled: bool,
     #[serde(default)]
@@ -416,6 +421,10 @@ impl AppSettings {
 
         self.wgpu_downscale_method = self.wgpu_downscale_method.selectable_fallback();
 
+        self.fixed_2x_sr_min_scale_pct = self
+            .fixed_2x_sr_min_scale_pct
+            .clamp(FIXED_2X_SR_MIN_SCALE_PCT_MIN, FIXED_2X_SR_MIN_SCALE_PCT_MAX);
+
         let mut seen = Vec::new();
         self.top_bar_wgpu_downscale_methods.retain_mut(|method| {
             *method = method.selectable_fallback();
@@ -426,6 +435,12 @@ impl AppSettings {
                 true
             }
         });
+    }
+
+    pub fn fixed_2x_sr_min_scale(&self) -> f32 {
+        self.fixed_2x_sr_min_scale_pct
+            .clamp(FIXED_2X_SR_MIN_SCALE_PCT_MIN, FIXED_2X_SR_MIN_SCALE_PCT_MAX) as f32
+            / 100.0
     }
 
     pub fn effective_page_transition_style(&self) -> PageTransitionStyle {
@@ -487,6 +502,7 @@ impl Default for AppSettings {
             renderer_mode: RendererMode::LowMemoryGlow,
             wgpu_upscale_method: WgpuUpscaleMethod::None,
             wgpu_downscale_method: default_wgpu_downscale_method(),
+            fixed_2x_sr_min_scale_pct: default_fixed_2x_sr_min_scale_pct(),
             prefetch_enabled: true,
             progressive_preview_enabled: false,
             cache_memory_mode: CacheMemoryMode::Auto,
@@ -796,6 +812,10 @@ fn default_archive_edge_page_action() -> EdgePageAction {
 
 fn default_manual_cache_mb() -> u32 {
     DEFAULT_MANUAL_CACHE_MB
+}
+
+fn default_fixed_2x_sr_min_scale_pct() -> u32 {
+    (scalers::FIXED_2X_SR_SMALL_SCALE_MIN * 100.0) as u32
 }
 
 fn default_cpu_upscale_filter() -> CpuScaleFilter {

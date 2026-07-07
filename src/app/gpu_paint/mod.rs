@@ -79,6 +79,7 @@ pub(super) struct GpuPaintRequest {
     pub(super) effects: ViewEffects,
     pub(super) wgpu_upscale_method: WgpuUpscaleMethod,
     pub(super) wgpu_downscale_method: WgpuDownscaleMethod,
+    pub(super) fixed_2x_sr_min_scale_pct: u32,
     pub(super) opacity: f32,
 }
 
@@ -153,6 +154,7 @@ impl SuiSuiViewApp {
             effects: request.effects,
             wgpu_upscale_method: request.wgpu_upscale_method,
             wgpu_downscale_method: request.wgpu_downscale_method,
+            fixed_2x_sr_min_scale_pct: request.fixed_2x_sr_min_scale_pct,
             opacity: request.opacity.clamp(0.0, 1.0),
             pool_budgets,
             rect: request.rect,
@@ -162,6 +164,7 @@ impl SuiSuiViewApp {
                 request.effects,
                 request.wgpu_upscale_method,
                 request.wgpu_downscale_method,
+                request.fixed_2x_sr_min_scale_pct,
                 request.rect,
                 request.opacity,
             ),
@@ -294,6 +297,7 @@ struct GpuEffectCallback {
     effects: ViewEffects,
     wgpu_upscale_method: WgpuUpscaleMethod,
     wgpu_downscale_method: WgpuDownscaleMethod,
+    fixed_2x_sr_min_scale_pct: u32,
     opacity: f32,
     pool_budgets: GpuPoolBudgets,
     rect: Rect,
@@ -371,6 +375,7 @@ impl CallbackTrait for GpuEffectCallback {
             display_rect.full_size,
             self.wgpu_upscale_method,
             self.wgpu_downscale_method,
+            self.fixed_2x_sr_min_scale_pct as f32 / 100.0,
         );
         if let Some(source_bind_group) = resources
             .source_textures
@@ -387,6 +392,7 @@ impl CallbackTrait for GpuEffectCallback {
                 self.effects,
                 self.wgpu_upscale_method,
                 self.wgpu_downscale_method,
+                self.fixed_2x_sr_min_scale_pct as f32 / 100.0,
                 display_rect,
                 self.opacity,
                 &self.ctx,
@@ -472,6 +478,7 @@ fn draw_id(
     effects: ViewEffects,
     wgpu_upscale_method: WgpuUpscaleMethod,
     wgpu_downscale_method: WgpuDownscaleMethod,
+    fixed_2x_sr_min_scale_pct: u32,
     rect: Rect,
     opacity: f32,
 ) -> u64 {
@@ -480,6 +487,7 @@ fn draw_id(
     effects.hash(&mut hasher);
     wgpu_upscale_method.token().hash(&mut hasher);
     wgpu_downscale_method.token().hash(&mut hasher);
+    fixed_2x_sr_min_scale_pct.hash(&mut hasher);
     rect.min.x.to_bits().hash(&mut hasher);
     rect.min.y.to_bits().hash(&mut hasher);
     rect.max.x.to_bits().hash(&mut hasher);

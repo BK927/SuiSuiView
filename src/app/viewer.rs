@@ -581,6 +581,7 @@ impl SuiSuiViewApp {
                 } => {
                     let target_size = rect_target_size(page_rect, ctx.pixels_per_point());
                     let force_texture_fallback = self.sibling_book_transition_stabilizing();
+                    let fixed_2x_sr_min_scale = self.settings.fixed_2x_sr_min_scale();
                     let active_wgsl = !force_texture_fallback
                         && gpu_visual_needs_wgsl(
                             image_size,
@@ -588,6 +589,7 @@ impl SuiSuiViewApp {
                             effects,
                             wgpu_upscale_method,
                             wgpu_downscale_method,
+                            fixed_2x_sr_min_scale,
                         );
                     let target_intent =
                         self.prepared_target_intent_for_target(render_info.target_long_edge);
@@ -598,6 +600,7 @@ impl SuiSuiViewApp {
                         target_size,
                         wgpu_upscale_method,
                         wgpu_downscale_method,
+                        fixed_2x_sr_min_scale,
                         active_wgsl,
                         target_intent,
                     ));
@@ -612,6 +615,7 @@ impl SuiSuiViewApp {
                             effects,
                             wgpu_upscale_method,
                             wgpu_downscale_method,
+                            fixed_2x_sr_min_scale_pct: self.settings.fixed_2x_sr_min_scale_pct,
                             opacity: request.alpha,
                         },
                         force_texture_fallback,

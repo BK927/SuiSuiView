@@ -552,12 +552,14 @@ pub(in crate::app) fn gpu_visual_needs_wgsl(
     effects: ViewEffects,
     wgpu_upscale_method: WgpuUpscaleMethod,
     wgpu_downscale_method: WgpuDownscaleMethod,
+    fixed_2x_sr_min_scale: f32,
 ) -> bool {
     let scale_plan = WgpuScalePlan::resolve(
         image_size,
         target_size,
         wgpu_upscale_method,
         wgpu_downscale_method,
+        fixed_2x_sr_min_scale,
     );
     effects != ViewEffects::default()
         || scale_plan.effective_upscale_method != WgpuUpscaleMethod::None

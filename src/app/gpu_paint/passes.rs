@@ -32,6 +32,7 @@ impl GpuPaintResources {
         effects: ViewEffects,
         wgpu_upscale_method: WgpuUpscaleMethod,
         wgpu_downscale_method: WgpuDownscaleMethod,
+        fixed_2x_sr_min_scale: f32,
         display_rect: GpuDisplayRect,
         opacity: f32,
         ctx: &egui::Context,
@@ -41,6 +42,7 @@ impl GpuPaintResources {
             display_rect.full_size,
             wgpu_upscale_method,
             wgpu_downscale_method,
+            fixed_2x_sr_min_scale,
         );
         let effective_upscaler = scale_plan.effective_upscale_method;
         let effective_downscaler = scale_plan.effective_downscale_method;

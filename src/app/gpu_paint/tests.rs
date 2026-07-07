@@ -22,6 +22,7 @@ fn draw_id_separates_same_page_in_different_panes() {
             ViewEffects::default(),
             WgpuUpscaleMethod::WgslFsr1Style,
             WgpuDownscaleMethod::Bilinear,
+            110,
             left,
             1.0,
         ),
@@ -30,6 +31,7 @@ fn draw_id_separates_same_page_in_different_panes() {
             ViewEffects::default(),
             WgpuUpscaleMethod::WgslFsr1Style,
             WgpuDownscaleMethod::Bilinear,
+            110,
             right,
             1.0,
         )
@@ -510,6 +512,7 @@ fn render_gpu_frame(
         ViewEffects::default(),
         upscaler,
         downscaler,
+        1.10,
         GpuDisplayRect {
             origin: [0, 0],
             visible_size: target_size,

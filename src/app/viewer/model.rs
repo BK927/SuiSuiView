@@ -304,6 +304,7 @@ impl CurrentViewState {
         target_size: [u32; 2],
         wgpu_upscale_method: WgpuUpscaleMethod,
         wgpu_downscale_method: WgpuDownscaleMethod,
+        fixed_2x_sr_min_scale: f32,
         active: bool,
         target_intent: PreparedTargetIntent,
     ) -> Self {
@@ -313,6 +314,7 @@ impl CurrentViewState {
             target_size,
             wgpu_upscale_method,
             wgpu_downscale_method,
+            fixed_2x_sr_min_scale,
         );
         Self {
             page_index: render.page_index,

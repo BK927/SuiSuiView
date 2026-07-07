@@ -48,6 +48,7 @@ impl SuiSuiViewApp {
                 request.effects,
                 request.wgpu_upscale_method,
                 request.wgpu_downscale_method,
+                self.settings.fixed_2x_sr_min_scale(),
             )
         {
             let texture = self.texture_for_gpu_fallback(
