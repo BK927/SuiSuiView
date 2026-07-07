@@ -20,8 +20,24 @@ pub struct BookRecord {
     pub path_positions: BTreeMap<String, ReadingPosition>,
     #[serde(default)]
     pub page_bookmarks: Vec<PageBookmark>,
+    #[serde(default)]
+    pub upscale_probe: Option<UpscaleProbeRecord>,
     pub updated_at: u64,
 }
+
+/// Persisted outcome of the per-book AUTO upscaler round-trip probe. `winner` stores a
+/// [`WgpuUpscaleMethod::token`]; `version` guards against reusing a decision made by an
+/// older probe algorithm.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpscaleProbeRecord {
+    pub winner: String,
+    pub ssim_anime4k: f32,
+    pub ssim_fsr: f32,
+    pub pages: u8,
+    pub version: u32,
+}
+
+pub const UPSCALE_PROBE_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadingPosition {
@@ -197,6 +213,21 @@ impl StateStore {
         let _ = self.write_book_record(&record);
     }
 
+    /// Attach the AUTO upscaler probe outcome to an existing book record. Mirrors the
+    /// bookmark read-modify-write path so a buffered pending record stays consistent; a
+    /// no-op if the record does not exist yet (callers persist it first) or is unchanged.
+    pub fn set_book_upscale_probe(&mut self, book_id: &str, probe: UpscaleProbeRecord) {
+        let Some(mut record) = self.read_book_record(book_id) else {
+            return;
+        };
+        if record.upscale_probe.as_ref() == Some(&probe) {
+            return;
+        }
+        record.upscale_probe = Some(probe);
+        record.updated_at = now_unix_seconds();
+        let _ = self.write_book_record(&record);
+    }
+
     pub fn remove_page_bookmark(&mut self, book_id: &str, source_path: &Path, page: usize) {
         let Some(mut record) = self.read_book_record(book_id) else {
             return;
@@ -318,8 +349,37 @@ mod tests {
 
         assert!(bookmark.page_bookmarks.is_empty());
         assert!(bookmark.path_positions.is_empty());
+        assert!(bookmark.upscale_probe.is_none());
         assert!(!state.settings.show_status_bar);
         assert!(state.settings.resume_by_file_identity);
+    }
+
+    #[test]
+    fn upscale_probe_round_trips_and_defaults_when_absent() {
+        use super::{BookRecord, UpscaleProbeRecord, UPSCALE_PROBE_VERSION};
+
+        let base = r#"{"book_id":"b","title":"T","last_page":0,"total_pages":10,"known_paths":["p"],"reading_direction":"RightToLeft","fit_mode":"FitPage","updated_at":1"#;
+
+        // Old records without the field still load, defaulting the probe to None.
+        let without: BookRecord = serde_json::from_str(&(base.to_owned() + "}")).unwrap();
+        assert!(without.upscale_probe.is_none());
+
+        // A present probe survives a serialize/deserialize round-trip.
+        let with_probe = base.to_owned()
+            + r#","upscale_probe":{"winner":"wgsl_fsr1_easu_rcas","ssim_anime4k":0.91,"ssim_fsr":0.93,"pages":3,"version":1}}"#;
+        let record: BookRecord = serde_json::from_str(&with_probe).unwrap();
+        let reloaded: BookRecord =
+            serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
+        assert_eq!(
+            reloaded.upscale_probe,
+            Some(UpscaleProbeRecord {
+                winner: "wgsl_fsr1_easu_rcas".to_owned(),
+                ssim_anime4k: 0.91,
+                ssim_fsr: 0.93,
+                pages: 3,
+                version: UPSCALE_PROBE_VERSION,
+            })
+        );
     }
 
     #[test]

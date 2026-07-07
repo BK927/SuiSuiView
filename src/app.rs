@@ -1,4 +1,3 @@
-use crate::core::auto_kind::AutoKindPrediction;
 use crate::core::effects::ViewEffects;
 use crate::core::formats::OPENABLE_FILE_EXTENSIONS;
 use crate::core::source::{BookSource, SharedSource};
@@ -27,7 +26,6 @@ use ui::{BookmarkFilter, BookmarkRowsCache, BookmarkThumbnails};
 
 mod about;
 mod adjacent_seed;
-mod auto_kind;
 mod cache;
 mod commands;
 mod context_menu;
@@ -58,6 +56,7 @@ mod sibling_books;
 mod texture_prewarm;
 mod ui;
 mod update_loop;
+mod upscale_probe;
 mod viewer;
 mod window;
 
@@ -214,10 +213,12 @@ pub struct SuiSuiViewApp {
     debug_compare: DebugCompareState,
     debug_compare_worker: Option<DebugCompareWorker>,
     debug_compare_inflight: HashSet<PageCacheKey>,
-    auto_kind_worker: Option<auto_kind::AutoKindWorker>,
-    auto_kind_generation: u64,
-    auto_kind_hints: HashMap<PageCacheKey, AutoKindPrediction>,
-    auto_kind_inflight: HashSet<PageCacheKey>,
+    upscale_probe_worker: Option<upscale_probe::UpscaleProbeWorker>,
+    upscale_probe_generation: u64,
+    probe_page_results: Vec<upscale_probe::PageProbeResult>,
+    probed_page_ids: HashSet<crate::core::source::PageId>,
+    upscale_probe_failures: usize,
+    book_upscale_decision: Option<WgpuUpscaleMethod>,
     bookmark_thumbnails: Option<BookmarkThumbnails>,
     gpu_effects_available: bool,
     gpu_target_format: Option<wgpu::TextureFormat>,
@@ -358,10 +359,12 @@ impl SuiSuiViewApp {
             debug_compare: DebugCompareState::default(),
             debug_compare_worker: None,
             debug_compare_inflight: HashSet::new(),
-            auto_kind_worker: None,
-            auto_kind_generation: 0,
-            auto_kind_hints: HashMap::new(),
-            auto_kind_inflight: HashSet::new(),
+            upscale_probe_worker: None,
+            upscale_probe_generation: 0,
+            probe_page_results: Vec::new(),
+            probed_page_ids: HashSet::new(),
+            upscale_probe_failures: 0,
+            book_upscale_decision: None,
             bookmark_thumbnails: None,
             // Both stages start on Glow; the WGPU stage patches these in
             // `begin_handoff` once its render state is available.
@@ -436,11 +439,11 @@ impl SuiSuiViewApp {
             .get_or_insert_with(|| DebugCompareWorker::new(self.egui_ctx.clone()))
     }
 
-    fn ensure_auto_kind_worker(&mut self) -> &auto_kind::AutoKindWorker {
-        let generation = self.auto_kind_generation;
+    fn ensure_upscale_probe_worker(&mut self) -> &upscale_probe::UpscaleProbeWorker {
+        let generation = self.upscale_probe_generation;
         let worker = self
-            .auto_kind_worker
-            .get_or_insert_with(|| auto_kind::AutoKindWorker::new(self.egui_ctx.clone()));
+            .upscale_probe_worker
+            .get_or_insert_with(|| upscale_probe::UpscaleProbeWorker::new(self.egui_ctx.clone()));
         worker.set_generation(generation);
         worker
     }
@@ -668,7 +671,7 @@ impl SuiSuiViewApp {
                     .insert(page_id, PageMetrics::from_page(&page));
                 self.insert_prepared_page(key, page.clone());
                 decoded_cache_changed = true;
-                self.maybe_enqueue_auto_kind(key, page);
+                self.maybe_enqueue_upscale_probe(key, page);
                 self.commit_pending_page_turn_if_ready();
                 if self.spread_indices().contains(&index) {
                     self.egui_ctx
@@ -943,7 +946,7 @@ impl SuiSuiViewApp {
         self.page_metrics.clear();
         self.textures.clear();
         self.clear_debug_compare_requests();
-        self.clear_auto_kind_state();
+        self.clear_upscale_probe_state();
         if let Some(thumbnails) = self.bookmark_thumbnails.as_mut() {
             thumbnails.clear();
         }

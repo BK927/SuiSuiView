@@ -21,6 +21,7 @@ pub use crate::core::i18n::Language;
 use bookmarks::path_key;
 pub use bookmarks::{
     BookRecord, BookRecordInput, PageBookmark, PageBookmarkEntry, ReadingPosition,
+    UpscaleProbeRecord, UPSCALE_PROBE_VERSION,
 };
 pub use decoders::{DecodeMode, DecoderPreference, DecoderPreferences};
 pub use display::{GpuEffectMode, WgpuUpscaleMethod};
@@ -709,6 +710,7 @@ impl StateStore {
             manual_zoom: None,
             path_positions: BTreeMap::new(),
             page_bookmarks: Vec::new(),
+            upscale_probe: None,
             updated_at: now,
         });
 

@@ -186,8 +186,6 @@ impl SuiSuiViewApp {
             .retain(|page_id, _| new_source.page_index_for_id(*page_id).is_some());
         self.page_errors
             .retain(|key, _| new_source.page_index_for_id(key.page_id).is_some());
-        self.auto_kind_hints
-            .retain(|key, _| new_source.page_index_for_id(key.page_id).is_some());
 
         self.transition = None;
         self.clear_pending_page_turns();

@@ -117,6 +117,7 @@ impl StateStore {
                 manual_zoom: None,
                 path_positions: BTreeMap::new(),
                 page_bookmarks: record.page_bookmarks,
+                upscale_probe: record.upscale_probe,
                 updated_at: record.updated_at,
             };
             let _ = self.write_book_record(&rescued);

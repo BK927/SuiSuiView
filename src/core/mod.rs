@@ -1,5 +1,4 @@
 pub mod artcnn;
-pub mod auto_kind;
 pub mod decoder_backend;
 pub mod decoder_bench;
 pub mod effect_bench;

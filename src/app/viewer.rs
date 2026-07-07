@@ -198,7 +198,7 @@ impl SuiSuiViewApp {
             .expect("best page key should exist in decoded cache");
         if use_wgsl_effects {
             let wgpu_upscale_method =
-                self.content_aware_wgpu_upscale_method(best_key, self.active_wgpu_upscale_method());
+                self.book_aware_wgpu_upscale_method(self.active_wgpu_upscale_method());
             #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
             perf::record_open_to_first_visible_if_pending(
                 &mut self.open_to_first_visible_trace,

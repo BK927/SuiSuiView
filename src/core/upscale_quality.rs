@@ -75,8 +75,8 @@ pub struct UpscaleQualityRun {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct QualityMetrics {
-    ssim: f64,
+pub(crate) struct QualityMetrics {
+    pub(crate) ssim: f64,
     mae: f64,
     rmse: f64,
     psnr: f64,
@@ -459,7 +459,10 @@ fn color_image_to_rgba(image: &ColorImage) -> Vec<u8> {
     bytes
 }
 
-fn compare_images(baseline: &ColorImage, candidate: &ColorImage) -> Result<QualityMetrics, String> {
+pub(crate) fn compare_images(
+    baseline: &ColorImage,
+    candidate: &ColorImage,
+) -> Result<QualityMetrics, String> {
     if baseline.size != candidate.size {
         return Err(format!(
             "Image sizes differ: baseline {:?}, candidate {:?}",

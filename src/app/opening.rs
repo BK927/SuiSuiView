@@ -563,7 +563,8 @@ impl SuiSuiViewApp {
         self.decoded_bytes = 0;
         self.page_metrics.clear();
         self.textures.clear();
-        self.clear_auto_kind_state();
+        self.clear_upscale_probe_state();
+        self.seed_upscale_decision_from_record(&book_id);
         if let Some(thumbnails) = self.bookmark_thumbnails.as_mut() {
             thumbnails.clear();
         }

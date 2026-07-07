@@ -51,12 +51,66 @@ pub(crate) struct GpuUpscaleOutput {
     pub(crate) elapsed: Duration,
 }
 
-impl GpuUpscaleBench {
-    pub(crate) fn new_for_method(method: Option<WgpuUpscaleMethod>) -> Result<Self, String> {
-        pollster::block_on(Self::new_async(method))
+/// Which sub-benches a constructor should compile. `All` reproduces the historical
+/// "no filter" behavior (heavy benchmark-only families such as ArtCNN, SPAN, and CuNNy
+/// stay out); `Only` compiles a sub-bench iff any listed method needs it.
+enum MethodFilter<'a> {
+    All,
+    Only(&'a [WgpuUpscaleMethod]),
+}
+
+impl MethodFilter<'_> {
+    /// Compiled for `All`, or when the exact method is requested.
+    fn wants_method(&self, method: WgpuUpscaleMethod) -> bool {
+        match self {
+            MethodFilter::All => true,
+            MethodFilter::Only(methods) => methods.contains(&method),
+        }
     }
 
-    async fn new_async(method: Option<WgpuUpscaleMethod>) -> Result<Self, String> {
+    /// Compiled for `All`, or when any requested method matches the group predicate.
+    fn wants_group(&self, predicate: impl Fn(WgpuUpscaleMethod) -> bool) -> bool {
+        match self {
+            MethodFilter::All => true,
+            MethodFilter::Only(methods) => methods.iter().copied().any(predicate),
+        }
+    }
+
+    /// Never compiled for `All` (benchmark-only heavy family); compiled only when a
+    /// requested method matches the predicate.
+    fn wants_explicit(&self, predicate: impl Fn(WgpuUpscaleMethod) -> bool) -> bool {
+        match self {
+            MethodFilter::All => false,
+            MethodFilter::Only(methods) => methods.iter().copied().any(predicate),
+        }
+    }
+
+    /// First requested method matching the predicate, or None for `All`.
+    fn first(&self, predicate: impl Fn(WgpuUpscaleMethod) -> bool) -> Option<WgpuUpscaleMethod> {
+        match self {
+            MethodFilter::All => None,
+            MethodFilter::Only(methods) => {
+                methods.iter().copied().find(|method| predicate(*method))
+            }
+        }
+    }
+}
+
+impl GpuUpscaleBench {
+    pub(crate) fn new_for_method(method: Option<WgpuUpscaleMethod>) -> Result<Self, String> {
+        match method {
+            Some(method) => Self::new_for_methods(std::slice::from_ref(&method)),
+            None => pollster::block_on(Self::new_async(MethodFilter::All)),
+        }
+    }
+
+    /// Build one device/queue and compile the base pipeline plus only the sub-benches any
+    /// of `methods` needs. Used by the per-book upscale probe, which passes a two-method set.
+    pub(crate) fn new_for_methods(methods: &[WgpuUpscaleMethod]) -> Result<Self, String> {
+        pollster::block_on(Self::new_async(MethodFilter::Only(methods)))
+    }
+
+    async fn new_async(filter: MethodFilter<'_>) -> Result<Self, String> {
         let instance = wgpu::Instance::default();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -138,41 +192,44 @@ impl GpuUpscaleBench {
             cache: None,
         });
 
-        let nvidia_nis = if wants_method(method, WgpuUpscaleMethod::NvidiaNis) {
+        let nvidia_nis = if filter.wants_method(WgpuUpscaleMethod::NvidiaNis) {
             NvidiaNisBench::try_new(&device).await
         } else {
             None
         };
-        let anime4k = if wants_method(method, WgpuUpscaleMethod::WgslAnime4kV32CnnX2S) {
+        let anime4k = if filter.wants_method(WgpuUpscaleMethod::WgslAnime4kV32CnnX2S) {
             Anime4kBench::try_new(&device).await
         } else {
             None
         };
-        let anime4k_m = if wants_method(method, WgpuUpscaleMethod::WgslAnime4kV32CnnX2M) {
+        let anime4k_m = if filter.wants_method(WgpuUpscaleMethod::WgslAnime4kV32CnnX2M) {
             Anime4kMBench::try_new(&device).await
         } else {
             None
         };
         let mut artcnn = Vec::new();
         for variant in ArtcnnVariant::ALL {
-            if wants_artcnn_variant(method, variant) {
+            if filter
+                .wants_explicit(|method| ArtcnnBench::variant_for_method(method) == Some(variant))
+            {
                 if let Some(bench) = ArtcnnBench::try_new(&device, variant).await {
                     artcnn.push(bench);
                 }
             }
         }
-        let span = if method == Some(WgpuUpscaleMethod::WgslSrLabSpanX2) {
+        let span = if filter.wants_explicit(|method| method == WgpuUpscaleMethod::WgslSrLabSpanX2) {
             SpanBench::try_new()
         } else {
             None
         };
-        let acnet = if wants_group(method, is_acnet_method) {
+        let acnet = if filter.wants_group(is_acnet_method) {
             AcnetBench::try_new(&device).await
         } else {
             None
         };
-        let cunny = if method.is_some_and(WgpuUpscaleMethod::is_cunny) {
-            CunnyBench::try_new(&device, method).await
+        let cunny_method = filter.first(WgpuUpscaleMethod::is_cunny);
+        let cunny = if cunny_method.is_some() {
+            CunnyBench::try_new(&device, cunny_method).await
         } else {
             None
         };
@@ -510,21 +567,6 @@ impl GpuUpscaleBench {
         pass.set_bind_group(0, &bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
-}
-
-fn wants_method(filter: Option<WgpuUpscaleMethod>, method: WgpuUpscaleMethod) -> bool {
-    filter.is_none_or(|selected| selected == method)
-}
-
-fn wants_artcnn_variant(filter: Option<WgpuUpscaleMethod>, variant: ArtcnnVariant) -> bool {
-    filter.is_some_and(|method| ArtcnnBench::variant_for_method(method) == Some(variant))
-}
-
-fn wants_group(
-    filter: Option<WgpuUpscaleMethod>,
-    group_predicate: fn(WgpuUpscaleMethod) -> bool,
-) -> bool {
-    filter.is_none_or(group_predicate)
 }
 
 fn is_acnet_method(method: WgpuUpscaleMethod) -> bool {
