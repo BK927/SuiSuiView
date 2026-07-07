@@ -278,16 +278,10 @@ impl SuiSuiViewApp {
             )
         });
         if ctrl {
-            let Some(gesture) = ctrl_wheel_gesture(scroll_y, zoom_delta) else {
-                return;
-            };
-            if let Some(command) = command_for_mouse_gesture(gesture, &self.settings) {
-                self.apply_command(ui.ctx(), command);
-            }
-        } else if let Some(gesture) = zoom_delta_gesture(zoom_delta) {
-            if let Some(command) = command_for_mouse_gesture(gesture, &self.settings) {
-                self.apply_command(ui.ctx(), command);
-            }
+            self.apply_wheel_gesture_steps(ui, scroll_y, zoom_delta);
+        } else if (zoom_delta - 1.0).abs() >= WHEEL_ZOOM_DELTA_EPSILON {
+            // Trackpad pinch arrives as a zoom factor without the ctrl modifier.
+            self.apply_wheel_gesture_steps(ui, 0.0, zoom_delta);
         } else if scroll_y.abs() < 1.0 {
             // Swallow sub-pixel scroll noise.
         } else if self.settings.wheel_mode == WheelMode::ScrollWhenZoomed
@@ -306,6 +300,38 @@ impl SuiSuiViewApp {
             {
                 self.apply_command(ui.ctx(), command);
             }
+        }
+    }
+
+    /// Drain this frame's analog wheel/pinch input through the notch
+    /// accumulator and apply the bound CtrlWheel gesture once per whole step.
+    fn apply_wheel_gesture_steps(&mut self, ui: &egui::Ui, scroll_points: f32, zoom_delta: f32) {
+        let now = Instant::now();
+        if self
+            .wheel_gesture_last
+            .is_some_and(|last| now.duration_since(last) > WHEEL_ACCUM_TIMEOUT)
+        {
+            self.wheel_gesture_accum = 0.0;
+        }
+        if scroll_points.abs() >= f32::EPSILON
+            || (zoom_delta - 1.0).abs() >= WHEEL_ZOOM_DELTA_EPSILON
+        {
+            self.wheel_gesture_last = Some(now);
+        }
+        let steps = wheel_gesture_steps(&mut self.wheel_gesture_accum, scroll_points, zoom_delta);
+        if steps == 0 {
+            return;
+        }
+        let gesture = if steps > 0 {
+            MouseGesture::CtrlWheelUp
+        } else {
+            MouseGesture::CtrlWheelDown
+        };
+        let Some(command) = command_for_mouse_gesture(gesture, &self.settings) else {
+            return;
+        };
+        for _ in 0..steps.unsigned_abs() {
+            self.apply_command(ui.ctx(), command);
         }
     }
 }
@@ -339,25 +365,42 @@ fn view_target_settle_wait(
     }
 }
 
-fn ctrl_wheel_gesture(scroll_y: f32, zoom_delta: f32) -> Option<MouseGesture> {
-    if scroll_y.abs() >= 1.0 {
-        return Some(if scroll_y > 0.0 {
-            MouseGesture::CtrlWheelUp
-        } else {
-            MouseGesture::CtrlWheelDown
-        });
-    }
-    zoom_delta_gesture(zoom_delta)
-}
+/// One classic wheel notch in egui points (egui's native `line_scroll_speed`
+/// converts `MouseScrollDelta::LineDelta(1.0)` to 40 points).
+const WHEEL_NOTCH_POINTS: f32 = 40.0;
+/// ln(1.1): the per-notch zoom step in log space, used to convert an analog
+/// pinch factor into notch equivalents (7 notches ≈ 2x, matching the wheel).
+const WHEEL_STEP_LN: f32 = 0.095_310_2;
+/// A pinch factor closer to 1.0 than this is treated as no zoom input.
+const WHEEL_ZOOM_DELTA_EPSILON: f32 = 1e-4;
+/// Idle time after which a leftover partial notch is forgotten, so half a
+/// notch flicked now does not surface as a ghost step much later.
+const WHEEL_ACCUM_TIMEOUT: Duration = Duration::from_millis(300);
+/// Upper bound on gesture steps applied from a single frame's input.
+const WHEEL_MAX_STEPS_PER_FRAME: i32 = 8;
 
-fn zoom_delta_gesture(zoom_delta: f32) -> Option<MouseGesture> {
-    if zoom_delta > 1.001 {
-        Some(MouseGesture::CtrlWheelUp)
-    } else if zoom_delta < 0.999 {
-        Some(MouseGesture::CtrlWheelDown)
+/// Convert one frame's analog wheel/pinch input into whole gesture steps,
+/// carrying the fractional remainder in `accum`. High-resolution wheels and
+/// trackpads deliver a notch's worth of input spread over many small frames;
+/// accumulating keeps one physical notch equal to exactly one step instead of
+/// one step per frame. Raw scroll wins over the synthesized pinch factor when
+/// both are present (same priority as the previous per-frame gesture logic).
+fn wheel_gesture_steps(accum: &mut f32, scroll_points: f32, zoom_delta: f32) -> i32 {
+    let notches = if scroll_points.abs() >= f32::EPSILON {
+        scroll_points / WHEEL_NOTCH_POINTS
+    } else if (zoom_delta - 1.0).abs() >= WHEEL_ZOOM_DELTA_EPSILON {
+        zoom_delta.ln() / WHEEL_STEP_LN
     } else {
-        None
+        0.0
+    };
+    *accum += notches;
+    let steps = *accum as i32;
+    if steps.abs() >= WHEEL_MAX_STEPS_PER_FRAME {
+        *accum = 0.0;
+        return steps.clamp(-WHEEL_MAX_STEPS_PER_FRAME, WHEEL_MAX_STEPS_PER_FRAME);
     }
+    *accum -= steps as f32;
+    steps
 }
 
 pub(in crate::app) fn target_long_edge_for_view(
@@ -518,11 +561,10 @@ impl OriginalPageSize {
 #[cfg(test)]
 mod tests {
     use super::{
-        ctrl_wheel_gesture, target_long_edge_for_view, view_target_settle_wait, zoom_delta_gesture,
-        OriginalPageSize, ViewTargetSignature, VIEW_TARGET_SETTLE_DELAY,
+        target_long_edge_for_view, view_target_settle_wait, wheel_gesture_steps, OriginalPageSize,
+        ViewTargetSignature, VIEW_TARGET_SETTLE_DELAY, WHEEL_MAX_STEPS_PER_FRAME,
     };
     use super::{FitMode, ViewMode};
-    use crate::core::state::MouseGesture;
     use egui::Vec2;
     use std::time::Instant;
 
@@ -765,35 +807,58 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_wheel_gesture_accepts_egui_zoom_delta() {
-        assert_eq!(
-            ctrl_wheel_gesture(0.0, 1.1),
-            Some(MouseGesture::CtrlWheelUp)
-        );
-        assert_eq!(
-            ctrl_wheel_gesture(0.0, 0.9),
-            Some(MouseGesture::CtrlWheelDown)
-        );
-        assert_eq!(ctrl_wheel_gesture(0.0, 1.0), None);
+    fn one_wheel_notch_is_exactly_one_step() {
+        let mut accum = 0.0;
+        assert_eq!(wheel_gesture_steps(&mut accum, 40.0, 1.0), 1);
+        assert_eq!(accum, 0.0);
+        assert_eq!(wheel_gesture_steps(&mut accum, -40.0, 1.0), -1);
+        assert_eq!(accum, 0.0);
     }
 
     #[test]
-    fn zoom_delta_gesture_does_not_require_modifier_state() {
-        assert_eq!(zoom_delta_gesture(1.1), Some(MouseGesture::CtrlWheelUp));
-        assert_eq!(zoom_delta_gesture(0.9), Some(MouseGesture::CtrlWheelDown));
-        assert_eq!(zoom_delta_gesture(1.0), None);
+    fn fragmented_high_resolution_flick_sums_to_its_true_notch_count() {
+        // 15 frames of small deltas that add up to just over one notch: the old
+        // per-frame logic applied 15 steps; the accumulator applies exactly 1.
+        let mut accum = 0.0;
+        let mut steps = 0;
+        for _ in 0..15 {
+            steps += wheel_gesture_steps(&mut accum, 2.7, 1.0);
+        }
+        assert_eq!(steps, 1);
     }
 
     #[test]
-    fn ctrl_wheel_gesture_prefers_raw_scroll_direction() {
+    fn pinch_zoom_delta_converts_to_notch_equivalents() {
+        // ln(1.21) / ln(1.1) ~= 2.0: a 1.21x pinch frame is two zoom steps.
+        let mut accum = 0.0;
+        assert_eq!(wheel_gesture_steps(&mut accum, 0.0, 1.21), 2);
+        // A gentle pinch accumulates across frames instead of firing every frame.
+        let mut accum = 0.0;
+        let mut steps = 0;
+        for _ in 0..5 {
+            steps += wheel_gesture_steps(&mut accum, 0.0, 1.02);
+        }
+        assert_eq!(steps, 1);
+        assert_eq!(wheel_gesture_steps(&mut accum, 0.0, 1.0), 0);
+    }
+
+    #[test]
+    fn raw_scroll_wins_over_the_synthesized_pinch_factor() {
+        let mut accum = 0.0;
+        assert_eq!(wheel_gesture_steps(&mut accum, 40.0, 0.9), 1);
+        let mut accum = 0.0;
+        assert_eq!(wheel_gesture_steps(&mut accum, -40.0, 1.1), -1);
+    }
+
+    #[test]
+    fn wheel_steps_per_frame_are_clamped() {
+        let mut accum = 0.0;
         assert_eq!(
-            ctrl_wheel_gesture(120.0, 0.9),
-            Some(MouseGesture::CtrlWheelUp)
+            wheel_gesture_steps(&mut accum, 4000.0, 1.0),
+            WHEEL_MAX_STEPS_PER_FRAME
         );
-        assert_eq!(
-            ctrl_wheel_gesture(-120.0, 1.1),
-            Some(MouseGesture::CtrlWheelDown)
-        );
+        // The clamp also drops the excess instead of replaying it later.
+        assert_eq!(accum, 0.0);
     }
 
     fn page_size(width: f32, height: f32) -> OriginalPageSize {

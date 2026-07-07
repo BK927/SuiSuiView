@@ -204,6 +204,12 @@ pub struct SuiSuiViewApp {
     /// downscaling through the cheap cached hardware-mipmap path while a zoom
     /// gesture is still in motion. Transient; never persisted.
     last_zoom_motion: Option<Instant>,
+    /// Fractional wheel-notch carry for the CtrlWheel gesture accumulator:
+    /// high-resolution wheels spread one notch over many frames, so whole
+    /// gesture steps are emitted only as full notches accumulate. Transient.
+    wheel_gesture_accum: f32,
+    /// When the accumulator last saw input; a stale partial notch is dropped.
+    wheel_gesture_last: Option<Instant>,
     effects: ViewEffects,
     target_long_edge: u32,
     current_view_state: Option<CurrentViewState>,
@@ -351,6 +357,8 @@ impl SuiSuiViewApp {
             fit_mode: FitMode::default(),
             manual_zoom: 1.0,
             last_zoom_motion: None,
+            wheel_gesture_accum: 0.0,
+            wheel_gesture_last: None,
             effects: ViewEffects::default(),
             target_long_edge: DEFAULT_TARGET_LONG_EDGE,
             current_view_state: None,

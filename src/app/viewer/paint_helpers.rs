@@ -193,7 +193,8 @@ impl SuiSuiViewApp {
             return;
         }
         let min_zoom = self.settings.pixel_grid_min_zoom_pct as f32 / 100.0;
-        if pixel_grid_spacing(rect.width() * pixels_per_point, original_size.x, min_zoom).is_none() {
+        if pixel_grid_spacing(rect.width() * pixels_per_point, original_size.x, min_zoom).is_none()
+        {
             return;
         }
         let clip = viewport.intersect(rect);
@@ -201,7 +202,10 @@ impl SuiSuiViewApp {
             return;
         }
         // 1 physical pixel wide; a translucent black boundary reads against light and dark pages.
-        let stroke = Stroke::new(1.0 / pixels_per_point.max(0.1), Color32::from_black_alpha(96));
+        let stroke = Stroke::new(
+            1.0 / pixels_per_point.max(0.1),
+            Color32::from_black_alpha(96),
+        );
 
         let x_step = rect.width() / original_size.x;
         let first_col = ((clip.left() - rect.left()) / x_step)
