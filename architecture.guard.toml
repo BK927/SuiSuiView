@@ -115,20 +115,9 @@ remediation = [
 ]
 
 [[files]]
-path = "src/core/state/bookmarks.rs"
-kind = "legacy-large"
-baseline_lines = 937
-growth_warn_lines = 80
-growth_fail_lines = 160
-purpose = "Book record and reading-position persistence types (BookRecord/ReadingPosition/BookRecordInput), their store read-modify-write methods, and the co-located serde/round-trip tests."
-remediation = [
-  "Extract the #[cfg(test)] module into src/core/state/bookmarks/tests.rs (matching the opening.rs / refresh.rs pattern) when persistence work settles, then lower the baseline."
-]
-
-[[files]]
 path = "src/app/winit_host.rs"
 kind = "legacy-large"
-baseline_lines = 477
+baseline_lines = 473
 growth_warn_lines = 80
 growth_fail_lines = 160
 purpose = "Custom winit host root: event loop, reactive control flow, and DPI defense wiring; the Glow/WGPU stage handlers and title-sync live in glow_stage.rs, wgpu_stage.rs, and title_sync.rs."

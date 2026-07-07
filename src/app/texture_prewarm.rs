@@ -1,6 +1,6 @@
 use super::perf;
 use super::{
-    texture_options_for_sampling, SuiSuiViewApp, TextureCacheKey, TextureEntry,
+    texture_options_for_sampling, SuiSuiViewApp, TextureCacheKey, TextureEntry, ViewMode,
     BYTES_PER_RGBA_PIXEL,
 };
 use crate::core::effects::ViewEffects;
@@ -61,7 +61,17 @@ impl SuiSuiViewApp {
     }
 
     fn can_prewarm_neighbor_textures(&self) -> bool {
-        self.settings.prefetch_enabled
+        // The neighbor-texture prewarm is a paged-turn optimization: its candidate
+        // pages come from `page_turn_target_from`/`spread_indices_for`, and it
+        // warms textures a couple of discrete turns out so a page turn lands on an
+        // already-uploaded texture. The vertical strip has no discrete turns; it
+        // paints its continuous visible window plus a one-page margin every frame
+        // (`paint_strip`), uploading each visible page's texture during paint. This
+        // prewarm therefore only duplicates that work or warms pages beyond the
+        // strip's own margin, competing for the per-frame upload slot and texture
+        // budget, so skip it in strip mode.
+        self.view_mode != ViewMode::VerticalStrip
+            && self.settings.prefetch_enabled
             && perf::texture_prewarm_enabled()
             && self.source.is_some()
             && self.target_long_edge <= MAX_TARGET_LONG_EDGE

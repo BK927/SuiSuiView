@@ -163,7 +163,7 @@ standalone files.
 - [x] Display effects, fit-mode upscaling, and user-selectable decoders.
 - [x] Current-page EXIF, file, and color information.
 - [ ] CBR/RAR and 7Z/CB7 read-only archive support.
-- [ ] Webtoon-style continuous vertical reading mode.
+- [x] Webtoon-style continuous vertical reading mode.
 - [ ] Folder and page thumbnail overview for faster navigation.
 - [x] Smarter Auto upscaler selection for content-aware fit-mode enlargement
   (per-book round-trip probe: each book's own pixels pick the winner once,
