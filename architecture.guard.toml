@@ -117,13 +117,12 @@ remediation = [
 [[files]]
 path = "src/app/winit_host.rs"
 kind = "legacy-large"
-baseline_lines = 910
+baseline_lines = 477
 growth_warn_lines = 80
 growth_fail_lines = 160
-purpose = "Custom winit host: event loop, Glow/WGPU stages, reactive control flow, and DPI defense wiring."
+purpose = "Custom winit host root: event loop, reactive control flow, and DPI defense wiring; the Glow/WGPU stage handlers and title-sync live in glow_stage.rs, wgpu_stage.rs, and title_sync.rs."
 remediation = [
-  "Split the Glow and Wgpu stage handlers (redraw/window_event arms) into per-stage submodules.",
-  "Move the title-sync Win32 helpers into a platform-side module."
+  "Keep new stage-specific code in the matching submodule (glow_stage.rs, wgpu_stage.rs, or title_sync.rs) rather than the host root."
 ]
 
 [[routing]]
