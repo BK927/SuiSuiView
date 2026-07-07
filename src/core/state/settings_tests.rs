@@ -210,6 +210,29 @@ fn settings_normalization_clamps_fixed_2x_sr_min_scale_pct() {
 }
 
 #[test]
+fn settings_normalization_clamps_pixel_grid_min_zoom_pct() {
+    let mut settings = AppSettings {
+        pixel_grid_min_zoom_pct: 100,
+        ..AppSettings::default()
+    };
+    settings.normalize_product_choices();
+    assert_eq!(settings.pixel_grid_min_zoom_pct, 200);
+
+    settings.pixel_grid_min_zoom_pct = 99999;
+    settings.normalize_product_choices();
+    assert_eq!(settings.pixel_grid_min_zoom_pct, 6400);
+}
+
+#[test]
+fn old_settings_without_pixel_grid_load_defaults() {
+    let state: PersistedState =
+        serde_json::from_str(r#"{"version":1,"settings":{},"books":{}}"#).unwrap();
+
+    assert!(!state.settings.pixel_grid_enabled);
+    assert_eq!(state.settings.pixel_grid_min_zoom_pct, 800);
+}
+
+#[test]
 fn legacy_cache_memory_mode_tokens_still_deserialize() {
     let auto: PersistedState =
         serde_json::from_str(r#"{"version":1,"settings":{"cache_memory_mode":"Auto"},"books":{}}"#)

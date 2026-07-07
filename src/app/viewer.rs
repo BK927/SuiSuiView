@@ -534,6 +534,8 @@ impl SuiSuiViewApp {
             request.offset,
         );
         let tint = Color32::from_white_alpha((request.alpha.clamp(0.0, 1.0) * 255.0) as u8);
+        // The pixel grid is a steady-state inspection aid; suppress it while a spread animates.
+        let full_alpha = request.alpha >= 1.0;
 
         let mut spread_contains_current = false;
         let mut spread_fully_drawn = true;
@@ -570,6 +572,15 @@ impl SuiSuiViewApp {
                         Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
                         tint,
                     );
+                    if full_alpha {
+                        self.paint_pixel_grid(
+                            painter,
+                            page_rect,
+                            size,
+                            request.viewport,
+                            ctx.pixels_per_point(),
+                        );
+                    }
                 }
                 PageVisual::ReadyGpu {
                     source_key,
@@ -639,6 +650,15 @@ impl SuiSuiViewApp {
                         spread_uses_wgpu_paint_callback = true;
                     } else if force_texture_fallback {
                         spread_needs_sibling_visible_hold = true;
+                    }
+                    if gpu_painted && full_alpha {
+                        self.paint_pixel_grid(
+                            painter,
+                            page_rect,
+                            size,
+                            request.viewport,
+                            ctx.pixels_per_point(),
+                        );
                     }
                 }
                 PageVisual::Loading { index } => {

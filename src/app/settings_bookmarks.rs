@@ -1,4 +1,4 @@
-use super::settings::{checkbox_with_help, setting_group};
+use super::settings::{checkbox_with_help, grid_label_with_help, setting_group};
 use super::SuiSuiViewApp;
 use crate::core::i18n::I18n;
 use crate::core::state::{
@@ -35,6 +35,29 @@ pub(in crate::app) fn show_view_settings(
                 &i18n.text("settings.view.filename_overlay"),
                 &i18n.text("settings.view.filename_overlay.help"),
             );
+            *changed |= checkbox_with_help(
+                ui,
+                &mut draft.pixel_grid_enabled,
+                &i18n.text("settings.view.pixel_grid"),
+                &i18n.text("settings.view.pixel_grid.help"),
+            );
+            ui.add_enabled_ui(draft.pixel_grid_enabled, |ui| {
+                ui.horizontal(|ui| {
+                    grid_label_with_help(
+                        ui,
+                        &i18n.text("settings.view.pixel_grid_threshold"),
+                        &i18n.text("settings.view.pixel_grid_threshold.help"),
+                    );
+                    *changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut draft.pixel_grid_min_zoom_pct)
+                                .range(200..=6400)
+                                .speed(10)
+                                .suffix("%"),
+                        )
+                        .changed();
+                });
+            });
         },
     );
 

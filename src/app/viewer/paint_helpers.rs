@@ -176,10 +176,86 @@ impl SuiSuiViewApp {
         }
         .clamp(0.02, 16.0)
     }
+
+    /// Overlay a 1px grid on original-pixel boundaries once the page is magnified past the user
+    /// threshold. `original_size` is the transformed (rotation-aware) original pixel size, so a
+    /// 90° rotation that swaps width/height is honored. Lines are clipped to the visible window
+    /// and land exactly on integer original-pixel boundaries.
+    pub(in crate::app) fn paint_pixel_grid(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        original_size: Vec2,
+        viewport: Rect,
+        pixels_per_point: f32,
+    ) {
+        if !self.settings.pixel_grid_enabled {
+            return;
+        }
+        let min_zoom = self.settings.pixel_grid_min_zoom_pct as f32 / 100.0;
+        if pixel_grid_spacing(rect.width() * pixels_per_point, original_size.x, min_zoom).is_none() {
+            return;
+        }
+        let clip = viewport.intersect(rect);
+        if clip.width() <= 0.0 || clip.height() <= 0.0 {
+            return;
+        }
+        // 1 physical pixel wide; a translucent black boundary reads against light and dark pages.
+        let stroke = Stroke::new(1.0 / pixels_per_point.max(0.1), Color32::from_black_alpha(96));
+
+        let x_step = rect.width() / original_size.x;
+        let first_col = ((clip.left() - rect.left()) / x_step)
+            .floor()
+            .clamp(0.0, original_size.x) as u32;
+        let last_col = ((clip.right() - rect.left()) / x_step)
+            .ceil()
+            .clamp(0.0, original_size.x) as u32;
+        for col in first_col..=last_col {
+            let x = rect.left() + col as f32 * x_step;
+            if x >= clip.left() && x <= clip.right() {
+                painter.line_segment(
+                    [Pos2::new(x, clip.top()), Pos2::new(x, clip.bottom())],
+                    stroke,
+                );
+            }
+        }
+
+        let y_step = rect.height() / original_size.y;
+        let first_row = ((clip.top() - rect.top()) / y_step)
+            .floor()
+            .clamp(0.0, original_size.y) as u32;
+        let last_row = ((clip.bottom() - rect.top()) / y_step)
+            .ceil()
+            .clamp(0.0, original_size.y) as u32;
+        for row in first_row..=last_row {
+            let y = rect.top() + row as f32 * y_step;
+            if y >= clip.top() && y <= clip.bottom() {
+                painter.line_segment(
+                    [Pos2::new(clip.left(), y), Pos2::new(clip.right(), y)],
+                    stroke,
+                );
+            }
+        }
+    }
 }
 
 fn source_pixel_scale(pixels_per_point: f32) -> f32 {
     1.0 / pixels_per_point.max(0.1)
+}
+
+/// On-screen spacing (physical pixels per original image pixel) when the page is magnified at or
+/// beyond `min_zoom` (also physical pixels per original pixel); `None` below threshold or for
+/// degenerate input.
+pub(in crate::app) fn pixel_grid_spacing(
+    rect_width_px: f32,
+    original_width: f32,
+    min_zoom: f32,
+) -> Option<f32> {
+    if original_width <= 0.0 || rect_width_px <= 0.0 {
+        return None;
+    }
+    let spacing = rect_width_px / original_width;
+    (spacing >= min_zoom).then_some(spacing)
 }
 
 pub(in crate::app) fn texture_options_for_sampling(sampling: TextureSampling) -> TextureOptions {
@@ -191,9 +267,28 @@ pub(in crate::app) fn texture_options_for_sampling(sampling: TextureSampling) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{source_pixel_scale, texture_options_for_sampling};
+    use super::{pixel_grid_spacing, source_pixel_scale, texture_options_for_sampling};
     use crate::app::TextureSampling;
     use egui::TextureOptions;
+
+    #[test]
+    fn pixel_grid_spacing_reports_at_and_above_threshold() {
+        // 1600 physical px across 200 original px = 8.0x magnification == 800% threshold.
+        assert_eq!(pixel_grid_spacing(1600.0, 200.0, 8.0), Some(8.0));
+        assert_eq!(pixel_grid_spacing(2000.0, 200.0, 8.0), Some(10.0));
+    }
+
+    #[test]
+    fn pixel_grid_spacing_below_threshold_is_none() {
+        assert_eq!(pixel_grid_spacing(1400.0, 200.0, 8.0), None);
+    }
+
+    #[test]
+    fn pixel_grid_spacing_rejects_degenerate_inputs() {
+        assert_eq!(pixel_grid_spacing(1600.0, 0.0, 8.0), None);
+        assert_eq!(pixel_grid_spacing(1600.0, -10.0, 8.0), None);
+        assert_eq!(pixel_grid_spacing(0.0, 200.0, 8.0), None);
+    }
 
     #[test]
     fn source_pixel_scale_maps_one_image_pixel_to_one_physical_pixel() {

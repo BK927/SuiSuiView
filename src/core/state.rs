@@ -189,6 +189,9 @@ pub const DEFAULT_MANUAL_CACHE_MB: u32 = 160;
 pub const FIXED_2X_SR_MIN_SCALE_PCT_MIN: u32 = 100;
 pub const FIXED_2X_SR_MIN_SCALE_PCT_MAX: u32 = 200;
 
+pub const PIXEL_GRID_MIN_ZOOM_PCT_MIN: u32 = 200;
+pub const PIXEL_GRID_MIN_ZOOM_PCT_MAX: u32 = 6400;
+
 /// Fixed total-memory budgets (bytes) for the preset modes. These caps dominate every cache
 /// pool; the current-page working set is always exempt so display never breaks.
 pub const SAVER_TOTAL_BUDGET_BYTES: usize = 128 * 1024 * 1024;
@@ -337,6 +340,10 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub show_page_arrows: bool,
     #[serde(default)]
+    pub pixel_grid_enabled: bool,
+    #[serde(default = "default_pixel_grid_min_zoom_pct")]
+    pub pixel_grid_min_zoom_pct: u32,
+    #[serde(default)]
     pub edge_page_action: EdgePageAction,
     #[serde(default = "default_image_edge_page_action")]
     pub image_edge_page_action: EdgePageAction,
@@ -411,6 +418,10 @@ impl AppSettings {
         self.fixed_2x_sr_min_scale_pct = self
             .fixed_2x_sr_min_scale_pct
             .clamp(FIXED_2X_SR_MIN_SCALE_PCT_MIN, FIXED_2X_SR_MIN_SCALE_PCT_MAX);
+
+        self.pixel_grid_min_zoom_pct = self
+            .pixel_grid_min_zoom_pct
+            .clamp(PIXEL_GRID_MIN_ZOOM_PCT_MIN, PIXEL_GRID_MIN_ZOOM_PCT_MAX);
     }
 
     pub fn fixed_2x_sr_min_scale(&self) -> f32 {
@@ -465,6 +476,8 @@ impl Default for AppSettings {
             show_filename_overlay: false,
             show_main_border: true,
             show_page_arrows: true,
+            pixel_grid_enabled: false,
+            pixel_grid_min_zoom_pct: default_pixel_grid_min_zoom_pct(),
             edge_page_action: EdgePageAction::Stop,
             image_edge_page_action: EdgePageAction::Wrap,
             archive_edge_page_action: default_archive_edge_page_action(),
@@ -791,6 +804,10 @@ fn default_manual_cache_mb() -> u32 {
 
 fn default_fixed_2x_sr_min_scale_pct() -> u32 {
     (scalers::FIXED_2X_SR_SMALL_SCALE_MIN * 100.0) as u32
+}
+
+fn default_pixel_grid_min_zoom_pct() -> u32 {
+    800
 }
 
 fn default_cpu_upscale_filter() -> CpuScaleFilter {
