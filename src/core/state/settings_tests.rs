@@ -1,8 +1,9 @@
 use super::{
-    default_top_bar_cpu_scale_filters, default_top_bar_wgpu_upscale_methods, AppSettings,
-    CacheMemoryMode, CpuScaleFilter, DecodeMode, DecoderPreferences, EdgePageAction, GpuEffectMode,
-    PageTransitionStyle, PersistedState, RendererMode, TopBarItems, WgpuUpscaleMethod, WheelMode,
-    WindowPlacement, DEFAULT_MANUAL_CACHE_MB,
+    default_key_bindings, default_top_bar_cpu_scale_filters, default_top_bar_wgpu_upscale_methods,
+    AppSettings, CacheMemoryMode, CommandId, CpuScaleFilter, DecodeMode, DecoderPreferences,
+    EdgePageAction, GpuEffectMode, KeyBinding, KeyCode, KeyShortcut, PageTransitionStyle,
+    PersistedState, RendererMode, TopBarItems, WgpuUpscaleMethod, WheelMode, WindowPlacement,
+    DEFAULT_MANUAL_CACHE_MB,
 };
 use crate::core::i18n::Language;
 
@@ -223,6 +224,78 @@ fn settings_normalization_clamps_pixel_grid_min_zoom_pct() {
     assert_eq!(settings.pixel_grid_min_zoom_pct, 6400);
 }
 
+/// A profile written before a command existed: its bindings list shadows the
+/// defaults, and `seen_commands` is empty.
+fn legacy_profile_without(command: CommandId) -> AppSettings {
+    AppSettings {
+        key_bindings: default_key_bindings()
+            .into_iter()
+            .filter(|binding| binding.command != command)
+            .collect(),
+        seen_commands: Vec::new(),
+        ..AppSettings::default()
+    }
+}
+
+#[test]
+fn legacy_profile_adopts_default_binding_for_new_command() {
+    let mut settings = legacy_profile_without(CommandId::ToggleVerticalStrip);
+
+    settings.normalize_product_choices();
+
+    assert!(settings.key_bindings.contains(&KeyBinding {
+        command: CommandId::ToggleVerticalStrip,
+        shortcut: KeyShortcut::new(KeyCode::Num3),
+    }));
+    assert_eq!(settings.seen_commands, CommandId::ALL.to_vec());
+}
+
+#[test]
+fn deliberately_unbound_command_is_not_resurrected() {
+    let mut settings = legacy_profile_without(CommandId::ToggleVerticalStrip);
+    settings.seen_commands = CommandId::ALL.to_vec();
+
+    settings.normalize_product_choices();
+
+    assert!(!settings
+        .key_bindings
+        .iter()
+        .any(|binding| binding.command == CommandId::ToggleVerticalStrip));
+}
+
+#[test]
+fn adoption_never_steals_a_shortcut_the_user_already_uses() {
+    let mut settings = legacy_profile_without(CommandId::ToggleVerticalStrip);
+    settings.key_bindings.push(KeyBinding {
+        command: CommandId::NextPage,
+        shortcut: KeyShortcut::new(KeyCode::Num3),
+    });
+
+    settings.normalize_product_choices();
+
+    assert!(!settings
+        .key_bindings
+        .iter()
+        .any(|binding| binding.command == CommandId::ToggleVerticalStrip));
+    // The user's remap survives, and the command counts as seen from now on.
+    assert!(settings.key_bindings.contains(&KeyBinding {
+        command: CommandId::NextPage,
+        shortcut: KeyShortcut::new(KeyCode::Num3),
+    }));
+    assert_eq!(settings.seen_commands, CommandId::ALL.to_vec());
+}
+
+#[test]
+fn binding_adoption_is_idempotent() {
+    let mut settings = legacy_profile_without(CommandId::ToggleVerticalStrip);
+
+    settings.normalize_product_choices();
+    let after_first = settings.key_bindings.clone();
+    settings.normalize_product_choices();
+
+    assert_eq!(settings.key_bindings, after_first);
+}
+
 #[test]
 fn old_settings_without_pixel_grid_load_defaults() {
     let state: PersistedState =
@@ -289,12 +362,15 @@ fn retired_wgpu_downscale_json_keys_are_ignored() {
     // so `wgpu_downscale_method` and `top_bar_wgpu_downscale_methods` were removed
     // from AppSettings. Old state.json files still carry them; AppSettings has no
     // `deny_unknown_fields`, so they must be ignored on load rather than erroring.
-    let state: PersistedState = serde_json::from_str(
+    let mut state: PersistedState = serde_json::from_str(
         r#"{"version":4,"settings":{"wgpu_downscale_method":"Hamming","top_bar_wgpu_downscale_methods":["Bilinear","PyramidLanczos3"]},"books":{}}"#,
     )
     .unwrap();
 
     // Only unknown keys were supplied, so every field falls back to its default.
+    // (`seen_commands` deliberately deserializes empty as the legacy-profile
+    // marker and only reaches its steady state through load-path normalization.)
+    state.settings.normalize_product_choices();
     assert_eq!(state.settings, AppSettings::default());
 }
 

@@ -27,8 +27,8 @@ pub use decoders::{DecodeMode, DecoderPreference, DecoderPreferences};
 pub use display::{GpuEffectMode, WgpuUpscaleMethod};
 pub use fast_start::FastStartFailureNotice;
 pub use input::{
-    default_key_bindings, default_mouse_bindings, CommandId, KeyBinding, KeyCode, KeyShortcut,
-    MouseBinding, MouseGesture,
+    adopt_default_bindings_for_new_commands, default_key_bindings, default_mouse_bindings,
+    CommandId, KeyBinding, KeyCode, KeyShortcut, MouseBinding, MouseGesture,
 };
 pub use rendering::RendererMode;
 pub use scalers::{
@@ -407,6 +407,11 @@ pub struct AppSettings {
     pub key_bindings: Vec<KeyBinding>,
     #[serde(default = "default_mouse_bindings")]
     pub mouse_bindings: Vec<MouseBinding>,
+    /// Commands this profile has been offered default shortcuts for; commands
+    /// missing here get theirs appended on load (see
+    /// `adopt_default_bindings_for_new_commands`). Empty on legacy profiles.
+    #[serde(default)]
+    pub seen_commands: Vec<CommandId>,
 }
 
 impl AppSettings {
@@ -422,6 +427,8 @@ impl AppSettings {
         self.pixel_grid_min_zoom_pct = self
             .pixel_grid_min_zoom_pct
             .clamp(PIXEL_GRID_MIN_ZOOM_PCT_MIN, PIXEL_GRID_MIN_ZOOM_PCT_MAX);
+
+        adopt_default_bindings_for_new_commands(&mut self.key_bindings, &mut self.seen_commands);
     }
 
     pub fn fixed_2x_sr_min_scale(&self) -> f32 {
@@ -508,6 +515,7 @@ impl Default for AppSettings {
             remember_archive_page_name: true,
             key_bindings: default_key_bindings(),
             mouse_bindings: default_mouse_bindings(),
+            seen_commands: CommandId::ALL.to_vec(),
         }
     }
 }

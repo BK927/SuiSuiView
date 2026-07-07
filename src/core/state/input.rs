@@ -757,6 +757,36 @@ pub fn default_key_bindings() -> Vec<KeyBinding> {
         .collect()
 }
 
+/// A saved profile's `key_bindings` fully shadow `default_key_bindings()`, so a
+/// command added in a newer build would stay unbound forever for existing
+/// users. Append the default shortcuts of every command the profile has never
+/// seen — unless the command already has bindings or a default shortcut is
+/// already taken by the user — then record the full command set so a later
+/// deliberate unbind is never resurrected.
+pub fn adopt_default_bindings_for_new_commands(
+    key_bindings: &mut Vec<KeyBinding>,
+    seen_commands: &mut Vec<CommandId>,
+) {
+    let adopt: Vec<CommandId> = CommandId::ALL
+        .iter()
+        .copied()
+        .filter(|command| !seen_commands.contains(command))
+        .filter(|command| !key_bindings.iter().any(|b| b.command == *command))
+        .collect();
+    for default in default_key_bindings() {
+        if !adopt.contains(&default.command) {
+            continue;
+        }
+        if key_bindings.iter().any(|b| b.shortcut == default.shortcut) {
+            continue;
+        }
+        key_bindings.push(default);
+    }
+    if seen_commands.as_slice() != CommandId::ALL {
+        *seen_commands = CommandId::ALL.to_vec();
+    }
+}
+
 pub fn default_mouse_bindings() -> Vec<MouseBinding> {
     use CommandId as C;
     use MouseGesture as M;
