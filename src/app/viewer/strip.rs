@@ -315,6 +315,32 @@ pub(in crate::app) fn recenter_target(current: usize, derived: usize) -> Option<
     (derived != current).then_some(derived)
 }
 
+/// Exponential ease-out rate for smooth scrolling: the pending debt decays with
+/// time constant 1/rate (~83ms), so a wheel notch glides out over roughly a
+/// quarter second instead of teleporting.
+const STRIP_SCROLL_DECAY_PER_SEC: f32 = 12.0;
+/// Below this remaining debt the tail is snapped in one step so the animation
+/// (and its repaint chain) terminates.
+const STRIP_SCROLL_SNAP_PX: f32 = 0.5;
+
+/// Portion of the pending smooth-scroll debt to apply this frame. Pure: returns
+/// `(step, remaining)`; `remaining == 0.0` means the animation is finished.
+pub(in crate::app) fn smooth_scroll_step(pending_px: f32, dt_seconds: f32) -> (f32, f32) {
+    if pending_px == 0.0 {
+        return (0.0, 0.0);
+    }
+    if pending_px.abs() <= STRIP_SCROLL_SNAP_PX {
+        return (pending_px, 0.0);
+    }
+    let step = pending_px * (1.0 - (-dt_seconds.max(0.0) * STRIP_SCROLL_DECAY_PER_SEC).exp());
+    let remaining = pending_px - step;
+    if remaining.abs() <= STRIP_SCROLL_SNAP_PX {
+        (pending_px, 0.0)
+    } else {
+        (step, remaining)
+    }
+}
+
 fn placement_rect(viewport: Rect, top: f32, height: f32) -> Rect {
     Rect::from_min_max(
         egui::pos2(viewport.left(), top),

@@ -4,7 +4,8 @@
 
 use super::{
     accumulate_edge_overscroll, display_height, jump_to_page, layout_visible, median_known_height,
-    page_at_viewport_center, recenter_target, scroll_by, StripAnchor, StripPageDims,
+    page_at_viewport_center, recenter_target, scroll_by, smooth_scroll_step, StripAnchor,
+    StripPageDims,
 };
 use crate::app::commands::{command_for_mouse_gesture, AppCommand};
 use crate::app::navigation::MAX_QUEUED_WORKER_VISIBLE_PAGES;
@@ -38,6 +39,7 @@ impl SuiSuiViewApp {
         if page_count == 0 {
             return;
         }
+        self.drain_strip_scroll_pending(ctx);
         let Some((anchor_index, offset_frac)) =
             self.strip_resolve_anchor(source.as_ref(), page_count)
         else {
@@ -149,7 +151,31 @@ impl SuiSuiViewApp {
             // Continuous scroll: no 30px page-turn threshold, no notch accumulator.
             // A raw wheel notch is only ~40 points, so the sensitivity multiplier
             // is what makes strip reading tolerable.
-            self.strip_scroll_by(-scroll_y * self.settings.strip_wheel_scroll_multiplier());
+            self.strip_scroll_animate_by(-scroll_y * self.settings.strip_wheel_scroll_multiplier());
+        }
+    }
+
+    /// Queue a scroll to be applied over the next few frames with an exponential
+    /// ease-out (wheel notches and keyboard steps would otherwise teleport).
+    /// Drag input must NOT come through here — it tracks the pointer 1:1 via
+    /// [`Self::strip_scroll_by`].
+    pub(in crate::app) fn strip_scroll_animate_by(&mut self, delta_px: f32) {
+        self.strip_scroll_pending_px += delta_px;
+        self.egui_ctx.request_repaint();
+    }
+
+    /// Apply this frame's slice of the queued smooth scroll and keep the repaint
+    /// chain alive until the debt is drained.
+    fn drain_strip_scroll_pending(&mut self, ctx: &egui::Context) {
+        if self.strip_scroll_pending_px == 0.0 {
+            return;
+        }
+        let dt = ctx.input(|input| input.stable_dt).min(0.05);
+        let (step, remaining) = smooth_scroll_step(self.strip_scroll_pending_px, dt);
+        self.strip_scroll_pending_px = remaining;
+        self.strip_scroll_by(step);
+        if self.strip_scroll_pending_px != 0.0 {
+            ctx.request_repaint();
         }
     }
 
@@ -200,7 +226,10 @@ impl SuiSuiViewApp {
             // Already pinned to the edge (the scroll produced no movement):
             // sustained overscroll turns the page. The event that merely reaches
             // the edge moves the anchor and so falls through to the reset arm.
+            // Any queued smooth-scroll debt is dropped so one big flick cannot
+            // keep pushing into the edge and turn the book on its own.
             Some(direction) if !moved => {
+                self.strip_scroll_pending_px = 0.0;
                 if accumulate_edge_overscroll(
                     &mut self.strip_edge_overscroll_px,
                     &mut self.strip_edge_overscroll_at,
@@ -238,6 +267,7 @@ impl SuiSuiViewApp {
         self.current_page = index;
         self.strip_edge_overscroll_px = 0.0;
         self.strip_edge_overscroll_at = None;
+        self.strip_scroll_pending_px = 0.0;
         self.persist_reading_position_deferred();
         self.worker.set_page(
             index,
@@ -258,8 +288,8 @@ impl SuiSuiViewApp {
             .last_viewer_size_points
             .map_or(STRIP_FALLBACK_VIEWPORT.y, |size| size.y);
         match command {
-            AppCommand::NextPage => self.strip_scroll_by(viewport_height * 0.9),
-            AppCommand::PreviousPage => self.strip_scroll_by(-viewport_height * 0.9),
+            AppCommand::NextPage => self.strip_scroll_animate_by(viewport_height * 0.9),
+            AppCommand::PreviousPage => self.strip_scroll_animate_by(-viewport_height * 0.9),
             AppCommand::Home => self.strip_jump_to_page(0),
             AppCommand::End => {
                 if let Some(source) = self.source.as_ref() {

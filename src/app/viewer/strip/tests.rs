@@ -301,3 +301,32 @@ fn overscroll_direction_reversal_resets_before_accumulating() {
     ));
     assert_eq!(px, -200.0);
 }
+
+#[test]
+fn smooth_scroll_step_drains_monotonically_and_keeps_sign() {
+    let (step, remaining) = smooth_scroll_step(160.0, 1.0 / 60.0);
+    assert!(step > 0.0 && step < 160.0);
+    assert!((step + remaining - 160.0).abs() < 1e-3);
+
+    let (neg_step, neg_remaining) = smooth_scroll_step(-160.0, 1.0 / 60.0);
+    assert!(neg_step < 0.0 && neg_remaining < 0.0);
+    assert!((neg_step - -step).abs() < 1e-3);
+}
+
+#[test]
+fn smooth_scroll_step_snaps_the_tail_and_terminates() {
+    // A sub-snap debt is applied whole.
+    assert_eq!(smooth_scroll_step(0.4, 1.0 / 60.0), (0.4, 0.0));
+    assert_eq!(smooth_scroll_step(0.0, 1.0 / 60.0), (0.0, 0.0));
+
+    // A full wheel notch drains to exactly zero within a bounded frame count.
+    let mut pending = 160.0;
+    let mut frames = 0;
+    while pending != 0.0 {
+        let (_, remaining) = smooth_scroll_step(pending, 1.0 / 60.0);
+        pending = remaining;
+        frames += 1;
+        assert!(frames < 120, "animation must terminate");
+    }
+    assert!(frames > 3, "a notch should glide over several frames");
+}

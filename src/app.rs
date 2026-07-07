@@ -246,6 +246,9 @@ pub struct SuiSuiViewApp {
     strip_last_scroll_dir: NavigationDirection,
     strip_edge_overscroll_px: f32,
     strip_edge_overscroll_at: Option<Instant>,
+    /// Wheel/keyboard scroll distance not yet applied; drained each strip frame
+    /// with an exponential ease-out so scrolling glides instead of stepping.
+    strip_scroll_pending_px: f32,
     strip_zoom_notice_shown: bool,
     bookmark_thumbnails: Option<BookmarkThumbnails>,
     gpu_effects_available: bool,
@@ -400,6 +403,7 @@ impl SuiSuiViewApp {
             strip_dim_scan_generation: 0,
             strip_dim_scan: None,
             strip_anchor: None,
+            strip_scroll_pending_px: 0.0,
             strip_visible_indices: Vec::new(),
             strip_last_scroll_dir: NavigationDirection::Forward,
             strip_edge_overscroll_px: 0.0,
@@ -1034,6 +1038,7 @@ impl SuiSuiViewApp {
         self.strip_visible_indices.clear();
         self.strip_edge_overscroll_px = 0.0;
         self.strip_edge_overscroll_at = None;
+        self.strip_scroll_pending_px = 0.0;
         if let Some(thumbnails) = self.bookmark_thumbnails.as_mut() {
             thumbnails.clear();
         }

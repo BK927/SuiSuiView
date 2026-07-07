@@ -413,9 +413,11 @@ impl SuiSuiViewApp {
             self.reading_direction = direction;
         }
         // The anchor is rebuilt from the current page on the first strip frame; a
-        // stale one from the departing/arriving side must never be reused.
+        // stale one from the departing/arriving side must never be reused, and
+        // neither may a queued smooth-scroll debt.
         if entering_strip || leaving_strip {
             self.strip_anchor = None;
+            self.strip_scroll_pending_px = 0.0;
         }
         if entering_strip {
             self.clear_pending_page_turns();
