@@ -17,7 +17,7 @@ use crate::core::state::{
     WgpuDownscaleMethod, WgpuScaleDirection, WgpuScalePlan, WgpuUpscaleMethod,
 };
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -756,6 +756,7 @@ impl GpuPaintResources {
             // (see `ensure_realtime_sr_stage_texture_from_*`), so they carry their own once-only
             // semantics; mark `rendered` for honesty even though no fill site re-checks this Arc.
             rendered: AtomicBool::new(true),
+            last_used_pass: AtomicU64::new(self.current_pass),
         });
         let evicted_on_insert = if let Some((_old_key, old_texture)) =
             self.intermediate_textures.push(key, intermediate.clone())

@@ -366,6 +366,7 @@ impl CallbackTrait for GpuEffectCallback {
         // total budget dominates from here.
         resources.source_texture_budget_bytes = self.pool_budgets.source_texture_bytes;
         resources.intermediate_texture_budget_bytes = self.pool_budgets.intermediate_texture_bytes;
+        resources.current_pass = self.ctx.cumulative_pass_nr();
         let source_uploaded = resources.ensure_source_texture(
             device,
             queue,
@@ -479,6 +480,10 @@ struct GpuPaintResources {
     // eviction is well-defined even before the first `prepare` publishes the settings-derived caps.
     source_texture_budget_bytes: usize,
     intermediate_texture_budget_bytes: usize,
+    /// egui pass number of the pass currently being prepared; pool pruning
+    /// never evicts entries stamped with it (multi-page strip frames need
+    /// their whole working set alive through the paint callbacks).
+    pub(super) current_pass: u64,
     deferred_realtime_sr_first_frames: LruCache<u64, ()>,
     realtime_sr: RealtimeSrResources,
 }

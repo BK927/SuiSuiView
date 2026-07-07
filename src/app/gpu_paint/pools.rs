@@ -15,7 +15,7 @@ use lru::LruCache;
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::time::Duration;
@@ -35,6 +35,9 @@ pub(super) struct GpuDrawState {
     pub(super) params_bind_group: wgpu::BindGroup,
     _intermediate_pins: Vec<Arc<GpuIntermediateTexture>>,
     pub(super) intermediate_byte_size: usize,
+    /// egui pass number that inserted this state; entries from the CURRENT pass
+    /// are never pruned (see `prune_draw_states`).
+    pub(super) inserted_pass: u64,
 }
 
 pub(super) struct GpuIntermediateTexture {
@@ -50,6 +53,9 @@ pub(super) struct GpuIntermediateTexture {
     /// the (identical, key-determined) passes. A fresh allocation after LRU eviction starts `false`,
     /// so an evicted-and-recreated texture is naturally re-rendered.
     pub(super) rendered: AtomicBool,
+    /// egui pass number that last created or reused this texture; entries from
+    /// the CURRENT pass are never pruned (see `prune_intermediate_textures`).
+    pub(super) last_used_pass: AtomicU64,
 }
 
 impl GpuDrawState {
@@ -67,6 +73,7 @@ impl GpuDrawState {
             params_bind_group,
             _intermediate_pins: intermediate_pins,
             intermediate_byte_size,
+            inserted_pass: 0,
         }
     }
 
@@ -178,6 +185,7 @@ impl GpuPaintResources {
             intermediate_texture_bytes: 0,
             source_texture_budget_bytes: GPU_SOURCE_TEXTURE_BUDGET_BYTES,
             intermediate_texture_budget_bytes: GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES,
+            current_pass: 0,
             deferred_realtime_sr_first_frames: LruCache::new(
                 NonZeroUsize::new(GPU_REALTIME_SR_DEFER_CACHE_LIMIT).unwrap(),
             ),
@@ -302,7 +310,10 @@ impl GpuPaintResources {
         key: u64,
         target_size: [u32; 2],
     ) {
-        if self.intermediate_textures.get(&key).is_some() {
+        if let Some(texture) = self.intermediate_textures.get(&key) {
+            texture
+                .last_used_pass
+                .store(self.current_pass, Ordering::Relaxed);
             return;
         }
         let byte_size = texture_byte_size(target_size, 1);
@@ -334,6 +345,7 @@ impl GpuPaintResources {
                 content_key: key,
                 byte_size,
                 rendered: AtomicBool::new(false),
+                last_used_pass: AtomicU64::new(self.current_pass),
             }),
         ) {
             self.intermediate_texture_bytes = self
@@ -351,7 +363,10 @@ impl GpuPaintResources {
         target_size: [u32; 2],
         mip_levels: u32,
     ) {
-        if self.intermediate_textures.get(&key).is_some() {
+        if let Some(texture) = self.intermediate_textures.get(&key) {
+            texture
+                .last_used_pass
+                .store(self.current_pass, Ordering::Relaxed);
             return;
         }
         let byte_size = texture_byte_size(target_size, mip_levels);
@@ -385,6 +400,7 @@ impl GpuPaintResources {
                 content_key: key,
                 byte_size,
                 rendered: AtomicBool::new(false),
+                last_used_pass: AtomicU64::new(self.current_pass),
             }),
         ) {
             self.intermediate_texture_bytes = self
@@ -395,7 +411,8 @@ impl GpuPaintResources {
         self.prune_intermediate_textures();
     }
 
-    pub(super) fn insert_draw_state(&mut self, key: u64, draw_state: GpuDrawState) {
+    pub(super) fn insert_draw_state(&mut self, key: u64, mut draw_state: GpuDrawState) {
+        draw_state.inserted_pass = self.current_pass;
         let byte_size = draw_state.intermediate_byte_size;
         if let Some((_old_key, old_state)) = self.draw_bind_groups.push(key, draw_state) {
             self.draw_state_intermediate_bytes = self
@@ -500,6 +517,20 @@ impl GpuPaintResources {
         while self.intermediate_texture_bytes > self.intermediate_texture_budget_bytes
             && self.intermediate_textures.len() > 1
         {
+            // Entries the CURRENT egui pass created or reused must survive it: a
+            // multi-page frame (the vertical strip) can legitimately need more
+            // than the steady-state budget at once, and evicting mid-frame made
+            // every earlier page silently vanish. Stamps and LRU order move
+            // together, so once the LRU end is current-pass, everything is.
+            if self
+                .intermediate_textures
+                .peek_lru()
+                .is_some_and(|(_key, texture)| {
+                    texture.last_used_pass.load(Ordering::Relaxed) == self.current_pass
+                })
+            {
+                break;
+            }
             let Some((_key, texture)) = self.intermediate_textures.pop_lru() else {
                 break;
             };
@@ -514,6 +545,16 @@ impl GpuPaintResources {
         while self.draw_state_intermediate_bytes > self.intermediate_texture_budget_bytes
             && self.draw_bind_groups.len() > 1
         {
+            // Same current-pass shield as `prune_intermediate_textures`: the
+            // paint callback silently skips on a missing draw state, so evicting
+            // one inserted earlier THIS frame blanks that page on screen.
+            if self
+                .draw_bind_groups
+                .peek_lru()
+                .is_some_and(|(_key, state)| state.inserted_pass == self.current_pass)
+            {
+                break;
+            }
             let Some((_key, draw_state)) = self.draw_bind_groups.pop_lru() else {
                 break;
             };
