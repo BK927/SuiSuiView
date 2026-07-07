@@ -197,6 +197,19 @@ impl SuiSuiViewApp {
     }
 
     fn target_long_edge_for(&self, page_viewport: Vec2, pixels_per_point: f32) -> u32 {
+        // In the strip the column IS the display width: size the decode target as
+        // fit-width against a column-wide viewport, regardless of the user-facing
+        // fit mode, so narrow columns don't over-decode nor Manual under-decode.
+        if self.view_mode == ViewMode::VerticalStrip {
+            let column = self.strip_column_width(page_viewport);
+            return target_long_edge_for_view(
+                FitMode::FitWidth,
+                1.0,
+                Vec2::new(column, page_viewport.y),
+                pixels_per_point,
+                &self.visible_original_page_sizes(),
+            );
+        }
         target_long_edge_for_view(
             self.fit_mode,
             self.manual_zoom,
@@ -309,7 +322,13 @@ impl SuiSuiViewApp {
 
     /// Drain this frame's analog wheel/pinch input through the notch
     /// accumulator and apply the bound CtrlWheel gesture once per whole step.
-    fn apply_wheel_gesture_steps(&mut self, ui: &egui::Ui, scroll_points: f32, zoom_delta: f32) {
+    /// Shared with the strip, whose zoom command reroutes into its column model.
+    pub(in crate::app) fn apply_wheel_gesture_steps(
+        &mut self,
+        ui: &egui::Ui,
+        scroll_points: f32,
+        zoom_delta: f32,
+    ) {
         let now = Instant::now();
         if self
             .wheel_gesture_last
@@ -376,7 +395,7 @@ const WHEEL_NOTCH_POINTS: f32 = 40.0;
 /// pinch factor into notch equivalents (7 notches ≈ 2x, matching the wheel).
 const WHEEL_STEP_LN: f32 = 0.095_310_2;
 /// A pinch factor closer to 1.0 than this is treated as no zoom input.
-const WHEEL_ZOOM_DELTA_EPSILON: f32 = 1e-4;
+pub(in crate::app) const WHEEL_ZOOM_DELTA_EPSILON: f32 = 1e-4;
 /// Idle time after which a leftover partial notch is forgotten, so half a
 /// notch flicked now does not surface as a ghost step much later.
 const WHEEL_ACCUM_TIMEOUT: Duration = Duration::from_millis(300);

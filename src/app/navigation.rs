@@ -513,14 +513,9 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn set_fit_mode(&mut self, mode: FitMode) {
-        // The strip lays out fit-width only; any other fit accepted here would
-        // just skew the decode targets and lie on the toolbar indicator while
-        // the layout keeps rendering fit-width. (Entering the strip sets
-        // FitWidth through this same path, so that must stay allowed.)
-        if self.view_mode == ViewMode::VerticalStrip && mode != FitMode::FitWidth {
-            self.notify_strip_fit_locked();
-            return;
-        }
+        // In the strip the fit mode drives the centered column's width (see
+        // `strip_column_width`); entering the strip sets FitWidth through this
+        // same path as the webtoon-canon default.
         let previous_decode = self.decode_options();
         let previous_intent = self.current_prepared_target_intent();
         self.clear_pending_page_turns();

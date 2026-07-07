@@ -3,22 +3,21 @@
 //! layout/scroll math it calls lives in the parent `strip` module.
 
 use super::{
-    accumulate_edge_overscroll, display_height, jump_to_page, layout_visible, median_known_height,
-    page_at_viewport_center, recenter_target, scroll_by, smooth_scroll_step, StripAnchor,
-    StripPageDims,
+    accumulate_edge_overscroll, clamp_pan_x, column_width, display_height, jump_to_page,
+    layout_visible, median_known_height, page_at_viewport_center, recenter_target, scroll_by,
+    smooth_scroll_step, StripAnchor, StripPageDims,
 };
 use crate::app::commands::{command_for_mouse_gesture, AppCommand};
 use crate::app::navigation::MAX_QUEUED_WORKER_VISIBLE_PAGES;
+use crate::app::viewer::interaction::WHEEL_ZOOM_DELTA_EPSILON;
 use crate::app::viewer::PagePaintOutcome;
 use crate::app::SuiSuiViewApp;
 use crate::core::source::BookSource;
-use crate::core::state::MouseGesture;
+use crate::core::state::{FitMode, MouseGesture};
 use crate::core::worker::NavigationDirection;
 use egui::{Rect, Vec2};
 use std::time::Instant;
 
-/// A trackpad pinch factor closer to 1.0 than this counts as no zoom input.
-const STRIP_ZOOM_DELTA_EPSILON: f32 = 1e-4;
 /// Viewport size assumed before the first real viewer layout has been measured.
 const STRIP_FALLBACK_VIEWPORT: Vec2 = Vec2 {
     x: 1000.0,
@@ -46,17 +45,23 @@ impl SuiSuiViewApp {
             return;
         };
 
-        let fallback = self.strip_fallback_height(
-            source.as_ref(),
-            page_count,
-            viewport.width(),
-            viewport.height(),
-        );
+        let column = self.strip_column_width(viewport.size());
+        self.pan.x = clamp_pan_x(self.pan.x, column, viewport.width());
+        let column_left = viewport.center().x - column / 2.0 + self.pan.x;
+        let fallback =
+            self.strip_fallback_height(source.as_ref(), page_count, column, viewport.height());
         let placements = {
-            let height_of = |index: usize| {
-                self.strip_display_height(source.as_ref(), index, viewport.width(), fallback)
-            };
-            layout_visible(anchor_index, offset_frac, viewport, page_count, &height_of)
+            let height_of =
+                |index: usize| self.strip_display_height(source.as_ref(), index, column, fallback);
+            layout_visible(
+                anchor_index,
+                offset_frac,
+                viewport,
+                column_left,
+                column,
+                page_count,
+                &height_of,
+            )
         };
         self.strip_visible_indices = placements.iter().map(|placement| placement.index).collect();
 
@@ -131,8 +136,11 @@ impl SuiSuiViewApp {
             }
         }
         if response.dragged() {
-            let delta_y = ui.input(|input| input.pointer.delta().y);
-            self.strip_scroll_by(-delta_y * self.settings.strip_drag_scroll_multiplier());
+            let delta = ui.input(|input| input.pointer.delta());
+            // Horizontal drag pans the column (only visible when it is wider than
+            // the viewport; `clamp_pan_x` zeroes it otherwise, each paint).
+            self.pan.x += delta.x;
+            self.strip_scroll_by(-delta.y * self.settings.strip_drag_scroll_multiplier());
         }
         if !response.hovered() {
             return;
@@ -144,9 +152,13 @@ impl SuiSuiViewApp {
                 input.zoom_delta(),
             )
         });
-        if ctrl || (zoom_delta - 1.0).abs() >= STRIP_ZOOM_DELTA_EPSILON {
-            // Ctrl+wheel and trackpad pinch are zoom gestures, unsupported in strip.
-            self.notify_strip_zoom_unsupported();
+        if ctrl {
+            // Ctrl+wheel zooms the column via the shared notch accumulator; the
+            // fired zoom command is rerouted into the strip's Manual-column path.
+            self.apply_wheel_gesture_steps(ui, scroll_y, zoom_delta);
+        } else if (zoom_delta - 1.0).abs() >= WHEEL_ZOOM_DELTA_EPSILON {
+            // Trackpad pinch arrives as a zoom factor without the ctrl modifier.
+            self.apply_wheel_gesture_steps(ui, 0.0, zoom_delta);
         } else if scroll_y != 0.0 {
             // Continuous scroll: no 30px page-turn threshold, no notch accumulator.
             // A raw wheel notch is only ~40 points, so the sensitivity multiplier
@@ -197,12 +209,11 @@ impl SuiSuiViewApp {
         else {
             return;
         };
-        let fallback =
-            self.strip_fallback_height(source.as_ref(), page_count, viewport.x, viewport.y);
+        let column = self.strip_column_width(viewport);
+        let fallback = self.strip_fallback_height(source.as_ref(), page_count, column, viewport.y);
         let (new_index, new_offset, edge) = {
-            let height_of = |index: usize| {
-                self.strip_display_height(source.as_ref(), index, viewport.x, fallback)
-            };
+            let height_of =
+                |index: usize| self.strip_display_height(source.as_ref(), index, column, fallback);
             scroll_by(
                 anchor_index,
                 offset_frac,
@@ -304,10 +315,34 @@ impl SuiSuiViewApp {
             AppCommand::MovePages(delta) | AppCommand::ForceMovePages(delta) => {
                 self.strip_jump_to_page(self.strip_clamped_target(delta));
             }
-            AppCommand::Zoom(_) | AppCommand::ZoomFine(_) => self.notify_strip_zoom_unsupported(),
+            AppCommand::Zoom(factor) => {
+                self.strip_begin_manual_zoom();
+                self.adjust_zoom(factor);
+            }
+            AppCommand::ZoomFine(delta) => {
+                self.strip_begin_manual_zoom();
+                self.adjust_zoom_by_delta(delta);
+            }
             _ => return false,
         }
         true
+    }
+
+    /// Re-express the current effective column as a Manual zoom so switching into
+    /// Manual from any fit does not jump; the shared `adjust_zoom*` then applies
+    /// the step with the usual clamps/persist. Idempotent once already Manual.
+    fn strip_begin_manual_zoom(&mut self) {
+        let viewport = self
+            .last_viewer_size_points
+            .unwrap_or(STRIP_FALLBACK_VIEWPORT);
+        let median = self.strip_source_median_dims();
+        let ppp = self.egui_ctx.pixels_per_point();
+        let current = column_width(self.fit_mode, self.manual_zoom, viewport, median, ppp);
+        let original = column_width(FitMode::Original, 1.0, viewport, median, ppp);
+        self.fit_mode = FitMode::Manual;
+        if original > 0.0 {
+            self.manual_zoom = current / original;
+        }
     }
 
     fn strip_clamped_target(&self, delta: isize) -> usize {
@@ -324,24 +359,49 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn notify_strip_zoom_unsupported(&mut self) {
-        if self.strip_zoom_notice_shown {
-            return;
-        }
-        self.strip_zoom_notice_shown = true;
-        let text = self.i18n().text("strip.zoom_unsupported");
-        self.notify(text);
+    /// Width in points of the centered page column under the current fit/zoom.
+    /// The single source of the display width used by paint, scroll, and decode
+    /// targeting so they never disagree about how wide a page is drawn.
+    pub(in crate::app) fn strip_column_width(&self, viewport: Vec2) -> f32 {
+        column_width(
+            self.fit_mode,
+            self.manual_zoom,
+            viewport,
+            self.strip_source_median_dims(),
+            self.egui_ctx.pixels_per_point(),
+        )
     }
 
-    /// One-shot notice that the strip pins the fit to fit-width (shares the
-    /// zoom notice's once-per-session flag; both say "the strip decides size").
-    pub(in crate::app) fn notify_strip_fit_locked(&mut self) {
-        if self.strip_zoom_notice_shown {
-            return;
+    /// The book's typical page dimensions `[w, h]` in source pixels, or `None`
+    /// until at least one page has been measured.
+    fn strip_source_median_dims(&self) -> Option<[u32; 2]> {
+        let source = self.source.as_ref()?;
+        self.strip_median_dims(source.as_ref(), source.page_count())
+    }
+
+    /// Per-axis medians of every page whose size is known (page_metrics first,
+    /// prescan hint next). Independent medians of width and height rather than a
+    /// median aspect ratio: webtoon pages are near-uniform so the two agree, and
+    /// per-axis medians resist a single stray page skewing the typical size.
+    fn strip_median_dims(&self, source: &dyn BookSource, page_count: usize) -> Option<[u32; 2]> {
+        let mut widths = Vec::new();
+        let mut heights = Vec::new();
+        for index in 0..page_count {
+            if let StripPageDims::Exact([width, height]) | StripPageDims::Hint([width, height]) =
+                self.strip_page_dims(source, index)
+            {
+                if width != 0 && height != 0 {
+                    widths.push(width as f32);
+                    heights.push(height as f32);
+                }
+            }
         }
-        self.strip_zoom_notice_shown = true;
-        let text = self.i18n().text("strip.fit_locked");
-        self.notify(text);
+        let median_w = median_known_height(widths.into_iter())?;
+        let median_h = median_known_height(heights.into_iter())?;
+        Some([
+            median_w.round().max(1.0) as u32,
+            median_h.round().max(1.0) as u32,
+        ])
     }
 
     /// Resolve the anchor to `(index, offset_frac)` in the current source,
@@ -367,21 +427,17 @@ impl SuiSuiViewApp {
         Some((index, 0.0))
     }
 
-    /// Fit-width display height for one page, resolving dimensions with the strip
-    /// priority: authoritative `page_metrics`, then the header prescan hint, then
-    /// the book-typical `fallback`.
+    /// Display height for one page at the current column width, resolving
+    /// dimensions with the strip priority: authoritative `page_metrics`, then the
+    /// header prescan hint, then the book-typical `fallback`.
     fn strip_display_height(
         &self,
         source: &dyn BookSource,
         index: usize,
-        viewport_width: f32,
+        column: f32,
         fallback: f32,
     ) -> f32 {
-        display_height(
-            self.strip_page_dims(source, index),
-            viewport_width,
-            fallback,
-        )
+        display_height(self.strip_page_dims(source, index), column, fallback)
     }
 
     fn strip_page_dims(&self, source: &dyn BookSource, index: usize) -> StripPageDims {
@@ -400,18 +456,19 @@ impl SuiSuiViewApp {
         StripPageDims::Unknown
     }
 
-    /// Median of the known fit-width page heights, the height estimate for pages
-    /// not yet measured; the viewport height when nothing is known yet.
+    /// Median of the known page heights at the current column width, the height
+    /// estimate for pages not yet measured; the viewport height when nothing is
+    /// known yet.
     fn strip_fallback_height(
         &self,
         source: &dyn BookSource,
         page_count: usize,
-        viewport_width: f32,
+        column: f32,
         viewport_height: f32,
     ) -> f32 {
         let known = (0..page_count).filter_map(|index| match self.strip_page_dims(source, index) {
             StripPageDims::Exact([width, height]) | StripPageDims::Hint([width, height]) => {
-                (width != 0).then(|| viewport_width * height as f32 / width as f32)
+                (width != 0).then(|| column * height as f32 / width as f32)
             }
             StripPageDims::Unknown => None,
         });

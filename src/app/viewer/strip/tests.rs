@@ -1,8 +1,29 @@
 use super::*;
-use egui::pos2;
+use crate::core::state::FitMode;
+use egui::{pos2, vec2};
 
 fn viewport(height: f32) -> Rect {
     Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, height))
+}
+
+/// Full-width column matching the 100pt-wide test viewport, i.e. the FitWidth
+/// column that reproduces the pre-column-model layout.
+fn full_width_layout(
+    anchor_index: usize,
+    offset_frac: f32,
+    viewport: Rect,
+    page_count: usize,
+    height_of: &impl Fn(usize) -> f32,
+) -> Vec<StripPlacement> {
+    layout_visible(
+        anchor_index,
+        offset_frac,
+        viewport,
+        viewport.left(),
+        viewport.width(),
+        page_count,
+        height_of,
+    )
 }
 
 fn uniform(height: f32) -> impl Fn(usize) -> f32 {
@@ -48,7 +69,7 @@ fn median_known_height_handles_parity_and_empty() {
 #[test]
 fn layout_places_anchor_exactly_and_walks_down() {
     let height_of = uniform(100.0);
-    let placements = layout_visible(2, 0.5, viewport(300.0), 10, &height_of);
+    let placements = full_width_layout(2, 0.5, viewport(300.0), 10, &height_of);
     // Anchor is topmost (offset in range), so no page is prepended above it.
     assert_eq!(
         placements.iter().map(|p| p.index).collect::<Vec<_>>(),
@@ -72,7 +93,7 @@ fn layout_walks_up_when_anchor_is_not_topmost() {
     // the defensive walk-up: the anchor's top sits below the viewport top, so
     // the page above peeks in and must be prepended.
     let height_of = uniform(100.0);
-    let placements = layout_visible(3, -0.5, viewport(300.0), 10, &height_of);
+    let placements = full_width_layout(3, -0.5, viewport(300.0), 10, &height_of);
     assert_eq!(placements[0].index, 2);
     assert_eq!(placements[0].rect.top(), -50.0);
     assert_eq!(placements[1].index, 3);
@@ -96,7 +117,7 @@ fn layout_on_screen_rects_ignore_far_page_heights() {
         let dims = dims.to_vec();
         let len = dims.len();
         let height_of = move |index: usize| display_height(dims[index], viewport_width, fallback);
-        layout_visible(0, 0.0, viewport(250.0), len, &height_of)
+        full_width_layout(0, 0.0, viewport(250.0), len, &height_of)
     };
     let before = layout(&dims);
 
@@ -160,7 +181,7 @@ fn scroll_book_shorter_than_viewport_clamps_to_top() {
 #[test]
 fn page_at_center_prefers_containing_placement() {
     let height_of = uniform(100.0);
-    let placements = layout_visible(0, 0.0, viewport(300.0), 10, &height_of);
+    let placements = full_width_layout(0, 0.0, viewport(300.0), 10, &height_of);
     // Center y = 150 falls inside page 1 (100..200).
     assert_eq!(
         page_at_viewport_center(&placements, viewport(300.0)),
@@ -329,4 +350,130 @@ fn smooth_scroll_step_snaps_the_tail_and_terminates() {
         assert!(frames < 120, "animation must terminate");
     }
     assert!(frames > 3, "a notch should glide over several frames");
+}
+
+#[test]
+fn column_width_maps_each_fit_mode_for_a_tall_median() {
+    let viewport = vec2(1000.0, 800.0);
+    let tall = Some([690, 1600]);
+    let width = |mode, zoom| column_width(mode, zoom, viewport, tall, 1.0);
+    assert_eq!(width(FitMode::FitWidth, 1.0), 1000.0);
+    // FitHeight = viewport_h * median_w / median_h = 800 * 690 / 1600.
+    assert_eq!(width(FitMode::FitHeight, 1.0), 345.0);
+    // FitPage picks the narrower of the two (FitHeight here).
+    assert_eq!(width(FitMode::FitPage, 1.0), 345.0);
+    // Original = median native width in points (median_w / ppp).
+    assert_eq!(width(FitMode::Original, 1.0), 690.0);
+    // Manual = manual_zoom * Original column.
+    assert_eq!(width(FitMode::Manual, 2.0), 1380.0);
+}
+
+#[test]
+fn column_width_maps_each_fit_mode_for_a_wide_median() {
+    let viewport = vec2(1000.0, 800.0);
+    let wide = Some([2000, 800]);
+    let width = |mode, zoom| column_width(mode, zoom, viewport, wide, 1.0);
+    assert_eq!(width(FitMode::FitWidth, 1.0), 1000.0);
+    // FitHeight = 800 * 2000 / 800 = 2000 (a full wide page spans one viewport
+    // height, so its column overflows the viewport and pans horizontally).
+    assert_eq!(width(FitMode::FitHeight, 1.0), 2000.0);
+    // FitPage picks the narrower (FitWidth here).
+    assert_eq!(width(FitMode::FitPage, 1.0), 1000.0);
+    assert_eq!(width(FitMode::Original, 1.0), 2000.0);
+    assert_eq!(width(FitMode::Manual, 0.5), 1000.0);
+}
+
+#[test]
+fn column_width_degrades_to_viewport_width_without_median() {
+    let viewport = vec2(1000.0, 800.0);
+    for mode in [
+        FitMode::FitWidth,
+        FitMode::FitHeight,
+        FitMode::FitPage,
+        FitMode::Original,
+        FitMode::Manual,
+    ] {
+        assert_eq!(column_width(mode, 3.0, viewport, None, 1.0), 1000.0);
+        // A zero-sized median is treated as unknown, too.
+        assert_eq!(column_width(mode, 3.0, viewport, Some([0, 0]), 1.0), 1000.0);
+    }
+}
+
+#[test]
+fn column_width_clamps_to_a_sane_span() {
+    let viewport = vec2(1000.0, 800.0);
+    // A tiny native page clamps up to the readable minimum.
+    assert_eq!(
+        column_width(FitMode::Original, 1.0, viewport, Some([10, 5000]), 1.0),
+        64.0
+    );
+    // A pathologically tall-narrow median under FitHeight clamps to 16x the
+    // viewport width rather than an absurd column.
+    assert_eq!(
+        column_width(FitMode::FitHeight, 1.0, viewport, Some([10_000, 100]), 1.0),
+        16_000.0
+    );
+    // The Original-column scales with device pixels: half the points at 2x ppp.
+    assert_eq!(
+        column_width(FitMode::Original, 1.0, viewport, Some([690, 1600]), 2.0),
+        345.0
+    );
+}
+
+#[test]
+fn clamp_pan_x_pins_a_fitting_column_and_bounds_an_overflowing_one() {
+    // Column no wider than the viewport never pans.
+    assert_eq!(clamp_pan_x(500.0, 800.0, 1000.0), 0.0);
+    assert_eq!(clamp_pan_x(-500.0, 1000.0, 1000.0), 0.0);
+    // Overflowing column pans up to +/- half the overflow.
+    assert_eq!(clamp_pan_x(500.0, 1400.0, 1000.0), 200.0);
+    assert_eq!(clamp_pan_x(-500.0, 1400.0, 1000.0), -200.0);
+    assert_eq!(clamp_pan_x(120.0, 1400.0, 1000.0), 120.0);
+}
+
+#[test]
+fn layout_centers_narrower_column_and_scales_heights() {
+    let dims = StripPageDims::Exact([100, 200]); // aspect 2.0
+    let vp = viewport(300.0);
+    let wide = layout_visible(0, 0.0, vp, 0.0, 100.0, 1, &|_| {
+        display_height(dims, 100.0, 0.0)
+    });
+    let narrow_left = vp.center().x - 40.0 / 2.0; // 50 - 20 = 30
+    let narrow = layout_visible(0, 0.0, vp, narrow_left, 40.0, 1, &|_| {
+        display_height(dims, 40.0, 0.0)
+    });
+    // Full-width column spans the viewport, height = 100 * 200 / 100 = 200.
+    assert_eq!(wide[0].rect.left(), 0.0);
+    assert_eq!(wide[0].rect.right(), 100.0);
+    assert_eq!(wide[0].rect.height(), 200.0);
+    // Narrow column is centered (30..70) with height scaled to it: 40*200/100.
+    assert_eq!(narrow[0].rect.left(), 30.0);
+    assert_eq!(narrow[0].rect.right(), 70.0);
+    assert_eq!(narrow[0].rect.height(), 80.0);
+    assert_eq!(narrow[0].rect.center().x, vp.center().x);
+}
+
+#[test]
+fn anchor_offset_frac_is_preserved_across_column_change() {
+    let dims = StripPageDims::Exact([100, 200]); // aspect 2.0
+    let vp = viewport(300.0);
+    let offset = 0.25;
+    // Fraction of the anchor page's height sitting above the viewport top.
+    let fraction_above = |column: f32| {
+        let height = display_height(dims, column, 0.0);
+        let placements = layout_visible(
+            0,
+            offset,
+            vp,
+            vp.center().x - column / 2.0,
+            column,
+            1,
+            &|_| height,
+        );
+        (vp.top() - placements[0].rect.top()) / placements[0].rect.height()
+    };
+    // Because the offset is a fraction of the page height, both columns keep the
+    // same fractional reading position regardless of how tall the page renders.
+    assert!((fraction_above(100.0) - offset).abs() < 1e-6);
+    assert!((fraction_above(40.0) - offset).abs() < 1e-6);
 }

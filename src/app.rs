@@ -239,8 +239,7 @@ pub struct SuiSuiViewApp {
     /// `VerticalStrip`). The anchor pins the scroll position by page identity;
     /// `strip_visible_indices` is the last frame's virtualized window (the seam
     /// read by prefetch pinning and original-size probing). The overscroll pair
-    /// accumulates at-edge scroll toward a page turn; the notice bool shows the
-    /// zoom-unsupported message at most once per session.
+    /// accumulates at-edge scroll toward a page turn.
     strip_anchor: Option<StripAnchor>,
     strip_visible_indices: Vec<usize>,
     strip_last_scroll_dir: NavigationDirection,
@@ -249,7 +248,6 @@ pub struct SuiSuiViewApp {
     /// Wheel/keyboard scroll distance not yet applied; drained each strip frame
     /// with an exponential ease-out so scrolling glides instead of stepping.
     strip_scroll_pending_px: f32,
-    strip_zoom_notice_shown: bool,
     bookmark_thumbnails: Option<BookmarkThumbnails>,
     gpu_effects_available: bool,
     gpu_target_format: Option<wgpu::TextureFormat>,
@@ -408,7 +406,6 @@ impl SuiSuiViewApp {
             strip_last_scroll_dir: NavigationDirection::Forward,
             strip_edge_overscroll_px: 0.0,
             strip_edge_overscroll_at: None,
-            strip_zoom_notice_shown: false,
             bookmark_thumbnails: None,
             // Both stages start on Glow; the WGPU stage patches these in
             // `begin_handoff` once its render state is available.

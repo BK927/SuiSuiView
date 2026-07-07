@@ -11,9 +11,18 @@ mod view;
 pub(in crate::app) use scan::StripDimScanWorker;
 
 use crate::core::source::PageId;
+use crate::core::state::FitMode;
 use crate::core::worker::NavigationDirection;
-use egui::Rect;
+use egui::{Rect, Vec2};
 use std::time::{Duration, Instant};
+
+/// Manual-zoom span mirrored from the paged path (`navigation.rs`) so a Manual
+/// column in the strip and a Manual zoom in a paged view share the same bounds.
+const MIN_MANUAL_ZOOM: f32 = 0.1;
+const MAX_MANUAL_ZOOM: f32 = 16.0;
+/// A column narrower than this is unreadable; the upper clamp (16x the viewport
+/// width) keeps a pathological median from producing an absurd column.
+const MIN_COLUMN_WIDTH_POINTS: f32 = 64.0;
 
 /// Where a virtualized strip is scrolled to: the topmost visible page plus how
 /// far the viewport top has slid past that page's top.
@@ -26,7 +35,7 @@ pub(in crate::app) struct StripAnchor {
 }
 
 /// One laid-out page: its index in the current source snapshot and the screen
-/// rect it occupies (full viewport width, fit-width).
+/// rect it occupies (the centered column's width, height scaled to that width).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::app) struct StripPlacement {
     pub index: usize,
@@ -60,6 +69,55 @@ pub(in crate::app) fn display_height(
     viewport_width * height as f32 / width as f32
 }
 
+/// Points-wide the horizontally-centered page column should be under the current
+/// fit/zoom. Every fit mode collapses onto this one axis in the strip:
+/// `FitWidth` = the viewport width, `FitHeight` = the width at which a typical
+/// page's full height spans one viewport height, `FitPage` = the narrower of
+/// those, `Original` = the median native width in points (1:1 physical pixels),
+/// `Manual` = `manual_zoom` times the Original column. `median_dims` is the
+/// book's typical `[w, h]` in source pixels; `None` (nothing measured yet)
+/// degrades every mode to the viewport width — i.e. today's fit-width layout.
+/// The result is clamped to a readable, non-absurd span.
+pub(in crate::app) fn column_width(
+    fit_mode: FitMode,
+    manual_zoom: f32,
+    viewport: Vec2,
+    median_dims: Option<[u32; 2]>,
+    pixels_per_point: f32,
+) -> f32 {
+    let Some([median_w, median_h]) = median_dims.filter(|[w, h]| *w > 0 && *h > 0) else {
+        return viewport.x;
+    };
+    let median_w = median_w as f32;
+    let median_h = median_h as f32;
+    let fit_width = viewport.x;
+    let fit_height = viewport.y * median_w / median_h;
+    let original = median_w / pixels_per_point.max(f32::EPSILON);
+    let raw = match fit_mode {
+        FitMode::FitWidth => fit_width,
+        FitMode::FitHeight => fit_height,
+        FitMode::FitPage => fit_width.min(fit_height),
+        FitMode::Original => original,
+        FitMode::Manual => manual_zoom.clamp(MIN_MANUAL_ZOOM, MAX_MANUAL_ZOOM) * original,
+    };
+    raw.clamp(
+        MIN_COLUMN_WIDTH_POINTS,
+        MAX_MANUAL_ZOOM * viewport.x.max(1.0),
+    )
+}
+
+/// Horizontal pan (points) for the centered column: zero when the column fits
+/// the viewport, otherwise clamped to +/- half the overflow so the column's near
+/// edge can reach, but never cross, the viewport edge.
+pub(in crate::app) fn clamp_pan_x(pan_x: f32, column: f32, viewport_width: f32) -> f32 {
+    let slack = (column - viewport_width) / 2.0;
+    if slack <= 0.0 {
+        0.0
+    } else {
+        pan_x.clamp(-slack, slack)
+    }
+}
+
 /// Median of the known page heights, used as the `Unknown` fallback so the strip
 /// estimates unmeasured pages at a book-typical height. `None` when empty.
 pub(in crate::app) fn median_known_height(heights: impl Iterator<Item = f32>) -> Option<f32> {
@@ -79,10 +137,15 @@ pub(in crate::app) fn median_known_height(heights: impl Iterator<Item = f32>) ->
 /// Placements for every page that intersects `viewport`, plus one page of margin
 /// below as prefetch. Positions are accumulated OUTWARD from the anchor, so a
 /// height-estimate error in a distant page can never shift an on-screen rect.
+/// `column_left`/`column` place the centered page column horizontally (the
+/// column is `column` points wide starting at `column_left`); the vertical
+/// bounds still come from `viewport` and `height_of`.
 pub(in crate::app) fn layout_visible(
     anchor_index: usize,
     offset_frac: f32,
     viewport: Rect,
+    column_left: f32,
+    column: f32,
     page_count: usize,
     height_of: &impl Fn(usize) -> f32,
 ) -> Vec<StripPlacement> {
@@ -95,7 +158,7 @@ pub(in crate::app) fn layout_visible(
 
     let mut placements = vec![StripPlacement {
         index: anchor_index,
-        rect: placement_rect(viewport, anchor_top, anchor_height),
+        rect: placement_rect(column_left, column, anchor_top, anchor_height),
     }];
 
     // Walk UP, prepending each page whose bottom is still below the viewport top.
@@ -114,7 +177,7 @@ pub(in crate::app) fn layout_visible(
             0,
             StripPlacement {
                 index: above,
-                rect: placement_rect(viewport, above_top, above_height),
+                rect: placement_rect(column_left, column, above_top, above_height),
             },
         );
         top = above_top;
@@ -138,7 +201,7 @@ pub(in crate::app) fn layout_visible(
         let below_height = height_of(below);
         placements.push(StripPlacement {
             index: below,
-            rect: placement_rect(viewport, below_top, below_height),
+            rect: placement_rect(column_left, column, below_top, below_height),
         });
         bottom = below_top + below_height;
         index = below;
@@ -341,10 +404,10 @@ pub(in crate::app) fn smooth_scroll_step(pending_px: f32, dt_seconds: f32) -> (f
     }
 }
 
-fn placement_rect(viewport: Rect, top: f32, height: f32) -> Rect {
+fn placement_rect(column_left: f32, column: f32, top: f32, height: f32) -> Rect {
     Rect::from_min_max(
-        egui::pos2(viewport.left(), top),
-        egui::pos2(viewport.right(), top + height),
+        egui::pos2(column_left, top),
+        egui::pos2(column_left + column, top + height),
     )
 }
 

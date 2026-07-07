@@ -541,12 +541,8 @@ impl SuiSuiViewApp {
                     .with_reading_direction(self.reading_direction);
             }
         }
-        // Strip layout (and its decode-target math) is inherently fit-width;
-        // enforce the invariant however the mode was reached — persisted token
-        // or a legacy record opened while the session mode is already strip.
-        if self.view_mode == ViewMode::VerticalStrip {
-            self.fit_mode = FitMode::FitWidth;
-        }
+        // The strip now honours a persisted fit (it drives the centered column's
+        // width via `strip_column_width`), so no fit override on open.
 
         let pending_page = self
             .pending_bookmark_jump
