@@ -565,6 +565,8 @@ impl SuiSuiViewApp {
         self.textures.clear();
         self.clear_upscale_probe_state();
         self.seed_upscale_decision_from_record(&book_id);
+        self.clear_strip_dim_scan_state();
+        self.kick_strip_dim_scan();
         if let Some(thumbnails) = self.bookmark_thumbnails.as_mut() {
             thumbnails.clear();
         }

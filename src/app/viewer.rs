@@ -21,6 +21,7 @@ use std::time::Instant;
 mod interaction;
 mod model;
 mod paint_helpers;
+mod strip;
 mod transition;
 
 pub(in crate::app) use interaction::{
@@ -35,6 +36,7 @@ pub(in crate::app) use model::{
     WgpuScaleState,
 };
 pub(in crate::app) use paint_helpers::texture_options_for_sampling;
+pub(in crate::app) use strip::StripDimScanWorker;
 pub(in crate::app) use transition::{
     paint_book_flip_shadow, transition_paint_params, transition_screen_sign,
 };

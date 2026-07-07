@@ -101,7 +101,7 @@ use viewer::{
 pub(in crate::app) use viewer::{
     page_visual_size, texture_options_for_sampling, transition_screen_sign,
     worker_center_page_for_mode, CurrentViewState, PageMetrics, PageRenderInfo, PageVisual,
-    Transition, UpscaleDecisionOrigin, ViewMode, ViewTargetSettle,
+    StripDimScanWorker, Transition, UpscaleDecisionOrigin, ViewMode, ViewTargetSettle,
 };
 
 #[cfg(test)]
@@ -229,6 +229,12 @@ pub struct SuiSuiViewApp {
     probed_page_ids: HashSet<crate::core::source::PageId>,
     upscale_probe_failures: usize,
     book_upscale_decision: Option<WgpuUpscaleMethod>,
+    /// Header-derived page dimensions from the background prescan. ISOLATED: these
+    /// predate EXIF orientation, so only the V2 strip layout may read this (behind
+    /// `page_metrics`). Never consult it from smart-spread / page_metrics paths.
+    strip_dim_hints: HashMap<crate::core::source::PageId, [u32; 2]>,
+    strip_dim_scan_generation: u64,
+    strip_dim_scan: Option<StripDimScanWorker>,
     bookmark_thumbnails: Option<BookmarkThumbnails>,
     gpu_effects_available: bool,
     gpu_target_format: Option<wgpu::TextureFormat>,
@@ -378,6 +384,9 @@ impl SuiSuiViewApp {
             probed_page_ids: HashSet::new(),
             upscale_probe_failures: 0,
             book_upscale_decision: None,
+            strip_dim_hints: HashMap::new(),
+            strip_dim_scan_generation: 0,
+            strip_dim_scan: None,
             bookmark_thumbnails: None,
             // Both stages start on Glow; the WGPU stage patches these in
             // `begin_handoff` once its render state is available.
@@ -960,6 +969,7 @@ impl SuiSuiViewApp {
         self.textures.clear();
         self.clear_debug_compare_requests();
         self.clear_upscale_probe_state();
+        self.clear_strip_dim_scan_state();
         if let Some(thumbnails) = self.bookmark_thumbnails.as_mut() {
             thumbnails.clear();
         }

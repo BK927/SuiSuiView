@@ -34,6 +34,9 @@ impl SuiSuiViewApp {
         self.drain_upscale_probe_events();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("drain_upscale_probe_events");
+        self.drain_strip_dim_scan_events();
+        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+        record_update_phase!("drain_strip_dim_scan_events");
         self.drain_debug_compare_events();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("drain_debug_compare_events");
