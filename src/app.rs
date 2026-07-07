@@ -37,7 +37,6 @@ pub(crate) mod fast_start;
 #[cfg(target_os = "windows")]
 mod file_associations;
 mod gpu_paint;
-pub(crate) mod winit_host;
 mod image_header;
 mod image_info;
 mod navigation;
@@ -59,6 +58,7 @@ mod update_loop;
 mod upscale_probe;
 mod viewer;
 mod window;
+pub(crate) mod winit_host;
 
 #[cfg(test)]
 use crate::core::effects::{apply_effects_to_image, transformed_page_size};

@@ -85,11 +85,7 @@ impl HostFailure {
         }
     }
 
-    fn with_metrics(
-        stage: HostFailureStage,
-        error: String,
-        mut metrics: WinitHostMetrics,
-    ) -> Self {
+    fn with_metrics(stage: HostFailureStage, error: String, mut metrics: WinitHostMetrics) -> Self {
         metrics.error = Some(error.clone());
         Self {
             stage,

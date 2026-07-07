@@ -620,9 +620,8 @@ fn should_skip_memory_aware_adjacent_seed_source(source: &dyn BookSource, index:
     let Ok(header) = source.read_page_prefix(index, ADJACENT_SEED_HEADER_BYTES) else {
         return true;
     };
-    image_header::dimensions_from_header(&header).is_none_or(|(width, height)| {
-        width.max(height) >= ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE
-    })
+    image_header::dimensions_from_header(&header)
+        .is_none_or(|(width, height)| width.max(height) >= ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE)
 }
 
 fn should_skip_memory_aware_adjacent_seed_path(path: &Path) -> bool {

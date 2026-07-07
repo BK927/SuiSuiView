@@ -1,8 +1,8 @@
 use super::glow_window::{create_gl_display, GlutinWindowContext};
-use crate::app::runtime::{AppRuntime, StartupReveal};
 use super::title_sync::{schedule_process_visible_window_title, sync_visible_window_title};
-use super::{elapsed_ms, injected_failure, HostFailureStage, Stage, WinitHostApp};
 use super::SuiSuiViewApp;
+use super::{elapsed_ms, injected_failure, HostFailureStage, Stage, WinitHostApp};
+use crate::app::runtime::{AppRuntime, StartupReveal};
 use egui_winit::winit;
 use std::sync::Arc;
 

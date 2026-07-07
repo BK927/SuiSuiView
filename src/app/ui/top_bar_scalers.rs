@@ -395,7 +395,10 @@ mod tests {
                 substituted_below: None,
             },
         );
-        assert_eq!(top_bar_scaler_summary(Some(&probe), i18n), "Anime4K M·probe");
+        assert_eq!(
+            top_bar_scaler_summary(Some(&probe), i18n),
+            "Anime4K M·probe"
+        );
 
         // AUTO with no decision yet: the built-in default.
         let auto = test_view_state(
@@ -417,7 +420,10 @@ mod tests {
                 substituted_below: Some(1.10),
             },
         );
-        assert_eq!(top_bar_scaler_summary(Some(&substituted), i18n), "FSR·<1.10x");
+        assert_eq!(
+            top_bar_scaler_summary(Some(&substituted), i18n),
+            "FSR·<1.10x"
+        );
     }
 
     #[test]
