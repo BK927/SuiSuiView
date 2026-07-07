@@ -528,11 +528,20 @@ impl SuiSuiViewApp {
         );
         let spread_width = natural_width * scale * request.scale.x;
         let spread_height = natural_height * scale * request.scale.y;
-        let mut cursor = self.spread_origin(
-            request.viewport,
-            Vec2::new(spread_width, spread_height),
-            request.offset,
-        );
+        let spread_size = Vec2::new(spread_width, spread_height);
+        // Keep the image reachable: on the settled plain paint (no transition
+        // offset, full alpha) pull the stored pan back so the spread can never
+        // sit entirely outside the viewport — zooming out with a large pan used
+        // to leave the image lost off-window.
+        if request.offset == Vec2::ZERO && request.alpha >= 1.0 {
+            self.pan = paint_helpers::clamp_pan_to_viewport(
+                self.pan,
+                request.viewport,
+                spread_size,
+                self.spread_base_origin(request.viewport, spread_size),
+            );
+        }
+        let mut cursor = self.spread_origin(request.viewport, spread_size, request.offset);
         let tint = Color32::from_white_alpha((request.alpha.clamp(0.0, 1.0) * 255.0) as u8);
         // The pixel grid is a steady-state inspection aid; suppress it while a spread animates.
         let full_alpha = request.alpha >= 1.0;

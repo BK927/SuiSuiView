@@ -138,6 +138,15 @@ impl SuiSuiViewApp {
         spread_size: Vec2,
         offset: Vec2,
     ) -> Pos2 {
+        let base = self.spread_base_origin(viewport, spread_size);
+        Pos2::new(
+            base.x + self.pan.x + offset.x,
+            base.y + self.pan.y + offset.y,
+        )
+    }
+
+    /// The anchor-resolved spread origin before pan and transition offsets.
+    pub(in crate::app) fn spread_base_origin(&self, viewport: Rect, spread_size: Vec2) -> Pos2 {
         let centered_x = viewport.center().x - spread_size.x * 0.5;
         let centered_y = viewport.center().y - spread_size.y * 0.5;
         let x = if spread_size.x > viewport.width()
@@ -156,8 +165,7 @@ impl SuiSuiViewApp {
         } else {
             centered_y
         };
-
-        Pos2::new(x + self.pan.x + offset.x, y + self.pan.y + offset.y)
+        Pos2::new(x, y)
     }
 
     pub(in crate::app) fn scale_for(
@@ -174,7 +182,7 @@ impl SuiSuiViewApp {
             FitMode::Original => source_pixel_scale(pixels_per_point),
             FitMode::Manual => self.manual_zoom * source_pixel_scale(pixels_per_point),
         }
-        .clamp(0.02, 16.0)
+        .clamp(0.02, 32.0)
     }
 
     /// Overlay a 1px grid on original-pixel boundaries once the page is magnified past the user
@@ -247,6 +255,44 @@ fn source_pixel_scale(pixels_per_point: f32) -> f32 {
     1.0 / pixels_per_point.max(0.1)
 }
 
+/// Clamp a pan offset so the spread can never leave the viewport: an axis
+/// larger than the viewport pans only until its far edge meets the viewport
+/// edge (no gap opens behind it), and an axis that fits inside the viewport
+/// stays at its anchored position (pan 0). Zooming out with a large pan
+/// therefore pulls the image back on screen instead of losing it off-window.
+pub(in crate::app) fn clamp_pan_to_viewport(
+    pan: Vec2,
+    viewport: Rect,
+    spread_size: Vec2,
+    base_origin: Pos2,
+) -> Vec2 {
+    let clamp_axis = |pan: f32, base: f32, view_min: f32, view_len: f32, size: f32| -> f32 {
+        if size <= view_len {
+            0.0
+        } else {
+            let min_origin = view_min + view_len - size;
+            let max_origin = view_min;
+            (base + pan).clamp(min_origin, max_origin) - base
+        }
+    };
+    Vec2::new(
+        clamp_axis(
+            pan.x,
+            base_origin.x,
+            viewport.left(),
+            viewport.width(),
+            spread_size.x,
+        ),
+        clamp_axis(
+            pan.y,
+            base_origin.y,
+            viewport.top(),
+            viewport.height(),
+            spread_size.y,
+        ),
+    )
+}
+
 /// On-screen spacing (physical pixels per original image pixel) when the page is magnified at or
 /// beyond `min_zoom` (also physical pixels per original pixel); `None` below threshold or for
 /// degenerate input.
@@ -271,9 +317,11 @@ pub(in crate::app) fn texture_options_for_sampling(sampling: TextureSampling) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{pixel_grid_spacing, source_pixel_scale, texture_options_for_sampling};
+    use super::{
+        clamp_pan_to_viewport, pixel_grid_spacing, source_pixel_scale, texture_options_for_sampling,
+    };
     use crate::app::TextureSampling;
-    use egui::TextureOptions;
+    use egui::{Pos2, Rect, TextureOptions, Vec2};
 
     #[test]
     fn pixel_grid_spacing_reports_at_and_above_threshold() {
@@ -298,6 +346,51 @@ mod tests {
     fn source_pixel_scale_maps_one_image_pixel_to_one_physical_pixel() {
         assert_eq!(source_pixel_scale(1.25), 0.8);
         assert_eq!(source_pixel_scale(1.0), 1.0);
+    }
+
+    #[test]
+    fn pan_is_zeroed_when_the_spread_fits_the_viewport() {
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 800.0));
+        // Zoomed out far with a huge stale pan: the image fits, so it snaps back.
+        let clamped = clamp_pan_to_viewport(
+            Vec2::new(4000.0, -3000.0),
+            viewport,
+            Vec2::new(400.0, 300.0),
+            Pos2::new(300.0, 250.0),
+        );
+        assert_eq!(clamped, Vec2::ZERO);
+    }
+
+    #[test]
+    fn pan_on_a_larger_axis_stops_at_the_viewport_edges() {
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 800.0));
+        let spread = Vec2::new(2000.0, 800.0);
+        // Centered base: origin x = 500 - 1000 = -500.
+        let base = Pos2::new(-500.0, 0.0);
+        // Panning right beyond the limit: the left edge may reach the viewport
+        // left (origin 0), so pan clamps to +500.
+        let clamped = clamp_pan_to_viewport(Vec2::new(2500.0, 0.0), viewport, spread, base);
+        assert_eq!(clamped, Vec2::new(500.0, 0.0));
+        // Panning left: the right edge may reach the viewport right
+        // (origin -1000), so pan clamps to -500.
+        let clamped = clamp_pan_to_viewport(Vec2::new(-2500.0, 0.0), viewport, spread, base);
+        assert_eq!(clamped, Vec2::new(-500.0, 0.0));
+        // In-range pans are untouched.
+        let clamped = clamp_pan_to_viewport(Vec2::new(123.0, 0.0), viewport, spread, base);
+        assert_eq!(clamped, Vec2::new(123.0, 0.0));
+    }
+
+    #[test]
+    fn pan_clamp_respects_a_non_centered_base_origin() {
+        let viewport = Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 800.0));
+        let spread = Vec2::new(2000.0, 800.0);
+        // Top-left anchored base: origin already at the viewport left, so only
+        // leftward panning (down to origin -1000) is available.
+        let base = Pos2::new(0.0, 0.0);
+        let clamped = clamp_pan_to_viewport(Vec2::new(700.0, 0.0), viewport, spread, base);
+        assert_eq!(clamped, Vec2::ZERO);
+        let clamped = clamp_pan_to_viewport(Vec2::new(-1700.0, 0.0), viewport, spread, base);
+        assert_eq!(clamped, Vec2::new(-1000.0, 0.0));
     }
 
     #[test]

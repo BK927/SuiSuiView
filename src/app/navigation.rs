@@ -20,6 +20,12 @@ const SIBLING_OPEN_RETRY_LIMIT: usize = 16;
 /// once it settles, the exact quality downscale is rendered once more.
 const ZOOM_SETTLE_MS: u64 = 200;
 
+/// Interactive manual-zoom bounds. The maximum pairs with the pixel-grid
+/// inspection use case (16x shows a 64px-wide detail across ~1000px); the
+/// display scale cap in `scale_for` keeps DPI headroom above this.
+const MIN_MANUAL_ZOOM: f32 = 0.1;
+const MAX_MANUAL_ZOOM: f32 = 16.0;
+
 /// Active "skip unopenable sibling books" walk: while set, a failed sibling
 /// open continues to the next candidate in the same direction instead of
 /// stopping at the failure toast.
@@ -481,7 +487,7 @@ impl SuiSuiViewApp {
         let previous_intent = self.current_prepared_target_intent();
         self.clear_pending_page_turns();
         self.fit_mode = FitMode::Manual;
-        self.manual_zoom = (self.manual_zoom * factor).clamp(0.1, 8.0);
+        self.manual_zoom = (self.manual_zoom * factor).clamp(MIN_MANUAL_ZOOM, MAX_MANUAL_ZOOM);
         self.schedule_high_target_cleanup_if_leaving_target_intent(previous_intent);
         self.request_page_if_decode_or_target_intent_changed(previous_decode, previous_intent);
         self.persist_reading_position();
@@ -493,7 +499,7 @@ impl SuiSuiViewApp {
         let previous_intent = self.current_prepared_target_intent();
         self.clear_pending_page_turns();
         self.fit_mode = FitMode::Manual;
-        self.manual_zoom = (self.manual_zoom + delta).clamp(0.1, 8.0);
+        self.manual_zoom = (self.manual_zoom + delta).clamp(MIN_MANUAL_ZOOM, MAX_MANUAL_ZOOM);
         self.schedule_high_target_cleanup_if_leaving_target_intent(previous_intent);
         self.request_page_if_decode_or_target_intent_changed(previous_decode, previous_intent);
         self.persist_reading_position();
