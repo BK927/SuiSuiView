@@ -340,6 +340,9 @@ impl SuiSuiViewApp {
                         wgpu_downscale_method,
                         fixed_2x_sr_min_scale_pct: self.settings.fixed_2x_sr_min_scale_pct,
                         opacity: 1.0,
+                        // The compare pane is a static quality reference, not a live
+                        // gesture, so it always renders the exact downscale path.
+                        zoom_in_motion: false,
                     },
                 ) {
                     self.paint_placeholder(

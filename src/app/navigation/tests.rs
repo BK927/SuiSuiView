@@ -1,11 +1,30 @@
 use super::super::QueuedPageTurns;
 use super::{
     normalize_sibling_book_direction, push_queued_page_turn, push_queued_sibling_book_turn,
-    should_open_edge_prompt, skip_missing_target, EdgePrompt, MAX_QUEUED_PAGE_TURNS,
-    MAX_QUEUED_SIBLING_BOOK_TURNS,
+    should_open_edge_prompt, skip_missing_target, zoom_motion_active, EdgePrompt,
+    MAX_QUEUED_PAGE_TURNS, MAX_QUEUED_SIBLING_BOOK_TURNS, ZOOM_SETTLE_MS,
 };
 use crate::core::worker::NavigationDirection;
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
+#[test]
+fn zoom_motion_is_active_only_inside_the_settle_window() {
+    let now = Instant::now();
+    let settle = Duration::from_millis(ZOOM_SETTLE_MS);
+
+    // No motion ever recorded is never in motion.
+    assert!(!zoom_motion_active(None, now));
+    // A change at `now` is in motion, and stays so partway through the window.
+    assert!(zoom_motion_active(Some(now), now));
+    assert!(zoom_motion_active(Some(now), now + settle / 2));
+    // At and past the window boundary the gesture has settled.
+    assert!(!zoom_motion_active(Some(now), now + settle));
+    assert!(!zoom_motion_active(
+        Some(now),
+        now + settle + Duration::from_millis(1)
+    ));
+}
 
 #[test]
 fn sibling_book_direction_normalizes_to_step() {

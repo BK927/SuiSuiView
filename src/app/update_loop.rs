@@ -105,6 +105,12 @@ impl SuiSuiViewApp {
         if self.transition.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
+        // While a zoom gesture is in motion the cheap trilinear-mipmap downscale is
+        // used; schedule a repaint for when the settle window expires so the exact
+        // quality path re-renders automatically once input stops.
+        if let Some(remaining) = self.zoom_settle_repaint_delay() {
+            ctx.request_repaint_after(remaining);
+        }
         self.reveal_startup_window_after_first_frame(ctx);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::record_ui_update(

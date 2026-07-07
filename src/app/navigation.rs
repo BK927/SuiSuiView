@@ -14,6 +14,12 @@ const MAX_QUEUED_WORKER_VISIBLE_PAGES: usize = 25;
 const MAX_QUEUED_SIBLING_BOOK_TURNS: usize = 1;
 const SIBLING_OPEN_RETRY_LIMIT: usize = 16;
 
+/// A zoom gesture is treated as "in motion" for this long after the last
+/// interactive `manual_zoom` change. While in motion, the WGSL downscaler is
+/// routed through the cheap cached hardware-mipmap path (trilinear sample);
+/// once it settles, the exact quality downscale is rendered once more.
+const ZOOM_SETTLE_MS: u64 = 200;
+
 /// Active "skip unopenable sibling books" walk: while set, a failed sibling
 /// open continues to the next candidate in the same direction instead of
 /// stopping at the failure toast.
@@ -446,7 +452,31 @@ impl SuiSuiViewApp {
         self.settings.effective_page_transition_style()
     }
 
+    /// Record that `manual_zoom` was just changed by an interactive gesture.
+    /// Every user-driven zoom funnels through [`adjust_zoom`] or
+    /// [`adjust_zoom_by_delta`], so calling this from both covers keyboard,
+    /// wheel/pinch, top-bar buttons, and the context menu. Programmatic resets
+    /// (fit-mode changes, book-open restore) deliberately do not call it.
+    pub(in crate::app) fn note_zoom_motion(&mut self) {
+        self.last_zoom_motion = Some(Instant::now());
+    }
+
+    /// Whether a zoom gesture is still in motion (the last interactive change was
+    /// within [`ZOOM_SETTLE_MS`]). While true, the render side substitutes the
+    /// cached hardware-mipmap downscale for the per-frame quality downscale.
+    pub(in crate::app) fn zoom_in_motion(&self) -> bool {
+        zoom_motion_active(self.last_zoom_motion, Instant::now())
+    }
+
+    /// Remaining time in the current settle window, or `None` once it has
+    /// elapsed. The update loop schedules a repaint after this so the quality
+    /// re-render fires automatically when the gesture stops without more input.
+    pub(in crate::app) fn zoom_settle_repaint_delay(&self) -> Option<Duration> {
+        zoom_settle_remaining(self.last_zoom_motion, Instant::now())
+    }
+
     pub(in crate::app) fn adjust_zoom(&mut self, factor: f32) {
+        self.note_zoom_motion();
         let previous_decode = self.decode_options();
         let previous_intent = self.current_prepared_target_intent();
         self.clear_pending_page_turns();
@@ -458,6 +488,7 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn adjust_zoom_by_delta(&mut self, delta: f32) {
+        self.note_zoom_motion();
         let previous_decode = self.decode_options();
         let previous_intent = self.current_prepared_target_intent();
         self.clear_pending_page_turns();
@@ -673,6 +704,21 @@ impl SuiSuiViewApp {
             }
         }
     }
+}
+
+/// Whether a zoom gesture recorded at `last` is still in motion at `now`
+/// (within the [`ZOOM_SETTLE_MS`] window). `None` (no motion recorded) is not
+/// in motion. Pure for testing.
+fn zoom_motion_active(last: Option<Instant>, now: Instant) -> bool {
+    zoom_settle_remaining(last, now).is_some()
+}
+
+/// Time left in the settle window for a motion recorded at `last`, or `None`
+/// once the window has elapsed (or nothing was recorded).
+fn zoom_settle_remaining(last: Option<Instant>, now: Instant) -> Option<Duration> {
+    let settle = Duration::from_millis(ZOOM_SETTLE_MS);
+    let elapsed = now.saturating_duration_since(last?);
+    (elapsed < settle).then(|| settle - elapsed)
 }
 
 fn random_offset(max: usize) -> usize {

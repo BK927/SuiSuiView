@@ -200,6 +200,10 @@ pub struct SuiSuiViewApp {
     reading_direction: ReadingDirection,
     fit_mode: FitMode,
     manual_zoom: f32,
+    /// When the last interactive zoom change happened, used to route WGSL
+    /// downscaling through the cheap cached hardware-mipmap path while a zoom
+    /// gesture is still in motion. Transient; never persisted.
+    last_zoom_motion: Option<Instant>,
     effects: ViewEffects,
     target_long_edge: u32,
     current_view_state: Option<CurrentViewState>,
@@ -346,6 +350,7 @@ impl SuiSuiViewApp {
             reading_direction: ReadingDirection::default(),
             fit_mode: FitMode::default(),
             manual_zoom: 1.0,
+            last_zoom_motion: None,
             effects: ViewEffects::default(),
             target_long_edge: DEFAULT_TARGET_LONG_EDGE,
             current_view_state: None,

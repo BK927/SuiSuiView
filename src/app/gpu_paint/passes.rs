@@ -13,7 +13,9 @@ use crate::core::gpu_effect::{
 };
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
-use crate::core::state::{WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod};
+use crate::core::state::{
+    WgpuDownscaleMethod, WgpuScaleDirection, WgpuScalePlan, WgpuUpscaleMethod,
+};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -37,6 +39,7 @@ impl GpuPaintResources {
         fixed_2x_sr_min_scale: f32,
         display_rect: GpuDisplayRect,
         opacity: f32,
+        zoom_in_motion: bool,
         ctx: &egui::Context,
     ) -> GpuDrawState {
         let scale_plan = WgpuScalePlan::resolve(
@@ -150,8 +153,33 @@ impl GpuPaintResources {
             );
         }
 
-        // Unreachable in product after settings sanitize (HardwareMipmapLinear folds
-        // to Bilinear); retained for tests and potential future re-exposure.
+        // While a zoom gesture is in motion the display size changes every frame, so
+        // the content-keyed quality downscale (pyramid or single-pass) would re-render
+        // at a fresh key each tick. Route a true downscale through the hardware mip
+        // chain instead: C1 caches the chain per content, so per-frame cost collapses to
+        // one trilinear sample. `prepare_hardware_mipmap_draw_state` samples with the
+        // full display rect (offset + full size), so a clipped rect is handled fine.
+        // Only `Downscale` qualifies — `Native`/`Mixed`/`Upscale` are left to their own
+        // paths, and realtime-SR/EASU have already returned above (they carry an
+        // upscaler, whereas a `Downscale` plan resolves the upscaler to `None`).
+        if zoom_in_motion && scale_plan.direction == WgpuScaleDirection::Downscale {
+            return self.prepare_hardware_mipmap_draw_state(
+                device,
+                encoder,
+                source_content_key,
+                source_bind_group,
+                source_size,
+                output_size,
+                effects,
+                display_rect,
+                opacity,
+            );
+        }
+
+        // The `is_hardware_mipmap()` guard below stays dormant in product (settings
+        // sanitize folds HardwareMipmapLinear to Bilinear), but the
+        // `prepare_hardware_mipmap_draw_state` path it shares is now live via the
+        // zoom-motion reroute above. Retained for that shared entry point and tests.
         if effective_downscaler.is_hardware_mipmap() {
             return self.prepare_hardware_mipmap_draw_state(
                 device,
@@ -320,8 +348,12 @@ impl GpuPaintResources {
         let sr_output_size = output_size_for_effects(intermediate.size, effects);
         let post_downscaler =
             post_realtime_sr_downscale_method(sr_output_size, display_rect.full_size, downscaler);
-        // Unreachable in product after settings sanitize (HardwareMipmapLinear folds
-        // to Bilinear); retained for tests and potential future re-exposure.
+        // The zoom-motion reroute in `prepare_draw_state` deliberately does not capture
+        // this post-SR downscale: it only fires for `Downscale` plans whose upscaler is
+        // `None`, whereas reaching here means a realtime-SR upscaler is active. This
+        // `is_hardware_mipmap()` guard therefore stays dormant in product (sanitize folds
+        // HardwareMipmapLinear to Bilinear); the shared mipmap path is exercised via the
+        // reroute and by tests.
         if post_downscaler.is_hardware_mipmap() {
             return self
                 .prepare_hardware_mipmap_draw_state(

@@ -81,6 +81,11 @@ pub(super) struct GpuPaintRequest {
     pub(super) wgpu_downscale_method: WgpuDownscaleMethod,
     pub(super) fixed_2x_sr_min_scale_pct: u32,
     pub(super) opacity: f32,
+    /// Set while an interactive zoom gesture is in motion. When the resolved plan
+    /// is a downscale, this reroutes rendering through the cached hardware-mipmap
+    /// path so a continuous zoom does not re-render the quality downscale at a new
+    /// content key every frame.
+    pub(super) zoom_in_motion: bool,
 }
 
 /// GPU pool budgets (bytes) carried from the app/settings thread into the render thread. The
@@ -157,6 +162,7 @@ impl SuiSuiViewApp {
             wgpu_downscale_method: request.wgpu_downscale_method,
             fixed_2x_sr_min_scale_pct: request.fixed_2x_sr_min_scale_pct,
             opacity: request.opacity.clamp(0.0, 1.0),
+            zoom_in_motion: request.zoom_in_motion,
             pool_budgets,
             rect: request.rect,
             target_format,
@@ -168,6 +174,7 @@ impl SuiSuiViewApp {
                 request.fixed_2x_sr_min_scale_pct,
                 request.rect,
                 request.opacity,
+                request.zoom_in_motion,
             ),
             ctx: painter.ctx().clone(),
         };
@@ -300,6 +307,7 @@ struct GpuEffectCallback {
     wgpu_downscale_method: WgpuDownscaleMethod,
     fixed_2x_sr_min_scale_pct: u32,
     opacity: f32,
+    zoom_in_motion: bool,
     pool_budgets: GpuPoolBudgets,
     rect: Rect,
     target_format: wgpu::TextureFormat,
@@ -396,6 +404,7 @@ impl CallbackTrait for GpuEffectCallback {
                 self.fixed_2x_sr_min_scale_pct as f32 / 100.0,
                 display_rect,
                 self.opacity,
+                self.zoom_in_motion,
                 &self.ctx,
             );
             resources.insert_draw_state(self.draw_id, draw_state);
@@ -474,6 +483,7 @@ struct GpuPaintResources {
     realtime_sr: RealtimeSrResources,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_id(
     source_key: GpuPaintSourceKey,
     effects: ViewEffects,
@@ -482,6 +492,7 @@ fn draw_id(
     fixed_2x_sr_min_scale_pct: u32,
     rect: Rect,
     opacity: f32,
+    zoom_in_motion: bool,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     source_key.hash(&mut hasher);
@@ -494,6 +505,9 @@ fn draw_id(
     rect.max.x.to_bits().hash(&mut hasher);
     rect.max.y.to_bits().hash(&mut hasher);
     opacity.to_bits().hash(&mut hasher);
+    // The bool changes which pipeline renders (cached mipmap sample vs. the
+    // quality downscale), so distinct draw states must not collide.
+    zoom_in_motion.hash(&mut hasher);
     hasher.finish()
 }
 

@@ -25,6 +25,7 @@ fn draw_id_separates_same_page_in_different_panes() {
             110,
             left,
             1.0,
+            false,
         ),
         draw_id(
             source_key,
@@ -34,8 +35,39 @@ fn draw_id_separates_same_page_in_different_panes() {
             110,
             right,
             1.0,
+            false,
         )
     );
+}
+
+#[test]
+fn draw_id_separates_zoom_in_motion_from_settled() {
+    let source_key = GpuPaintSourceKey {
+        book: 7,
+        page: PageCacheKey {
+            page_id: PageId(3),
+            target_long_edge: 2048,
+            decode: DecodeOptions::default(),
+        },
+    };
+    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(640.0, 900.0));
+
+    let id_for = |zoom_in_motion| {
+        draw_id(
+            source_key,
+            ViewEffects::default(),
+            WgpuUpscaleMethod::None,
+            WgpuDownscaleMethod::PyramidLanczos3,
+            110,
+            rect,
+            1.0,
+            zoom_in_motion,
+        )
+    };
+
+    // The motion flag selects a different pipeline (cached mipmap sample vs. the
+    // quality downscale), so its draw states must not collide.
+    assert_ne!(id_for(true), id_for(false));
 }
 
 #[test]
@@ -557,6 +589,7 @@ fn render_gpu_frame(
             full_size: target_size,
         },
         1.0,
+        false,
         &egui::Context::default(),
     );
     let output_texture = device.create_texture(&wgpu::TextureDescriptor {

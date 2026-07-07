@@ -621,6 +621,7 @@ impl SuiSuiViewApp {
                             wgpu_downscale_method,
                             fixed_2x_sr_min_scale_pct: self.settings.fixed_2x_sr_min_scale_pct,
                             opacity: request.alpha,
+                            zoom_in_motion: self.zoom_in_motion(),
                         },
                         force_texture_fallback,
                         tint,
