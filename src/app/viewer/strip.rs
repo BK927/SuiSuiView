@@ -285,8 +285,8 @@ pub(in crate::app) fn accumulate_edge_overscroll(
     delta_px: f32,
     now: Instant,
 ) -> bool {
-    let expired = accum_at
-        .is_some_and(|at| now.saturating_duration_since(at) > STRIP_EDGE_OVERSCROLL_WINDOW);
+    let expired =
+        accum_at.is_some_and(|at| now.saturating_duration_since(at) > STRIP_EDGE_OVERSCROLL_WINDOW);
     if expired {
         *accum_px = 0.0;
     }

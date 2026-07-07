@@ -887,7 +887,8 @@ impl SuiSuiViewApp {
     fn apply_command(&mut self, ctx: &egui::Context, command: AppCommand) {
         // Strip mode reinterprets navigation/zoom commands as scrolls/jumps before
         // the paged handlers; unhandled commands fall through unchanged.
-        if self.view_mode == ViewMode::VerticalStrip && self.apply_strip_keyboard_override(command) {
+        if self.view_mode == ViewMode::VerticalStrip && self.apply_strip_keyboard_override(command)
+        {
             return;
         }
         match command {
@@ -1313,7 +1314,10 @@ mod tests {
         // A vanished anchor (no index) falls back to the current page, no offset.
         assert_eq!(strip_persist_target(true, Some(0.3), None, 8), (8, None));
         // Paged modes always persist the current page with no offset.
-        assert_eq!(strip_persist_target(false, Some(0.3), Some(5), 8), (8, None));
+        assert_eq!(
+            strip_persist_target(false, Some(0.3), Some(5), 8),
+            (8, None)
+        );
         assert_eq!(strip_persist_target(false, None, None, 8), (8, None));
     }
 

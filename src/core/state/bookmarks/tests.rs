@@ -73,8 +73,7 @@ fn view_mode_and_strip_offset_round_trip_and_default_when_absent() {
     assert!(without.strip_offset_frac.is_none());
 
     // Present values survive a serialize/deserialize round-trip.
-    let with_view =
-        base.to_owned() + r#","view_mode":"vertical_strip","strip_offset_frac":0.375}"#;
+    let with_view = base.to_owned() + r#","view_mode":"vertical_strip","strip_offset_frac":0.375}"#;
     let record: BookRecord = serde_json::from_str(&with_view).unwrap();
     let reloaded: BookRecord =
         serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();

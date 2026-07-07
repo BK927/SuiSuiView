@@ -95,8 +95,7 @@ fn layout_on_screen_rects_ignore_far_page_heights() {
     let layout = |dims: &[StripPageDims]| {
         let dims = dims.to_vec();
         let len = dims.len();
-        let height_of =
-            move |index: usize| display_height(dims[index], viewport_width, fallback);
+        let height_of = move |index: usize| display_height(dims[index], viewport_width, fallback);
         layout_visible(0, 0.0, viewport(250.0), len, &height_of)
     };
     let before = layout(&dims);

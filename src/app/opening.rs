@@ -536,7 +536,9 @@ impl SuiSuiViewApp {
             // Legacy record with no token: keep today's session-mode behavior,
             // only re-aligning its direction to the resolved one.
             None => {
-                self.view_mode = self.view_mode.with_reading_direction(self.reading_direction);
+                self.view_mode = self
+                    .view_mode
+                    .with_reading_direction(self.reading_direction);
             }
         }
         // Strip layout (and its decode-target math) is inherently fit-width;
@@ -563,10 +565,12 @@ impl SuiSuiViewApp {
         // Seed the strip anchor so the first painted frame lands at the saved
         // scroll instead of snapping to the top of the start page.
         if self.view_mode == ViewMode::VerticalStrip {
-            self.strip_anchor = source.page_id(self.current_page).map(|page_id| StripAnchor {
-                page_id,
-                offset_frac: resolved_view.strip_offset_frac.unwrap_or(0.0),
-            });
+            self.strip_anchor = source
+                .page_id(self.current_page)
+                .map(|page_id| StripAnchor {
+                    page_id,
+                    offset_frac: resolved_view.strip_offset_frac.unwrap_or(0.0),
+                });
         }
         let clear_pending_bookmark_jump = pending_page.is_some()
             || self
