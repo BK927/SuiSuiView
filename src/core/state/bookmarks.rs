@@ -16,6 +16,14 @@ pub struct BookRecord {
     pub fit_mode: FitMode,
     #[serde(default)]
     pub manual_zoom: Option<f32>,
+    /// Opaque view-mode token (see `ViewMode::token` in the app layer). Core
+    /// stores it verbatim; `None` on legacy records restores session behavior.
+    #[serde(default)]
+    pub view_mode: Option<String>,
+    /// Anchor scroll offset for `view_mode == "vertical_strip"`; ignored in
+    /// paged modes.
+    #[serde(default)]
+    pub strip_offset_frac: Option<f32>,
     #[serde(default)]
     pub path_positions: BTreeMap<String, ReadingPosition>,
     #[serde(default)]
@@ -48,6 +56,10 @@ pub struct ReadingPosition {
     pub fit_mode: FitMode,
     #[serde(default)]
     pub manual_zoom: Option<f32>,
+    #[serde(default)]
+    pub view_mode: Option<String>,
+    #[serde(default)]
+    pub strip_offset_frac: Option<f32>,
     pub updated_at: u64,
 }
 
@@ -59,6 +71,8 @@ impl ReadingPosition {
             reading_direction: input.reading_direction,
             fit_mode: input.fit_mode,
             manual_zoom: input.manual_zoom,
+            view_mode: input.view_mode.map(ToOwned::to_owned),
+            strip_offset_frac: input.strip_offset_frac,
             updated_at: now,
         }
     }
@@ -70,6 +84,8 @@ impl ReadingPosition {
             reading_direction: record.reading_direction,
             fit_mode: record.fit_mode,
             manual_zoom: record.manual_zoom,
+            view_mode: record.view_mode.clone(),
+            strip_offset_frac: record.strip_offset_frac,
             updated_at: record.updated_at,
         }
     }
@@ -80,6 +96,8 @@ impl ReadingPosition {
             && self.reading_direction == input.reading_direction
             && self.fit_mode == input.fit_mode
             && self.manual_zoom == input.manual_zoom
+            && self.view_mode.as_deref() == input.view_mode
+            && self.strip_offset_frac == input.strip_offset_frac
     }
 }
 
@@ -93,6 +111,8 @@ pub struct BookRecordInput<'a> {
     pub reading_direction: ReadingDirection,
     pub fit_mode: FitMode,
     pub manual_zoom: Option<f32>,
+    pub view_mode: Option<&'a str>,
+    pub strip_offset_frac: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -383,6 +403,27 @@ mod tests {
     }
 
     #[test]
+    fn view_mode_and_strip_offset_round_trip_and_default_when_absent() {
+        use super::BookRecord;
+
+        let base = r#"{"book_id":"b","title":"T","last_page":0,"total_pages":10,"known_paths":["p"],"reading_direction":"RightToLeft","fit_mode":"FitPage","updated_at":1"#;
+
+        // Legacy records without the fields still load, defaulting both to None.
+        let without: BookRecord = serde_json::from_str(&(base.to_owned() + "}")).unwrap();
+        assert!(without.view_mode.is_none());
+        assert!(without.strip_offset_frac.is_none());
+
+        // Present values survive a serialize/deserialize round-trip.
+        let with_view =
+            base.to_owned() + r#","view_mode":"vertical_strip","strip_offset_frac":0.375}"#;
+        let record: BookRecord = serde_json::from_str(&with_view).unwrap();
+        let reloaded: BookRecord =
+            serde_json::from_str(&serde_json::to_string(&record).unwrap()).unwrap();
+        assert_eq!(reloaded.view_mode.as_deref(), Some("vertical_strip"));
+        assert_eq!(reloaded.strip_offset_frac, Some(0.375));
+    }
+
+    #[test]
     fn page_bookmarks_add_and_remove() {
         let mut store = test_store("page-bookmarks");
         store.upsert_book_record(BookRecordInput {
@@ -395,6 +436,8 @@ mod tests {
             reading_direction: ReadingDirection::RightToLeft,
             fit_mode: FitMode::FitPage,
             manual_zoom: None,
+            view_mode: None,
+            strip_offset_frac: None,
         });
 
         let source_path = Path::new("C:/books/book-1");
@@ -441,6 +484,8 @@ mod tests {
             reading_direction: ReadingDirection::RightToLeft,
             fit_mode: FitMode::FitPage,
             manual_zoom: None,
+            view_mode: None,
+            strip_offset_frac: None,
         });
 
         let first = Path::new("C:/books/first/book.cbz");
@@ -472,6 +517,8 @@ mod tests {
             reading_direction: ReadingDirection::RightToLeft,
             fit_mode: FitMode::FitPage,
             manual_zoom: None,
+            view_mode: None,
+            strip_offset_frac: None,
         });
         store.upsert_book_record(BookRecordInput {
             book_id: "book-1",
@@ -483,6 +530,8 @@ mod tests {
             reading_direction: ReadingDirection::LeftToRight,
             fit_mode: FitMode::Manual,
             manual_zoom: Some(1.5),
+            view_mode: None,
+            strip_offset_frac: None,
         });
 
         let original = store
@@ -517,6 +566,8 @@ mod tests {
                 reading_direction: ReadingDirection::RightToLeft,
                 fit_mode: FitMode::FitPage,
                 manual_zoom: None,
+                view_mode: None,
+                strip_offset_frac: None,
             });
         }
         store.upsert_page_bookmark(
@@ -630,6 +681,8 @@ mod tests {
             reading_direction: ReadingDirection::RightToLeft,
             fit_mode: FitMode::FitPage,
             manual_zoom: None,
+            view_mode: None,
+            strip_offset_frac: None,
         });
 
         let reopened = store_at(&base);
@@ -654,6 +707,8 @@ mod tests {
             reading_direction: ReadingDirection::RightToLeft,
             fit_mode: FitMode::FitPage,
             manual_zoom: None,
+            view_mode: None,
+            strip_offset_frac: None,
         });
         assert!(changed);
 
@@ -668,6 +723,8 @@ mod tests {
             reading_direction: ReadingDirection::RightToLeft,
             fit_mode: FitMode::FitPage,
             manual_zoom: None,
+            view_mode: None,
+            strip_offset_frac: None,
         });
 
         let reopened = store_at(&base);
@@ -766,6 +823,8 @@ mod tests {
             reading_direction: ReadingDirection::RightToLeft,
             fit_mode: FitMode::FitPage,
             manual_zoom: None,
+            view_mode: None,
+            strip_offset_frac: None,
         });
         let reopened = store_at(&store_dir);
         assert_eq!(
@@ -807,6 +866,8 @@ mod tests {
             reading_direction: ReadingDirection::RightToLeft,
             fit_mode: FitMode::FitPage,
             manual_zoom: None,
+            view_mode: None,
+            strip_offset_frac: None,
         });
 
         // Reopening the same archive from a fresh store restores the page (by name).

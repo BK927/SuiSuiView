@@ -2,7 +2,7 @@ use super::{
     adjacent_seed::{prepare_seeded_first_page, SeedTargetView},
     perf,
     sibling_books::{same_path, sibling_book_path},
-    viewer::{ViewTargetSettle, SPREAD_GAP_POINTS},
+    viewer::{StripAnchor, ViewMode, ViewTargetSettle, SPREAD_GAP_POINTS},
     PendingBookmarkJump, SeededPreparedPage, SiblingOpenRetry, SuiSuiViewApp,
 };
 use crate::core::effects::ViewEffects;
@@ -64,6 +64,7 @@ pub(in crate::app) struct OpenViewFallback {
     pub(in crate::app) reading_direction: ReadingDirection,
     pub(in crate::app) fit_mode: FitMode,
     pub(in crate::app) manual_zoom: f32,
+    pub(in crate::app) view_mode: ViewMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -71,6 +72,12 @@ struct ResolvedOpenView {
     reading_direction: ReadingDirection,
     fit_mode: FitMode,
     manual_zoom: f32,
+    /// Persisted/inherited view mode, or `None` for legacy records with no
+    /// token and no fallback — the caller then keeps today's session behavior.
+    view_mode: Option<ViewMode>,
+    /// Anchor scroll offset, meaningful only when `view_mode` is
+    /// `Some(ViewMode::VerticalStrip)`.
+    strip_offset_frac: Option<f32>,
 }
 
 pub(crate) struct StartupOpen {
@@ -520,11 +527,24 @@ impl SuiSuiViewApp {
             self.settings.remember_zoom_per_book,
         );
         self.reading_direction = resolved_view.reading_direction;
-        self.view_mode = self
-            .view_mode
-            .with_reading_direction(self.reading_direction);
         self.fit_mode = resolved_view.fit_mode;
         self.manual_zoom = resolved_view.manual_zoom;
+        match resolved_view.view_mode {
+            // A persisted/inherited mode enters via the open-path helper (fit
+            // forcing without the worker/persist side effects of set_view_mode).
+            Some(mode) => self.enter_view_mode_on_open(mode),
+            // Legacy record with no token: keep today's session-mode behavior,
+            // only re-aligning its direction to the resolved one.
+            None => {
+                self.view_mode = self.view_mode.with_reading_direction(self.reading_direction);
+            }
+        }
+        // Strip layout (and its decode-target math) is inherently fit-width;
+        // enforce the invariant however the mode was reached — persisted token
+        // or a legacy record opened while the session mode is already strip.
+        if self.view_mode == ViewMode::VerticalStrip {
+            self.fit_mode = FitMode::FitWidth;
+        }
 
         let pending_page = self
             .pending_bookmark_jump
@@ -540,6 +560,14 @@ impl SuiSuiViewApp {
             reading_position.as_ref(),
             pending_page,
         );
+        // Seed the strip anchor so the first painted frame lands at the saved
+        // scroll instead of snapping to the top of the start page.
+        if self.view_mode == ViewMode::VerticalStrip {
+            self.strip_anchor = source.page_id(self.current_page).map(|page_id| StripAnchor {
+                page_id,
+                offset_frac: resolved_view.strip_offset_frac.unwrap_or(0.0),
+            });
+        }
         let clear_pending_bookmark_jump = pending_page.is_some()
             || self
                 .pending_bookmark_jump
@@ -602,11 +630,23 @@ impl SuiSuiViewApp {
         }
     }
 
+    /// Apply a persisted/inherited view mode while opening a book. Unlike
+    /// `set_view_mode`, it performs no worker or persist side effects — the open
+    /// path loads the book and persists at its end. Strip fit forcing and anchor
+    /// seeding happen at the call site, after the final mode is known.
+    fn enter_view_mode_on_open(&mut self, mode: ViewMode) {
+        self.view_mode = mode;
+        if let Some(direction) = mode.reading_direction() {
+            self.reading_direction = direction;
+        }
+    }
+
     pub(in crate::app) fn open_view_fallback(&self) -> OpenViewFallback {
         OpenViewFallback {
             reading_direction: self.reading_direction,
             fit_mode: self.fit_mode,
             manual_zoom: self.manual_zoom,
+            view_mode: self.view_mode,
         }
     }
 
@@ -750,17 +790,25 @@ fn resolve_open_view(
             } else {
                 1.0
             },
+            view_mode: position.view_mode.as_deref().and_then(ViewMode::from_token),
+            strip_offset_frac: position.strip_offset_frac,
         },
         None => view_fallback.map_or_else(
             || ResolvedOpenView {
                 reading_direction: ReadingDirection::default(),
                 fit_mode: FitMode::default(),
                 manual_zoom: 1.0,
+                view_mode: None,
+                strip_offset_frac: None,
             },
             |fallback| ResolvedOpenView {
                 reading_direction: fallback.reading_direction,
                 fit_mode: fallback.fit_mode,
                 manual_zoom: fallback.manual_zoom,
+                // A sibling book without its own record inherits the current
+                // mode explicitly (matches the implicit session-field behavior).
+                view_mode: Some(fallback.view_mode),
+                strip_offset_frac: None,
             },
         ),
     }

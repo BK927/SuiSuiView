@@ -1,6 +1,6 @@
 use super::{
     open_seed_target_long_edge, resolve_open_view, selected_open_page,
-    startup_seed_target_long_edge, OpenViewFallback,
+    startup_seed_target_long_edge, OpenViewFallback, ViewMode,
 };
 use crate::core::source::{BookSource, SourceError};
 use crate::core::state::{FitMode, ReadingDirection, ReadingPosition, WindowPlacement};
@@ -71,6 +71,7 @@ fn sibling_open_view_fallback_preserves_fit_width_without_saved_position() {
             reading_direction: ReadingDirection::LeftToRight,
             fit_mode: FitMode::FitWidth,
             manual_zoom: 1.75,
+            view_mode: ViewMode::VerticalStrip,
         }),
         true,
     );
@@ -78,6 +79,9 @@ fn sibling_open_view_fallback_preserves_fit_width_without_saved_position() {
     assert_eq!(resolved.reading_direction, ReadingDirection::LeftToRight);
     assert_eq!(resolved.fit_mode, FitMode::FitWidth);
     assert_eq!(resolved.manual_zoom, 1.75);
+    // A sibling book without its own record inherits the current mode.
+    assert_eq!(resolved.view_mode, Some(ViewMode::VerticalStrip));
+    assert_eq!(resolved.strip_offset_frac, None);
 }
 
 #[test]
@@ -88,6 +92,8 @@ fn saved_reading_position_wins_over_sibling_view_fallback() {
         reading_direction: ReadingDirection::RightToLeft,
         fit_mode: FitMode::FitPage,
         manual_zoom: Some(1.25),
+        view_mode: None,
+        strip_offset_frac: None,
         updated_at: 10,
     };
 
@@ -97,6 +103,7 @@ fn saved_reading_position_wins_over_sibling_view_fallback() {
             reading_direction: ReadingDirection::LeftToRight,
             fit_mode: FitMode::FitWidth,
             manual_zoom: 2.0,
+            view_mode: ViewMode::VerticalStrip,
         }),
         true,
     );
@@ -104,6 +111,8 @@ fn saved_reading_position_wins_over_sibling_view_fallback() {
     assert_eq!(resolved.reading_direction, ReadingDirection::RightToLeft);
     assert_eq!(resolved.fit_mode, FitMode::FitPage);
     assert_eq!(resolved.manual_zoom, 1.25);
+    // Saved position with no token wins; the fallback mode is ignored.
+    assert_eq!(resolved.view_mode, None);
 }
 
 #[test]
@@ -113,6 +122,37 @@ fn direct_open_without_saved_position_keeps_default_view() {
     assert_eq!(resolved.reading_direction, ReadingDirection::default());
     assert_eq!(resolved.fit_mode, FitMode::default());
     assert_eq!(resolved.manual_zoom, 1.0);
+    assert_eq!(resolved.view_mode, None);
+    assert_eq!(resolved.strip_offset_frac, None);
+}
+
+#[test]
+fn saved_vertical_strip_position_resolves_mode_and_offset() {
+    let saved = ReadingPosition {
+        last_page: 4,
+        last_page_name: None,
+        reading_direction: ReadingDirection::LeftToRight,
+        fit_mode: FitMode::FitWidth,
+        manual_zoom: None,
+        view_mode: Some("vertical_strip".to_owned()),
+        strip_offset_frac: Some(0.42),
+        updated_at: 7,
+    };
+
+    let resolved = resolve_open_view(Some(&saved), None, true);
+
+    assert_eq!(resolved.view_mode, Some(ViewMode::VerticalStrip));
+    assert_eq!(resolved.strip_offset_frac, Some(0.42));
+}
+
+#[test]
+fn saved_position_with_unknown_token_yields_no_mode() {
+    let mut saved = reading_position(2, None);
+    saved.view_mode = Some("webtoon".to_owned());
+
+    let resolved = resolve_open_view(Some(&saved), None, true);
+
+    assert_eq!(resolved.view_mode, None);
 }
 
 #[test]
@@ -166,6 +206,8 @@ fn reading_position(last_page: usize, last_page_name: Option<&str>) -> ReadingPo
         reading_direction: ReadingDirection::default(),
         fit_mode: FitMode::default(),
         manual_zoom: None,
+        view_mode: None,
+        strip_offset_frac: None,
         updated_at: 0,
     }
 }

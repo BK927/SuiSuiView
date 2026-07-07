@@ -694,6 +694,8 @@ impl StateStore {
             reading_direction: input.reading_direction,
             fit_mode: input.fit_mode,
             manual_zoom: None,
+            view_mode: None,
+            strip_offset_frac: None,
             path_positions: BTreeMap::new(),
             page_bookmarks: Vec::new(),
             upscale_probe: None,
@@ -715,6 +717,8 @@ impl StateStore {
             || record.reading_direction != input.reading_direction
             || record.fit_mode != input.fit_mode
             || record.manual_zoom != input.manual_zoom
+            || record.view_mode.as_deref() != input.view_mode
+            || record.strip_offset_frac != input.strip_offset_frac
             || path_position_changed;
 
         record.title = title;
@@ -724,6 +728,8 @@ impl StateStore {
         record.reading_direction = input.reading_direction;
         record.fit_mode = input.fit_mode;
         record.manual_zoom = input.manual_zoom;
+        record.view_mode = input.view_mode.map(ToOwned::to_owned);
+        record.strip_offset_frac = input.strip_offset_frac;
         if path_position_changed || touch {
             record
                 .path_positions

@@ -524,16 +524,19 @@ impl SuiSuiViewApp {
             return;
         };
         let path = self.current_bookmark_path(source.as_ref()).to_path_buf();
+        let (last_page, strip_offset_frac) = self.persisted_position(source.as_ref());
         self.store.upsert_book_record(BookRecordInput {
             book_id: source.book_id(),
             title: source.title(),
-            last_page: self.current_page,
-            last_page_name: self.current_bookmark_page_name(source.as_ref()),
+            last_page,
+            last_page_name: self.current_bookmark_page_name(source.as_ref(), last_page),
             total_pages: source.page_count(),
             path: &path,
             reading_direction: self.reading_direction,
             fit_mode: self.fit_mode,
             manual_zoom: self.current_bookmark_manual_zoom(),
+            view_mode: Some(self.view_mode.token()),
+            strip_offset_frac,
         });
         self.bookmark_rows.clear();
         self.pending_state_save_at = None;
@@ -547,16 +550,19 @@ impl SuiSuiViewApp {
             return;
         }
         let path = self.current_bookmark_path(source.as_ref()).to_path_buf();
+        let (last_page, strip_offset_frac) = self.persisted_position(source.as_ref());
         let changed = self.store.upsert_book_record_deferred(BookRecordInput {
             book_id: source.book_id(),
             title: source.title(),
-            last_page: self.current_page,
-            last_page_name: self.current_bookmark_page_name(source.as_ref()),
+            last_page,
+            last_page_name: self.current_bookmark_page_name(source.as_ref(), last_page),
             total_pages: source.page_count(),
             path: &path,
             reading_direction: self.reading_direction,
             fit_mode: self.fit_mode,
             manual_zoom: self.current_bookmark_manual_zoom(),
+            view_mode: Some(self.view_mode.token()),
+            strip_offset_frac,
         });
         if changed {
             self.bookmark_rows.clear();
@@ -575,13 +581,35 @@ impl SuiSuiViewApp {
         source.source_path()
     }
 
-    fn current_bookmark_page_name<'a>(&self, source: &'a dyn BookSource) -> Option<&'a str> {
+    fn current_bookmark_page_name<'a>(
+        &self,
+        source: &'a dyn BookSource,
+        page: usize,
+    ) -> Option<&'a str> {
         if self.open_origin == Some(OpenOrigin::ZipCbz) && self.settings.remember_archive_page_name
         {
-            source.page_name(self.current_page)
+            source.page_name(page)
         } else {
             None
         }
+    }
+
+    /// Page index and strip-anchor offset to persist for the current view. In
+    /// vertical-strip mode the anchor (viewport-top) page and its offset are
+    /// saved so restore rebuilds the exact scroll; paged modes — and a strip
+    /// anchor whose page has vanished — fall back to the derived current page
+    /// with no offset.
+    fn persisted_position(&self, source: &dyn BookSource) -> (usize, Option<f32>) {
+        let anchor_index = self
+            .strip_anchor
+            .as_ref()
+            .and_then(|anchor| source.page_index_for_id(anchor.page_id));
+        strip_persist_target(
+            self.view_mode == ViewMode::VerticalStrip,
+            self.strip_anchor.map(|anchor| anchor.offset_frac),
+            anchor_index,
+            self.current_page,
+        )
     }
 
     fn current_bookmark_manual_zoom(&self) -> Option<f32> {
@@ -1208,6 +1236,23 @@ impl SuiSuiViewApp {
     }
 }
 
+/// Decide the persisted (page, strip offset) for a view. Vertical-strip mode
+/// with a resolvable anchor persists the anchor page plus its offset so the
+/// exact scroll is restored; every other case (paged modes, or a strip anchor
+/// whose page vanished) persists the current page with no offset. Pure so the
+/// anchor-vs-current coherence is unit-testable.
+fn strip_persist_target(
+    is_strip: bool,
+    anchor_offset: Option<f32>,
+    anchor_index: Option<usize>,
+    current_page: usize,
+) -> (usize, Option<f32>) {
+    match (is_strip, anchor_index, anchor_offset) {
+        (true, Some(index), Some(offset)) => (index, Some(offset)),
+        _ => (current_page, None),
+    }
+}
+
 /// Current index of a worker event's page in `source`, or None when the page
 /// vanished from the snapshot mid-flight (the event must then be dropped so an
 /// orphaned id never enters the cache).
@@ -1254,6 +1299,23 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn strip_persist_target_uses_anchor_page_and_offset_in_strip_mode() {
+        use super::strip_persist_target;
+
+        // Strip mode with a resolvable anchor persists the anchor page + offset,
+        // not the derived current (viewport-center) page.
+        assert_eq!(
+            strip_persist_target(true, Some(0.3), Some(5), 8),
+            (5, Some(0.3))
+        );
+        // A vanished anchor (no index) falls back to the current page, no offset.
+        assert_eq!(strip_persist_target(true, Some(0.3), None, 8), (8, None));
+        // Paged modes always persist the current page with no offset.
+        assert_eq!(strip_persist_target(false, Some(0.3), Some(5), 8), (8, None));
+        assert_eq!(strip_persist_target(false, None, None, 8), (8, None));
+    }
 
     #[test]
     fn transition_screen_sign_follows_reading_direction() {

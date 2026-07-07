@@ -115,6 +115,8 @@ impl StateStore {
                 reading_direction: record.reading_direction,
                 fit_mode: record.fit_mode,
                 manual_zoom: None,
+                view_mode: None,
+                strip_offset_frac: None,
                 path_positions: BTreeMap::new(),
                 page_bookmarks: record.page_bookmarks,
                 upscale_probe: record.upscale_probe,

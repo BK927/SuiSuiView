@@ -72,6 +72,34 @@ impl ViewMode {
             },
         }
     }
+
+    /// Stable, opaque token persisted in a book record so the view mode survives
+    /// restarts. Core carries this as a plain string; only this layer knows the
+    /// mapping. Keep in sync with [`ViewMode::from_token`].
+    pub(in crate::app) fn token(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::DoubleLeftToRight => "double_ltr",
+            Self::DoubleRightToLeft => "double_rtl",
+            Self::SmartDoubleLeftToRight => "smart_ltr",
+            Self::SmartDoubleRightToLeft => "smart_rtl",
+            Self::VerticalStrip => "vertical_strip",
+        }
+    }
+
+    /// Parse a persisted [`ViewMode::token`]. Unknown/legacy tokens yield `None`
+    /// so the caller falls back to session behavior.
+    pub(in crate::app) fn from_token(token: &str) -> Option<Self> {
+        Some(match token {
+            "single" => Self::Single,
+            "double_ltr" => Self::DoubleLeftToRight,
+            "double_rtl" => Self::DoubleRightToLeft,
+            "smart_ltr" => Self::SmartDoubleLeftToRight,
+            "smart_rtl" => Self::SmartDoubleRightToLeft,
+            "vertical_strip" => Self::VerticalStrip,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -417,5 +445,25 @@ mod tests {
             ViewMode::VerticalStrip.with_reading_direction(ReadingDirection::RightToLeft),
             ViewMode::VerticalStrip
         );
+    }
+
+    #[test]
+    fn view_mode_tokens_round_trip_for_every_variant() {
+        for mode in [
+            ViewMode::Single,
+            ViewMode::DoubleLeftToRight,
+            ViewMode::DoubleRightToLeft,
+            ViewMode::SmartDoubleLeftToRight,
+            ViewMode::SmartDoubleRightToLeft,
+            ViewMode::VerticalStrip,
+        ] {
+            assert_eq!(ViewMode::from_token(mode.token()), Some(mode));
+        }
+    }
+
+    #[test]
+    fn unknown_view_mode_token_is_none() {
+        assert_eq!(ViewMode::from_token("webtoon"), None);
+        assert_eq!(ViewMode::from_token(""), None);
     }
 }
