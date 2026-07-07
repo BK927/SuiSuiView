@@ -195,6 +195,7 @@ fn post_sr_downscale_keys_include_intermediate_content() {
         "pyramid",
         anime_content,
         WgpuDownscaleMethod::PyramidLanczos3,
+        ViewEffects::default(),
         [1536, 1536],
         [2048, 2048],
         0,
@@ -203,14 +204,50 @@ fn post_sr_downscale_keys_include_intermediate_content() {
         "pyramid",
         cunny_content,
         WgpuDownscaleMethod::PyramidLanczos3,
+        ViewEffects::default(),
         [1536, 1536],
         [2048, 2048],
         0,
     );
     assert_ne!(anime_downscale, cunny_downscale);
     assert_ne!(
-        mipmap_intermediate_texture_key(anime_content),
-        mipmap_intermediate_texture_key(cunny_content)
+        mipmap_intermediate_texture_key(anime_content, ViewEffects::default()),
+        mipmap_intermediate_texture_key(cunny_content, ViewEffects::default())
+    );
+}
+
+#[test]
+fn downscale_and_mipmap_keys_separate_effects() {
+    // The rendered-flag skip reuses a key'd intermediate's contents, so the key must split when
+    // `effects` changes contents. On the post-realtime-SR path `content_key` carries no effects,
+    // so these keys hash `effects` directly; guard that here (device-free).
+    let inverted = ViewEffects {
+        invert_colors: true,
+        ..ViewEffects::default()
+    };
+    assert_ne!(
+        downscale_intermediate_texture_key(
+            "pyramid",
+            42,
+            WgpuDownscaleMethod::PyramidLanczos3,
+            ViewEffects::default(),
+            [1536, 1536],
+            [2048, 2048],
+            0,
+        ),
+        downscale_intermediate_texture_key(
+            "pyramid",
+            42,
+            WgpuDownscaleMethod::PyramidLanczos3,
+            inverted,
+            [1536, 1536],
+            [2048, 2048],
+            0,
+        )
+    );
+    assert_ne!(
+        mipmap_intermediate_texture_key(42, ViewEffects::default()),
+        mipmap_intermediate_texture_key(42, inverted)
     );
 }
 

@@ -1,6 +1,7 @@
 use super::pools::{
     downscale_intermediate_texture_key, intermediate_texture_key, mip_level_count, mip_size,
-    mipmap_intermediate_texture_key, source_texture_content_key, GpuDrawState, GpuIntermediateTexture,
+    mipmap_intermediate_texture_key, source_texture_content_key, GpuDrawState,
+    GpuIntermediateTexture,
 };
 use super::{GpuDisplayRect, GpuPaintResources, GpuPaintSourceKey};
 use crate::app::realtime_sr::RealtimeSrResources;
@@ -14,6 +15,7 @@ use crate::core::gpu_effect::{
 use crate::core::perf_trace::{self, PerfField};
 use crate::core::state::{WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod};
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -83,29 +85,35 @@ impl GpuPaintResources {
                 .expect("intermediate texture should be cached before rendering")
                 .clone();
             let intermediate_bind_group = intermediate.bind_group.clone();
-            let intermediate_view = intermediate
-                .mip_views
-                .first()
-                .expect("intermediate textures should expose a renderable mip 0 view");
-            let easu_params = params_for_effects_with_display(
-                source_size,
-                output_size,
-                effects,
-                effective_upscaler,
-                WgpuDownscaleMethod::Bilinear,
-                [0, 0],
-                display_rect.visible_size,
-                display_rect.sample_offset,
-                display_rect.full_size,
-                1.0,
-            );
-            let easu_params_bind_group = self.params_bind_group_for(device, easu_params);
-            self.render_fullscreen(
-                encoder,
-                intermediate_view,
-                &source_bind_group,
-                &easu_params_bind_group,
-            );
+            // Skip re-recording the EASU pass when this key'd intermediate already holds its
+            // (key-determined) contents; `intermediate_texture_key` covers source, effects, upscaler
+            // and the display rect, so the cached pixels are exact.
+            if !intermediate.rendered.load(Ordering::Relaxed) {
+                let intermediate_view = intermediate
+                    .mip_views
+                    .first()
+                    .expect("intermediate textures should expose a renderable mip 0 view");
+                let easu_params = params_for_effects_with_display(
+                    source_size,
+                    output_size,
+                    effects,
+                    effective_upscaler,
+                    WgpuDownscaleMethod::Bilinear,
+                    [0, 0],
+                    display_rect.visible_size,
+                    display_rect.sample_offset,
+                    display_rect.full_size,
+                    1.0,
+                );
+                let easu_params_bind_group = self.params_bind_group_for(device, easu_params);
+                self.render_fullscreen(
+                    encoder,
+                    intermediate_view,
+                    &source_bind_group,
+                    &easu_params_bind_group,
+                );
+                intermediate.rendered.store(true, Ordering::Relaxed);
+            }
 
             let rcas_params = params_for_effects_with_shader_method(
                 [
@@ -157,7 +165,6 @@ impl GpuPaintResources {
                 opacity,
             );
         }
-
         if effective_downscaler.is_pyramid()
             && !display_rect.is_clipped()
             && needs_multi_pass_downscale(output_size, display_rect.full_size)
@@ -498,6 +505,7 @@ impl GpuPaintResources {
             "pyramid",
             content_key,
             downscaler,
+            effects,
             [stage_size[0], stage_size[1]],
             current_size,
             stage_index,
@@ -508,6 +516,12 @@ impl GpuPaintResources {
             .peek(&stage_key)
             .expect("pyramid stage texture should be cached before rendering")
             .clone();
+        // Skip re-recording this pyramid stage when its key'd intermediate is already filled; the
+        // key covers content, downscaler, effects, and every stage size/index, so the cached pixels
+        // are exact.
+        if intermediate.rendered.load(Ordering::Relaxed) {
+            return intermediate;
+        }
         let params = if first_stage {
             params_for_effects(
                 source_size,
@@ -537,6 +551,7 @@ impl GpuPaintResources {
             .first()
             .expect("pyramid stage textures should expose a renderable mip 0 view");
         self.render_fullscreen(encoder, stage_view, current_bind_group, &params_bind_group);
+        intermediate.rendered.store(true, Ordering::Relaxed);
         intermediate
     }
 
@@ -554,7 +569,7 @@ impl GpuPaintResources {
         opacity: f32,
     ) -> GpuDrawState {
         let mip_levels = mip_level_count(output_size);
-        let mip_key = mipmap_intermediate_texture_key(content_key);
+        let mip_key = mipmap_intermediate_texture_key(content_key, effects);
         self.ensure_mipmapped_intermediate_texture(
             device,
             mip_key,
@@ -566,43 +581,49 @@ impl GpuPaintResources {
             .peek(&mip_key)
             .expect("mipmapped intermediate texture should be cached before rendering")
             .clone();
-        let mip0_params = params_for_effects(
-            source_size,
-            output_size,
-            effects,
-            WgpuUpscaleMethod::None,
-            WgpuDownscaleMethod::Bilinear,
-            [0, 0],
-            output_size.map(|dimension| dimension.max(1) as u32),
-            1.0,
-        );
-        let mip0_params_bind_group = self.params_bind_group_for(device, mip0_params);
-        self.render_fullscreen(
-            encoder,
-            &intermediate.mip_views[0],
-            &source_bind_group,
-            &mip0_params_bind_group,
-        );
-
-        for level in 1..mip_levels {
-            let prev_size = mip_size(output_size, level - 1);
-            let next_size = mip_size(output_size, level);
-            let prev_bind_group =
-                self.texture_bind_group_for(device, &intermediate.mip_views[level as usize - 1]);
-            let params = params_for_hardware_mipmap_sample(
-                prev_size,
+        // Skip regenerating the whole mip chain when this key'd texture already holds it; the key
+        // covers content, effects, and (via `output_size`) every mip size, so the cached chain is
+        // exact.
+        if !intermediate.rendered.load(Ordering::Relaxed) {
+            let mip0_params = params_for_effects(
+                source_size,
+                output_size,
+                effects,
+                WgpuUpscaleMethod::None,
+                WgpuDownscaleMethod::Bilinear,
                 [0, 0],
-                next_size.map(|dimension| dimension as u32),
+                output_size.map(|dimension| dimension.max(1) as u32),
                 1.0,
-                0.0,
             );
-            let params_bind_group = self.params_bind_group_for(device, params);
+            let mip0_params_bind_group = self.params_bind_group_for(device, mip0_params);
             self.render_fullscreen(
                 encoder,
-                &intermediate.mip_views[level as usize],
-                &prev_bind_group,
-                &params_bind_group,
+                &intermediate.mip_views[0],
+                &source_bind_group,
+                &mip0_params_bind_group,
             );
+
+            for level in 1..mip_levels {
+                let prev_size = mip_size(output_size, level - 1);
+                let next_size = mip_size(output_size, level);
+                let prev_bind_group = self
+                    .texture_bind_group_for(device, &intermediate.mip_views[level as usize - 1]);
+                let params = params_for_hardware_mipmap_sample(
+                    prev_size,
+                    [0, 0],
+                    next_size.map(|dimension| dimension as u32),
+                    1.0,
+                    0.0,
+                );
+                let params_bind_group = self.params_bind_group_for(device, params);
+                self.render_fullscreen(
+                    encoder,
+                    &intermediate.mip_views[level as usize],
+                    &prev_bind_group,
+                    &params_bind_group,
+                );
+            }
+            intermediate.rendered.store(true, Ordering::Relaxed);
         }
 
         let lod = downscale_lod(output_size, display_rect.full_size)
@@ -688,7 +709,9 @@ impl GpuPaintResources {
         let output_size = output.size;
         let output_byte_size = output.byte_size;
         let bind_group = Arc::new(self.texture_bind_group_for(device, &output.view));
-        let mip_views = vec![output.texture.create_view(&super::pools::mip_view_descriptor(0))];
+        let mip_views = vec![output
+            .texture
+            .create_view(&super::pools::mip_view_descriptor(0))];
         let intermediate = Arc::new(GpuIntermediateTexture {
             _texture: output.texture,
             _view: output.view,
@@ -697,6 +720,10 @@ impl GpuPaintResources {
             size: output_size,
             content_key: key,
             byte_size: output_byte_size,
+            // Realtime-SR stage textures are filled here, once, and only re-created on a cache miss
+            // (see `ensure_realtime_sr_stage_texture_from_*`), so they carry their own once-only
+            // semantics; mark `rendered` for honesty even though no fill site re-checks this Arc.
+            rendered: AtomicBool::new(true),
         });
         let evicted_on_insert = if let Some((_old_key, old_texture)) =
             self.intermediate_textures.push(key, intermediate.clone())

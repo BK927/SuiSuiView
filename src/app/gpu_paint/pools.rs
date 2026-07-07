@@ -15,13 +15,13 @@ use lru::LruCache;
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use wgpu::util::DeviceExt;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::time::Duration;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::time::Instant;
+use wgpu::util::DeviceExt;
 
 pub(super) struct GpuSourceTexture {
     _texture: wgpu::Texture,
@@ -45,6 +45,11 @@ pub(super) struct GpuIntermediateTexture {
     pub(super) size: [usize; 2],
     pub(super) content_key: u64,
     pub(super) byte_size: usize,
+    /// `false` until the pass(es) that fill this texture have been recorded into a frame encoder;
+    /// set `true` once recorded so later prepares reuse the cached contents instead of re-recording
+    /// the (identical, key-determined) passes. A fresh allocation after LRU eviction starts `false`,
+    /// so an evicted-and-recreated texture is naturally re-rendered.
+    pub(super) rendered: AtomicBool,
 }
 
 impl GpuDrawState {
@@ -65,7 +70,10 @@ impl GpuDrawState {
         }
     }
 
-    pub(super) fn with_intermediate_pin(mut self, intermediate: Arc<GpuIntermediateTexture>) -> Self {
+    pub(super) fn with_intermediate_pin(
+        mut self,
+        intermediate: Arc<GpuIntermediateTexture>,
+    ) -> Self {
         self.intermediate_byte_size = self
             .intermediate_byte_size
             .saturating_add(intermediate.byte_size);
@@ -325,6 +333,7 @@ impl GpuPaintResources {
                 size: [target_size[0] as usize, target_size[1] as usize],
                 content_key: key,
                 byte_size,
+                rendered: AtomicBool::new(false),
             }),
         ) {
             self.intermediate_texture_bytes = self
@@ -375,6 +384,7 @@ impl GpuPaintResources {
                 size: [target_size[0] as usize, target_size[1] as usize],
                 content_key: key,
                 byte_size,
+                rendered: AtomicBool::new(false),
             }),
         ) {
             self.intermediate_texture_bytes = self
@@ -572,6 +582,7 @@ pub(super) fn downscale_intermediate_texture_key(
     namespace: &'static str,
     content_key: u64,
     downscaler: WgpuDownscaleMethod,
+    effects: ViewEffects,
     stage_size: [u32; 2],
     current_size: [usize; 2],
     stage_index: u32,
@@ -580,16 +591,24 @@ pub(super) fn downscale_intermediate_texture_key(
     namespace.hash(&mut hasher);
     content_key.hash(&mut hasher);
     downscaler.token().hash(&mut hasher);
+    // The first pyramid stage bakes `effects` into its output, and every later stage inherits that
+    // through its input. `content_key` only carries `effects` on the direct-from-source path; on the
+    // post-realtime-SR path it does not, so hash `effects` here to keep the key content-complete
+    // (harmless redundancy on the source path — it only splits cache entries).
+    effects.hash(&mut hasher);
     stage_size.hash(&mut hasher);
     current_size.hash(&mut hasher);
     stage_index.hash(&mut hasher);
     hasher.finish()
 }
 
-pub(super) fn mipmap_intermediate_texture_key(content_key: u64) -> u64 {
+pub(super) fn mipmap_intermediate_texture_key(content_key: u64, effects: ViewEffects) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     "hardware_mipmap_linear".hash(&mut hasher);
     content_key.hash(&mut hasher);
+    // Mip 0 bakes `effects` into the chain; `content_key` omits `effects` on the post-realtime-SR
+    // path, so hash it here to keep the key content-complete.
+    effects.hash(&mut hasher);
     hasher.finish()
 }
 
