@@ -1,4 +1,6 @@
-use super::super::viewer::{CurrentViewState, PrepareScaleState, WgpuScaleState};
+use super::super::viewer::{
+    CurrentViewState, PrepareScaleState, UpscaleDecisionOrigin, WgpuScaleState,
+};
 use super::super::SuiSuiViewApp;
 use super::{icons, theme};
 use crate::core::i18n::I18n;
@@ -143,7 +145,7 @@ fn top_bar_scaler_tooltip(current_view: Option<&CurrentViewState>, i18n: I18n) -
     let Some(current_view) = current_view else {
         return i18n.text("topbar.scale.current_unknown");
     };
-    [
+    let mut lines = vec![
         format!(
             "{}: {}",
             i18n.text("topbar.scale.current_prepare"),
@@ -154,8 +156,11 @@ fn top_bar_scaler_tooltip(current_view: Option<&CurrentViewState>, i18n: I18n) -
             i18n.text("topbar.scale.current_display"),
             current_view.wgpu_scale.label()
         ),
-    ]
-    .join("\n")
+    ];
+    if let Some(provenance) = wgpu_scale_provenance_sentence(current_view.wgpu_scale, i18n) {
+        lines.push(provenance);
+    }
+    lines.join("\n")
 }
 
 fn cpu_filter_candidates(
@@ -234,8 +239,58 @@ fn compact_wgpu_scale_state_label(state: WgpuScaleState) -> Option<String> {
     match state {
         WgpuScaleState::Inactive | WgpuScaleState::Native => None,
         WgpuScaleState::Mixed => Some("Bilinear".to_owned()),
-        WgpuScaleState::Upscale(method) => Some(compact_wgpu_upscale_label(method)),
+        WgpuScaleState::Upscale {
+            method,
+            origin,
+            substituted_below,
+        } => Some(compact_wgpu_upscale_provenance_label(
+            method,
+            origin,
+            substituted_below,
+        )),
         WgpuScaleState::Downscale(method) => Some(method.label().to_owned()),
+    }
+}
+
+/// The compact upscale method name plus a provenance suffix. Substitution wins over the
+/// origin suffix because it is the more specific story (and implies the shown method is FSR).
+fn compact_wgpu_upscale_provenance_label(
+    method: WgpuUpscaleMethod,
+    origin: UpscaleDecisionOrigin,
+    substituted_below: Option<f32>,
+) -> String {
+    let base = compact_wgpu_upscale_label(method);
+    match substituted_below {
+        Some(threshold) => format!("{base}·<{threshold:.2}x"),
+        None => match origin {
+            UpscaleDecisionOrigin::User => base,
+            UpscaleDecisionOrigin::ProbeAuto => format!("{base}·probe"),
+            UpscaleDecisionOrigin::AutoDefault => format!("{base}·auto"),
+        },
+    }
+}
+
+/// One-sentence provenance note for the scaler button hover, or `None` for a plain
+/// user-picked upscale (and any non-upscale state).
+fn wgpu_scale_provenance_sentence(state: WgpuScaleState, i18n: I18n) -> Option<String> {
+    let WgpuScaleState::Upscale {
+        origin,
+        substituted_below,
+        ..
+    } = state
+    else {
+        return None;
+    };
+    if let Some(threshold) = substituted_below {
+        return Some(i18n.with_vars(
+            "top_bar.scaler.origin.substituted",
+            &[("threshold", format!("{threshold:.2}"))],
+        ));
+    }
+    match origin {
+        UpscaleDecisionOrigin::User => None,
+        UpscaleDecisionOrigin::ProbeAuto => Some(i18n.text("top_bar.scaler.origin.probe")),
+        UpscaleDecisionOrigin::AutoDefault => Some(i18n.text("top_bar.scaler.origin.auto")),
     }
 }
 
@@ -272,7 +327,9 @@ mod tests {
     use super::{
         cpu_filter_candidates, top_bar_scaler_summary, unique_candidates, wgpu_upscale_menu_current,
     };
-    use crate::app::viewer::{CurrentViewState, PrepareScaleState, WgpuScaleState};
+    use crate::app::viewer::{
+        CurrentViewState, PrepareScaleState, UpscaleDecisionOrigin, WgpuScaleState,
+    };
     use crate::core::i18n::{I18n, ResolvedLanguage};
     use crate::core::state::{
         AppSettings, CpuScaleFilter, RendererMode, WgpuDownscaleMethod, WgpuUpscaleMethod,
@@ -312,6 +369,55 @@ mod tests {
             top_bar_scaler_summary(Some(&state), i18n),
             "Hamming | Pyramid + Lanczos3"
         );
+    }
+
+    #[test]
+    fn scaler_summary_marks_upscale_provenance() {
+        let i18n = I18n::resolved(ResolvedLanguage::EnUs);
+
+        // User-picked method: no suffix.
+        let user = test_view_state(
+            PrepareScaleState::Native,
+            WgpuScaleState::Upscale {
+                method: WgpuUpscaleMethod::WgslAnime4kV32CnnX2M,
+                origin: UpscaleDecisionOrigin::User,
+                substituted_below: None,
+            },
+        );
+        assert_eq!(top_bar_scaler_summary(Some(&user), i18n), "Anime4K M");
+
+        // AUTO routed by the probe.
+        let probe = test_view_state(
+            PrepareScaleState::Native,
+            WgpuScaleState::Upscale {
+                method: WgpuUpscaleMethod::WgslAnime4kV32CnnX2M,
+                origin: UpscaleDecisionOrigin::ProbeAuto,
+                substituted_below: None,
+            },
+        );
+        assert_eq!(top_bar_scaler_summary(Some(&probe), i18n), "Anime4K M·probe");
+
+        // AUTO with no decision yet: the built-in default.
+        let auto = test_view_state(
+            PrepareScaleState::Native,
+            WgpuScaleState::Upscale {
+                method: WgpuUpscaleMethod::WgslFsr1EasuRcas,
+                origin: UpscaleDecisionOrigin::AutoDefault,
+                substituted_below: None,
+            },
+        );
+        assert_eq!(top_bar_scaler_summary(Some(&auto), i18n), "FSR·auto");
+
+        // Substitution wins over the origin suffix.
+        let substituted = test_view_state(
+            PrepareScaleState::Native,
+            WgpuScaleState::Upscale {
+                method: WgpuUpscaleMethod::WgslFsr1EasuRcas,
+                origin: UpscaleDecisionOrigin::ProbeAuto,
+                substituted_below: Some(1.10),
+            },
+        );
+        assert_eq!(top_bar_scaler_summary(Some(&substituted), i18n), "FSR·<1.10x");
     }
 
     #[test]

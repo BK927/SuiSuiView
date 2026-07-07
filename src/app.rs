@@ -101,7 +101,7 @@ use viewer::{
 pub(in crate::app) use viewer::{
     page_visual_size, texture_options_for_sampling, transition_screen_sign,
     worker_center_page_for_mode, CurrentViewState, PageMetrics, PageRenderInfo, PageVisual,
-    Transition, ViewMode, ViewTargetSettle,
+    Transition, UpscaleDecisionOrigin, ViewMode, ViewTargetSettle,
 };
 
 #[cfg(test)]

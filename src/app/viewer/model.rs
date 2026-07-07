@@ -210,12 +210,30 @@ impl PrepareScaleState {
     }
 }
 
+/// Why the shown upscale method was chosen, for the toolbar scaler provenance suffix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) enum UpscaleDecisionOrigin {
+    /// The user picked a concrete (non-AUTO) method.
+    User,
+    /// AUTO routed to a method the book's round-trip probe decided.
+    ProbeAuto,
+    /// AUTO with no probe decision yet: the built-in default is in effect.
+    AutoDefault,
+}
+
+// `substituted_below` holds an f32 threshold, so this state cannot derive `Eq`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::app) enum WgpuScaleState {
     Inactive,
     Native,
     Mixed,
-    Upscale(WgpuUpscaleMethod),
+    Upscale {
+        method: WgpuUpscaleMethod,
+        origin: UpscaleDecisionOrigin,
+        /// `Some(threshold)` when the fixed-2x model was swapped for FSR because the
+        /// needed scale fell below `threshold`; the shown method is then FSR.
+        substituted_below: Option<f32>,
+    },
     Downscale(WgpuDownscaleMethod),
 }
 
@@ -225,12 +243,17 @@ impl WgpuScaleState {
             Self::Inactive => "no WGPU scaling".to_owned(),
             Self::Native => "WGPU native-size draw".to_owned(),
             Self::Mixed => "WGPU mixed-axis resize (bilinear)".to_owned(),
-            Self::Upscale(method) => format!("WGPU upscale ({})", method.label()),
+            Self::Upscale { method, .. } => format!("WGPU upscale ({})", method.label()),
             Self::Downscale(method) => format!("WGPU downscale ({})", method.label()),
         }
     }
 
-    fn from_plan(active: bool, plan: WgpuScalePlan) -> Self {
+    fn from_plan(
+        active: bool,
+        plan: WgpuScalePlan,
+        origin: UpscaleDecisionOrigin,
+        fixed_2x_sr_min_scale: f32,
+    ) -> Self {
         if !active {
             return Self::Inactive;
         }
@@ -239,7 +262,13 @@ impl WgpuScaleState {
                 if plan.effective_upscale_method == WgpuUpscaleMethod::None {
                     Self::Native
                 } else {
-                    Self::Upscale(plan.effective_upscale_method)
+                    Self::Upscale {
+                        method: plan.effective_upscale_method,
+                        origin,
+                        substituted_below: plan
+                            .upscale_substituted
+                            .then_some(fixed_2x_sr_min_scale),
+                    }
                 }
             }
             WgpuScaleDirection::Downscale => Self::Downscale(plan.effective_downscale_method),
@@ -272,7 +301,8 @@ impl PageRenderInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Holds a `WgpuScaleState`, whose `substituted_below: Option<f32>` blocks `Eq`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::app) struct CurrentViewState {
     pub(in crate::app) page_index: usize,
     pub(in crate::app) decode_backend: DecodeBackend,
@@ -303,6 +333,7 @@ impl CurrentViewState {
         effects: ViewEffects,
         target_size: [u32; 2],
         wgpu_upscale_method: WgpuUpscaleMethod,
+        wgpu_upscale_origin: UpscaleDecisionOrigin,
         wgpu_downscale_method: WgpuDownscaleMethod,
         fixed_2x_sr_min_scale: f32,
         active: bool,
@@ -320,7 +351,12 @@ impl CurrentViewState {
             page_index: render.page_index,
             decode_backend: render.decode_backend,
             prepare_scale: render.prepare_scale,
-            wgpu_scale: WgpuScaleState::from_plan(active, scale_plan),
+            wgpu_scale: WgpuScaleState::from_plan(
+                active,
+                scale_plan,
+                wgpu_upscale_origin,
+                fixed_2x_sr_min_scale,
+            ),
             target_intent,
         }
     }
@@ -339,6 +375,7 @@ pub(in crate::app) enum PageVisual {
         size: Vec2,
         effects: ViewEffects,
         wgpu_upscale_method: WgpuUpscaleMethod,
+        wgpu_upscale_origin: UpscaleDecisionOrigin,
         wgpu_downscale_method: WgpuDownscaleMethod,
         render_info: PageRenderInfo,
     },

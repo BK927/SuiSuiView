@@ -18,6 +18,7 @@ fn wgpu_scale_plan_activates_only_the_matching_direction() {
             direction: WgpuScaleDirection::Upscale,
             effective_upscale_method: WgpuUpscaleMethod::WgslFsr1EasuRcas,
             effective_downscale_method: WgpuDownscaleMethod::Bilinear,
+            upscale_substituted: false,
         }
     );
     assert_eq!(
@@ -32,6 +33,7 @@ fn wgpu_scale_plan_activates_only_the_matching_direction() {
             direction: WgpuScaleDirection::Downscale,
             effective_upscale_method: WgpuUpscaleMethod::None,
             effective_downscale_method: WgpuDownscaleMethod::Hamming,
+            upscale_substituted: false,
         }
     );
     assert_eq!(
@@ -46,6 +48,7 @@ fn wgpu_scale_plan_activates_only_the_matching_direction() {
             direction: WgpuScaleDirection::Native,
             effective_upscale_method: WgpuUpscaleMethod::None,
             effective_downscale_method: WgpuDownscaleMethod::Bilinear,
+            upscale_substituted: false,
         }
     );
 }
@@ -64,6 +67,7 @@ fn wgpu_scale_plan_uses_bilinear_for_mixed_axis_resize() {
             direction: WgpuScaleDirection::Mixed,
             effective_upscale_method: WgpuUpscaleMethod::None,
             effective_downscale_method: WgpuDownscaleMethod::Bilinear,
+            upscale_substituted: false,
         }
     );
 }
@@ -475,6 +479,51 @@ fn fixed_2x_sr_falls_back_for_tiny_display_upscale() {
         ),
         Some(WgpuUpscaleMethod::WgslAnime4kV32CnnX2M)
     );
+}
+
+#[test]
+fn wgpu_scale_plan_reports_fixed_2x_substitution() {
+    // Below the 1.10 threshold: the fixed-2x model is swapped for FSR and the flag is set.
+    let substituted = WgpuScalePlan::resolve(
+        [1000, 1000],
+        [1090, 1090],
+        WgpuUpscaleMethod::WgslAnime4kV32CnnX2M,
+        WgpuDownscaleMethod::Hamming,
+        DEFAULT_MIN_SCALE,
+    );
+    assert_eq!(
+        substituted.effective_upscale_method,
+        WgpuUpscaleMethod::WgslFsr1EasuRcas
+    );
+    assert!(substituted.upscale_substituted);
+
+    // At/above the threshold: the model is kept and the flag stays false.
+    let kept = WgpuScalePlan::resolve(
+        [1000, 1000],
+        [1100, 1100],
+        WgpuUpscaleMethod::WgslAnime4kV32CnnX2M,
+        WgpuDownscaleMethod::Hamming,
+        DEFAULT_MIN_SCALE,
+    );
+    assert_eq!(
+        kept.effective_upscale_method,
+        WgpuUpscaleMethod::WgslAnime4kV32CnnX2M
+    );
+    assert!(!kept.upscale_substituted);
+
+    // A plain FSR upscale is FSR by choice, not by substitution: the flag stays false.
+    let native_fsr = WgpuScalePlan::resolve(
+        [1000, 1000],
+        [1090, 1090],
+        WgpuUpscaleMethod::WgslFsr1EasuRcas,
+        WgpuDownscaleMethod::Hamming,
+        DEFAULT_MIN_SCALE,
+    );
+    assert_eq!(
+        native_fsr.effective_upscale_method,
+        WgpuUpscaleMethod::WgslFsr1EasuRcas
+    );
+    assert!(!native_fsr.upscale_substituted);
 }
 
 #[test]

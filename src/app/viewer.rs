@@ -31,7 +31,8 @@ pub(in crate::app) use model::relative_difference;
 pub(in crate::app) use model::{
     double_spread_indices, ordered_spread_indices, page_visual_size,
     smart_spread_indices_for_metrics, worker_center_page_for_mode, CurrentViewState, PageMetrics,
-    PageRenderInfo, PageVisual, PrepareScaleState, Transition, ViewMode, WgpuScaleState,
+    PageRenderInfo, PageVisual, PrepareScaleState, Transition, UpscaleDecisionOrigin, ViewMode,
+    WgpuScaleState,
 };
 pub(in crate::app) use paint_helpers::texture_options_for_sampling;
 pub(in crate::app) use transition::{
@@ -197,7 +198,7 @@ impl SuiSuiViewApp {
             .cloned()
             .expect("best page key should exist in decoded cache");
         if use_wgsl_effects {
-            let wgpu_upscale_method =
+            let (wgpu_upscale_method, wgpu_upscale_origin) =
                 self.book_aware_wgpu_upscale_method(self.active_wgpu_upscale_method());
             #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
             perf::record_open_to_first_visible_if_pending(
@@ -221,6 +222,7 @@ impl SuiSuiViewApp {
                 ),
                 effects: self.effects,
                 wgpu_upscale_method,
+                wgpu_upscale_origin,
                 wgpu_downscale_method: self.settings.wgpu_downscale_method,
                 render_info: PageRenderInfo::from_page(index, best_key, &page),
             };
@@ -575,6 +577,7 @@ impl SuiSuiViewApp {
                     pixels,
                     effects,
                     wgpu_upscale_method,
+                    wgpu_upscale_origin,
                     wgpu_downscale_method,
                     render_info,
                     ..
@@ -599,6 +602,7 @@ impl SuiSuiViewApp {
                         effects,
                         target_size,
                         wgpu_upscale_method,
+                        wgpu_upscale_origin,
                         wgpu_downscale_method,
                         fixed_2x_sr_min_scale,
                         active_wgsl,

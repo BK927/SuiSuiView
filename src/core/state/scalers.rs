@@ -313,19 +313,21 @@ impl WgpuUpscaleMethod {
         }
     }
 
+    /// Resolves the effective upscale method for the given scale, reporting whether the
+    /// fixed-2x → FSR small-scale substitution fired. `Some((method, substituted))`.
     fn resolve_for_upscale_target(
         self,
         output_size: [usize; 2],
         target_size: [u32; 2],
         fixed_2x_sr_min_scale: f32,
-    ) -> Option<Self> {
+    ) -> Option<(Self, bool)> {
         let method = self.resolve_for_upscale()?;
         if method.is_fixed_2x_sr()
             && wgpu_target_min_scale(output_size, target_size) < fixed_2x_sr_min_scale
         {
-            Some(Self::WgslFsr1EasuRcas)
+            Some((Self::WgslFsr1EasuRcas, true))
         } else {
-            Some(method)
+            Some((method, false))
         }
     }
 }
@@ -346,6 +348,9 @@ pub struct WgpuScalePlan {
     pub direction: WgpuScaleDirection,
     pub effective_upscale_method: WgpuUpscaleMethod,
     pub effective_downscale_method: WgpuDownscaleMethod,
+    /// True only when the fixed-2x model was substituted with FSR because the needed
+    /// upscale fell below `fixed_2x_sr_min_scale`. False on every other path.
+    pub upscale_substituted: bool,
 }
 
 impl WgpuScalePlan {
@@ -357,12 +362,14 @@ impl WgpuScalePlan {
         fixed_2x_sr_min_scale: f32,
     ) -> Self {
         if target_is_larger(output_size, target_size) {
+            let (effective_upscale_method, upscale_substituted) = requested_upscale
+                .resolve_for_upscale_target(output_size, target_size, fixed_2x_sr_min_scale)
+                .unwrap_or((WgpuUpscaleMethod::None, false));
             return Self {
                 direction: WgpuScaleDirection::Upscale,
-                effective_upscale_method: requested_upscale
-                    .resolve_for_upscale_target(output_size, target_size, fixed_2x_sr_min_scale)
-                    .unwrap_or(WgpuUpscaleMethod::None),
+                effective_upscale_method,
                 effective_downscale_method: WgpuDownscaleMethod::Bilinear,
+                upscale_substituted,
             };
         }
         if target_is_smaller(output_size, target_size) {
@@ -374,6 +381,7 @@ impl WgpuScalePlan {
                     direction: WgpuScaleDirection::Native,
                     effective_upscale_method: WgpuUpscaleMethod::None,
                     effective_downscale_method: WgpuDownscaleMethod::Bilinear,
+                    upscale_substituted: false,
                 };
             }
             return Self {
@@ -381,6 +389,7 @@ impl WgpuScalePlan {
                 effective_upscale_method: WgpuUpscaleMethod::None,
                 effective_downscale_method: requested_downscale
                     .resolve_for_downscale(output_size, target_size),
+                upscale_substituted: false,
             };
         }
         if target_is_mixed(output_size, target_size) {
@@ -388,12 +397,14 @@ impl WgpuScalePlan {
                 direction: WgpuScaleDirection::Mixed,
                 effective_upscale_method: WgpuUpscaleMethod::None,
                 effective_downscale_method: WgpuDownscaleMethod::Bilinear,
+                upscale_substituted: false,
             };
         }
         Self {
             direction: WgpuScaleDirection::Native,
             effective_upscale_method: WgpuUpscaleMethod::None,
             effective_downscale_method: WgpuDownscaleMethod::Bilinear,
+            upscale_substituted: false,
         }
     }
 }

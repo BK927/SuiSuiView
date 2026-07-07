@@ -1,4 +1,4 @@
-use super::{PageCacheKey, SuiSuiViewApp};
+use super::{PageCacheKey, SuiSuiViewApp, UpscaleDecisionOrigin};
 use crate::core::source::PageId;
 use crate::core::state::{UpscaleProbeRecord, WgpuUpscaleMethod, UPSCALE_PROBE_VERSION};
 use crate::core::upscale_bench::gpu::GpuUpscaleBench;
@@ -311,11 +311,14 @@ fn method_for_probe_token(token: &str) -> Option<WgpuUpscaleMethod> {
 fn route_book_upscale(
     fallback: WgpuUpscaleMethod,
     decision: Option<WgpuUpscaleMethod>,
-) -> WgpuUpscaleMethod {
+) -> (WgpuUpscaleMethod, UpscaleDecisionOrigin) {
     if fallback != WgpuUpscaleMethod::Auto {
-        return fallback;
+        return (fallback, UpscaleDecisionOrigin::User);
     }
-    decision.unwrap_or(fallback)
+    match decision {
+        Some(method) => (method, UpscaleDecisionOrigin::ProbeAuto),
+        None => (WgpuUpscaleMethod::Auto, UpscaleDecisionOrigin::AutoDefault),
+    }
 }
 
 impl SuiSuiViewApp {
@@ -467,7 +470,7 @@ impl SuiSuiViewApp {
     pub(in crate::app) fn book_aware_wgpu_upscale_method(
         &self,
         fallback: WgpuUpscaleMethod,
-    ) -> WgpuUpscaleMethod {
+    ) -> (WgpuUpscaleMethod, UpscaleDecisionOrigin) {
         route_book_upscale(fallback, self.book_upscale_decision)
     }
 }
@@ -563,10 +566,13 @@ mod tests {
 
     #[test]
     fn routing_passes_through_non_auto_fallbacks() {
-        assert_eq!(route_book_upscale(FSR, Some(ANIME4K)), FSR);
+        assert_eq!(
+            route_book_upscale(FSR, Some(ANIME4K)),
+            (FSR, UpscaleDecisionOrigin::User)
+        );
         assert_eq!(
             route_book_upscale(WgpuUpscaleMethod::None, Some(ANIME4K)),
-            WgpuUpscaleMethod::None
+            (WgpuUpscaleMethod::None, UpscaleDecisionOrigin::User)
         );
     }
 
@@ -574,11 +580,11 @@ mod tests {
     fn routing_uses_decision_only_for_auto() {
         assert_eq!(
             route_book_upscale(WgpuUpscaleMethod::Auto, Some(ANIME4K)),
-            ANIME4K
+            (ANIME4K, UpscaleDecisionOrigin::ProbeAuto)
         );
         assert_eq!(
             route_book_upscale(WgpuUpscaleMethod::Auto, None),
-            WgpuUpscaleMethod::Auto
+            (WgpuUpscaleMethod::Auto, UpscaleDecisionOrigin::AutoDefault)
         );
     }
 }

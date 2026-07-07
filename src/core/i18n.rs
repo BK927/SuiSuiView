@@ -447,6 +447,12 @@ const CATALOG_KO_KR: &[(&str, &str)] = &[
     ("topbar.scale.current_prepare", "현재 준비"),
     ("topbar.scale.current_display", "현재 표시"),
     ("topbar.scale.current_unknown", "아직 표시 중인 이미지 스케일 상태를 알 수 없습니다."),
+    ("top_bar.scaler.origin.probe", "AUTO: 이 책의 라운드트립 측정으로 선택됨"),
+    ("top_bar.scaler.origin.auto", "AUTO 기본값"),
+    (
+        "top_bar.scaler.origin.substituted",
+        "2× 전용 모델이 최소 배율 {threshold} 미만이라 FSR로 대체됨",
+    ),
     ("topbar.correction", "보정"),
     ("topbar.transition", "페이지 전환"),
     ("topbar.filter", "필터"),
@@ -1030,6 +1036,15 @@ const CATALOG_EN_US: &[(&str, &str)] = &[
     ("topbar.scale.current_prepare", "Current prepare"),
     ("topbar.scale.current_display", "Current display"),
     ("topbar.scale.current_unknown", "The current image scale state is not available yet."),
+    (
+        "top_bar.scaler.origin.probe",
+        "AUTO: chosen by this book's round-trip probe",
+    ),
+    ("top_bar.scaler.origin.auto", "AUTO default"),
+    (
+        "top_bar.scaler.origin.substituted",
+        "Fixed-2x model substituted with FSR below the {threshold} minimum scale",
+    ),
     ("topbar.correction", "Adjust"),
     ("topbar.transition", "Page transition"),
     ("topbar.filter", "Filter"),
