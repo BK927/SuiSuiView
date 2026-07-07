@@ -6,6 +6,8 @@ use crate::core::i18n::I18n;
 use crate::core::state::{
     default_key_bindings, default_mouse_bindings, AppSettings, CommandId, KeyBinding, KeyCode,
     KeyShortcut, LargeImageAnchor, MouseBinding, MouseGesture, WheelMode,
+    STRIP_DRAG_SCROLL_PCT_MAX, STRIP_DRAG_SCROLL_PCT_MIN, STRIP_WHEEL_SCROLL_PCT_MAX,
+    STRIP_WHEEL_SCROLL_PCT_MIN,
 };
 use egui::{self, RichText};
 
@@ -511,6 +513,36 @@ pub(in crate::app) fn show_mouse_settings(
                                     .changed();
                             }
                         });
+                    ui.end_row();
+
+                    grid_label_with_help(
+                        ui,
+                        &i18n.text("settings.mouse.strip_wheel"),
+                        &i18n.text("settings.mouse.strip_wheel.help"),
+                    );
+                    *changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut draft.strip_wheel_scroll_pct)
+                                .range(STRIP_WHEEL_SCROLL_PCT_MIN..=STRIP_WHEEL_SCROLL_PCT_MAX)
+                                .speed(10)
+                                .suffix("%"),
+                        )
+                        .changed();
+                    ui.end_row();
+
+                    grid_label_with_help(
+                        ui,
+                        &i18n.text("settings.mouse.strip_drag"),
+                        &i18n.text("settings.mouse.strip_drag.help"),
+                    );
+                    *changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut draft.strip_drag_scroll_pct)
+                                .range(STRIP_DRAG_SCROLL_PCT_MIN..=STRIP_DRAG_SCROLL_PCT_MAX)
+                                .speed(5)
+                                .suffix("%"),
+                        )
+                        .changed();
                     ui.end_row();
                 });
         },

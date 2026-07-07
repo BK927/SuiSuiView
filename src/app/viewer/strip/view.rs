@@ -19,7 +19,10 @@ use std::time::Instant;
 /// A trackpad pinch factor closer to 1.0 than this counts as no zoom input.
 const STRIP_ZOOM_DELTA_EPSILON: f32 = 1e-4;
 /// Viewport size assumed before the first real viewer layout has been measured.
-const STRIP_FALLBACK_VIEWPORT: Vec2 = Vec2 { x: 1000.0, y: 800.0 };
+const STRIP_FALLBACK_VIEWPORT: Vec2 = Vec2 {
+    x: 1000.0,
+    y: 800.0,
+};
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn paint_strip(
@@ -103,7 +106,11 @@ impl SuiSuiViewApp {
         }
     }
 
-    pub(in crate::app) fn handle_strip_pointer(&mut self, ui: &egui::Ui, response: &egui::Response) {
+    pub(in crate::app) fn handle_strip_pointer(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+    ) {
         if response.double_clicked() {
             if let Some(command) =
                 command_for_mouse_gesture(MouseGesture::DoubleClick, &self.settings)
@@ -123,7 +130,7 @@ impl SuiSuiViewApp {
         }
         if response.dragged() {
             let delta_y = ui.input(|input| input.pointer.delta().y);
-            self.strip_scroll_by(-delta_y);
+            self.strip_scroll_by(-delta_y * self.settings.strip_drag_scroll_multiplier());
         }
         if !response.hovered() {
             return;
@@ -140,7 +147,9 @@ impl SuiSuiViewApp {
             self.notify_strip_zoom_unsupported();
         } else if scroll_y != 0.0 {
             // Continuous scroll: no 30px page-turn threshold, no notch accumulator.
-            self.strip_scroll_by(-scroll_y);
+            // A raw wheel notch is only ~40 points, so the sensitivity multiplier
+            // is what makes strip reading tolerable.
+            self.strip_scroll_by(-scroll_y * self.settings.strip_wheel_scroll_multiplier());
         }
     }
 
@@ -163,8 +172,9 @@ impl SuiSuiViewApp {
         let fallback =
             self.strip_fallback_height(source.as_ref(), page_count, viewport.x, viewport.y);
         let (new_index, new_offset, edge) = {
-            let height_of =
-                |index: usize| self.strip_display_height(source.as_ref(), index, viewport.x, fallback);
+            let height_of = |index: usize| {
+                self.strip_display_height(source.as_ref(), index, viewport.x, fallback)
+            };
             scroll_by(
                 anchor_index,
                 offset_frac,

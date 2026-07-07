@@ -192,6 +192,14 @@ pub const FIXED_2X_SR_MIN_SCALE_PCT_MAX: u32 = 200;
 pub const PIXEL_GRID_MIN_ZOOM_PCT_MIN: u32 = 200;
 pub const PIXEL_GRID_MIN_ZOOM_PCT_MAX: u32 = 6400;
 
+/// Vertical-strip scroll sensitivity, percent of the raw input delta. A wheel
+/// notch is ~40 egui points, far too little for webtoon strips, hence the
+/// boosted default; drag stays closer to direct manipulation.
+pub const STRIP_WHEEL_SCROLL_PCT_MIN: u32 = 100;
+pub const STRIP_WHEEL_SCROLL_PCT_MAX: u32 = 1200;
+pub const STRIP_DRAG_SCROLL_PCT_MIN: u32 = 100;
+pub const STRIP_DRAG_SCROLL_PCT_MAX: u32 = 400;
+
 /// Fixed total-memory budgets (bytes) for the preset modes. These caps dominate every cache
 /// pool; the current-page working set is always exempt so display never breaks.
 pub const SAVER_TOTAL_BUDGET_BYTES: usize = 128 * 1024 * 1024;
@@ -391,6 +399,10 @@ pub struct AppSettings {
     pub middle_click_fullscreen: bool,
     #[serde(default)]
     pub wheel_mode: WheelMode,
+    #[serde(default = "default_strip_wheel_scroll_pct")]
+    pub strip_wheel_scroll_pct: u32,
+    #[serde(default = "default_strip_drag_scroll_pct")]
+    pub strip_drag_scroll_pct: u32,
 
     #[serde(default = "default_true")]
     pub apply_exif_orientation: bool,
@@ -428,7 +440,26 @@ impl AppSettings {
             .pixel_grid_min_zoom_pct
             .clamp(PIXEL_GRID_MIN_ZOOM_PCT_MIN, PIXEL_GRID_MIN_ZOOM_PCT_MAX);
 
+        self.strip_wheel_scroll_pct = self
+            .strip_wheel_scroll_pct
+            .clamp(STRIP_WHEEL_SCROLL_PCT_MIN, STRIP_WHEEL_SCROLL_PCT_MAX);
+        self.strip_drag_scroll_pct = self
+            .strip_drag_scroll_pct
+            .clamp(STRIP_DRAG_SCROLL_PCT_MIN, STRIP_DRAG_SCROLL_PCT_MAX);
+
         adopt_default_bindings_for_new_commands(&mut self.key_bindings, &mut self.seen_commands);
+    }
+
+    pub fn strip_wheel_scroll_multiplier(&self) -> f32 {
+        self.strip_wheel_scroll_pct
+            .clamp(STRIP_WHEEL_SCROLL_PCT_MIN, STRIP_WHEEL_SCROLL_PCT_MAX) as f32
+            / 100.0
+    }
+
+    pub fn strip_drag_scroll_multiplier(&self) -> f32 {
+        self.strip_drag_scroll_pct
+            .clamp(STRIP_DRAG_SCROLL_PCT_MIN, STRIP_DRAG_SCROLL_PCT_MAX) as f32
+            / 100.0
     }
 
     pub fn fixed_2x_sr_min_scale(&self) -> f32 {
@@ -508,6 +539,8 @@ impl Default for AppSettings {
             double_click_maximize: true,
             middle_click_fullscreen: true,
             wheel_mode: WheelMode::PageTurn,
+            strip_wheel_scroll_pct: default_strip_wheel_scroll_pct(),
+            strip_drag_scroll_pct: default_strip_drag_scroll_pct(),
             apply_exif_orientation: true,
             apply_embedded_icc: false,
             auto_save_reading_position: true,
@@ -822,6 +855,14 @@ fn default_fixed_2x_sr_min_scale_pct() -> u32 {
 
 fn default_pixel_grid_min_zoom_pct() -> u32 {
     800
+}
+
+fn default_strip_wheel_scroll_pct() -> u32 {
+    400
+}
+
+fn default_strip_drag_scroll_pct() -> u32 {
+    150
 }
 
 fn default_cpu_upscale_filter() -> CpuScaleFilter {

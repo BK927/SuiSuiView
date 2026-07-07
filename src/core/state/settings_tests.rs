@@ -211,6 +211,33 @@ fn settings_normalization_clamps_fixed_2x_sr_min_scale_pct() {
 }
 
 #[test]
+fn settings_normalization_clamps_strip_scroll_sensitivities() {
+    let mut settings = AppSettings {
+        strip_wheel_scroll_pct: 50,
+        strip_drag_scroll_pct: 9999,
+        ..AppSettings::default()
+    };
+    settings.normalize_product_choices();
+    assert_eq!(settings.strip_wheel_scroll_pct, 100);
+    assert_eq!(settings.strip_drag_scroll_pct, 400);
+
+    settings.strip_wheel_scroll_pct = 99999;
+    settings.normalize_product_choices();
+    assert_eq!(settings.strip_wheel_scroll_pct, 1200);
+}
+
+#[test]
+fn old_settings_without_strip_scroll_sensitivities_load_defaults() {
+    let state: PersistedState =
+        serde_json::from_str(r#"{"version":4,"settings":{},"books":{}}"#).unwrap();
+
+    assert_eq!(state.settings.strip_wheel_scroll_pct, 400);
+    assert_eq!(state.settings.strip_drag_scroll_pct, 150);
+    assert_eq!(state.settings.strip_wheel_scroll_multiplier(), 4.0);
+    assert_eq!(state.settings.strip_drag_scroll_multiplier(), 1.5);
+}
+
+#[test]
 fn settings_normalization_clamps_pixel_grid_min_zoom_pct() {
     let mut settings = AppSettings {
         pixel_grid_min_zoom_pct: 100,
