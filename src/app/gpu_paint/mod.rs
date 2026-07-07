@@ -120,12 +120,13 @@ impl SuiSuiViewApp {
         wgpu_upscale_method_from_settings(self.settings.wgpu_upscale_method, span_manifest_present)
     }
 
+    /// WGSL painting is governed by `gpu_effect_mode` (`CpuOnly` is the explicit
+    /// opt-out) plus a usable `gpu_target_format`. The display downscaler is now a
+    /// fixed pyramid Lanczos3 (`WGPU_DOWNSCALE_METHOD`), so the WGSL path is always
+    /// the right target when GPU effects are available — no per-effect/upscale
+    /// gating is needed here; `WgpuScalePlan` handles the native-passthrough case.
     pub(super) fn can_paint_wgsl_effects(&self) -> bool {
-        let wgpu_upscale_method = self.active_wgpu_upscale_method();
         self.gpu_effects_available
-            && (self.effects != ViewEffects::default()
-                || wgpu_upscale_method != WgpuUpscaleMethod::None
-                || self.settings.wgpu_downscale_method != WgpuDownscaleMethod::Bilinear)
             && matches!(
                 self.settings.gpu_effect_mode,
                 GpuEffectMode::Auto | GpuEffectMode::Wgsl

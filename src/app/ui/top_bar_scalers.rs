@@ -4,9 +4,7 @@ use super::super::viewer::{
 use super::super::SuiSuiViewApp;
 use super::{icons, theme};
 use crate::core::i18n::I18n;
-use crate::core::state::{
-    AppSettings, CpuScaleFilter, RendererMode, WgpuDownscaleMethod, WgpuUpscaleMethod,
-};
+use crate::core::state::{AppSettings, CpuScaleFilter, RendererMode, WgpuUpscaleMethod};
 use egui::{self, RichText};
 
 impl SuiSuiViewApp {
@@ -44,7 +42,6 @@ impl SuiSuiViewApp {
             }
             ui.add_enabled_ui(gpu_enabled, |ui| {
                 self.show_wgpu_upscale_row(ctx, ui, i18n);
-                self.show_wgpu_downscale_row(ctx, ui, i18n);
             })
             .response
             .on_disabled_hover_text(i18n.text("topbar.scale.wgpu_disabled"));
@@ -94,29 +91,6 @@ impl SuiSuiViewApp {
                 {
                     let mut settings = self.settings.clone();
                     settings.wgpu_upscale_method = candidate;
-                    self.apply_settings(ctx, settings);
-                }
-            }
-        });
-    }
-
-    fn show_wgpu_downscale_row(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, i18n: I18n) {
-        let current = self.settings.wgpu_downscale_method;
-        ui.label(format!(
-            "{}: {}",
-            i18n.text("topbar.scale.wgpu_down"),
-            current.label()
-        ));
-        let candidates =
-            wgpu_downscale_candidates(&self.settings.top_bar_wgpu_downscale_methods, current);
-        ui.horizontal_wrapped(|ui| {
-            for candidate in candidates {
-                if ui
-                    .selectable_label(current == candidate, candidate.label())
-                    .clicked()
-                {
-                    let mut settings = self.settings.clone();
-                    settings.wgpu_downscale_method = candidate;
                     self.apply_settings(ctx, settings);
                 }
             }
@@ -185,19 +159,6 @@ fn wgpu_upscale_candidates(
             *method != WgpuUpscaleMethod::None
                 && WgpuUpscaleMethod::SETTINGS_CHOICES.contains(method)
         }),
-        current,
-    )
-}
-
-fn wgpu_downscale_candidates(
-    configured: &[WgpuDownscaleMethod],
-    current: WgpuDownscaleMethod,
-) -> Vec<WgpuDownscaleMethod> {
-    unique_candidates(
-        configured
-            .iter()
-            .copied()
-            .filter(|method| WgpuDownscaleMethod::SELECTABLE.contains(method)),
         current,
     )
 }

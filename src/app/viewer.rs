@@ -7,7 +7,7 @@ use super::{
 use crate::core::effects::{
     apply_effects_to_image, compose_images_horizontally, transformed_page_size, ViewEffects,
 };
-use crate::core::state::PageTransitionStyle;
+use crate::core::state::{PageTransitionStyle, WGPU_DOWNSCALE_METHOD};
 use crate::core::worker::MAX_TARGET_LONG_EDGE;
 use egui::{
     self, Align2, Color32, ColorImage, FontId, ImageData, Pos2, Rect, Sense, Stroke, StrokeKind,
@@ -223,7 +223,7 @@ impl SuiSuiViewApp {
                 effects: self.effects,
                 wgpu_upscale_method,
                 wgpu_upscale_origin,
-                wgpu_downscale_method: self.settings.wgpu_downscale_method,
+                wgpu_downscale_method: WGPU_DOWNSCALE_METHOD,
                 render_info: PageRenderInfo::from_page(index, best_key, &page),
             };
         }

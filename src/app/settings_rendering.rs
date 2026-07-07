@@ -4,8 +4,7 @@ use super::settings_performance;
 use super::ui::theme;
 use crate::core::i18n::I18n;
 use crate::core::state::{
-    AppSettings, CpuScaleFilter, PageTransitionStyle, RendererMode, WgpuDownscaleMethod,
-    WgpuUpscaleMethod,
+    AppSettings, CpuScaleFilter, PageTransitionStyle, RendererMode, WgpuUpscaleMethod,
 };
 use egui::{self, RichText};
 
@@ -194,30 +193,6 @@ pub(in crate::app) fn show_rendering_settings(
                         draft.wgpu_upscale_method = selected_upscaler;
                         *changed = true;
                     }
-                    ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.rendering.wgpu_downscale_method"),
-                        &i18n.text("settings.rendering.wgpu_downscale_method.help"),
-                    );
-                    ui.add_enabled_ui(gpu_enabled, |ui| {
-                        egui::ComboBox::from_id_salt("wgpu_downscale_method")
-                            .selected_text(draft.wgpu_downscale_method.label())
-                            .show_ui(ui, |ui| {
-                                for downscaler in WgpuDownscaleMethod::SELECTABLE {
-                                    *changed |= ui
-                                        .selectable_value(
-                                            &mut draft.wgpu_downscale_method,
-                                            downscaler,
-                                            downscaler.label(),
-                                        )
-                                        .changed();
-                                }
-                            });
-                    })
-                    .response
-                    .on_hover_text(i18n.text("settings.rendering.wgpu_downscale_method.help"));
                     ui.end_row();
 
                     grid_label_with_help(

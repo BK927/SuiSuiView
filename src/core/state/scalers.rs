@@ -129,6 +129,11 @@ pub enum WgpuDownscaleMethod {
     PyramidLanczos3,
 }
 
+/// The single display-downscaler used everywhere. Measurement showed the
+/// quality-first pyramid Lanczos3 is the right default for all content (per-frame
+/// cost differences are ~1ms), so the option is no longer user-configurable.
+pub const WGPU_DOWNSCALE_METHOD: WgpuDownscaleMethod = WgpuDownscaleMethod::PyramidLanczos3;
+
 impl WgpuDownscaleMethod {
     pub const ALL: [Self; 14] = [
         Self::Nearest,

@@ -384,7 +384,6 @@ impl SuiSuiViewApp {
         let previous_cache_budget = self.cpu_cache_budget_bytes();
         let previous_gpu_effect_mode = self.settings.gpu_effect_mode;
         let previous_wgpu_upscale_method = self.settings.wgpu_upscale_method;
-        let previous_wgpu_downscale_method = self.settings.wgpu_downscale_method;
         let previous_renderer_mode = self.settings.renderer_mode;
         let mut textures_invalidated = false;
 
@@ -432,7 +431,6 @@ impl SuiSuiViewApp {
         }
         if previous_gpu_effect_mode != self.settings.gpu_effect_mode
             || previous_wgpu_upscale_method != self.settings.wgpu_upscale_method
-            || previous_wgpu_downscale_method != self.settings.wgpu_downscale_method
         {
             self.textures.clear();
             textures_invalidated = true;

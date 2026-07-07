@@ -2,8 +2,7 @@ use super::settings::{checkbox_with_help, setting_group};
 use super::SuiSuiViewApp;
 use crate::core::i18n::I18n;
 use crate::core::state::{
-    AppSettings, CpuScaleFilter, TopBarItems, WgpuDownscaleMethod, WgpuUpscaleMethod,
-    DEFAULT_TOP_BAR_CPU_SCALE_FILTERS, DEFAULT_TOP_BAR_WGPU_DOWNSCALE_METHODS,
+    AppSettings, CpuScaleFilter, TopBarItems, WgpuUpscaleMethod, DEFAULT_TOP_BAR_CPU_SCALE_FILTERS,
     DEFAULT_TOP_BAR_WGPU_UPSCALE_METHODS,
 };
 
@@ -124,17 +123,6 @@ pub(in crate::app) fn show_view_settings(
                     .filter(|method| *method != WgpuUpscaleMethod::None),
                 &DEFAULT_TOP_BAR_WGPU_UPSCALE_METHODS,
                 |method| method.settings_label_i18n(i18n),
-                changed,
-                i18n,
-            );
-            ui.separator();
-            show_quick_scaler_candidates(
-                ui,
-                &i18n.text("settings.view.top_bar_scalers.wgpu_down"),
-                &mut draft.top_bar_wgpu_downscale_methods,
-                WgpuDownscaleMethod::SELECTABLE,
-                &DEFAULT_TOP_BAR_WGPU_DOWNSCALE_METHODS,
-                |method| method.label().to_owned(),
                 changed,
                 i18n,
             );

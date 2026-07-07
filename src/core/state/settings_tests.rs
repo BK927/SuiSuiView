@@ -1,9 +1,8 @@
 use super::{
-    default_top_bar_cpu_scale_filters, default_top_bar_wgpu_downscale_methods,
-    default_top_bar_wgpu_upscale_methods, AppSettings, CacheMemoryMode, CpuScaleFilter, DecodeMode,
-    DecoderPreferences, EdgePageAction, GpuEffectMode, PageTransitionStyle, PersistedState,
-    RendererMode, TopBarItems, WgpuDownscaleMethod, WgpuUpscaleMethod, WheelMode, WindowPlacement,
-    DEFAULT_MANUAL_CACHE_MB,
+    default_top_bar_cpu_scale_filters, default_top_bar_wgpu_upscale_methods, AppSettings,
+    CacheMemoryMode, CpuScaleFilter, DecodeMode, DecoderPreferences, EdgePageAction, GpuEffectMode,
+    PageTransitionStyle, PersistedState, RendererMode, TopBarItems, WgpuUpscaleMethod, WheelMode,
+    WindowPlacement, DEFAULT_MANUAL_CACHE_MB,
 };
 use crate::core::i18n::Language;
 
@@ -74,10 +73,6 @@ fn settings_defaults_match_viewer_policy() {
         settings.top_bar_wgpu_upscale_methods,
         default_top_bar_wgpu_upscale_methods()
     );
-    assert_eq!(
-        settings.top_bar_wgpu_downscale_methods,
-        default_top_bar_wgpu_downscale_methods()
-    );
     assert_eq!(settings.image_edge_page_action, EdgePageAction::Wrap);
     assert_eq!(settings.archive_edge_page_action, EdgePageAction::Ask);
     assert_eq!(settings.edge_page_action, EdgePageAction::Stop);
@@ -89,10 +84,6 @@ fn settings_defaults_match_viewer_policy() {
     assert_eq!(settings.gpu_effect_mode, GpuEffectMode::Auto);
     assert_eq!(settings.renderer_mode, RendererMode::LowMemoryGlow);
     assert_eq!(settings.wgpu_upscale_method, WgpuUpscaleMethod::None);
-    assert_eq!(
-        settings.wgpu_downscale_method,
-        WgpuDownscaleMethod::PyramidLanczos3
-    );
     assert!(settings.prefetch_enabled);
     assert!(!settings.progressive_preview_enabled);
     assert!(!settings.transition_effect);
@@ -165,10 +156,6 @@ fn top_bar_scaler_candidates_default_for_old_settings() {
         state.settings.top_bar_wgpu_upscale_methods,
         default_top_bar_wgpu_upscale_methods()
     );
-    assert_eq!(
-        state.settings.top_bar_wgpu_downscale_methods,
-        default_top_bar_wgpu_downscale_methods()
-    );
 }
 
 #[test]
@@ -178,10 +165,6 @@ fn top_bar_scaler_candidates_round_trip() {
         top_bar_wgpu_upscale_methods: vec![
             WgpuUpscaleMethod::Auto,
             WgpuUpscaleMethod::WgslAnime4kV32CnnX2M,
-        ],
-        top_bar_wgpu_downscale_methods: vec![
-            WgpuDownscaleMethod::Bilinear,
-            WgpuDownscaleMethod::PyramidLanczos3,
         ],
         ..AppSettings::default()
     };
@@ -196,10 +179,6 @@ fn top_bar_scaler_candidates_round_trip() {
     assert_eq!(
         round_trip.top_bar_wgpu_upscale_methods,
         settings.top_bar_wgpu_upscale_methods
-    );
-    assert_eq!(
-        round_trip.top_bar_wgpu_downscale_methods,
-        settings.top_bar_wgpu_downscale_methods
     );
 }
 
@@ -282,138 +261,18 @@ fn old_settings_without_language_load_auto_default() {
 }
 
 #[test]
-fn persisted_wgpu_downscale_method_values_still_load() {
-    let hamming: PersistedState = serde_json::from_str(
-        r#"{"version":1,"settings":{"wgpu_downscale_method":"Hamming"},"books":{}}"#,
+fn retired_wgpu_downscale_json_keys_are_ignored() {
+    // The WGPU downscaler is no longer user-configurable (fixed to PyramidLanczos3),
+    // so `wgpu_downscale_method` and `top_bar_wgpu_downscale_methods` were removed
+    // from AppSettings. Old state.json files still carry them; AppSettings has no
+    // `deny_unknown_fields`, so they must be ignored on load rather than erroring.
+    let state: PersistedState = serde_json::from_str(
+        r#"{"version":4,"settings":{"wgpu_downscale_method":"Hamming","top_bar_wgpu_downscale_methods":["Bilinear","PyramidLanczos3"]},"books":{}}"#,
     )
     .unwrap();
-    let lanczos3: PersistedState = serde_json::from_str(
-        r#"{"version":1,"settings":{"wgpu_downscale_method":"Lanczos3"},"books":{}}"#,
-    )
-    .unwrap();
 
-    assert_eq!(
-        hamming.settings.wgpu_downscale_method,
-        WgpuDownscaleMethod::Hamming
-    );
-    assert_eq!(
-        lanczos3.settings.wgpu_downscale_method,
-        WgpuDownscaleMethod::Lanczos3
-    );
-}
-
-fn serde_variant_name(method: WgpuDownscaleMethod) -> String {
-    match serde_json::to_value(method).unwrap() {
-        serde_json::Value::String(name) => name,
-        other => panic!("unexpected serialization for {method:?}: {other:?}"),
-    }
-}
-
-fn settings_with_wgpu_downscale_method(variant: &str) -> AppSettings {
-    let json = format!(
-        r#"{{"version":1,"settings":{{"wgpu_downscale_method":"{variant}"}},"books":{{}}}}"#
-    );
-    serde_json::from_str::<PersistedState>(&json)
-        .unwrap()
-        .settings
-}
-
-#[test]
-fn removed_wgpu_downscale_methods_normalize_to_fallbacks() {
-    // token deserializes fine (variant kept), then normalize folds onto SELECTABLE.
-    let cases = [
-        (WgpuDownscaleMethod::Nearest, WgpuDownscaleMethod::Bilinear),
-        (WgpuDownscaleMethod::Box, WgpuDownscaleMethod::Hamming),
-        (
-            WgpuDownscaleMethod::Mitchell,
-            WgpuDownscaleMethod::CatmullRom,
-        ),
-        (WgpuDownscaleMethod::Lanczos2, WgpuDownscaleMethod::Lanczos3),
-        (
-            WgpuDownscaleMethod::HardwareMipmapLinear,
-            WgpuDownscaleMethod::Bilinear,
-        ),
-        (
-            WgpuDownscaleMethod::PyramidBoxTent,
-            WgpuDownscaleMethod::PyramidHamming,
-        ),
-        (
-            WgpuDownscaleMethod::PyramidMitchell,
-            WgpuDownscaleMethod::PyramidLanczos3,
-        ),
-        (
-            WgpuDownscaleMethod::PyramidLanczos2,
-            WgpuDownscaleMethod::PyramidLanczos3,
-        ),
-    ];
-
-    for (removed, expected) in cases {
-        let mut settings = settings_with_wgpu_downscale_method(&serde_variant_name(removed));
-        assert_eq!(settings.wgpu_downscale_method, removed);
-        settings.normalize_product_choices();
-        assert_eq!(
-            settings.wgpu_downscale_method, expected,
-            "{removed:?} should fold to {expected:?}"
-        );
-    }
-}
-
-#[test]
-fn selectable_wgpu_downscale_methods_survive_normalize_and_round_trip() {
-    for kept in WgpuDownscaleMethod::SELECTABLE {
-        let mut settings = AppSettings {
-            wgpu_downscale_method: kept,
-            ..AppSettings::default()
-        };
-        settings.normalize_product_choices();
-        assert_eq!(settings.wgpu_downscale_method, kept);
-
-        let json = serde_json::to_string(&settings).unwrap();
-        let restored: AppSettings = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.wgpu_downscale_method, kept);
-    }
-}
-
-#[test]
-fn normalize_dedups_top_bar_wgpu_downscale_methods_in_order() {
-    let mut settings = AppSettings {
-        top_bar_wgpu_downscale_methods: vec![
-            WgpuDownscaleMethod::HardwareMipmapLinear,
-            WgpuDownscaleMethod::PyramidMitchell,
-            WgpuDownscaleMethod::Bilinear,
-        ],
-        ..AppSettings::default()
-    };
-    settings.normalize_product_choices();
-
-    assert_eq!(
-        settings.top_bar_wgpu_downscale_methods,
-        vec![
-            WgpuDownscaleMethod::Bilinear,
-            WgpuDownscaleMethod::PyramidLanczos3,
-        ]
-    );
-}
-
-#[test]
-fn default_top_bar_wgpu_downscale_methods_are_all_selectable() {
-    for method in default_top_bar_wgpu_downscale_methods() {
-        assert!(
-            WgpuDownscaleMethod::SELECTABLE.contains(&method),
-            "{method:?} in defaults is not SELECTABLE"
-        );
-    }
-}
-
-#[test]
-fn normalized_wgpu_downscale_method_reserializes_to_kept_token() {
-    let mut settings = settings_with_wgpu_downscale_method(&serde_variant_name(
-        WgpuDownscaleMethod::PyramidMitchell,
-    ));
-    settings.normalize_product_choices();
-
-    let value = serde_json::to_value(&settings).unwrap();
-    assert_eq!(value["wgpu_downscale_method"], "PyramidLanczos3");
+    // Only unknown keys were supplied, so every field falls back to its default.
+    assert_eq!(state.settings, AppSettings::default());
 }
 
 #[test]
@@ -435,7 +294,6 @@ fn app_settings_save_new_scaler_keys() {
         cpu_upscale_filter: CpuScaleFilter::Lanczos3,
         cpu_downscale_filter: CpuScaleFilter::Hamming,
         wgpu_upscale_method: WgpuUpscaleMethod::WgslFsr1EasuRcas,
-        wgpu_downscale_method: WgpuDownscaleMethod::PyramidLanczos3,
         ..AppSettings::default()
     })
     .unwrap();
@@ -445,7 +303,8 @@ fn app_settings_save_new_scaler_keys() {
     assert_eq!(object["cpu_upscale_filter"], "Lanczos3");
     assert_eq!(object["cpu_downscale_filter"], "Hamming");
     assert_eq!(object["wgpu_upscale_method"], "WgslFsr1EasuRcas");
-    assert_eq!(object["wgpu_downscale_method"], "PyramidLanczos3");
+    // The WGPU downscaler is fixed and no longer serialized.
+    assert!(!object.contains_key("wgpu_downscale_method"));
     assert!(!object.contains_key("resize_filter"));
     assert!(!object.contains_key("display_upscaler"));
     assert!(!object.contains_key("wgpu_downscaler"));

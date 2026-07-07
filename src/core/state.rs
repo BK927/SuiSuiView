@@ -33,6 +33,7 @@ pub use input::{
 pub use rendering::RendererMode;
 pub use scalers::{
     CpuScaleFilter, ResizeFilter, WgpuDownscaleMethod, WgpuScaleDirection, WgpuScalePlan,
+    WGPU_DOWNSCALE_METHOD,
 };
 
 pub const DEFAULT_TOP_BAR_CPU_SCALE_FILTERS: [CpuScaleFilter; 5] = [
@@ -48,15 +49,6 @@ pub const DEFAULT_TOP_BAR_WGPU_UPSCALE_METHODS: [WgpuUpscaleMethod; 4] = [
     WgpuUpscaleMethod::WgslFsr1EasuRcas,
     WgpuUpscaleMethod::WgslAnime4kV32CnnX2M,
 ];
-pub const DEFAULT_TOP_BAR_WGPU_DOWNSCALE_METHODS: [WgpuDownscaleMethod; 6] = [
-    WgpuDownscaleMethod::Bilinear,
-    WgpuDownscaleMethod::Hamming,
-    WgpuDownscaleMethod::Lanczos3,
-    WgpuDownscaleMethod::CatmullRom,
-    WgpuDownscaleMethod::PyramidHamming,
-    WgpuDownscaleMethod::PyramidLanczos3,
-];
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReadingDirection {
     LeftToRight,
@@ -338,8 +330,6 @@ pub struct AppSettings {
     pub top_bar_cpu_scale_filters: Vec<CpuScaleFilter>,
     #[serde(default = "default_top_bar_wgpu_upscale_methods")]
     pub top_bar_wgpu_upscale_methods: Vec<WgpuUpscaleMethod>,
-    #[serde(default = "default_top_bar_wgpu_downscale_methods")]
-    pub top_bar_wgpu_downscale_methods: Vec<WgpuDownscaleMethod>,
     #[serde(default)]
     pub show_filename_overlay: bool,
     #[serde(default = "default_true")]
@@ -369,8 +359,6 @@ pub struct AppSettings {
     pub renderer_mode: RendererMode,
     #[serde(default)]
     pub wgpu_upscale_method: WgpuUpscaleMethod,
-    #[serde(default = "default_wgpu_downscale_method")]
-    pub wgpu_downscale_method: WgpuDownscaleMethod,
     #[serde(default = "default_fixed_2x_sr_min_scale_pct")]
     pub fixed_2x_sr_min_scale_pct: u32,
     #[serde(default = "default_true")]
@@ -420,22 +408,9 @@ impl AppSettings {
             self.wgpu_upscale_method = WgpuUpscaleMethod::Auto;
         }
 
-        self.wgpu_downscale_method = self.wgpu_downscale_method.selectable_fallback();
-
         self.fixed_2x_sr_min_scale_pct = self
             .fixed_2x_sr_min_scale_pct
             .clamp(FIXED_2X_SR_MIN_SCALE_PCT_MIN, FIXED_2X_SR_MIN_SCALE_PCT_MAX);
-
-        let mut seen = Vec::new();
-        self.top_bar_wgpu_downscale_methods.retain_mut(|method| {
-            *method = method.selectable_fallback();
-            if seen.contains(method) {
-                false
-            } else {
-                seen.push(*method);
-                true
-            }
-        });
     }
 
     pub fn fixed_2x_sr_min_scale(&self) -> f32 {
@@ -487,7 +462,6 @@ impl Default for AppSettings {
             top_bar_items: TopBarItems::default(),
             top_bar_cpu_scale_filters: default_top_bar_cpu_scale_filters(),
             top_bar_wgpu_upscale_methods: default_top_bar_wgpu_upscale_methods(),
-            top_bar_wgpu_downscale_methods: default_top_bar_wgpu_downscale_methods(),
             show_filename_overlay: false,
             show_main_border: true,
             show_page_arrows: true,
@@ -502,7 +476,6 @@ impl Default for AppSettings {
             gpu_effect_mode: GpuEffectMode::Auto,
             renderer_mode: RendererMode::LowMemoryGlow,
             wgpu_upscale_method: WgpuUpscaleMethod::None,
-            wgpu_downscale_method: default_wgpu_downscale_method(),
             fixed_2x_sr_min_scale_pct: default_fixed_2x_sr_min_scale_pct(),
             prefetch_enabled: true,
             progressive_preview_enabled: false,
@@ -828,18 +801,10 @@ fn default_cpu_downscale_filter() -> CpuScaleFilter {
     CpuScaleFilter::Hamming
 }
 
-fn default_wgpu_downscale_method() -> WgpuDownscaleMethod {
-    WgpuDownscaleMethod::PyramidLanczos3
-}
-
 pub fn default_top_bar_cpu_scale_filters() -> Vec<CpuScaleFilter> {
     DEFAULT_TOP_BAR_CPU_SCALE_FILTERS.to_vec()
 }
 
 pub fn default_top_bar_wgpu_upscale_methods() -> Vec<WgpuUpscaleMethod> {
     DEFAULT_TOP_BAR_WGPU_UPSCALE_METHODS.to_vec()
-}
-
-pub fn default_top_bar_wgpu_downscale_methods() -> Vec<WgpuDownscaleMethod> {
-    DEFAULT_TOP_BAR_WGPU_DOWNSCALE_METHODS.to_vec()
 }
