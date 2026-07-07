@@ -333,6 +333,17 @@ impl SuiSuiViewApp {
         self.notify(text);
     }
 
+    /// One-shot notice that the strip pins the fit to fit-width (shares the
+    /// zoom notice's once-per-session flag; both say "the strip decides size").
+    pub(in crate::app) fn notify_strip_fit_locked(&mut self) {
+        if self.strip_zoom_notice_shown {
+            return;
+        }
+        self.strip_zoom_notice_shown = true;
+        let text = self.i18n().text("strip.fit_locked");
+        self.notify(text);
+    }
+
     /// Resolve the anchor to `(index, offset_frac)` in the current source,
     /// rebuilding it at the current page's top when it is absent or its page has
     /// vanished (folder refresh, book switch). `None` only for a degenerate book
