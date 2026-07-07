@@ -21,12 +21,13 @@ pub(in crate::app) enum ViewMode {
     DoubleRightToLeft,
     SmartDoubleLeftToRight,
     SmartDoubleRightToLeft,
+    VerticalStrip,
 }
 
 impl ViewMode {
     pub(in crate::app) fn step(self) -> usize {
         match self {
-            Self::Single => 1,
+            Self::Single | Self::VerticalStrip => 1,
             Self::DoubleLeftToRight
             | Self::DoubleRightToLeft
             | Self::SmartDoubleLeftToRight
@@ -43,7 +44,7 @@ impl ViewMode {
 
     pub(in crate::app) fn reading_direction(self) -> Option<ReadingDirection> {
         match self {
-            Self::Single => None,
+            Self::Single | Self::VerticalStrip => None,
             Self::DoubleLeftToRight | Self::SmartDoubleLeftToRight => {
                 Some(ReadingDirection::LeftToRight)
             }
@@ -60,6 +61,7 @@ impl ViewMode {
     pub(in crate::app) fn with_reading_direction(self, direction: ReadingDirection) -> Self {
         match self {
             Self::Single => Self::Single,
+            Self::VerticalStrip => Self::VerticalStrip,
             Self::DoubleLeftToRight | Self::DoubleRightToLeft => match direction {
                 ReadingDirection::LeftToRight => Self::DoubleLeftToRight,
                 ReadingDirection::RightToLeft => Self::DoubleRightToLeft,
@@ -393,5 +395,27 @@ pub(in crate::app) fn page_visual_size(visual: &PageVisual) -> Vec2 {
         PageVisual::Ready { size, .. } => *size,
         PageVisual::ReadyGpu { size, .. } => *size,
         PageVisual::Loading { .. } | PageVisual::Failed { .. } => Vec2::new(900.0, 1300.0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ViewMode;
+    use crate::core::state::ReadingDirection;
+
+    #[test]
+    fn vertical_strip_is_a_direction_free_single_step_mode() {
+        assert_eq!(ViewMode::VerticalStrip.step(), 1);
+        assert!(!ViewMode::VerticalStrip.is_smart());
+        assert_eq!(ViewMode::VerticalStrip.reading_direction(), None);
+        // Direction-free: applying either reading direction leaves the mode unchanged.
+        assert_eq!(
+            ViewMode::VerticalStrip.with_reading_direction(ReadingDirection::LeftToRight),
+            ViewMode::VerticalStrip
+        );
+        assert_eq!(
+            ViewMode::VerticalStrip.with_reading_direction(ReadingDirection::RightToLeft),
+            ViewMode::VerticalStrip
+        );
     }
 }

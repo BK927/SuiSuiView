@@ -207,7 +207,7 @@ impl SuiSuiViewApp {
     }
 
     fn visible_original_page_sizes(&self) -> Vec<OriginalPageSize> {
-        self.spread_indices()
+        self.visible_page_indices()
             .into_iter()
             .filter_map(|index| {
                 let metrics = self.page_metrics_at(index)?;
@@ -243,6 +243,10 @@ impl SuiSuiViewApp {
     }
 
     pub(super) fn handle_viewer_pointer(&mut self, ui: &egui::Ui, response: &egui::Response) {
+        if self.view_mode == ViewMode::VerticalStrip {
+            self.handle_strip_pointer(ui, response);
+            return;
+        }
         if response.double_clicked() {
             if let Some(command) =
                 command_for_mouse_gesture(MouseGesture::DoubleClick, &self.settings)

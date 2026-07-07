@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_QUEUED_PAGE_TURNS: usize = 1;
-const MAX_QUEUED_WORKER_VISIBLE_PAGES: usize = 25;
+pub(in crate::app) const MAX_QUEUED_WORKER_VISIBLE_PAGES: usize = 25;
 const MAX_QUEUED_SIBLING_BOOK_TURNS: usize = 1;
 const SIBLING_OPEN_RETRY_LIMIT: usize = 16;
 
@@ -217,6 +217,13 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn set_page(&mut self, target: usize, direction: NavigationDirection) {
+        // Strip mode has no paged commit path: explicit page selection (bookmark
+        // jump, top-bar page field, wrap/random edge actions) re-anchors the strip
+        // at the target's top instead of turning a spread.
+        if self.view_mode == ViewMode::VerticalStrip {
+            self.strip_jump_to_page(target);
+            return;
+        }
         let Some(source) = self.source.as_ref() else {
             return;
         };
@@ -557,7 +564,9 @@ impl SuiSuiViewApp {
     pub(in crate::app) fn toggle_double_mode(&mut self) {
         self.clear_pending_page_turns();
         self.view_mode = match self.view_mode {
-            ViewMode::Single => match self.reading_direction {
+            // From strip, toggling leaves into the double mode for the current
+            // reading direction (same as toggling up from Single).
+            ViewMode::Single | ViewMode::VerticalStrip => match self.reading_direction {
                 ReadingDirection::LeftToRight => ViewMode::DoubleLeftToRight,
                 ReadingDirection::RightToLeft => ViewMode::DoubleRightToLeft,
             },

@@ -275,6 +275,7 @@ impl SuiSuiViewApp {
                     ViewMode::DoubleRightToLeft,
                     ViewMode::SmartDoubleLeftToRight,
                     ViewMode::SmartDoubleRightToLeft,
+                    ViewMode::VerticalStrip,
                 ] {
                     if ui
                         .selectable_label(self.view_mode == mode, view_mode_label(mode, i18n))
@@ -401,13 +402,28 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn set_view_mode(&mut self, mode: ViewMode) {
+    pub(in crate::app) fn set_view_mode(&mut self, mode: ViewMode) {
         if self.view_mode == mode {
             return;
         }
+        let entering_strip = mode == ViewMode::VerticalStrip;
+        let leaving_strip = self.view_mode == ViewMode::VerticalStrip;
         self.view_mode = mode;
         if let Some(direction) = mode.reading_direction() {
             self.reading_direction = direction;
+        }
+        // The anchor is rebuilt from the current page on the first strip frame; a
+        // stale one from the departing/arriving side must never be reused.
+        if entering_strip || leaving_strip {
+            self.strip_anchor = None;
+        }
+        if entering_strip {
+            self.clear_pending_page_turns();
+            self.transition = None;
+            self.pan = Vec2::ZERO;
+            // Strip is fit-width by definition; forces the fit and persists it via
+            // the immediate save path.
+            self.set_fit_mode(FitMode::FitWidth);
         }
         if self.source.is_some() {
             self.worker.set_page(
@@ -763,6 +779,7 @@ fn view_mode_label(mode: ViewMode, i18n: I18n) -> String {
         ViewMode::DoubleRightToLeft => i18n.text("label.view.double_rtl"),
         ViewMode::SmartDoubleLeftToRight => i18n.text("label.view.smart_ltr"),
         ViewMode::SmartDoubleRightToLeft => i18n.text("label.view.smart_rtl"),
+        ViewMode::VerticalStrip => i18n.text("label.view.vertical_strip"),
     }
 }
 

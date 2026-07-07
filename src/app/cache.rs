@@ -266,7 +266,8 @@ impl SuiSuiViewApp {
     }
 
     fn pinned_page_indices(&self) -> HashSet<PageCacheKey> {
-        let mut pinned = self.pin_keys_for_indices(&self.spread_indices(), self.target_long_edge);
+        let mut pinned =
+            self.pin_keys_for_indices(&self.visible_page_indices(), self.target_long_edge);
         if self.target_long_edge > MAX_TARGET_LONG_EDGE {
             pinned.extend(self.normal_navigation_pin_keys_for_visible_pages());
         }

@@ -203,6 +203,14 @@ impl SuiSuiViewApp {
                     AppCommand::ToggleDouble,
                     has_book,
                 );
+                self.context_action(
+                    ui,
+                    ctx,
+                    &i18n.text("context.vertical_strip"),
+                    "3",
+                    AppCommand::ToggleVerticalStrip,
+                    has_book,
+                );
             });
 
             ui.menu_button(i18n.text("context.zoom_menu"), |ui| {

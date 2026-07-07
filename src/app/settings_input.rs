@@ -562,6 +562,7 @@ const VIEW_SHORTCUTS: &[CommandId] = &[
     CommandId::SetDoubleLeftToRight,
     CommandId::SetDoubleRightToLeft,
     CommandId::ToggleDouble,
+    CommandId::ToggleVerticalStrip,
     CommandId::ZoomIn,
     CommandId::ZoomOut,
     CommandId::ZoomFineIn,

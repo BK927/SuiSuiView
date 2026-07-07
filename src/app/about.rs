@@ -665,6 +665,7 @@ fn view_mode_label(mode: ViewMode, i18n: I18n) -> String {
         ViewMode::DoubleRightToLeft => i18n.text("label.view.double_rtl"),
         ViewMode::SmartDoubleLeftToRight => i18n.text("label.view.smart_ltr"),
         ViewMode::SmartDoubleRightToLeft => i18n.text("label.view.smart_rtl"),
+        ViewMode::VerticalStrip => i18n.text("label.view.vertical_strip"),
     }
 }
 

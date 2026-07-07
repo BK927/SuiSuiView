@@ -36,6 +36,7 @@ pub enum CommandId {
     SetDoubleLeftToRight,
     SetDoubleRightToLeft,
     ToggleDouble,
+    ToggleVerticalStrip,
     ZoomIn,
     ZoomOut,
     ZoomFineIn,
@@ -64,7 +65,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [Self; 57] = [
+    pub const ALL: [Self; 58] = [
         Self::OpenFile,
         Self::OpenFolder,
         Self::CloseBook,
@@ -97,6 +98,7 @@ impl CommandId {
         Self::SetDoubleLeftToRight,
         Self::SetDoubleRightToLeft,
         Self::ToggleDouble,
+        Self::ToggleVerticalStrip,
         Self::ZoomIn,
         Self::ZoomOut,
         Self::ZoomFineIn,
@@ -158,6 +160,7 @@ impl CommandId {
             Self::SetDoubleLeftToRight => "2장 보기 L -> R",
             Self::SetDoubleRightToLeft => "2장 보기 R -> L",
             Self::ToggleDouble => "1장/2장 전환",
+            Self::ToggleVerticalStrip => "세로 스크롤 전환",
             Self::ZoomIn => "확대",
             Self::ZoomOut => "축소",
             Self::ZoomFineIn => "미세 확대",
@@ -224,6 +227,7 @@ impl CommandId {
             Self::SetDoubleLeftToRight => "label.command.double_ltr",
             Self::SetDoubleRightToLeft => "label.command.double_rtl",
             Self::ToggleDouble => "label.command.toggle_double",
+            Self::ToggleVerticalStrip => "label.command.toggle_vertical_strip",
             Self::ZoomIn => "label.command.zoom_in",
             Self::ZoomOut => "label.command.zoom_out",
             Self::ZoomFineIn => "label.command.zoom_fine_in",
@@ -288,6 +292,7 @@ impl CommandId {
             | Self::SetDoubleLeftToRight
             | Self::SetDoubleRightToLeft
             | Self::ToggleDouble
+            | Self::ToggleVerticalStrip
             | Self::ZoomIn
             | Self::ZoomOut
             | Self::ZoomFineIn
@@ -350,6 +355,7 @@ impl CommandId {
             | Self::SetDoubleLeftToRight
             | Self::SetDoubleRightToLeft
             | Self::ToggleDouble
+            | Self::ToggleVerticalStrip
             | Self::ZoomIn
             | Self::ZoomOut
             | Self::ZoomFineIn
@@ -709,6 +715,7 @@ pub fn default_key_bindings() -> Vec<KeyBinding> {
         (C::SetDoubleLeftToRight, KeyShortcut::new(K::Num7)),
         (C::SetDoubleRightToLeft, KeyShortcut::new(K::Num6)),
         (C::ToggleDouble, KeyShortcut::new(K::Num2)),
+        (C::ToggleVerticalStrip, KeyShortcut::new(K::Num3)),
         (C::ZoomFineIn, KeyShortcut::ctrl(K::Plus)),
         (C::ZoomFineIn, KeyShortcut::ctrl(K::Equals)),
         (C::ZoomFineOut, KeyShortcut::ctrl(K::Minus)),

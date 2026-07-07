@@ -1,22 +1,22 @@
 //! Anchor-based virtualized vertical strip: pure layout/scroll math plus the
 //! background page-dimension prescan worker.
 //!
-//! V1 is a dark launch. None of the layout/scroll functions below are wired into
-//! a renderer yet; the webtoon continuous-vertical-scroll `ViewMode` that lands
-//! in V2 is their first consumer. They are marked `#[allow(dead_code)]` narrowly
-//! (with this note) so the file compiles clean while nothing calls them. The
-//! prescan worker in `scan.rs`, by contrast, is fully wired and live.
+//! The layout/scroll math below is the pure foundation for the webtoon
+//! continuous-vertical-scroll `ViewMode`; the app-side methods that drive it
+//! (paint, pointer, scroll, jump) live in `view.rs`, and the header prescan
+//! worker in `scan.rs` feeds the `strip_dim_hints` fallback.
 
 mod scan;
+mod view;
 pub(in crate::app) use scan::StripDimScanWorker;
 
 use crate::core::source::PageId;
 use crate::core::worker::NavigationDirection;
 use egui::Rect;
+use std::time::{Duration, Instant};
 
 /// Where a virtualized strip is scrolled to: the topmost visible page plus how
-/// far the viewport top has slid past that page's top. Consumed in V2.
-#[allow(dead_code)]
+/// far the viewport top has slid past that page's top.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::app) struct StripAnchor {
     pub page_id: PageId,
@@ -26,8 +26,7 @@ pub(in crate::app) struct StripAnchor {
 }
 
 /// One laid-out page: its index in the current source snapshot and the screen
-/// rect it occupies (full viewport width, fit-width). Consumed in V2.
-#[allow(dead_code)]
+/// rect it occupies (full viewport width, fit-width).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::app) struct StripPlacement {
     pub index: usize,
@@ -36,8 +35,7 @@ pub(in crate::app) struct StripPlacement {
 
 /// Known page pixel dimensions, by provenance. `page_metrics` (post-EXIF,
 /// authoritative) yields `Exact`; the header prescan yields `Hint`; anything not
-/// yet measured is `Unknown` and falls back to the running median. Consumed in V2.
-#[allow(dead_code)]
+/// yet measured is `Unknown` and falls back to the running median.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) enum StripPageDims {
     Exact([u32; 2]),
@@ -46,8 +44,7 @@ pub(in crate::app) enum StripPageDims {
 }
 
 /// Fit-width display height for a page: `viewport_width * h / w`. `Unknown` (or a
-/// degenerate zero width) falls back to `fallback_height`. Consumed in V2.
-#[allow(dead_code)]
+/// degenerate zero width) falls back to `fallback_height`.
 pub(in crate::app) fn display_height(
     dims: StripPageDims,
     viewport_width: f32,
@@ -65,8 +62,6 @@ pub(in crate::app) fn display_height(
 
 /// Median of the known page heights, used as the `Unknown` fallback so the strip
 /// estimates unmeasured pages at a book-typical height. `None` when empty.
-/// Consumed in V2.
-#[allow(dead_code)]
 pub(in crate::app) fn median_known_height(heights: impl Iterator<Item = f32>) -> Option<f32> {
     let mut values: Vec<f32> = heights.collect();
     if values.is_empty() {
@@ -84,8 +79,6 @@ pub(in crate::app) fn median_known_height(heights: impl Iterator<Item = f32>) ->
 /// Placements for every page that intersects `viewport`, plus one page of margin
 /// below as prefetch. Positions are accumulated OUTWARD from the anchor, so a
 /// height-estimate error in a distant page can never shift an on-screen rect.
-/// Consumed in V2.
-#[allow(dead_code)]
 pub(in crate::app) fn layout_visible(
     anchor_index: usize,
     offset_frac: f32,
@@ -157,12 +150,11 @@ pub(in crate::app) fn layout_visible(
 /// Apply a pixel scroll delta (positive scrolls the content up / advances the
 /// book) and renormalize so the returned offset stays in `[0, 1)`. Clamps at the
 /// top of page 0 and at the bottom (the last page's bottom pinned to the viewport
-/// bottom), reporting the edge that was hit. Consumed in V2.
+/// bottom), reporting the edge that was hit.
 ///
 /// Takes `viewport_height` (not implied by the plan's short signature) because
 /// the bottom clamp is defined relative to the viewport bottom and cannot be
 /// computed without it.
-#[allow(dead_code)]
 pub(in crate::app) fn scroll_by(
     anchor_index: usize,
     offset_frac: f32,
@@ -246,8 +238,7 @@ fn clamp_to_bottom(
 }
 
 /// The page under the viewport's vertical center, or the nearest by center
-/// distance when a gap or edge leaves the center over no page. Consumed in V2.
-#[allow(dead_code)]
+/// distance when a gap or edge leaves the center over no page.
 pub(in crate::app) fn page_at_viewport_center(
     placements: &[StripPlacement],
     viewport: Rect,
@@ -269,10 +260,59 @@ pub(in crate::app) fn page_at_viewport_center(
 }
 
 /// Jump target for an explicit page selection: land at that page's top. Kept for
-/// API symmetry with [`scroll_by`]. Consumed in V2.
-#[allow(dead_code)]
+/// API symmetry with [`scroll_by`].
 pub(in crate::app) fn jump_to_page(index: usize) -> (usize, f32) {
     (index, 0.0)
+}
+
+/// Page-turn threshold: sustained edge overscroll must reach this many pixels
+/// before a paged edge action (next/previous book, wrap, prompt) fires.
+pub(in crate::app) const STRIP_EDGE_OVERSCROLL_THRESHOLD: f32 = 240.0;
+/// Idle gap after which a partial edge-overscroll accumulation is forgotten, so
+/// a nudge against the edge now does not surface as a page turn much later.
+const STRIP_EDGE_OVERSCROLL_WINDOW: Duration = Duration::from_millis(500);
+
+/// Accumulate one at-edge overscroll of `delta_px` in `direction` into
+/// `(accum_px, accum_at)` (px signed +Forward/-Backward). The running total is
+/// abandoned when the [`STRIP_EDGE_OVERSCROLL_WINDOW`] lapsed since the last push
+/// or the push reverses direction. Returns `true` (and resets) once the total
+/// magnitude reaches [`STRIP_EDGE_OVERSCROLL_THRESHOLD`], signalling the caller
+/// to run one paged edge action. Pure for testing (`now` is injected).
+pub(in crate::app) fn accumulate_edge_overscroll(
+    accum_px: &mut f32,
+    accum_at: &mut Option<Instant>,
+    direction: NavigationDirection,
+    delta_px: f32,
+    now: Instant,
+) -> bool {
+    let expired = accum_at
+        .is_some_and(|at| now.saturating_duration_since(at) > STRIP_EDGE_OVERSCROLL_WINDOW);
+    if expired {
+        *accum_px = 0.0;
+    }
+    let signed = match direction {
+        NavigationDirection::Forward => delta_px.abs(),
+        NavigationDirection::Backward => -delta_px.abs(),
+    };
+    if *accum_px != 0.0 && accum_px.signum() != signed.signum() {
+        *accum_px = 0.0;
+    }
+    *accum_px += signed;
+    *accum_at = Some(now);
+    if accum_px.abs() >= STRIP_EDGE_OVERSCROLL_THRESHOLD {
+        *accum_px = 0.0;
+        *accum_at = None;
+        true
+    } else {
+        false
+    }
+}
+
+/// The page the strip should recenter the worker on: `Some(derived)` only when it
+/// differs from the currently-centered page, so the worker recenter (and reading
+/// position persist) fire once per integer page change, not every frame.
+pub(in crate::app) fn recenter_target(current: usize, derived: usize) -> Option<usize> {
+    (derived != current).then_some(derived)
 }
 
 fn placement_rect(viewport: Rect, top: f32, height: f32) -> Rect {
@@ -478,5 +518,114 @@ mod tests {
     #[test]
     fn jump_to_page_lands_at_page_top() {
         assert_eq!(jump_to_page(7), (7, 0.0));
+    }
+
+    #[test]
+    fn recenter_target_fires_only_on_integer_change() {
+        assert_eq!(recenter_target(3, 3), None);
+        assert_eq!(recenter_target(3, 4), Some(4));
+        assert_eq!(recenter_target(4, 2), Some(2));
+    }
+
+    #[test]
+    fn overscroll_below_threshold_does_not_fire() {
+        let now = Instant::now();
+        let mut px = 0.0;
+        let mut at = None;
+        assert!(!accumulate_edge_overscroll(
+            &mut px,
+            &mut at,
+            NavigationDirection::Forward,
+            100.0,
+            now
+        ));
+        assert!(!accumulate_edge_overscroll(
+            &mut px,
+            &mut at,
+            NavigationDirection::Forward,
+            100.0,
+            now
+        ));
+        // 200 < 240: still short of a page turn, running total preserved.
+        assert_eq!(px, 200.0);
+    }
+
+    #[test]
+    fn overscroll_crossing_threshold_fires_once_then_resets() {
+        let now = Instant::now();
+        let mut px = 0.0;
+        let mut at = None;
+        assert!(!accumulate_edge_overscroll(
+            &mut px,
+            &mut at,
+            NavigationDirection::Forward,
+            200.0,
+            now
+        ));
+        // 400 >= 240: fires and resets so the next push starts fresh.
+        assert!(accumulate_edge_overscroll(
+            &mut px,
+            &mut at,
+            NavigationDirection::Forward,
+            200.0,
+            now
+        ));
+        assert_eq!(px, 0.0);
+        assert_eq!(at, None);
+        assert!(!accumulate_edge_overscroll(
+            &mut px,
+            &mut at,
+            NavigationDirection::Forward,
+            100.0,
+            now
+        ));
+    }
+
+    #[test]
+    fn overscroll_window_expiry_forgets_partial_accumulation() {
+        let now = Instant::now();
+        let mut px = 0.0;
+        let mut at = None;
+        assert!(!accumulate_edge_overscroll(
+            &mut px,
+            &mut at,
+            NavigationDirection::Forward,
+            200.0,
+            now
+        ));
+        // A push after the window lapsed drops the stale 200 before adding 200,
+        // so 200 < 240 does not fire.
+        let later = now + Duration::from_millis(600);
+        assert!(!accumulate_edge_overscroll(
+            &mut px,
+            &mut at,
+            NavigationDirection::Forward,
+            200.0,
+            later
+        ));
+        assert_eq!(px, 200.0);
+    }
+
+    #[test]
+    fn overscroll_direction_reversal_resets_before_accumulating() {
+        let now = Instant::now();
+        let mut px = 0.0;
+        let mut at = None;
+        assert!(!accumulate_edge_overscroll(
+            &mut px,
+            &mut at,
+            NavigationDirection::Forward,
+            200.0,
+            now
+        ));
+        // Reversing to the top edge abandons the forward total, so |-200| < 240.
+        assert!(!accumulate_edge_overscroll(
+            &mut px,
+            &mut at,
+            NavigationDirection::Backward,
+            200.0,
+            now
+        ));
+        assert_eq!(px, -200.0);
     }
 }

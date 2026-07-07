@@ -101,7 +101,7 @@ use viewer::{
 pub(in crate::app) use viewer::{
     page_visual_size, texture_options_for_sampling, transition_screen_sign,
     worker_center_page_for_mode, CurrentViewState, PageMetrics, PageRenderInfo, PageVisual,
-    StripDimScanWorker, Transition, UpscaleDecisionOrigin, ViewMode, ViewTargetSettle,
+    StripAnchor, StripDimScanWorker, Transition, UpscaleDecisionOrigin, ViewMode, ViewTargetSettle,
 };
 
 #[cfg(test)]
@@ -235,6 +235,18 @@ pub struct SuiSuiViewApp {
     strip_dim_hints: HashMap<crate::core::source::PageId, [u32; 2]>,
     strip_dim_scan_generation: u64,
     strip_dim_scan: Option<StripDimScanWorker>,
+    /// Vertical-strip runtime state (all inert unless `view_mode` is
+    /// `VerticalStrip`). The anchor pins the scroll position by page identity;
+    /// `strip_visible_indices` is the last frame's virtualized window (the seam
+    /// read by prefetch pinning and original-size probing). The overscroll pair
+    /// accumulates at-edge scroll toward a page turn; the notice bool shows the
+    /// zoom-unsupported message at most once per session.
+    strip_anchor: Option<StripAnchor>,
+    strip_visible_indices: Vec<usize>,
+    strip_last_scroll_dir: NavigationDirection,
+    strip_edge_overscroll_px: f32,
+    strip_edge_overscroll_at: Option<Instant>,
+    strip_zoom_notice_shown: bool,
     bookmark_thumbnails: Option<BookmarkThumbnails>,
     gpu_effects_available: bool,
     gpu_target_format: Option<wgpu::TextureFormat>,
@@ -387,6 +399,12 @@ impl SuiSuiViewApp {
             strip_dim_hints: HashMap::new(),
             strip_dim_scan_generation: 0,
             strip_dim_scan: None,
+            strip_anchor: None,
+            strip_visible_indices: Vec::new(),
+            strip_last_scroll_dir: NavigationDirection::Forward,
+            strip_edge_overscroll_px: 0.0,
+            strip_edge_overscroll_at: None,
+            strip_zoom_notice_shown: false,
             bookmark_thumbnails: None,
             // Both stages start on Glow; the WGPU stage patches these in
             // `begin_handoff` once its render state is available.
@@ -839,6 +857,11 @@ impl SuiSuiViewApp {
     }
 
     fn apply_command(&mut self, ctx: &egui::Context, command: AppCommand) {
+        // Strip mode reinterprets navigation/zoom commands as scrolls/jumps before
+        // the paged handlers; unhandled commands fall through unchanged.
+        if self.view_mode == ViewMode::VerticalStrip && self.apply_strip_keyboard_override(command) {
+            return;
+        }
         match command {
             AppCommand::OpenFile => self.open_file_dialog(),
             AppCommand::OpenFolder => self.open_folder_dialog(),
@@ -889,6 +912,14 @@ impl SuiSuiViewApp {
             AppCommand::SetFitMode(mode) => self.set_fit_mode(mode),
             AppCommand::SetDouble(direction) => self.set_double_mode(direction),
             AppCommand::ToggleDouble => self.toggle_double_mode(),
+            AppCommand::ToggleVerticalStrip => {
+                let mode = if self.view_mode == ViewMode::VerticalStrip {
+                    ViewMode::Single
+                } else {
+                    ViewMode::VerticalStrip
+                };
+                self.set_view_mode(mode);
+            }
             AppCommand::Zoom(factor) => self.adjust_zoom(factor),
             AppCommand::ZoomFine(delta) => self.adjust_zoom_by_delta(delta),
             AppCommand::RotateClockwise => self.update_effects(|effects| {
@@ -970,6 +1001,10 @@ impl SuiSuiViewApp {
         self.clear_debug_compare_requests();
         self.clear_upscale_probe_state();
         self.clear_strip_dim_scan_state();
+        self.strip_anchor = None;
+        self.strip_visible_indices.clear();
+        self.strip_edge_overscroll_px = 0.0;
+        self.strip_edge_overscroll_at = None;
         if let Some(thumbnails) = self.bookmark_thumbnails.as_mut() {
             thumbnails.clear();
         }

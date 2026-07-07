@@ -36,7 +36,7 @@ pub(in crate::app) use model::{
     WgpuScaleState,
 };
 pub(in crate::app) use paint_helpers::texture_options_for_sampling;
-pub(in crate::app) use strip::StripDimScanWorker;
+pub(in crate::app) use strip::{StripAnchor, StripDimScanWorker};
 pub(in crate::app) use transition::{
     paint_book_flip_shadow, transition_paint_params, transition_screen_sign,
 };
@@ -53,6 +53,27 @@ struct SpreadPaint<'a> {
     offset: Vec2,
     scale: Vec2,
     alpha: f32,
+}
+
+/// Per-page paint result the spread and strip loops fold together: whether the
+/// page fully drew (spread completion gate), and the two sibling-book WGPU flags.
+#[derive(Clone, Copy, Default)]
+pub(in crate::app::viewer) struct PagePaintOutcome {
+    pub(in crate::app::viewer) fully_drawn: bool,
+    pub(in crate::app::viewer) used_wgpu_callback: bool,
+    pub(in crate::app::viewer) needs_sibling_visible_hold: bool,
+}
+
+impl PagePaintOutcome {
+    /// A page that drew completely with no pending sibling-book hold — the
+    /// `Ready`, painted-`ReadyGpu`, and `Failed` cases. `Loading` uses
+    /// `default()` (not fully drawn).
+    fn fully_drawn() -> Self {
+        Self {
+            fully_drawn: true,
+            ..Self::default()
+        }
+    }
 }
 
 impl SuiSuiViewApp {
@@ -102,7 +123,7 @@ impl SuiSuiViewApp {
 
         let page = page.min(page_count - 1);
         match self.view_mode {
-            ViewMode::Single => vec![page],
+            ViewMode::Single | ViewMode::VerticalStrip => vec![page],
             ViewMode::DoubleLeftToRight | ViewMode::DoubleRightToLeft => {
                 double_spread_indices(page, page_count)
             }
@@ -128,7 +149,24 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn visible_page_count(&self) -> usize {
-        self.view_mode.step()
+        if self.view_mode == ViewMode::VerticalStrip {
+            // Strip shows many pages; the worker's visible-page hint tracks the
+            // last frame's virtualized window (at least one).
+            self.strip_visible_indices.len().max(1)
+        } else {
+            self.view_mode.step()
+        }
+    }
+
+    /// Indices currently on screen: the paged spread in paged modes, the last
+    /// virtualized strip window in strip mode. The seam that lets prefetch
+    /// pinning and original-size probing see the strip's many visible pages.
+    pub(in crate::app) fn visible_page_indices(&self) -> Vec<usize> {
+        if self.view_mode == ViewMode::VerticalStrip {
+            self.strip_visible_indices.clone()
+        } else {
+            self.spread_indices()
+        }
     }
 
     pub(in crate::app) fn worker_center_page(&self) -> usize {
@@ -388,6 +426,15 @@ impl SuiSuiViewApp {
             return;
         }
 
+        if self.view_mode == ViewMode::VerticalStrip {
+            // Continuous vertical scroll owns its own layout and paint; the paged
+            // transition/spread/pan path below is skipped entirely. Page arrows are
+            // meaningless in a strip, so only the filename overlay is drawn.
+            self.paint_strip(ctx, &painter, rect);
+            self.paint_filename_overlay(ctx, &painter, rect);
+            return;
+        }
+
         let current_indices = self.spread_indices();
         // A completed transition must not paint from_indices: no further repaint is
         // requested once it drops, so the reactive host would freeze the ghost frame.
@@ -544,9 +591,6 @@ impl SuiSuiViewApp {
             );
         }
         let mut cursor = self.spread_origin(request.viewport, spread_size, request.offset);
-        let tint = Color32::from_white_alpha((request.alpha.clamp(0.0, 1.0) * 255.0) as u8);
-        // The pixel grid is a steady-state inspection aid; suppress it while a spread animates.
-        let full_alpha = request.alpha >= 1.0;
 
         let mut spread_contains_current = false;
         let mut spread_fully_drawn = true;
@@ -563,137 +607,18 @@ impl SuiSuiViewApp {
             let top = cursor.y + (spread_height - page_size.y) * 0.5;
             let page_rect = Rect::from_min_size(Pos2::new(cursor.x, top), page_size);
 
-            match visual {
-                PageVisual::Ready {
-                    texture,
-                    render_info,
-                    ..
-                } => {
-                    if let Some(render_info) = render_info {
-                        let target_intent =
-                            self.prepared_target_intent_for_target(render_info.target_long_edge);
-                        self.record_current_view_state(CurrentViewState::from_cpu(
-                            render_info,
-                            target_intent,
-                        ));
-                    }
-                    painter.image(
-                        texture.id(),
-                        page_rect,
-                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                        tint,
-                    );
-                    if full_alpha {
-                        self.paint_pixel_grid(
-                            painter,
-                            page_rect,
-                            size,
-                            request.viewport,
-                            ctx.pixels_per_point(),
-                        );
-                    }
-                }
-                PageVisual::ReadyGpu {
-                    source_key,
-                    image_size,
-                    pixels,
-                    effects,
-                    wgpu_upscale_method,
-                    wgpu_upscale_origin,
-                    wgpu_downscale_method,
-                    render_info,
-                    ..
-                } => {
-                    let target_size = rect_target_size(page_rect, ctx.pixels_per_point());
-                    let force_texture_fallback = self.sibling_book_transition_stabilizing();
-                    let fixed_2x_sr_min_scale = self.settings.fixed_2x_sr_min_scale();
-                    let active_wgsl = !force_texture_fallback
-                        && gpu_visual_needs_wgsl(
-                            image_size,
-                            target_size,
-                            effects,
-                            wgpu_upscale_method,
-                            wgpu_downscale_method,
-                            fixed_2x_sr_min_scale,
-                        );
-                    let target_intent =
-                        self.prepared_target_intent_for_target(render_info.target_long_edge);
-                    self.record_current_view_state(CurrentViewState::from_gpu(
-                        render_info,
-                        image_size,
-                        effects,
-                        target_size,
-                        wgpu_upscale_method,
-                        wgpu_upscale_origin,
-                        wgpu_downscale_method,
-                        fixed_2x_sr_min_scale,
-                        active_wgsl,
-                        target_intent,
-                    ));
-                    let gpu_painted = self.paint_ready_gpu_visual(
-                        ctx,
-                        painter,
-                        GpuPaintRequest {
-                            rect: page_rect,
-                            source_key,
-                            image_size,
-                            pixels,
-                            effects,
-                            wgpu_upscale_method,
-                            wgpu_downscale_method,
-                            fixed_2x_sr_min_scale_pct: self.settings.fixed_2x_sr_min_scale_pct,
-                            opacity: request.alpha,
-                            zoom_in_motion: self.zoom_in_motion(),
-                        },
-                        force_texture_fallback,
-                        tint,
-                    );
-                    if !gpu_painted {
-                        spread_fully_drawn = false;
-                        self.paint_placeholder(
-                            painter,
-                            page_rect,
-                            "GPU effect fallback pending",
-                            Color32::from_gray(120),
-                            tint,
-                        );
-                    } else if active_wgsl {
-                        spread_uses_wgpu_paint_callback = true;
-                    } else if force_texture_fallback {
-                        spread_needs_sibling_visible_hold = true;
-                    }
-                    if gpu_painted && full_alpha {
-                        self.paint_pixel_grid(
-                            painter,
-                            page_rect,
-                            size,
-                            request.viewport,
-                            ctx.pixels_per_point(),
-                        );
-                    }
-                }
-                PageVisual::Loading { index } => {
-                    spread_fully_drawn = false;
-                    self.clear_current_view_state_for(index);
-                    self.paint_placeholder(
-                        painter,
-                        page_rect,
-                        &format!("Loading page {}", index + 1),
-                        Color32::from_gray(120),
-                        tint,
-                    );
-                }
-                PageVisual::Failed { index, message } => {
-                    self.clear_current_view_state_for(index);
-                    self.paint_placeholder(
-                        painter,
-                        page_rect,
-                        &format!("Page {} failed\n{}", index + 1, message),
-                        Color32::from_rgb(180, 80, 80),
-                        tint,
-                    );
-                }
-            }
+            let outcome = self.paint_page_visual(
+                ctx,
+                painter,
+                request.viewport,
+                index,
+                visual,
+                page_rect,
+                request.alpha,
+            );
+            spread_fully_drawn &= outcome.fully_drawn;
+            spread_uses_wgpu_paint_callback |= outcome.used_wgpu_callback;
+            spread_needs_sibling_visible_hold |= outcome.needs_sibling_visible_hold;
 
             cursor.x += page_size.x + gap * scale;
         }
@@ -703,6 +628,163 @@ impl SuiSuiViewApp {
                 spread_uses_wgpu_paint_callback,
                 spread_needs_sibling_visible_hold,
             );
+        }
+    }
+
+    /// Paint one page's visual into `page_rect` and report the flags the spread
+    /// (and strip) loops accumulate. Shared verbatim by `paint_spread` and
+    /// `paint_strip`. `tint`/`full_alpha` are derived from `alpha` so the GPU
+    /// opacity stays the exact `alpha` the spread passes during a transition.
+    // Per-page paint surface shared by two callers; a params struct would be pure boilerplate.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_page_visual(
+        &mut self,
+        ctx: &egui::Context,
+        painter: &egui::Painter,
+        viewport: Rect,
+        index: usize,
+        visual: PageVisual,
+        page_rect: Rect,
+        alpha: f32,
+    ) -> PagePaintOutcome {
+        let size = page_visual_size(&visual);
+        let tint = Color32::from_white_alpha((alpha.clamp(0.0, 1.0) * 255.0) as u8);
+        // The pixel grid is a steady-state inspection aid; suppress it while a spread animates.
+        let full_alpha = alpha >= 1.0;
+        match visual {
+            PageVisual::Ready {
+                texture,
+                render_info,
+                ..
+            } => {
+                if let Some(render_info) = render_info {
+                    let target_intent =
+                        self.prepared_target_intent_for_target(render_info.target_long_edge);
+                    self.record_current_view_state(CurrentViewState::from_cpu(
+                        render_info,
+                        target_intent,
+                    ));
+                }
+                painter.image(
+                    texture.id(),
+                    page_rect,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                    tint,
+                );
+                if full_alpha {
+                    self.paint_pixel_grid(
+                        painter,
+                        page_rect,
+                        size,
+                        viewport,
+                        ctx.pixels_per_point(),
+                    );
+                }
+                PagePaintOutcome::fully_drawn()
+            }
+            PageVisual::ReadyGpu {
+                source_key,
+                image_size,
+                pixels,
+                effects,
+                wgpu_upscale_method,
+                wgpu_upscale_origin,
+                wgpu_downscale_method,
+                render_info,
+                ..
+            } => {
+                let target_size = rect_target_size(page_rect, ctx.pixels_per_point());
+                let force_texture_fallback = self.sibling_book_transition_stabilizing();
+                let fixed_2x_sr_min_scale = self.settings.fixed_2x_sr_min_scale();
+                let active_wgsl = !force_texture_fallback
+                    && gpu_visual_needs_wgsl(
+                        image_size,
+                        target_size,
+                        effects,
+                        wgpu_upscale_method,
+                        wgpu_downscale_method,
+                        fixed_2x_sr_min_scale,
+                    );
+                let target_intent =
+                    self.prepared_target_intent_for_target(render_info.target_long_edge);
+                self.record_current_view_state(CurrentViewState::from_gpu(
+                    render_info,
+                    image_size,
+                    effects,
+                    target_size,
+                    wgpu_upscale_method,
+                    wgpu_upscale_origin,
+                    wgpu_downscale_method,
+                    fixed_2x_sr_min_scale,
+                    active_wgsl,
+                    target_intent,
+                ));
+                let gpu_painted = self.paint_ready_gpu_visual(
+                    ctx,
+                    painter,
+                    GpuPaintRequest {
+                        rect: page_rect,
+                        source_key,
+                        image_size,
+                        pixels,
+                        effects,
+                        wgpu_upscale_method,
+                        wgpu_downscale_method,
+                        fixed_2x_sr_min_scale_pct: self.settings.fixed_2x_sr_min_scale_pct,
+                        opacity: alpha,
+                        zoom_in_motion: self.zoom_in_motion(),
+                    },
+                    force_texture_fallback,
+                    tint,
+                );
+                let mut outcome = PagePaintOutcome::fully_drawn();
+                if !gpu_painted {
+                    outcome.fully_drawn = false;
+                    self.paint_placeholder(
+                        painter,
+                        page_rect,
+                        "GPU effect fallback pending",
+                        Color32::from_gray(120),
+                        tint,
+                    );
+                } else if active_wgsl {
+                    outcome.used_wgpu_callback = true;
+                } else if force_texture_fallback {
+                    outcome.needs_sibling_visible_hold = true;
+                }
+                if gpu_painted && full_alpha {
+                    self.paint_pixel_grid(
+                        painter,
+                        page_rect,
+                        size,
+                        viewport,
+                        ctx.pixels_per_point(),
+                    );
+                }
+                outcome
+            }
+            PageVisual::Loading { .. } => {
+                self.clear_current_view_state_for(index);
+                self.paint_placeholder(
+                    painter,
+                    page_rect,
+                    &format!("Loading page {}", index + 1),
+                    Color32::from_gray(120),
+                    tint,
+                );
+                PagePaintOutcome::default()
+            }
+            PageVisual::Failed { message, .. } => {
+                self.clear_current_view_state_for(index);
+                self.paint_placeholder(
+                    painter,
+                    page_rect,
+                    &format!("Page {} failed\n{}", index + 1, message),
+                    Color32::from_rgb(180, 80, 80),
+                    tint,
+                );
+                PagePaintOutcome::fully_drawn()
+            }
         }
     }
 
