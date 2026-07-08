@@ -229,6 +229,14 @@ pub(in crate::app) fn collect_panels(pages: &[PanelPage]) -> Vec<(f32, f32)> {
 /// furthest within this travel wins, so a stack of small dialogue-bubble cuts
 /// is crossed a screenful per press instead of one bubble per press.
 const PANEL_STEP_CAP_FRAC: f32 = 0.9;
+/// A cut at least this fraction of the viewport tall is a MAJOR cut (an art
+/// panel rather than a speech bubble). Major cuts win the landing over any
+/// small cut in reach, so bubbles never displace a panel from the center.
+const PANEL_MAJOR_MIN_FRAC: f32 = 0.25;
+/// Major cuts may be reached up to a full viewport of travel — the exact
+/// no-content-loss limit — so a bubble just inside the normal cap cannot steal
+/// the landing from a panel just beyond it.
+const PANEL_MAJOR_CAP_FRAC: f32 = 1.0;
 
 /// Signed scroll delta for one panel-slideshow step, or `None` when no panel
 /// gives a better answer than the caller's plain step (no spans collected, or
@@ -256,7 +264,11 @@ pub(in crate::app) fn panel_step_delta(
     }
     let center = viewport_h * 0.5;
     let remainder_slack = viewport_h * PANEL_REMAINDER_FRAC;
-    let step_cap = viewport_h * PANEL_STEP_CAP_FRAC;
+    let caps = LandingCaps {
+        minor_cap: viewport_h * PANEL_STEP_CAP_FRAC,
+        major_cap: viewport_h * PANEL_MAJOR_CAP_FRAC,
+        major_min_height: viewport_h * PANEL_MAJOR_MIN_FRAC,
+    };
     let current = panels
         .iter()
         .copied()
@@ -292,9 +304,9 @@ pub(in crate::app) fn panel_step_delta(
             .iter()
             .copied()
             .filter(|&(top, _)| top >= from - PANEL_MERGE_EPSILON)
-            .map(land_forward)
-            .filter(|delta| *delta >= 1.0);
-        pick_landing(landings, step_cap)?
+            .map(|cut| (land_forward(cut), cut.1 - cut.0))
+            .filter(|(delta, _)| *delta >= 1.0);
+        pick_landing(landings, caps)?
     } else {
         if let Some((top, _bottom)) = current {
             let remaining = -top;
@@ -307,10 +319,10 @@ pub(in crate::app) fn panel_step_delta(
             .iter()
             .copied()
             .filter(|&(_, bottom)| bottom <= from + PANEL_MERGE_EPSILON)
-            .map(land_backward)
-            .filter(|delta| *delta <= -1.0)
-            .map(|delta| -delta);
-        -pick_landing(landings, step_cap)?
+            .map(|cut| (land_backward(cut), cut.1 - cut.0))
+            .filter(|(delta, _)| *delta <= -1.0)
+            .map(|(delta, height)| (-delta, height));
+        -pick_landing(landings, caps)?
     };
     Some(delta.clamp(
         -PANEL_STEP_MAX_VIEWPORTS * viewport_h,
@@ -318,22 +330,37 @@ pub(in crate::app) fn panel_step_delta(
     ))
 }
 
-/// Choose among positive landing distances: the furthest within `step_cap`
-/// (advance a screenful, landing framed), else the nearest beyond it (the gap
-/// skip), else `None`.
-fn pick_landing(landings: impl Iterator<Item = f32>, step_cap: f32) -> Option<f32> {
-    let mut best_within: Option<f32> = None;
+/// Travel limits for [`pick_landing`], all in points.
+struct LandingCaps {
+    minor_cap: f32,
+    major_cap: f32,
+    major_min_height: f32,
+}
+
+/// Choose among positive `(landing, cut_height)` pairs, in priority order:
+/// the furthest MAJOR cut within `major_cap` (an art panel always beats the
+/// speech bubbles around it), else the furthest minor cut within `minor_cap`
+/// (a pure dialogue stretch advances a screenful landing on a bubble), else
+/// the nearest landing beyond the caps (the gap skip), else `None`.
+fn pick_landing(landings: impl Iterator<Item = (f32, f32)>, caps: LandingCaps) -> Option<f32> {
+    let mut major_within: Option<f32> = None;
+    let mut minor_within: Option<f32> = None;
     let mut nearest_beyond: Option<f32> = None;
-    for landing in landings {
-        if landing <= step_cap {
-            if best_within.is_none_or(|best| landing > best) {
-                best_within = Some(landing);
+    for (landing, height) in landings {
+        let major = height >= caps.major_min_height;
+        if major && landing <= caps.major_cap {
+            if major_within.is_none_or(|best| landing > best) {
+                major_within = Some(landing);
+            }
+        } else if !major && landing <= caps.minor_cap {
+            if minor_within.is_none_or(|best| landing > best) {
+                minor_within = Some(landing);
             }
         } else if nearest_beyond.is_none_or(|nearest| landing < nearest) {
             nearest_beyond = Some(landing);
         }
     }
-    best_within.or(nearest_beyond)
+    major_within.or(minor_within).or(nearest_beyond)
 }
 
 /// Cap on how many nearby pages the delta-space walk collects, so a run of
@@ -629,6 +656,20 @@ mod tests {
             (1500.0, 1600.0),
         ];
         assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(550.0));
+    }
+
+    #[test]
+    fn major_cut_beats_nearer_bubbles_for_the_landing() {
+        // By distance alone the second bubble (landing 430) would win, but the
+        // big art panel (600 tall, landing 800 = exactly the no-loss major cap)
+        // takes the landing: bubbles never displace a panel from the center.
+        let panels = vec![
+            (200.0, 600.0),  // current cut
+            (650.0, 750.0),  // bubble, landing 300
+            (780.0, 880.0),  // bubble, landing 430
+            (900.0, 1500.0), // art panel, landing 800
+        ];
+        assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(800.0));
     }
 
     #[test]
