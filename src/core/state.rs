@@ -403,6 +403,10 @@ pub struct AppSettings {
     pub strip_wheel_scroll_pct: u32,
     #[serde(default = "default_strip_drag_scroll_pct")]
     pub strip_drag_scroll_pct: u32,
+    /// When set, keyboard viewport-steps in vertical-strip mode snap to panel
+    /// boundaries (gutters) instead of taking a fixed fraction-of-a-viewport jump.
+    #[serde(default = "default_true")]
+    pub strip_panel_snap: bool,
 
     #[serde(default = "default_true")]
     pub apply_exif_orientation: bool,
@@ -541,6 +545,7 @@ impl Default for AppSettings {
             wheel_mode: WheelMode::PageTurn,
             strip_wheel_scroll_pct: default_strip_wheel_scroll_pct(),
             strip_drag_scroll_pct: default_strip_drag_scroll_pct(),
+            strip_panel_snap: default_true(),
             apply_exif_orientation: true,
             apply_embedded_icc: false,
             auto_save_reading_position: true,

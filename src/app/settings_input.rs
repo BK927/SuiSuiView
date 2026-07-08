@@ -1,5 +1,5 @@
 use super::commands::shortcut_from_input_event;
-use super::settings::{grid_label_with_help, setting_group};
+use super::settings::{checkbox_with_help, grid_label_with_help, setting_group};
 use super::ui::{dialog, icons, theme};
 use super::SuiSuiViewApp;
 use crate::core::i18n::I18n;
@@ -545,6 +545,12 @@ pub(in crate::app) fn show_mouse_settings(
                         .changed();
                     ui.end_row();
                 });
+            *changed |= checkbox_with_help(
+                ui,
+                &mut draft.strip_panel_snap,
+                &i18n.text("settings.mouse.strip_panel_snap"),
+                &i18n.text("settings.mouse.strip_panel_snap.help"),
+            );
         },
     );
 }

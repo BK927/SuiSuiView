@@ -251,6 +251,11 @@ pub struct SuiSuiViewApp {
     /// Drag-release inertia distance not yet applied; drained alongside
     /// `strip_scroll_pending_px` but with the slower flick decay.
     strip_flick_pending_px: f32,
+    /// Lazily analysed panel-gutter ranges per page, `(start_frac, end_frac)` of
+    /// the page height, feeding the keyboard panel-snap step. Filled on demand
+    /// from already-decoded pixels; an empty list is a cached "analysed, none".
+    /// PageId-keyed so folder refreshes stay safe; cleared on book change.
+    strip_panel_gutters: HashMap<crate::core::source::PageId, Arc<[(f32, f32)]>>,
     bookmark_thumbnails: Option<BookmarkThumbnails>,
     gpu_effects_available: bool,
     gpu_target_format: Option<wgpu::TextureFormat>,
@@ -406,6 +411,7 @@ impl SuiSuiViewApp {
             strip_anchor: None,
             strip_scroll_pending_px: 0.0,
             strip_flick_pending_px: 0.0,
+            strip_panel_gutters: HashMap::new(),
             strip_visible_indices: Vec::new(),
             strip_last_scroll_dir: NavigationDirection::Forward,
             strip_edge_overscroll_px: 0.0,
@@ -1041,6 +1047,7 @@ impl SuiSuiViewApp {
         self.strip_edge_overscroll_at = None;
         self.strip_scroll_pending_px = 0.0;
         self.strip_flick_pending_px = 0.0;
+        self.strip_panel_gutters.clear();
         if let Some(thumbnails) = self.bookmark_thumbnails.as_mut() {
             thumbnails.clear();
         }

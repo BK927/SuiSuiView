@@ -2,6 +2,10 @@
 //! layout + paint, pointer/keyboard scroll, and explicit page jumps. The pure
 //! layout/scroll math it calls lives in the parent `strip` module.
 
+use super::panels::{
+    collect_band_pages, detect_gutter_rows, snap_step_target, STRIP_SNAP_BASE_STEP_FRAC,
+    STRIP_SNAP_LANDING_PAD, STRIP_SNAP_WINDOW_FRAC,
+};
 use super::{
     accumulate_edge_overscroll, clamp_pan_x, column_width, display_height, flick_debt,
     jump_to_page, layout_visible, median_known_height, page_at_viewport_center, recenter_target,
@@ -17,6 +21,7 @@ use crate::core::source::BookSource;
 use crate::core::state::{FitMode, MouseGesture};
 use crate::core::worker::NavigationDirection;
 use egui::{Rect, Vec2};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Viewport size assumed before the first real viewer layout has been measured.
@@ -24,6 +29,10 @@ const STRIP_FALLBACK_VIEWPORT: Vec2 = Vec2 {
     x: 1000.0,
     y: 800.0,
 };
+
+/// Upper bound on panel-gutter analyses per keyboard step, so a single press
+/// only ever scans a few sub-millisecond pages of already-decoded pixels.
+const STRIP_SNAP_MAX_ANALYSES: usize = 4;
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn paint_strip(
@@ -332,8 +341,28 @@ impl SuiSuiViewApp {
             .last_viewer_size_points
             .map_or(STRIP_FALLBACK_VIEWPORT.y, |size| size.y);
         match command {
-            AppCommand::NextPage => self.strip_scroll_animate_by(viewport_height * 0.9),
-            AppCommand::PreviousPage => self.strip_scroll_animate_by(-viewport_height * 0.9),
+            AppCommand::NextPage => {
+                if self.settings.strip_panel_snap {
+                    let delta = self.strip_snapped_step_delta(
+                        viewport_height * STRIP_SNAP_BASE_STEP_FRAC,
+                        viewport_height * STRIP_SNAP_WINDOW_FRAC,
+                    );
+                    self.strip_scroll_animate_by(delta);
+                } else {
+                    self.strip_scroll_animate_by(viewport_height * 0.9);
+                }
+            }
+            AppCommand::PreviousPage => {
+                if self.settings.strip_panel_snap {
+                    let delta = self.strip_snapped_step_delta(
+                        -viewport_height * STRIP_SNAP_BASE_STEP_FRAC,
+                        viewport_height * STRIP_SNAP_WINDOW_FRAC,
+                    );
+                    self.strip_scroll_animate_by(delta);
+                } else {
+                    self.strip_scroll_animate_by(-viewport_height * 0.9);
+                }
+            }
             AppCommand::Home => self.strip_jump_to_page(0),
             AppCommand::End => {
                 if let Some(source) = self.source.as_ref() {
@@ -386,6 +415,107 @@ impl SuiSuiViewApp {
                 .saturating_add(delta as usize)
                 .min(max_page)
         }
+    }
+
+    /// Snapped keyboard-step distance (points, signed) for a panel-aware viewport
+    /// step. `raw_target` is the fixed step this press would take with snapping
+    /// off (positive = forward). Returns the distance to the nearest panel
+    /// boundary within `window` of that target, or `raw_target` unchanged when no
+    /// boundary is near. Everything is computed in delta space (0.0 = the current
+    /// viewport top) so far-page height estimates can never shift the result.
+    fn strip_snapped_step_delta(&mut self, raw_target: f32, window: f32) -> f32 {
+        let Some(source) = self.source.clone() else {
+            return raw_target;
+        };
+        let page_count = source.page_count();
+        if page_count == 0 {
+            return raw_target;
+        }
+        let viewport = self
+            .last_viewer_size_points
+            .unwrap_or(STRIP_FALLBACK_VIEWPORT);
+        let Some((anchor_index, offset_frac)) =
+            self.strip_resolve_anchor(source.as_ref(), page_count)
+        else {
+            return raw_target;
+        };
+        let column = self.strip_column_width(viewport);
+        let fallback = self.strip_fallback_height(source.as_ref(), page_count, column, viewport.y);
+
+        // Pages whose vertical span overlaps the candidate band around the target.
+        let band = {
+            let height_of =
+                |index: usize| self.strip_display_height(source.as_ref(), index, column, fallback);
+            collect_band_pages(
+                anchor_index,
+                offset_frac,
+                raw_target - window,
+                raw_target + window,
+                page_count,
+                &height_of,
+            )
+        };
+
+        // A page top is always a candidate; each gutter bottom (minus a small
+        // landing pad) is added for pages whose pixels are already decoded, with
+        // the analyses bounded per press.
+        let mut analysis_budget = STRIP_SNAP_MAX_ANALYSES;
+        let mut candidates = Vec::new();
+        for (index, top_delta, height) in band {
+            candidates.push(top_delta);
+            let gutters = self.strip_gutters_for(index, &mut analysis_budget);
+            for (_start, end) in gutters.iter().copied() {
+                let landing = (top_delta + end * height - STRIP_SNAP_LANDING_PAD).max(top_delta);
+                candidates.push(landing);
+            }
+        }
+        snap_step_target(raw_target, &candidates, window)
+    }
+
+    /// Panel-gutter ranges for `index`, from the cache or a fresh bounded scan of
+    /// the best already-decoded resolution. An empty slice means either "no
+    /// decoded pixels yet" (not cached, retried next press) or "budget spent";
+    /// a page analysed with no gutters caches an empty list so it is scanned once.
+    fn strip_gutters_for(&mut self, index: usize, budget: &mut usize) -> Arc<[(f32, f32)]> {
+        let Some(page_id) = self
+            .source
+            .as_ref()
+            .and_then(|source| source.page_id(index))
+        else {
+            return Arc::from(Vec::new());
+        };
+        if let Some(gutters) = self.strip_panel_gutters.get(&page_id) {
+            return gutters.clone();
+        }
+        if *budget == 0 {
+            return Arc::from(Vec::new());
+        }
+        match self.strip_analyze_page_gutters(index) {
+            Some(gutters) => {
+                *budget -= 1;
+                let gutters: Arc<[(f32, f32)]> = Arc::from(gutters);
+                self.strip_panel_gutters.insert(page_id, gutters.clone());
+                gutters
+            }
+            None => Arc::from(Vec::new()),
+        }
+    }
+
+    /// Detect panel gutters for `index` from the best already-decoded resolution.
+    /// `Some(list)` (possibly empty) when decoded pixels were available; `None`
+    /// when none exist yet, so the caller does not cache a miss. Fractions are
+    /// scale-invariant, so any cached resolution is fine. Uses `peek` to avoid
+    /// disturbing the decoded-cache LRU order.
+    fn strip_analyze_page_gutters(&self, index: usize) -> Option<Vec<(f32, f32)>> {
+        let key = self.page_key_at(index, self.target_long_edge)?;
+        let best_key = self.best_page_key(key)?;
+        let page = self.decoded_pages.peek(&best_key)?;
+        Some(detect_gutter_rows(
+            page.pixels.as_slice(),
+            page.pixels.bytes_per_pixel(),
+            page.display_width,
+            page.display_height,
+        ))
     }
 
     /// Width in points of the centered page column under the current fit/zoom.

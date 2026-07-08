@@ -6,6 +6,7 @@
 //! (paint, pointer, scroll, jump) live in `view.rs`, and the header prescan
 //! worker in `scan.rs` feeds the `strip_dim_hints` fallback.
 
+mod panels;
 mod scan;
 mod view;
 pub(in crate::app) use scan::StripDimScanWorker;
