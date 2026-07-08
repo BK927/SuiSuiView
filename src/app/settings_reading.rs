@@ -151,6 +151,59 @@ impl SuiSuiViewApp {
         );
 
         ui.add_space(8.0);
+        // Vertical-strip scroll amounts + cut stepping, absorbed from the former
+        // Vertical Scroll section. Item-level i18n keys stay settings.mouse.strip_*
+        // by design.
+        setting_group(
+            ui,
+            &i18n.text("settings.reading.vertical_scroll.title"),
+            &i18n.text("settings.reading.vertical_scroll.desc"),
+            |ui| {
+                egui::Grid::new("settings_vertical_scroll_grid")
+                    .num_columns(2)
+                    .spacing([14.0, 8.0])
+                    .show(ui, |ui| {
+                        grid_label_with_help(
+                            ui,
+                            &i18n.text("settings.mouse.strip_wheel"),
+                            &i18n.text("settings.mouse.strip_wheel.help"),
+                        );
+                        *changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut draft.strip_wheel_scroll_pct)
+                                    .range(STRIP_WHEEL_SCROLL_PCT_MIN..=STRIP_WHEEL_SCROLL_PCT_MAX)
+                                    .speed(10)
+                                    .suffix("%"),
+                            )
+                            .changed();
+                        ui.end_row();
+
+                        grid_label_with_help(
+                            ui,
+                            &i18n.text("settings.mouse.strip_drag"),
+                            &i18n.text("settings.mouse.strip_drag.help"),
+                        );
+                        *changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut draft.strip_drag_scroll_pct)
+                                    .range(STRIP_DRAG_SCROLL_PCT_MIN..=STRIP_DRAG_SCROLL_PCT_MAX)
+                                    .speed(5)
+                                    .suffix("%"),
+                            )
+                            .changed();
+                        ui.end_row();
+                    });
+                ui.add_space(8.0);
+                *changed |= checkbox_with_help(
+                    ui,
+                    &mut draft.strip_panel_snap,
+                    &i18n.text("settings.mouse.strip_panel_snap"),
+                    &i18n.text("settings.mouse.strip_panel_snap.help"),
+                );
+            },
+        );
+
+        ui.add_space(8.0);
         // Resume group: the former Bookmarks resume + archive controls, plus
         // remember_zoom relocated from the View viewer group. Item-level i18n
         // keys (settings.bookmarks.* / settings.view.remember_zoom) stay as-is.
@@ -196,72 +249,4 @@ impl SuiSuiViewApp {
             },
         );
     }
-}
-
-pub(in crate::app) fn show_vertical_scroll_settings(
-    ui: &mut egui::Ui,
-    draft: &mut AppSettings,
-    changed: &mut bool,
-    i18n: I18n,
-) {
-    // Vertical-strip scroll amounts moved from the Mouse navigation group;
-    // item-level i18n keys stay settings.mouse.strip_* by design.
-    setting_group(
-        ui,
-        &i18n.text("settings.vertical_scroll.scroll.title"),
-        &i18n.text("settings.vertical_scroll.scroll.desc"),
-        |ui| {
-            egui::Grid::new("settings_vertical_scroll_grid")
-                .num_columns(2)
-                .spacing([14.0, 8.0])
-                .show(ui, |ui| {
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.mouse.strip_wheel"),
-                        &i18n.text("settings.mouse.strip_wheel.help"),
-                    );
-                    *changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut draft.strip_wheel_scroll_pct)
-                                .range(STRIP_WHEEL_SCROLL_PCT_MIN..=STRIP_WHEEL_SCROLL_PCT_MAX)
-                                .speed(10)
-                                .suffix("%"),
-                        )
-                        .changed();
-                    ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.mouse.strip_drag"),
-                        &i18n.text("settings.mouse.strip_drag.help"),
-                    );
-                    *changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut draft.strip_drag_scroll_pct)
-                                .range(STRIP_DRAG_SCROLL_PCT_MIN..=STRIP_DRAG_SCROLL_PCT_MAX)
-                                .speed(5)
-                                .suffix("%"),
-                        )
-                        .changed();
-                    ui.end_row();
-                });
-        },
-    );
-
-    ui.add_space(8.0);
-    // Cut stepping: strip_panel_snap moved from the Mouse navigation group;
-    // the i18n key stays settings.mouse.strip_panel_snap by design.
-    setting_group(
-        ui,
-        &i18n.text("settings.vertical_scroll.cut.title"),
-        &i18n.text("settings.vertical_scroll.cut.desc"),
-        |ui| {
-            *changed |= checkbox_with_help(
-                ui,
-                &mut draft.strip_panel_snap,
-                &i18n.text("settings.mouse.strip_panel_snap"),
-                &i18n.text("settings.mouse.strip_panel_snap.help"),
-            );
-        },
-    );
 }

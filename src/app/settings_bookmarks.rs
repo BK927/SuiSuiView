@@ -11,6 +11,8 @@ pub(in crate::app) fn show_view_settings(
     changed: &mut bool,
     i18n: I18n,
 ) {
+    // Toolbar group: pin toggle plus the top-bar item toggles, merged from the
+    // former separate "top bar items" group. Item-level i18n keys stay as-is.
     setting_group(
         ui,
         &i18n.text("settings.view.toolbar.title"),
@@ -18,31 +20,10 @@ pub(in crate::app) fn show_view_settings(
         |ui| {
             *changed |= checkbox_with_help(
                 ui,
-                &mut draft.show_status_bar,
-                &i18n.text("settings.view.status_bar"),
-                &i18n.text("settings.view.status_bar.help"),
-            );
-            *changed |= checkbox_with_help(
-                ui,
                 &mut draft.top_bar_pinned,
                 &i18n.text("settings.view.top_bar_pinned"),
                 &i18n.text("settings.view.top_bar_pinned.help"),
             );
-            *changed |= checkbox_with_help(
-                ui,
-                &mut draft.show_filename_overlay,
-                &i18n.text("settings.view.filename_overlay"),
-                &i18n.text("settings.view.filename_overlay.help"),
-            );
-        },
-    );
-
-    ui.add_space(8.0);
-    setting_group(
-        ui,
-        &i18n.text("settings.view.top_bar_items.title"),
-        &i18n.text("settings.view.top_bar_items.desc"),
-        |ui| {
             *changed |= top_bar_item_checkbox(
                 ui,
                 &mut draft.top_bar_items.open,
@@ -129,11 +110,26 @@ pub(in crate::app) fn show_view_settings(
     );
 
     ui.add_space(8.0);
+    // "화면 표시" group: status bar + filename overlay relocated from the toolbar
+    // group, joined with the former viewer-display controls. The group reuses the
+    // settings.view.viewer.* keys (retitled in the catalog); item keys stay as-is.
     setting_group(
         ui,
         &i18n.text("settings.view.viewer.title"),
         &i18n.text("settings.view.viewer.desc"),
         |ui| {
+            *changed |= checkbox_with_help(
+                ui,
+                &mut draft.show_status_bar,
+                &i18n.text("settings.view.status_bar"),
+                &i18n.text("settings.view.status_bar.help"),
+            );
+            *changed |= checkbox_with_help(
+                ui,
+                &mut draft.show_filename_overlay,
+                &i18n.text("settings.view.filename_overlay"),
+                &i18n.text("settings.view.filename_overlay.help"),
+            );
             *changed |= checkbox_with_help(
                 ui,
                 &mut draft.show_main_border,

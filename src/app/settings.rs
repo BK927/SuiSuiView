@@ -1,7 +1,7 @@
 use super::ui::{dialog, icons, theme};
 use super::{
     gpu_paint, platform, settings_bookmarks, settings_input, settings_performance,
-    settings_reading, settings_rendering, SuiSuiViewApp,
+    settings_rendering, SuiSuiViewApp,
 };
 use crate::core::i18n::I18n;
 use crate::core::state::{AppSettings, GpuEffectMode, Language, RendererMode, WgpuUpscaleMethod};
@@ -13,7 +13,6 @@ pub(super) enum SettingsSection {
     General,
     View,
     Reading,
-    VerticalScroll,
     Rendering,
     Performance,
     Keyboard,
@@ -21,11 +20,10 @@ pub(super) enum SettingsSection {
 }
 
 impl SettingsSection {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 7] = [
         Self::General,
         Self::View,
         Self::Reading,
-        Self::VerticalScroll,
         Self::Rendering,
         Self::Performance,
         Self::Keyboard,
@@ -37,7 +35,6 @@ impl SettingsSection {
             Self::General => i18n.text("settings.section.general"),
             Self::View => i18n.text("settings.section.view"),
             Self::Reading => i18n.text("settings.section.reading"),
-            Self::VerticalScroll => i18n.text("settings.section.vertical_scroll"),
             Self::Rendering => i18n.text("settings.section.rendering"),
             Self::Performance => i18n.text("settings.section.performance"),
             Self::Keyboard => i18n.text("settings.section.keyboard"),
@@ -50,7 +47,6 @@ impl SettingsSection {
             Self::General => i18n.text("settings.section.general.desc"),
             Self::View => i18n.text("settings.section.view.desc"),
             Self::Reading => i18n.text("settings.section.reading.desc"),
-            Self::VerticalScroll => i18n.text("settings.section.vertical_scroll.desc"),
             Self::Rendering => i18n.text("settings.section.rendering.desc"),
             Self::Performance => i18n.text("settings.section.performance.desc"),
             Self::Keyboard => i18n.text("settings.section.keyboard.desc"),
@@ -63,7 +59,6 @@ impl SettingsSection {
             Self::General => (icons::SETTINGS, icons::IconStyle::Regular),
             Self::View => (icons::EYE, icons::IconStyle::Regular),
             Self::Reading => (icons::BOOKMARK, icons::IconStyle::Regular),
-            Self::VerticalScroll => (icons::CHEVRON_RIGHT, icons::IconStyle::Regular),
             Self::Rendering => (icons::IMAGE_SPARKLE, icons::IconStyle::Regular),
             Self::Performance => (icons::LOCK_OPEN, icons::IconStyle::Regular),
             Self::Keyboard => (icons::KEYBOARD, icons::IconStyle::Regular),
@@ -187,14 +182,6 @@ impl SuiSuiViewApp {
                                             i18n,
                                         );
                                     }
-                                    SettingsSection::VerticalScroll => {
-                                        settings_reading::show_vertical_scroll_settings(
-                                            ui,
-                                            &mut draft,
-                                            &mut changed,
-                                            i18n,
-                                        );
-                                    }
                                     SettingsSection::Rendering => {
                                         settings_rendering::show_rendering_settings(
                                             ui,
@@ -202,7 +189,6 @@ impl SuiSuiViewApp {
                                             &mut self.pending_gpu_acceleration,
                                             fast_start_failure_notice.as_ref(),
                                             &mut fast_start_action,
-                                            (live_ram_bytes, live_gpu_bytes),
                                             &mut changed,
                                             i18n,
                                         );
@@ -211,6 +197,14 @@ impl SuiSuiViewApp {
                                         settings_performance::show_decoder_settings(
                                             ui,
                                             &mut draft,
+                                            &mut changed,
+                                            i18n,
+                                        );
+                                        ui.add_space(8.0);
+                                        settings_performance::show_performance_settings(
+                                            ui,
+                                            &mut draft,
+                                            (live_ram_bytes, live_gpu_bytes),
                                             &mut changed,
                                             i18n,
                                         );

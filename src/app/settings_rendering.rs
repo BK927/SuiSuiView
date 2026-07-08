@@ -1,6 +1,5 @@
 use super::fast_start::{self, FastStartReportAction};
 use super::settings::{checkbox_with_help, grid_label_with_help, setting_group};
-use super::settings_performance;
 use super::ui::theme;
 use crate::core::i18n::I18n;
 use crate::core::state::{AppSettings, CpuScaleFilter, RendererMode, WgpuUpscaleMethod};
@@ -14,17 +13,51 @@ pub(in crate::app) fn show_rendering_settings(
     pending_gpu_acceleration: &mut Option<bool>,
     fast_start_failure_notice: Option<&crate::core::state::FastStartFailureNotice>,
     fast_start_action: &mut Option<FastStartReportAction>,
-    live_memory_bytes: (usize, usize),
     changed: &mut bool,
     i18n: I18n,
 ) {
+    let mut gpu_enabled = matches!(draft.renderer_mode, RendererMode::Wgpu);
+
+    // [렌더러·GPU 가속] — GPU acceleration toggle, split out of the scaling group.
+    // The restart-confirm dialog machinery lives in settings.rs and is untouched.
+    setting_group(
+        ui,
+        &i18n.text("settings.rendering.renderer.title"),
+        &i18n.text("settings.rendering.renderer.desc"),
+        |ui| {
+            egui::Grid::new("settings_gpu_toggle_grid")
+                .num_columns(2)
+                .spacing([14.0, 8.0])
+                .show(ui, |ui| {
+                    let gpu_help = i18n.text("settings.rendering.gpu.help");
+                    grid_label_with_help(ui, &i18n.text("settings.rendering.gpu"), &gpu_help);
+                    let gpu_changed = ui
+                        .checkbox(&mut gpu_enabled, "")
+                        .on_hover_text(gpu_help)
+                        .changed();
+                    if gpu_changed {
+                        *pending_gpu_acceleration = Some(gpu_enabled);
+                        ui.ctx().request_repaint();
+                        gpu_enabled = matches!(draft.renderer_mode, RendererMode::Wgpu);
+                    }
+                    ui.end_row();
+                });
+            fast_start::show_settings_status(
+                ui,
+                fast_start_failure_notice,
+                fast_start_action,
+                i18n,
+            );
+        },
+    );
+
+    ui.add_space(8.0);
+    // [스케일링] — CPU/GPU scaling controls (the rest of the former upscaler group).
     setting_group(
         ui,
         &i18n.text("settings.rendering.upscaler.title"),
         &i18n.text("settings.rendering.upscaler.desc"),
         |ui| {
-            let mut gpu_enabled = matches!(draft.renderer_mode, RendererMode::Wgpu);
-
             egui::Grid::new("settings_scaler_grid")
                 .num_columns(2)
                 .spacing([14.0, 8.0])
@@ -91,19 +124,6 @@ pub(in crate::app) fn show_rendering_settings(
                 .num_columns(2)
                 .spacing([14.0, 8.0])
                 .show(ui, |ui| {
-                    let gpu_help = i18n.text("settings.rendering.gpu.help");
-                    grid_label_with_help(ui, &i18n.text("settings.rendering.gpu"), &gpu_help);
-                    let gpu_changed = ui
-                        .checkbox(&mut gpu_enabled, "")
-                        .on_hover_text(gpu_help)
-                        .changed();
-                    if gpu_changed {
-                        *pending_gpu_acceleration = Some(gpu_enabled);
-                        ui.ctx().request_repaint();
-                        gpu_enabled = matches!(draft.renderer_mode, RendererMode::Wgpu);
-                    }
-                    ui.end_row();
-
                     grid_label_with_help(
                         ui,
                         &i18n.text("settings.rendering.gpu_upscaler"),
@@ -181,12 +201,6 @@ pub(in crate::app) fn show_rendering_settings(
                     .size(12.0)
                     .color(theme::TEXT_MUTED),
             );
-            fast_start::show_settings_status(
-                ui,
-                fast_start_failure_notice,
-                fast_start_action,
-                i18n,
-            );
         },
     );
 
@@ -218,7 +232,4 @@ pub(in crate::app) fn show_rendering_settings(
             }
         },
     );
-
-    ui.add_space(8.0);
-    settings_performance::show_performance_settings(ui, draft, live_memory_bytes, changed, i18n);
 }
