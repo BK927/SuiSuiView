@@ -224,6 +224,12 @@ pub(in crate::app) fn collect_panels(pages: &[PanelPage]) -> Vec<(f32, f32)> {
     spans
 }
 
+/// A step prefers to advance up to this fraction of a viewport (with the
+/// remaining 10% as reading overlap): among the cuts it could land on, the
+/// furthest within this travel wins, so a stack of small dialogue-bubble cuts
+/// is crossed a screenful per press instead of one bubble per press.
+const PANEL_STEP_CAP_FRAC: f32 = 0.9;
+
 /// Signed scroll delta for one panel-slideshow step, or `None` when no panel
 /// gives a better answer than the caller's plain step (no spans collected, or
 /// no next cut inside the collected range).
@@ -231,10 +237,14 @@ pub(in crate::app) fn collect_panels(pages: &[PanelPage]) -> Vec<(f32, f32)> {
 /// Delta space: 0.0 = current viewport top, the viewport spans `[0, viewport_h]`.
 /// Forward semantics: while the cut under the viewport center still has more
 /// than [`PANEL_REMAINDER_FRAC`] of a viewport unread below, walk within it by
-/// `walk_step` (an oversized cut reads like today); otherwise jump so the next
-/// cut sits centered — or top-aligned with a small pad when taller than the
-/// viewport. Backward is the mirror image. Blank pages and inter-cut whitespace
-/// contribute no spans, so a single step glides across them entirely.
+/// `walk_step` (an oversized cut reads like today). Otherwise land on a cut —
+/// centered, or top-aligned with a small pad when taller than the viewport —
+/// choosing the FURTHEST landing within [`PANEL_STEP_CAP_FRAC`] of a viewport
+/// so dense small cuts are crossed a screenful at a time (everything skipped
+/// past stays visible above the landing), and falling through to the nearest
+/// landing beyond the cap when none is inside it (the gap skip), capped at
+/// [`PANEL_STEP_MAX_VIEWPORTS`]. Backward is the mirror image. Blank pages and
+/// inter-cut whitespace contribute no spans, so a step glides across them.
 pub(in crate::app) fn panel_step_delta(
     viewport_h: f32,
     walk_step: f32,
@@ -246,10 +256,28 @@ pub(in crate::app) fn panel_step_delta(
     }
     let center = viewport_h * 0.5;
     let remainder_slack = viewport_h * PANEL_REMAINDER_FRAC;
+    let step_cap = viewport_h * PANEL_STEP_CAP_FRAC;
     let current = panels
         .iter()
         .copied()
         .find(|&(top, bottom)| top <= center && center < bottom);
+
+    // Landing delta for one cut: center it, or top-align an oversized one.
+    let land_forward = |(top, bottom): (f32, f32)| {
+        if bottom - top <= viewport_h {
+            (top + bottom) / 2.0 - center
+        } else {
+            top - STRIP_SNAP_LANDING_PAD
+        }
+    };
+    let land_backward = |(top, bottom): (f32, f32)| {
+        if bottom - top <= viewport_h {
+            (top + bottom) / 2.0 - center
+        } else {
+            // Reading backward into a tall cut: land on its end.
+            bottom - viewport_h + STRIP_SNAP_LANDING_PAD
+        }
+    };
 
     let delta = if forward {
         if let Some((_top, bottom)) = current {
@@ -260,15 +288,13 @@ pub(in crate::app) fn panel_step_delta(
             }
         }
         let from = current.map_or(center, |(_, bottom)| bottom);
-        let (top, bottom) = panels
+        let landings = panels
             .iter()
             .copied()
-            .find(|&(top, _)| top >= from - PANEL_MERGE_EPSILON)?;
-        if bottom - top <= viewport_h {
-            (top + bottom) / 2.0 - center
-        } else {
-            top - STRIP_SNAP_LANDING_PAD
-        }
+            .filter(|&(top, _)| top >= from - PANEL_MERGE_EPSILON)
+            .map(land_forward)
+            .filter(|delta| *delta >= 1.0);
+        pick_landing(landings, step_cap)?
     } else {
         if let Some((top, _bottom)) = current {
             let remaining = -top;
@@ -277,27 +303,37 @@ pub(in crate::app) fn panel_step_delta(
             }
         }
         let from = current.map_or(center, |(top, _)| top);
-        let (top, bottom) = panels
+        let landings = panels
             .iter()
-            .rev()
             .copied()
-            .find(|&(_, bottom)| bottom <= from + PANEL_MERGE_EPSILON)?;
-        if bottom - top <= viewport_h {
-            (top + bottom) / 2.0 - center
-        } else {
-            // Reading backward into a tall cut: land on its end.
-            bottom - viewport_h + STRIP_SNAP_LANDING_PAD
-        }
+            .filter(|&(_, bottom)| bottom <= from + PANEL_MERGE_EPSILON)
+            .map(land_backward)
+            .filter(|delta| *delta <= -1.0)
+            .map(|delta| -delta);
+        -pick_landing(landings, step_cap)?
     };
-    // A zero-ish delta means we are already centered on the found cut (e.g. one
-    // huge merged span); let the caller take the plain step instead of stalling.
-    if delta.abs() < 1.0 {
-        return None;
-    }
     Some(delta.clamp(
         -PANEL_STEP_MAX_VIEWPORTS * viewport_h,
         PANEL_STEP_MAX_VIEWPORTS * viewport_h,
     ))
+}
+
+/// Choose among positive landing distances: the furthest within `step_cap`
+/// (advance a screenful, landing framed), else the nearest beyond it (the gap
+/// skip), else `None`.
+fn pick_landing(landings: impl Iterator<Item = f32>, step_cap: f32) -> Option<f32> {
+    let mut best_within: Option<f32> = None;
+    let mut nearest_beyond: Option<f32> = None;
+    for landing in landings {
+        if landing <= step_cap {
+            if best_within.is_none_or(|best| landing > best) {
+                best_within = Some(landing);
+            }
+        } else if nearest_beyond.is_none_or(|nearest| landing < nearest) {
+            nearest_beyond = Some(landing);
+        }
+    }
+    best_within.or(nearest_beyond)
 }
 
 /// Cap on how many nearby pages the delta-space walk collects, so a run of
@@ -577,6 +613,22 @@ mod tests {
         // viewport top minus the pad instead of centering.
         let panels = vec![(200.0, 600.0), (900.0, 2900.0)];
         assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(888.0));
+    }
+
+    #[test]
+    fn step_crosses_dense_small_cuts_a_screenful_at_a_time() {
+        // A dialogue stack of small bubble-cuts: the furthest landing within
+        // the 0.9-viewport cap (720) wins — 550, centering the second bubble
+        // with the first still visible above — instead of crawling one bubble
+        // (350) per press.
+        let panels = vec![
+            (200.0, 600.0),
+            (700.0, 800.0),
+            (900.0, 1000.0),
+            (1100.0, 1200.0),
+            (1500.0, 1600.0),
+        ];
+        assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(550.0));
     }
 
     #[test]
