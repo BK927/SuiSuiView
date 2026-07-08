@@ -3,8 +3,8 @@
 //! layout/scroll math it calls lives in the parent `strip` module.
 
 use super::panels::{
-    collect_band_pages, detect_gutter_rows, snap_step_target, STRIP_SNAP_BASE_STEP_FRAC,
-    STRIP_SNAP_LANDING_PAD, STRIP_SNAP_WINDOW_FRAC,
+    collect_band_pages, collect_panels, detect_gutter_rows, panel_step_delta, PanelPage,
+    PANEL_STEP_MAX_VIEWPORTS, STRIP_SNAP_BASE_STEP_FRAC,
 };
 use super::{
     accumulate_edge_overscroll, clamp_pan_x, column_width, display_height, flick_debt,
@@ -343,10 +343,7 @@ impl SuiSuiViewApp {
         match command {
             AppCommand::NextPage => {
                 if self.settings.strip_panel_snap {
-                    let delta = self.strip_snapped_step_delta(
-                        viewport_height * STRIP_SNAP_BASE_STEP_FRAC,
-                        viewport_height * STRIP_SNAP_WINDOW_FRAC,
-                    );
+                    let delta = self.strip_panel_step_delta(viewport_height, true);
                     self.strip_scroll_animate_by(delta);
                 } else {
                     self.strip_scroll_animate_by(viewport_height * 0.9);
@@ -354,10 +351,7 @@ impl SuiSuiViewApp {
             }
             AppCommand::PreviousPage => {
                 if self.settings.strip_panel_snap {
-                    let delta = self.strip_snapped_step_delta(
-                        -viewport_height * STRIP_SNAP_BASE_STEP_FRAC,
-                        viewport_height * STRIP_SNAP_WINDOW_FRAC,
-                    );
+                    let delta = self.strip_panel_step_delta(viewport_height, false);
                     self.strip_scroll_animate_by(delta);
                 } else {
                     self.strip_scroll_animate_by(-viewport_height * 0.9);
@@ -417,19 +411,24 @@ impl SuiSuiViewApp {
         }
     }
 
-    /// Snapped keyboard-step distance (points, signed) for a panel-aware viewport
-    /// step. `raw_target` is the fixed step this press would take with snapping
-    /// off (positive = forward). Returns the distance to the nearest panel
-    /// boundary within `window` of that target, or `raw_target` unchanged when no
-    /// boundary is near. Everything is computed in delta space (0.0 = the current
-    /// viewport top) so far-page height estimates can never shift the result.
-    fn strip_snapped_step_delta(&mut self, raw_target: f32, window: f32) -> f32 {
+    /// Panel-slideshow keyboard step (points, signed): bring the next/previous
+    /// cut to the viewport center, walking within cuts taller than the viewport
+    /// and gliding across blank pages and inter-cut whitespace in one press.
+    /// Falls back to the plain fixed step when no cut gives a better answer.
+    /// Everything is computed in delta space (0.0 = the current viewport top) so
+    /// far-page height estimates can never shift the result.
+    fn strip_panel_step_delta(&mut self, viewport_height: f32, forward: bool) -> f32 {
+        let raw = if forward {
+            viewport_height * STRIP_SNAP_BASE_STEP_FRAC
+        } else {
+            -viewport_height * STRIP_SNAP_BASE_STEP_FRAC
+        };
         let Some(source) = self.source.clone() else {
-            return raw_target;
+            return raw;
         };
         let page_count = source.page_count();
         if page_count == 0 {
-            return raw_target;
+            return raw;
         }
         let viewport = self
             .last_viewer_size_points
@@ -437,39 +436,43 @@ impl SuiSuiViewApp {
         let Some((anchor_index, offset_frac)) =
             self.strip_resolve_anchor(source.as_ref(), page_count)
         else {
-            return raw_target;
+            return raw;
         };
         let column = self.strip_column_width(viewport);
         let fallback = self.strip_fallback_height(source.as_ref(), page_count, column, viewport.y);
 
-        // Pages whose vertical span overlaps the candidate band around the target.
+        // Pages overlapping the search reach: the current viewport (the cut under
+        // the center may start a page back) plus the furthest a step may travel.
+        let reach = PANEL_STEP_MAX_VIEWPORTS * viewport_height;
+        let (lo, hi) = if forward {
+            (-1.5 * viewport_height, reach + viewport_height)
+        } else {
+            (-reach - viewport_height, 1.5 * viewport_height)
+        };
         let band = {
             let height_of =
                 |index: usize| self.strip_display_height(source.as_ref(), index, column, fallback);
-            collect_band_pages(
-                anchor_index,
-                offset_frac,
-                raw_target - window,
-                raw_target + window,
-                page_count,
-                &height_of,
-            )
+            collect_band_pages(anchor_index, offset_frac, lo, hi, page_count, &height_of)
         };
 
-        // A page top is always a candidate; each gutter bottom (minus a small
-        // landing pad) is added for pages whose pixels are already decoded, with
-        // the analyses bounded per press.
+        // Gutters per page (bounded fresh analyses); a page with no decoded
+        // pixels yet contributes a full-content span, the conservative estimate.
         let mut analysis_budget = STRIP_SNAP_MAX_ANALYSES;
-        let mut candidates = Vec::new();
-        for (index, top_delta, height) in band {
-            candidates.push(top_delta);
-            let gutters = self.strip_gutters_for(index, &mut analysis_budget);
-            for (_start, end) in gutters.iter().copied() {
-                let landing = (top_delta + end * height - STRIP_SNAP_LANDING_PAD).max(top_delta);
-                candidates.push(landing);
-            }
-        }
-        snap_step_target(raw_target, &candidates, window)
+        let pages: Vec<PanelPage> = band
+            .into_iter()
+            .map(|(index, top_delta, height)| {
+                let gutters = self.strip_gutters_for(index, &mut analysis_budget);
+                (top_delta, height, gutters.to_vec())
+            })
+            .collect();
+        let panels = collect_panels(&pages);
+        panel_step_delta(
+            viewport_height,
+            viewport_height * STRIP_SNAP_BASE_STEP_FRAC,
+            &panels,
+            forward,
+        )
+        .unwrap_or(raw)
     }
 
     /// Panel-gutter ranges for `index`, from the cache or a fresh bounded scan of

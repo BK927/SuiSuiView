@@ -10,16 +10,13 @@
 
 use std::cmp::Ordering;
 
-/// Base keyboard step when snap is enabled, as a fraction of the viewport
-/// height. Slightly shorter than the snap-off `0.9` so a snap that misses still
-/// leaves a comfortable panel overlap.
+/// Base keyboard step (fraction of the viewport height): the fallback when no
+/// cut gives a better answer, and the walking step within a cut taller than the
+/// viewport. Slightly shorter than the snap-off `0.9` for comfortable overlap.
 pub(in crate::app) const STRIP_SNAP_BASE_STEP_FRAC: f32 = 0.85;
-/// Half-width of the search window around the raw target, as a fraction of the
-/// viewport height. A candidate within this of the raw target wins.
-pub(in crate::app) const STRIP_SNAP_WINDOW_FRAC: f32 = 0.25;
-/// Points of breathing room left above the next panel's top when landing on a
-/// gutter, so the panel edge is not flush against the viewport top.
-pub(in crate::app) const STRIP_SNAP_LANDING_PAD: f32 = 12.0;
+/// Points of breathing room left above a taller-than-viewport cut's top when
+/// top-aligning it, so the cut edge is not flush against the viewport edge.
+const STRIP_SNAP_LANDING_PAD: f32 = 12.0;
 
 /// A sampled row counts as uniform when its luminance spread (max-min over the
 /// sampled pixels, 0..=255) is at most this.
@@ -176,25 +173,131 @@ fn push_run(
     }
 }
 
-/// Nearest candidate to `raw_target_px` within `±window_px`, else `raw_target_px`
-/// unchanged. On an exact distance tie the earlier candidate in the slice wins
-/// (candidates are built anchor-outward, so the one nearer the viewport wins).
-pub(in crate::app) fn snap_step_target(
-    raw_target_px: f32,
-    candidates_px: &[f32],
-    window_px: f32,
-) -> f32 {
-    candidates_px
+/// Two content spans this close (points) merge into one panel: page seams and
+/// rounding produce sub-pixel gaps between spans that are really one cut.
+const PANEL_MERGE_EPSILON: f32 = 0.5;
+/// A panel counts as "still being read" while more than this fraction of a
+/// viewport of it remains off-screen in the step direction; the step then walks
+/// within the cut instead of jumping to the next one.
+const PANEL_REMAINDER_FRAC: f32 = 0.15;
+/// A single panel-slideshow step never travels further than this many viewports,
+/// so a pathological gap cannot fling the reader across the book in one press.
+pub(in crate::app) const PANEL_STEP_MAX_VIEWPORTS: f32 = 3.0;
+
+/// One page as the panel walk sees it: `(top_delta, height, gutters)` with the
+/// gutters as sorted height fractions.
+pub(in crate::app) type PanelPage = (f32, f32, Vec<(f32, f32)>);
+
+/// Content spans ("cuts") in delta space: the complement of each page's gutters,
+/// merged across touching boundaries — art that runs over a page seam with no
+/// gutter on either side is one panel. Pages may arrive unsorted. A page whose
+/// gutters cover it entirely (a blank/transition page) contributes no span,
+/// i.e. it becomes part of the gap between cuts.
+pub(in crate::app) fn collect_panels(pages: &[PanelPage]) -> Vec<(f32, f32)> {
+    let mut sorted: Vec<&PanelPage> = pages.iter().collect();
+    sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+
+    let mut spans: Vec<(f32, f32)> = Vec::new();
+    let push_span = |spans: &mut Vec<(f32, f32)>, top: f32, bottom: f32| {
+        if bottom - top <= f32::EPSILON {
+            return;
+        }
+        if let Some(last) = spans.last_mut() {
+            if top - last.1 <= PANEL_MERGE_EPSILON {
+                last.1 = last.1.max(bottom);
+                return;
+            }
+        }
+        spans.push((top, bottom));
+    };
+
+    for (page_top, height, gutters) in sorted {
+        let mut cursor = *page_top;
+        for (start_frac, end_frac) in gutters.iter().copied() {
+            let gutter_top = page_top + start_frac * height;
+            let gutter_bottom = page_top + end_frac * height;
+            push_span(&mut spans, cursor, gutter_top);
+            cursor = cursor.max(gutter_bottom);
+        }
+        push_span(&mut spans, cursor, page_top + height);
+    }
+    spans
+}
+
+/// Signed scroll delta for one panel-slideshow step, or `None` when no panel
+/// gives a better answer than the caller's plain step (no spans collected, or
+/// no next cut inside the collected range).
+///
+/// Delta space: 0.0 = current viewport top, the viewport spans `[0, viewport_h]`.
+/// Forward semantics: while the cut under the viewport center still has more
+/// than [`PANEL_REMAINDER_FRAC`] of a viewport unread below, walk within it by
+/// `walk_step` (an oversized cut reads like today); otherwise jump so the next
+/// cut sits centered — or top-aligned with a small pad when taller than the
+/// viewport. Backward is the mirror image. Blank pages and inter-cut whitespace
+/// contribute no spans, so a single step glides across them entirely.
+pub(in crate::app) fn panel_step_delta(
+    viewport_h: f32,
+    walk_step: f32,
+    panels: &[(f32, f32)],
+    forward: bool,
+) -> Option<f32> {
+    if panels.is_empty() || viewport_h <= 0.0 {
+        return None;
+    }
+    let center = viewport_h * 0.5;
+    let remainder_slack = viewport_h * PANEL_REMAINDER_FRAC;
+    let current = panels
         .iter()
         .copied()
-        .filter(|candidate| (candidate - raw_target_px).abs() <= window_px)
-        .min_by(|a, b| {
-            (a - raw_target_px)
-                .abs()
-                .partial_cmp(&(b - raw_target_px).abs())
-                .unwrap_or(Ordering::Equal)
-        })
-        .unwrap_or(raw_target_px)
+        .find(|&(top, bottom)| top <= center && center < bottom);
+
+    let delta = if forward {
+        if let Some((_top, bottom)) = current {
+            let remaining = bottom - viewport_h;
+            if remaining > remainder_slack {
+                // Still reading a tall cut: never step past its end.
+                return Some(walk_step.min(remaining));
+            }
+        }
+        let from = current.map_or(center, |(_, bottom)| bottom);
+        let (top, bottom) = panels
+            .iter()
+            .copied()
+            .find(|&(top, _)| top >= from - PANEL_MERGE_EPSILON)?;
+        if bottom - top <= viewport_h {
+            (top + bottom) / 2.0 - center
+        } else {
+            top - STRIP_SNAP_LANDING_PAD
+        }
+    } else {
+        if let Some((top, _bottom)) = current {
+            let remaining = -top;
+            if remaining > remainder_slack {
+                return Some(-walk_step.min(remaining));
+            }
+        }
+        let from = current.map_or(center, |(top, _)| top);
+        let (top, bottom) = panels
+            .iter()
+            .rev()
+            .copied()
+            .find(|&(_, bottom)| bottom <= from + PANEL_MERGE_EPSILON)?;
+        if bottom - top <= viewport_h {
+            (top + bottom) / 2.0 - center
+        } else {
+            // Reading backward into a tall cut: land on its end.
+            bottom - viewport_h + STRIP_SNAP_LANDING_PAD
+        }
+    };
+    // A zero-ish delta means we are already centered on the found cut (e.g. one
+    // huge merged span); let the caller take the plain step instead of stalling.
+    if delta.abs() < 1.0 {
+        return None;
+    }
+    Some(delta.clamp(
+        -PANEL_STEP_MAX_VIEWPORTS * viewport_h,
+        PANEL_STEP_MAX_VIEWPORTS * viewport_h,
+    ))
 }
 
 /// Cap on how many nearby pages the delta-space walk collects, so a run of
@@ -409,26 +512,93 @@ mod tests {
     }
 
     #[test]
-    fn snap_picks_nearest_candidate_inside_window() {
-        // Raw target 100, window 30: 90 (d=10) beats 125 (d=25); 200 is outside.
-        assert_eq!(snap_step_target(100.0, &[90.0, 125.0, 200.0], 30.0), 90.0);
+    fn panels_are_the_gutter_complement_and_merge_across_seams() {
+        // Page A [0,1000]: gutter at 40%-60% -> cuts [0,400] and [600,1000].
+        // Page B [1000,2000]: no gutters (art from its very top) -> its span
+        // touches page A's trailing span at the seam and merges into one cut.
+        let pages = vec![(0.0, 1000.0, vec![(0.4, 0.6)]), (1000.0, 1000.0, vec![])];
+        assert_eq!(collect_panels(&pages), vec![(0.0, 400.0), (600.0, 2000.0)]);
     }
 
     #[test]
-    fn snap_returns_raw_when_no_candidate_in_window() {
-        assert_eq!(snap_step_target(100.0, &[40.0, 200.0], 30.0), 100.0);
-        assert_eq!(snap_step_target(100.0, &[], 30.0), 100.0);
+    fn fully_blank_page_becomes_part_of_the_gap() {
+        // Page B is one full-page gutter (a blank transition page): the cuts on
+        // either side stay separate with the whole page as the gap.
+        let pages = vec![
+            (0.0, 1000.0, vec![(0.8, 1.0)]),
+            (1000.0, 1000.0, vec![(0.0, 1.0)]),
+            (2000.0, 1000.0, vec![(0.0, 0.2)]),
+        ];
+        assert_eq!(collect_panels(&pages), vec![(0.0, 800.0), (2200.0, 3000.0)]);
     }
 
     #[test]
-    fn snap_tie_prefers_earlier_candidate() {
-        // Both 20 away; the first listed (nearer the viewport top) wins.
-        assert_eq!(snap_step_target(100.0, &[80.0, 120.0], 30.0), 80.0);
+    fn panels_sort_unsorted_page_input() {
+        // collect_band_pages emits anchor, then downward, then upward pages.
+        let pages = vec![
+            (1000.0, 1000.0, vec![(0.0, 1.0)]),
+            (0.0, 1000.0, vec![(0.8, 1.0)]),
+        ];
+        assert_eq!(collect_panels(&pages), vec![(0.0, 800.0)]);
     }
 
     #[test]
-    fn snap_is_symmetric_for_backward_targets() {
-        assert_eq!(snap_step_target(-100.0, &[-90.0, -130.0], 30.0), -90.0);
+    fn step_centers_the_next_cut() {
+        // Viewport 800 (center 400). Current cut [200,600] is centered-ish and
+        // fully visible; the next cut [900,1100] (height 200) should center at
+        // 400 -> its center 1000 moves to 400 -> delta 600.
+        let panels = vec![(200.0, 600.0), (900.0, 1100.0)];
+        assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(600.0));
+    }
+
+    #[test]
+    fn step_skips_a_long_gap_in_one_press_but_is_capped() {
+        // Next cut far below: centering it needs 1900; cap is 3 viewports = 2400
+        // (not hit). A pathological 10k gap is clamped to the cap.
+        let panels = vec![(200.0, 600.0), (2200.0, 2400.0)];
+        assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(1900.0));
+        let far = vec![(200.0, 600.0), (10_000.0, 10_200.0)];
+        assert_eq!(panel_step_delta(800.0, 680.0, &far, true), Some(2400.0));
+    }
+
+    #[test]
+    fn step_walks_within_a_cut_taller_than_the_viewport() {
+        // One huge cut [0, 5000] under an 800 viewport: walk by the base step,
+        // and near its end never step past the cut bottom.
+        let panels = vec![(0.0, 5000.0)];
+        assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(680.0));
+        let near_end = vec![(-3900.0, 1100.0)];
+        assert_eq!(panel_step_delta(800.0, 680.0, &near_end, true), Some(300.0));
+    }
+
+    #[test]
+    fn step_top_aligns_a_next_cut_taller_than_the_viewport() {
+        // Next cut [900, 2900] (2000 tall > 800 viewport): land its top at the
+        // viewport top minus the pad instead of centering.
+        let panels = vec![(200.0, 600.0), (900.0, 2900.0)];
+        assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(888.0));
+    }
+
+    #[test]
+    fn step_falls_back_when_no_cut_answers() {
+        assert_eq!(panel_step_delta(800.0, 680.0, &[], true), None);
+        // Only cuts behind the center going forward -> None.
+        let behind = vec![(-500.0, -100.0)];
+        assert_eq!(panel_step_delta(800.0, 680.0, &behind, true), None);
+    }
+
+    #[test]
+    fn step_backward_mirrors_forward() {
+        // Previous cut [-700,-500] (height 200): center it -> its center -600
+        // moves to 400 -> delta -1000.
+        let panels = vec![(-700.0, -500.0), (200.0, 600.0)];
+        assert_eq!(
+            panel_step_delta(800.0, 680.0, &panels, false),
+            Some(-1000.0)
+        );
+        // Reading backward while the current cut still extends above: walk up.
+        let tall = vec![(-3000.0, 1100.0)];
+        assert_eq!(panel_step_delta(800.0, 680.0, &tall, false), Some(-680.0));
     }
 
     #[test]
