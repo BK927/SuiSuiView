@@ -3,9 +3,7 @@ use super::settings::{checkbox_with_help, grid_label_with_help, setting_group};
 use super::settings_performance;
 use super::ui::theme;
 use crate::core::i18n::I18n;
-use crate::core::state::{
-    AppSettings, CpuScaleFilter, PageTransitionStyle, RendererMode, WgpuUpscaleMethod,
-};
+use crate::core::state::{AppSettings, CpuScaleFilter, RendererMode, WgpuUpscaleMethod};
 use egui::{self, RichText};
 
 // established call surface; a params struct would be pure boilerplate
@@ -20,41 +18,6 @@ pub(in crate::app) fn show_rendering_settings(
     changed: &mut bool,
     i18n: I18n,
 ) {
-    setting_group(
-        ui,
-        &i18n.text("settings.rendering.display.title"),
-        &i18n.text("settings.rendering.display.desc"),
-        |ui| {
-            egui::Grid::new("settings_transition_grid")
-                .num_columns(2)
-                .spacing([14.0, 8.0])
-                .show(ui, |ui| {
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.rendering.transition"),
-                        &i18n.text("settings.rendering.transition.help"),
-                    );
-                    let mut transition_style = draft.effective_page_transition_style();
-                    egui::ComboBox::from_id_salt("page_transition_style")
-                        .selected_text(transition_style.label_i18n(i18n))
-                        .show_ui(ui, |ui| {
-                            for style in PageTransitionStyle::ALL {
-                                *changed |= ui
-                                    .selectable_value(
-                                        &mut transition_style,
-                                        style,
-                                        style.label_i18n(i18n),
-                                    )
-                                    .changed();
-                            }
-                        });
-                    draft.set_page_transition_style(transition_style);
-                    ui.end_row();
-                });
-        },
-    );
-
-    ui.add_space(8.0);
     setting_group(
         ui,
         &i18n.text("settings.rendering.upscaler.title"),

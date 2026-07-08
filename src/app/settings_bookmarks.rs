@@ -1,5 +1,4 @@
 use super::settings::{checkbox_with_help, grid_label_with_help, setting_group};
-use super::SuiSuiViewApp;
 use crate::core::i18n::I18n;
 use crate::core::state::{
     AppSettings, CpuScaleFilter, TopBarItems, WgpuUpscaleMethod, DEFAULT_TOP_BAR_CPU_SCALE_FILTERS,
@@ -35,29 +34,6 @@ pub(in crate::app) fn show_view_settings(
                 &i18n.text("settings.view.filename_overlay"),
                 &i18n.text("settings.view.filename_overlay.help"),
             );
-            *changed |= checkbox_with_help(
-                ui,
-                &mut draft.pixel_grid_enabled,
-                &i18n.text("settings.view.pixel_grid"),
-                &i18n.text("settings.view.pixel_grid.help"),
-            );
-            ui.add_enabled_ui(draft.pixel_grid_enabled, |ui| {
-                ui.horizontal(|ui| {
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.view.pixel_grid_threshold"),
-                        &i18n.text("settings.view.pixel_grid_threshold.help"),
-                    );
-                    *changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut draft.pixel_grid_min_zoom_pct)
-                                .range(200..=6400)
-                                .speed(10)
-                                .suffix("%"),
-                        )
-                        .changed();
-                });
-            });
         },
     );
 
@@ -172,10 +148,27 @@ pub(in crate::app) fn show_view_settings(
             );
             *changed |= checkbox_with_help(
                 ui,
-                &mut draft.remember_zoom_per_book,
-                &i18n.text("settings.view.remember_zoom"),
-                &i18n.text("settings.view.remember_zoom.help"),
+                &mut draft.pixel_grid_enabled,
+                &i18n.text("settings.view.pixel_grid"),
+                &i18n.text("settings.view.pixel_grid.help"),
             );
+            ui.add_enabled_ui(draft.pixel_grid_enabled, |ui| {
+                ui.horizontal(|ui| {
+                    grid_label_with_help(
+                        ui,
+                        &i18n.text("settings.view.pixel_grid_threshold"),
+                        &i18n.text("settings.view.pixel_grid_threshold.help"),
+                    );
+                    *changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut draft.pixel_grid_min_zoom_pct)
+                                .range(200..=6400)
+                                .speed(10)
+                                .suffix("%"),
+                        )
+                        .changed();
+                });
+            });
         },
     );
 }
@@ -237,59 +230,4 @@ fn show_quick_scaler_candidates<T, I>(
             }
         }
     });
-}
-
-impl SuiSuiViewApp {
-    pub(in crate::app) fn show_bookmark_settings(
-        &mut self,
-        ui: &mut egui::Ui,
-        draft: &mut AppSettings,
-        changed: &mut bool,
-        i18n: I18n,
-    ) {
-        setting_group(
-            ui,
-            &i18n.text("settings.bookmarks.resume.title"),
-            &i18n.text("settings.bookmarks.resume.desc"),
-            |ui| {
-                *changed |= checkbox_with_help(
-                    ui,
-                    &mut draft.auto_save_reading_position,
-                    &i18n.text("settings.bookmarks.auto_save"),
-                    &i18n.text("settings.bookmarks.auto_save.help"),
-                );
-                *changed |= checkbox_with_help(
-                    ui,
-                    &mut draft.resume_by_file_identity,
-                    &i18n.text("settings.bookmarks.file_identity"),
-                    &i18n.text("settings.bookmarks.file_identity.help"),
-                );
-            },
-        );
-
-        ui.add_space(8.0);
-        setting_group(
-            ui,
-            &i18n.text("settings.bookmarks.archive.title"),
-            &i18n.text("settings.bookmarks.archive.desc"),
-            |ui| {
-                *changed |= checkbox_with_help(
-                    ui,
-                    &mut draft.remember_archive_page_name,
-                    &i18n.text("settings.bookmarks.archive_page_name"),
-                    &i18n.text("settings.bookmarks.archive_page_name.help"),
-                );
-                if ui
-                    .button(i18n.text("settings.bookmarks.clear_archive"))
-                    .clicked()
-                {
-                    let cleared = self.store.clear_archive_page_names();
-                    self.set_status(i18n.with_vars(
-                        "settings.bookmarks.clear_archive.status",
-                        &[("count", cleared.to_string())],
-                    ));
-                }
-            },
-        );
-    }
 }

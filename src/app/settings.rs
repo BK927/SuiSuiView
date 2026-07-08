@@ -1,12 +1,10 @@
 use super::ui::{dialog, icons, theme};
 use super::{
     gpu_paint, platform, settings_bookmarks, settings_input, settings_performance,
-    settings_rendering, SuiSuiViewApp,
+    settings_reading, settings_rendering, SuiSuiViewApp,
 };
 use crate::core::i18n::I18n;
-use crate::core::state::{
-    AppSettings, EdgePageAction, GpuEffectMode, Language, RendererMode, WgpuUpscaleMethod,
-};
+use crate::core::state::{AppSettings, GpuEffectMode, Language, RendererMode, WgpuUpscaleMethod};
 use egui::{self, RichText};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -14,35 +12,22 @@ pub(super) enum SettingsSection {
     #[default]
     General,
     View,
-    #[cfg(target_os = "windows")]
-    FileAssociations,
+    Reading,
+    VerticalScroll,
     Rendering,
-    Decoders,
-    Bookmarks,
+    Performance,
     Keyboard,
     Mouse,
 }
 
 impl SettingsSection {
-    #[cfg(target_os = "windows")]
     const ALL: [Self; 8] = [
         Self::General,
         Self::View,
-        Self::FileAssociations,
+        Self::Reading,
+        Self::VerticalScroll,
         Self::Rendering,
-        Self::Decoders,
-        Self::Bookmarks,
-        Self::Keyboard,
-        Self::Mouse,
-    ];
-
-    #[cfg(not(target_os = "windows"))]
-    const ALL: [Self; 7] = [
-        Self::General,
-        Self::View,
-        Self::Rendering,
-        Self::Decoders,
-        Self::Bookmarks,
+        Self::Performance,
         Self::Keyboard,
         Self::Mouse,
     ];
@@ -51,11 +36,10 @@ impl SettingsSection {
         match self {
             Self::General => i18n.text("settings.section.general"),
             Self::View => i18n.text("settings.section.view"),
-            #[cfg(target_os = "windows")]
-            Self::FileAssociations => i18n.text("settings.section.file_associations"),
+            Self::Reading => i18n.text("settings.section.reading"),
+            Self::VerticalScroll => i18n.text("settings.section.vertical_scroll"),
             Self::Rendering => i18n.text("settings.section.rendering"),
-            Self::Decoders => i18n.text("settings.section.decoders"),
-            Self::Bookmarks => i18n.text("settings.section.bookmarks"),
+            Self::Performance => i18n.text("settings.section.performance"),
             Self::Keyboard => i18n.text("settings.section.keyboard"),
             Self::Mouse => i18n.text("settings.section.mouse"),
         }
@@ -65,11 +49,10 @@ impl SettingsSection {
         match self {
             Self::General => i18n.text("settings.section.general.desc"),
             Self::View => i18n.text("settings.section.view.desc"),
-            #[cfg(target_os = "windows")]
-            Self::FileAssociations => i18n.text("settings.section.file_associations.desc"),
+            Self::Reading => i18n.text("settings.section.reading.desc"),
+            Self::VerticalScroll => i18n.text("settings.section.vertical_scroll.desc"),
             Self::Rendering => i18n.text("settings.section.rendering.desc"),
-            Self::Decoders => i18n.text("settings.section.decoders.desc"),
-            Self::Bookmarks => i18n.text("settings.section.bookmarks.desc"),
+            Self::Performance => i18n.text("settings.section.performance.desc"),
             Self::Keyboard => i18n.text("settings.section.keyboard.desc"),
             Self::Mouse => i18n.text("settings.section.mouse.desc"),
         }
@@ -79,11 +62,10 @@ impl SettingsSection {
         match self {
             Self::General => (icons::SETTINGS, icons::IconStyle::Regular),
             Self::View => (icons::EYE, icons::IconStyle::Regular),
-            #[cfg(target_os = "windows")]
-            Self::FileAssociations => (icons::DOCUMENT, icons::IconStyle::Regular),
+            Self::Reading => (icons::BOOKMARK, icons::IconStyle::Regular),
+            Self::VerticalScroll => (icons::CHEVRON_RIGHT, icons::IconStyle::Regular),
             Self::Rendering => (icons::IMAGE_SPARKLE, icons::IconStyle::Regular),
-            Self::Decoders => (icons::LOCK_OPEN, icons::IconStyle::Regular),
-            Self::Bookmarks => (icons::BOOKMARK, icons::IconStyle::Regular),
+            Self::Performance => (icons::LOCK_OPEN, icons::IconStyle::Regular),
             Self::Keyboard => (icons::KEYBOARD, icons::IconStyle::Regular),
             Self::Mouse => (icons::CURSOR_CLICK, icons::IconStyle::Regular),
         }
@@ -181,6 +163,13 @@ impl SuiSuiViewApp {
                                 .show(ui, |ui| match active_section {
                                     SettingsSection::General => {
                                         show_general_settings(ui, &mut draft, &mut changed, i18n);
+                                        // File associations moved into General as a
+                                        // group; keep its Windows-only gating here.
+                                        #[cfg(target_os = "windows")]
+                                        {
+                                            ui.add_space(8.0);
+                                            self.show_file_association_settings(ui, i18n);
+                                        }
                                     }
                                     SettingsSection::View => {
                                         settings_bookmarks::show_view_settings(
@@ -190,9 +179,21 @@ impl SuiSuiViewApp {
                                             i18n,
                                         );
                                     }
-                                    #[cfg(target_os = "windows")]
-                                    SettingsSection::FileAssociations => {
-                                        self.show_file_association_settings(ui, i18n);
+                                    SettingsSection::Reading => {
+                                        self.show_reading_settings(
+                                            ui,
+                                            &mut draft,
+                                            &mut changed,
+                                            i18n,
+                                        );
+                                    }
+                                    SettingsSection::VerticalScroll => {
+                                        settings_reading::show_vertical_scroll_settings(
+                                            ui,
+                                            &mut draft,
+                                            &mut changed,
+                                            i18n,
+                                        );
                                     }
                                     SettingsSection::Rendering => {
                                         settings_rendering::show_rendering_settings(
@@ -206,16 +207,8 @@ impl SuiSuiViewApp {
                                             i18n,
                                         );
                                     }
-                                    SettingsSection::Decoders => {
+                                    SettingsSection::Performance => {
                                         settings_performance::show_decoder_settings(
-                                            ui,
-                                            &mut draft,
-                                            &mut changed,
-                                            i18n,
-                                        );
-                                    }
-                                    SettingsSection::Bookmarks => {
-                                        self.show_bookmark_settings(
                                             ui,
                                             &mut draft,
                                             &mut changed,
@@ -544,59 +537,6 @@ fn show_general_settings(
                 &i18n.text("settings.general.show_toasts"),
                 &i18n.text("settings.general.show_toasts.help"),
             );
-        },
-    );
-
-    ui.add_space(8.0);
-    setting_group(
-        ui,
-        &i18n.text("settings.general.edge.title"),
-        &i18n.text("settings.general.edge.desc"),
-        |ui| {
-            egui::Grid::new("settings_edge_page_grid")
-                .num_columns(2)
-                .spacing([14.0, 8.0])
-                .show(ui, |ui| {
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.general.edge.image"),
-                        &i18n.text("settings.general.edge.image.help"),
-                    );
-                    egui::ComboBox::from_id_salt("image_edge_page_action")
-                        .selected_text(draft.image_edge_page_action.label_i18n(i18n))
-                        .show_ui(ui, |ui| {
-                            for action in EdgePageAction::ALL {
-                                *changed |= ui
-                                    .selectable_value(
-                                        &mut draft.image_edge_page_action,
-                                        action,
-                                        action.label_i18n(i18n),
-                                    )
-                                    .changed();
-                            }
-                        });
-                    ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.general.edge.archive"),
-                        &i18n.text("settings.general.edge.archive.help"),
-                    );
-                    egui::ComboBox::from_id_salt("archive_edge_page_action")
-                        .selected_text(draft.archive_edge_page_action.label_i18n(i18n))
-                        .show_ui(ui, |ui| {
-                            for action in EdgePageAction::ALL {
-                                *changed |= ui
-                                    .selectable_value(
-                                        &mut draft.archive_edge_page_action,
-                                        action,
-                                        action.label_i18n(i18n),
-                                    )
-                                    .changed();
-                            }
-                        });
-                    ui.end_row();
-                });
         },
     );
 }

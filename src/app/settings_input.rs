@@ -1,13 +1,11 @@
 use super::commands::shortcut_from_input_event;
-use super::settings::{checkbox_with_help, grid_label_with_help, setting_group};
+use super::settings::setting_group;
 use super::ui::{dialog, icons, theme};
 use super::SuiSuiViewApp;
 use crate::core::i18n::I18n;
 use crate::core::state::{
     default_key_bindings, default_mouse_bindings, AppSettings, CommandId, KeyBinding, KeyCode,
-    KeyShortcut, LargeImageAnchor, MouseBinding, MouseGesture, WheelMode,
-    STRIP_DRAG_SCROLL_PCT_MAX, STRIP_DRAG_SCROLL_PCT_MIN, STRIP_WHEEL_SCROLL_PCT_MAX,
-    STRIP_WHEEL_SCROLL_PCT_MIN,
+    KeyShortcut, MouseBinding, MouseGesture,
 };
 use egui::{self, RichText};
 
@@ -462,95 +460,6 @@ pub(in crate::app) fn show_mouse_settings(
                         ui.end_row();
                     }
                 });
-        },
-    );
-
-    ui.add_space(8.0);
-    setting_group(
-        ui,
-        &i18n.text("settings.mouse.navigation.title"),
-        &i18n.text("settings.mouse.navigation.desc"),
-        |ui| {
-            egui::Grid::new("settings_mouse_grid")
-                .num_columns(2)
-                .spacing([14.0, 8.0])
-                .show(ui, |ui| {
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.mouse.large_anchor"),
-                        &i18n.text("settings.mouse.large_anchor.help"),
-                    );
-                    egui::ComboBox::from_id_salt("large_image_anchor")
-                        .selected_text(draft.large_image_anchor.label_i18n(i18n))
-                        .show_ui(ui, |ui| {
-                            for anchor in LargeImageAnchor::ALL {
-                                *changed |= ui
-                                    .selectable_value(
-                                        &mut draft.large_image_anchor,
-                                        anchor,
-                                        anchor.label_i18n(i18n),
-                                    )
-                                    .changed();
-                            }
-                        });
-                    ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.mouse.wheel_mode"),
-                        &i18n.text("settings.mouse.wheel_mode.help"),
-                    );
-                    egui::ComboBox::from_id_salt("wheel_mode")
-                        .selected_text(draft.wheel_mode.label_i18n(i18n))
-                        .show_ui(ui, |ui| {
-                            for mode in WheelMode::ALL {
-                                *changed |= ui
-                                    .selectable_value(
-                                        &mut draft.wheel_mode,
-                                        mode,
-                                        mode.label_i18n(i18n),
-                                    )
-                                    .changed();
-                            }
-                        });
-                    ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.mouse.strip_wheel"),
-                        &i18n.text("settings.mouse.strip_wheel.help"),
-                    );
-                    *changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut draft.strip_wheel_scroll_pct)
-                                .range(STRIP_WHEEL_SCROLL_PCT_MIN..=STRIP_WHEEL_SCROLL_PCT_MAX)
-                                .speed(10)
-                                .suffix("%"),
-                        )
-                        .changed();
-                    ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.mouse.strip_drag"),
-                        &i18n.text("settings.mouse.strip_drag.help"),
-                    );
-                    *changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut draft.strip_drag_scroll_pct)
-                                .range(STRIP_DRAG_SCROLL_PCT_MIN..=STRIP_DRAG_SCROLL_PCT_MAX)
-                                .speed(5)
-                                .suffix("%"),
-                        )
-                        .changed();
-                    ui.end_row();
-                });
-            *changed |= checkbox_with_help(
-                ui,
-                &mut draft.strip_panel_snap,
-                &i18n.text("settings.mouse.strip_panel_snap"),
-                &i18n.text("settings.mouse.strip_panel_snap.help"),
-            );
         },
     );
 }
