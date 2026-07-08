@@ -184,42 +184,64 @@ const PANEL_REMAINDER_FRAC: f32 = 0.15;
 /// so a pathological gap cannot fling the reader across the book in one press.
 pub(in crate::app) const PANEL_STEP_MAX_VIEWPORTS: f32 = 3.0;
 
-/// One page as the panel walk sees it: `(top_delta, height, gutters)` with the
-/// gutters as sorted height fractions.
-pub(in crate::app) type PanelPage = (f32, f32, Vec<(f32, f32)>);
+/// One page as the panel walk sees it. `analyzed == false` means no decoded
+/// pixels were available yet: the page is treated as full content (the
+/// conservative estimate) but its span is an ASSUMED cut, never a landing.
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::app) struct PanelPage {
+    pub top: f32,
+    pub height: f32,
+    pub gutters: Vec<(f32, f32)>,
+    pub analyzed: bool,
+}
+
+/// One content span ("cut") in delta space. `assumed` marks spans that include
+/// any unanalyzed page: they behave as content for walking and for the no-loss
+/// clamp, but are not landing targets.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::app) struct PanelSpan {
+    pub top: f32,
+    pub bottom: f32,
+    pub assumed: bool,
+}
 
 /// Content spans ("cuts") in delta space: the complement of each page's gutters,
 /// merged across touching boundaries — art that runs over a page seam with no
 /// gutter on either side is one panel. Pages may arrive unsorted. A page whose
 /// gutters cover it entirely (a blank/transition page) contributes no span,
 /// i.e. it becomes part of the gap between cuts.
-pub(in crate::app) fn collect_panels(pages: &[PanelPage]) -> Vec<(f32, f32)> {
+pub(in crate::app) fn collect_panels(pages: &[PanelPage]) -> Vec<PanelSpan> {
     let mut sorted: Vec<&PanelPage> = pages.iter().collect();
-    sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    sorted.sort_by(|a, b| a.top.partial_cmp(&b.top).unwrap_or(Ordering::Equal));
 
-    let mut spans: Vec<(f32, f32)> = Vec::new();
-    let push_span = |spans: &mut Vec<(f32, f32)>, top: f32, bottom: f32| {
+    let mut spans: Vec<PanelSpan> = Vec::new();
+    let push_span = |spans: &mut Vec<PanelSpan>, top: f32, bottom: f32, assumed: bool| {
         if bottom - top <= f32::EPSILON {
             return;
         }
         if let Some(last) = spans.last_mut() {
-            if top - last.1 <= PANEL_MERGE_EPSILON {
-                last.1 = last.1.max(bottom);
+            if top - last.bottom <= PANEL_MERGE_EPSILON {
+                last.bottom = last.bottom.max(bottom);
+                last.assumed |= assumed;
                 return;
             }
         }
-        spans.push((top, bottom));
+        spans.push(PanelSpan {
+            top,
+            bottom,
+            assumed,
+        });
     };
 
-    for (page_top, height, gutters) in sorted {
-        let mut cursor = *page_top;
-        for (start_frac, end_frac) in gutters.iter().copied() {
-            let gutter_top = page_top + start_frac * height;
-            let gutter_bottom = page_top + end_frac * height;
-            push_span(&mut spans, cursor, gutter_top);
+    for page in sorted {
+        let mut cursor = page.top;
+        for (start_frac, end_frac) in page.gutters.iter().copied() {
+            let gutter_top = page.top + start_frac * page.height;
+            let gutter_bottom = page.top + end_frac * page.height;
+            push_span(&mut spans, cursor, gutter_top, !page.analyzed);
             cursor = cursor.max(gutter_bottom);
         }
-        push_span(&mut spans, cursor, page_top + height);
+        push_span(&mut spans, cursor, page.top + page.height, !page.analyzed);
     }
     spans
 }
@@ -256,7 +278,7 @@ const PANEL_MAJOR_CAP_FRAC: f32 = 1.0;
 pub(in crate::app) fn panel_step_delta(
     viewport_h: f32,
     walk_step: f32,
-    panels: &[(f32, f32)],
+    panels: &[PanelSpan],
     forward: bool,
 ) -> Option<f32> {
     if panels.is_empty() || viewport_h <= 0.0 {
@@ -272,57 +294,80 @@ pub(in crate::app) fn panel_step_delta(
     let current = panels
         .iter()
         .copied()
-        .find(|&(top, bottom)| top <= center && center < bottom);
+        .find(|span| span.top <= center && center < span.bottom);
 
     // Landing delta for one cut: center it, or top-align an oversized one.
-    let land_forward = |(top, bottom): (f32, f32)| {
-        if bottom - top <= viewport_h {
-            (top + bottom) / 2.0 - center
+    let land_forward = |span: PanelSpan| {
+        if span.bottom - span.top <= viewport_h {
+            (span.top + span.bottom) / 2.0 - center
         } else {
-            top - STRIP_SNAP_LANDING_PAD
+            span.top - STRIP_SNAP_LANDING_PAD
         }
     };
-    let land_backward = |(top, bottom): (f32, f32)| {
-        if bottom - top <= viewport_h {
-            (top + bottom) / 2.0 - center
+    let land_backward = |span: PanelSpan| {
+        if span.bottom - span.top <= viewport_h {
+            (span.top + span.bottom) / 2.0 - center
         } else {
             // Reading backward into a tall cut: land on its end.
-            bottom - viewport_h + STRIP_SNAP_LANDING_PAD
+            span.bottom - viewport_h + STRIP_SNAP_LANDING_PAD
         }
     };
 
     let delta = if forward {
-        if let Some((_top, bottom)) = current {
-            let remaining = bottom - viewport_h;
+        if let Some(span) = current {
+            let remaining = span.bottom - viewport_h;
             if remaining > remainder_slack {
-                // Still reading a tall cut: never step past its end.
+                // Still reading a (possibly assumed) tall cut: never step past
+                // its end.
                 return Some(walk_step.min(remaining));
             }
         }
-        let from = current.map_or(center, |(_, bottom)| bottom);
+        let from = current.map_or(center, |span| span.bottom);
+        // Only VERIFIED cuts are landing targets; an assumed span (page with no
+        // decoded pixels yet) is walked, not framed.
         let landings = panels
             .iter()
             .copied()
-            .filter(|&(top, _)| top >= from - PANEL_MERGE_EPSILON)
-            .map(|cut| (land_forward(cut), cut.1 - cut.0))
+            .filter(|span| !span.assumed && span.top >= from - PANEL_MERGE_EPSILON)
+            .map(|span| (land_forward(span), span.bottom - span.top))
             .filter(|(delta, _)| *delta >= 1.0);
-        pick_landing(landings, caps)?
+        let mut delta = pick_landing(landings, caps)?;
+        // Never fly past unverified content: clamp to the first assumed span
+        // ahead (a plain step's reach past it stays lossless).
+        if let Some(assumed_top) = panels
+            .iter()
+            .filter(|span| span.assumed && span.top >= from - PANEL_MERGE_EPSILON)
+            .map(|span| span.top)
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+        {
+            delta = delta.min(assumed_top.max(walk_step));
+        }
+        delta
     } else {
-        if let Some((top, _bottom)) = current {
-            let remaining = -top;
+        if let Some(span) = current {
+            let remaining = -span.top;
             if remaining > remainder_slack {
                 return Some(-walk_step.min(remaining));
             }
         }
-        let from = current.map_or(center, |(top, _)| top);
+        let from = current.map_or(center, |span| span.top);
         let landings = panels
             .iter()
             .copied()
-            .filter(|&(_, bottom)| bottom <= from + PANEL_MERGE_EPSILON)
-            .map(|cut| (land_backward(cut), cut.1 - cut.0))
+            .filter(|span| !span.assumed && span.bottom <= from + PANEL_MERGE_EPSILON)
+            .map(|span| (land_backward(span), span.bottom - span.top))
             .filter(|(delta, _)| *delta <= -1.0)
             .map(|(delta, height)| (-delta, height));
-        -pick_landing(landings, caps)?
+        let mut magnitude = pick_landing(landings, caps)?;
+        if let Some(assumed_reach) = panels
+            .iter()
+            .filter(|span| span.assumed && span.bottom <= from + PANEL_MERGE_EPSILON)
+            .map(|span| -span.bottom)
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
+        {
+            magnitude = magnitude.min(assumed_reach.max(walk_step));
+        }
+        -magnitude
     };
     Some(delta.clamp(
         -PANEL_STEP_MAX_VIEWPORTS * viewport_h,
@@ -574,13 +619,56 @@ mod tests {
         assert!(detect_gutter_rows(&[0, 0, 0], 4, 10, 10).is_empty());
     }
 
+    /// Analyzed page shorthand for panel tests.
+    fn page(top: f32, height: f32, gutters: Vec<(f32, f32)>) -> PanelPage {
+        PanelPage {
+            top,
+            height,
+            gutters,
+            analyzed: true,
+        }
+    }
+
+    /// Unanalyzed (assumed full-content) page shorthand.
+    fn assumed_page(top: f32, height: f32) -> PanelPage {
+        PanelPage {
+            top,
+            height,
+            gutters: Vec::new(),
+            analyzed: false,
+        }
+    }
+
+    /// Verified cut shorthand for step tests.
+    fn span(top: f32, bottom: f32) -> PanelSpan {
+        PanelSpan {
+            top,
+            bottom,
+            assumed: false,
+        }
+    }
+
+    fn assumed_span(top: f32, bottom: f32) -> PanelSpan {
+        PanelSpan {
+            top,
+            bottom,
+            assumed: true,
+        }
+    }
+
     #[test]
     fn panels_are_the_gutter_complement_and_merge_across_seams() {
         // Page A [0,1000]: gutter at 40%-60% -> cuts [0,400] and [600,1000].
         // Page B [1000,2000]: no gutters (art from its very top) -> its span
         // touches page A's trailing span at the seam and merges into one cut.
-        let pages = vec![(0.0, 1000.0, vec![(0.4, 0.6)]), (1000.0, 1000.0, vec![])];
-        assert_eq!(collect_panels(&pages), vec![(0.0, 400.0), (600.0, 2000.0)]);
+        let pages = vec![
+            page(0.0, 1000.0, vec![(0.4, 0.6)]),
+            page(1000.0, 1000.0, vec![]),
+        ];
+        assert_eq!(
+            collect_panels(&pages),
+            vec![span(0.0, 400.0), span(600.0, 2000.0)]
+        );
     }
 
     #[test]
@@ -588,21 +676,32 @@ mod tests {
         // Page B is one full-page gutter (a blank transition page): the cuts on
         // either side stay separate with the whole page as the gap.
         let pages = vec![
-            (0.0, 1000.0, vec![(0.8, 1.0)]),
-            (1000.0, 1000.0, vec![(0.0, 1.0)]),
-            (2000.0, 1000.0, vec![(0.0, 0.2)]),
+            page(0.0, 1000.0, vec![(0.8, 1.0)]),
+            page(1000.0, 1000.0, vec![(0.0, 1.0)]),
+            page(2000.0, 1000.0, vec![(0.0, 0.2)]),
         ];
-        assert_eq!(collect_panels(&pages), vec![(0.0, 800.0), (2200.0, 3000.0)]);
+        assert_eq!(
+            collect_panels(&pages),
+            vec![span(0.0, 800.0), span(2200.0, 3000.0)]
+        );
     }
 
     #[test]
     fn panels_sort_unsorted_page_input() {
         // collect_band_pages emits anchor, then downward, then upward pages.
         let pages = vec![
-            (1000.0, 1000.0, vec![(0.0, 1.0)]),
-            (0.0, 1000.0, vec![(0.8, 1.0)]),
+            page(1000.0, 1000.0, vec![(0.0, 1.0)]),
+            page(0.0, 1000.0, vec![(0.8, 1.0)]),
         ];
-        assert_eq!(collect_panels(&pages), vec![(0.0, 800.0)]);
+        assert_eq!(collect_panels(&pages), vec![span(0.0, 800.0)]);
+    }
+
+    #[test]
+    fn unanalyzed_page_yields_an_assumed_span_and_taints_merges() {
+        // The unanalyzed page is one assumed full-content span; merging with the
+        // analyzed neighbour's touching span keeps the assumed taint.
+        let pages = vec![page(0.0, 1000.0, vec![]), assumed_page(1000.0, 1000.0)];
+        assert_eq!(collect_panels(&pages), vec![assumed_span(0.0, 2000.0)]);
     }
 
     #[test]
@@ -610,7 +709,7 @@ mod tests {
         // Viewport 800 (center 400). Current cut [200,600] is centered-ish and
         // fully visible; the next cut [900,1100] (height 200) should center at
         // 400 -> its center 1000 moves to 400 -> delta 600.
-        let panels = vec![(200.0, 600.0), (900.0, 1100.0)];
+        let panels = vec![span(200.0, 600.0), span(900.0, 1100.0)];
         assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(600.0));
     }
 
@@ -618,9 +717,9 @@ mod tests {
     fn step_skips_a_long_gap_in_one_press_but_is_capped() {
         // Next cut far below: centering it needs 1900; cap is 3 viewports = 2400
         // (not hit). A pathological 10k gap is clamped to the cap.
-        let panels = vec![(200.0, 600.0), (2200.0, 2400.0)];
+        let panels = vec![span(200.0, 600.0), span(2200.0, 2400.0)];
         assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(1900.0));
-        let far = vec![(200.0, 600.0), (10_000.0, 10_200.0)];
+        let far = vec![span(200.0, 600.0), span(10_000.0, 10_200.0)];
         assert_eq!(panel_step_delta(800.0, 680.0, &far, true), Some(2400.0));
     }
 
@@ -628,9 +727,9 @@ mod tests {
     fn step_walks_within_a_cut_taller_than_the_viewport() {
         // One huge cut [0, 5000] under an 800 viewport: walk by the base step,
         // and near its end never step past the cut bottom.
-        let panels = vec![(0.0, 5000.0)];
+        let panels = vec![span(0.0, 5000.0)];
         assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(680.0));
-        let near_end = vec![(-3900.0, 1100.0)];
+        let near_end = vec![span(-3900.0, 1100.0)];
         assert_eq!(panel_step_delta(800.0, 680.0, &near_end, true), Some(300.0));
     }
 
@@ -638,22 +737,22 @@ mod tests {
     fn step_top_aligns_a_next_cut_taller_than_the_viewport() {
         // Next cut [900, 2900] (2000 tall > 800 viewport): land its top at the
         // viewport top minus the pad instead of centering.
-        let panels = vec![(200.0, 600.0), (900.0, 2900.0)];
+        let panels = vec![span(200.0, 600.0), span(900.0, 2900.0)];
         assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(888.0));
     }
 
     #[test]
     fn step_crosses_dense_small_cuts_a_screenful_at_a_time() {
         // A dialogue stack of small bubble-cuts: the furthest landing within
-        // the 0.9-viewport cap (720) wins — 550, centering the second bubble
-        // with the first still visible above — instead of crawling one bubble
+        // the 0.9-viewport cap (720) wins - 550, centering the second bubble
+        // with the first still visible above - instead of crawling one bubble
         // (350) per press.
         let panels = vec![
-            (200.0, 600.0),
-            (700.0, 800.0),
-            (900.0, 1000.0),
-            (1100.0, 1200.0),
-            (1500.0, 1600.0),
+            span(200.0, 600.0),
+            span(700.0, 800.0),
+            span(900.0, 1000.0),
+            span(1100.0, 1200.0),
+            span(1500.0, 1600.0),
         ];
         assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(550.0));
     }
@@ -664,19 +763,39 @@ mod tests {
         // big art panel (600 tall, landing 800 = exactly the no-loss major cap)
         // takes the landing: bubbles never displace a panel from the center.
         let panels = vec![
-            (200.0, 600.0),  // current cut
-            (650.0, 750.0),  // bubble, landing 300
-            (780.0, 880.0),  // bubble, landing 430
-            (900.0, 1500.0), // art panel, landing 800
+            span(200.0, 600.0),  // current cut
+            span(650.0, 750.0),  // bubble, landing 300
+            span(780.0, 880.0),  // bubble, landing 430
+            span(900.0, 1500.0), // art panel, landing 800
         ];
         assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(800.0));
+    }
+
+    #[test]
+    fn assumed_span_is_never_a_landing_target() {
+        // The only thing ahead is an unverified page: no landing answer, the
+        // caller takes the plain step (which walks into it losslessly).
+        let panels = vec![span(200.0, 600.0), assumed_span(900.0, 2300.0)];
+        assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), None);
+    }
+
+    #[test]
+    fn gap_skip_never_flies_past_unverified_content() {
+        // A verified cut lies beyond an unverified page: the skip is clamped to
+        // the assumed page's top so nothing unseen is jumped over.
+        let panels = vec![
+            span(200.0, 600.0),
+            assumed_span(1200.0, 2600.0),
+            span(2800.0, 3000.0),
+        ];
+        assert_eq!(panel_step_delta(800.0, 680.0, &panels, true), Some(1200.0));
     }
 
     #[test]
     fn step_falls_back_when_no_cut_answers() {
         assert_eq!(panel_step_delta(800.0, 680.0, &[], true), None);
         // Only cuts behind the center going forward -> None.
-        let behind = vec![(-500.0, -100.0)];
+        let behind = vec![span(-500.0, -100.0)];
         assert_eq!(panel_step_delta(800.0, 680.0, &behind, true), None);
     }
 
@@ -684,13 +803,13 @@ mod tests {
     fn step_backward_mirrors_forward() {
         // Previous cut [-700,-500] (height 200): center it -> its center -600
         // moves to 400 -> delta -1000.
-        let panels = vec![(-700.0, -500.0), (200.0, 600.0)];
+        let panels = vec![span(-700.0, -500.0), span(200.0, 600.0)];
         assert_eq!(
             panel_step_delta(800.0, 680.0, &panels, false),
             Some(-1000.0)
         );
         // Reading backward while the current cut still extends above: walk up.
-        let tall = vec![(-3000.0, 1100.0)];
+        let tall = vec![span(-3000.0, 1100.0)];
         assert_eq!(panel_step_delta(800.0, 680.0, &tall, false), Some(-680.0));
     }
 

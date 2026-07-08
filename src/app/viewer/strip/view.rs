@@ -32,7 +32,7 @@ const STRIP_FALLBACK_VIEWPORT: Vec2 = Vec2 {
 
 /// Upper bound on panel-gutter analyses per keyboard step, so a single press
 /// only ever scans a few sub-millisecond pages of already-decoded pixels.
-const STRIP_SNAP_MAX_ANALYSES: usize = 4;
+const STRIP_SNAP_MAX_ANALYSES: usize = 8;
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn paint_strip(
@@ -462,7 +462,12 @@ impl SuiSuiViewApp {
             .into_iter()
             .map(|(index, top_delta, height)| {
                 let gutters = self.strip_gutters_for(index, &mut analysis_budget);
-                (top_delta, height, gutters.to_vec())
+                PanelPage {
+                    top: top_delta,
+                    height,
+                    gutters: gutters.as_deref().map(<[_]>::to_vec).unwrap_or_default(),
+                    analyzed: gutters.is_some(),
+                }
             })
             .collect();
         let panels = collect_panels(&pages);
@@ -476,32 +481,26 @@ impl SuiSuiViewApp {
     }
 
     /// Panel-gutter ranges for `index`, from the cache or a fresh bounded scan of
-    /// the best already-decoded resolution. An empty slice means either "no
-    /// decoded pixels yet" (not cached, retried next press) or "budget spent";
-    /// a page analysed with no gutters caches an empty list so it is scanned once.
-    fn strip_gutters_for(&mut self, index: usize, budget: &mut usize) -> Arc<[(f32, f32)]> {
-        let Some(page_id) = self
+    /// the best already-decoded resolution. `None` means the page is UNKNOWN —
+    /// no decoded pixels yet, or the per-press budget is spent — so the caller
+    /// treats it as an assumed full-content page and retries next press; a page
+    /// analysed with no gutters caches (and returns) an empty list.
+    fn strip_gutters_for(&mut self, index: usize, budget: &mut usize) -> Option<Arc<[(f32, f32)]>> {
+        let page_id = self
             .source
             .as_ref()
-            .and_then(|source| source.page_id(index))
-        else {
-            return Arc::from(Vec::new());
-        };
+            .and_then(|source| source.page_id(index))?;
         if let Some(gutters) = self.strip_panel_gutters.get(&page_id) {
-            return gutters.clone();
+            return Some(gutters.clone());
         }
         if *budget == 0 {
-            return Arc::from(Vec::new());
+            return None;
         }
-        match self.strip_analyze_page_gutters(index) {
-            Some(gutters) => {
-                *budget -= 1;
-                let gutters: Arc<[(f32, f32)]> = Arc::from(gutters);
-                self.strip_panel_gutters.insert(page_id, gutters.clone());
-                gutters
-            }
-            None => Arc::from(Vec::new()),
-        }
+        let gutters = self.strip_analyze_page_gutters(index)?;
+        *budget -= 1;
+        let gutters: Arc<[(f32, f32)]> = Arc::from(gutters);
+        self.strip_panel_gutters.insert(page_id, gutters.clone());
+        Some(gutters)
     }
 
     /// Detect panel gutters for `index` from the best already-decoded resolution.
