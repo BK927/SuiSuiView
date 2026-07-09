@@ -526,7 +526,7 @@ fn wgpu_realtime_sr_stacking_renders_nonblank_output() {
     });
 }
 
-async fn smoke_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+pub(super) async fn smoke_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::default();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
@@ -559,7 +559,7 @@ fn render_downscale_smoke(
     render_downscale_frame(device, queue, &mut fixture, downscaler)
 }
 
-struct DownscaleSmokeFixture {
+pub(super) struct DownscaleSmokeFixture {
     resources: GpuPaintResources,
     source_key: GpuPaintSourceKey,
     source_size: [usize; 2],
@@ -649,7 +649,7 @@ fn render_gpu_frame(
 
 /// Render one composite frame through the real paint chain and return the
 /// tightly packed (unpadded) RGBA8 output of `target_size`.
-fn capture_gpu_frame(
+pub(super) fn capture_gpu_frame(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     fixture: &mut DownscaleSmokeFixture,
@@ -822,7 +822,7 @@ fn ramp_rgba(size: [usize; 2]) -> Vec<u8> {
 }
 
 impl DownscaleSmokeFixture {
-    fn with_rgba(
+    pub(super) fn with_rgba(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         source_size: [usize; 2],

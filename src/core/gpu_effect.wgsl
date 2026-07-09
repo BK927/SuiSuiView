@@ -41,6 +41,48 @@ fn dither_hash_unit(x: u32, y: u32, salt: u32) -> f32 {
     return f32(dither_hash_u32(x, y, salt)) / 4294967296.0;
 }
 
+// V13 linear-light downscale. The exact piecewise sRGB transfer pair (EOTF/OETF,
+// not pow(2.2)). Applied per tap (RGB only; alpha is a linear quantity and is
+// never converted) inside the DOWNSCALE weighted-sum legs when the linear flag is
+// set, so the physically-correct mean of high-frequency content is preserved
+// (gamma-space averaging of black/white lands at sRGB ~127 = 21% light; the
+// correct 50%-light mean is sRGB ~188). Textures stay gamma-encoded at rest — a
+// per-tap round trip only, nothing else in the pipeline changes meaning. Gated by
+// bit 1 of `params.upscale.w`; bit 0 remains the V12 output dither.
+fn srgb_to_linear_channel(c: f32) -> f32 {
+    if c <= 0.04045 {
+        return c / 12.92;
+    }
+    return pow((c + 0.055) / 1.055, 2.4);
+}
+
+fn linear_to_srgb_channel(c: f32) -> f32 {
+    if c <= 0.0031308 {
+        return c * 12.92;
+    }
+    return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        srgb_to_linear_channel(c.r),
+        srgb_to_linear_channel(c.g),
+        srgb_to_linear_channel(c.b),
+    );
+}
+
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        linear_to_srgb_channel(c.r),
+        linear_to_srgb_channel(c.g),
+        linear_to_srgb_channel(c.b),
+    );
+}
+
+fn linear_downscale_active() -> bool {
+    return (params.upscale.w & 2u) != 0u;
+}
+
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
     var positions = array<vec2<f32>, 3>(
@@ -171,8 +213,24 @@ fn sample_effect(sample_x: f32, sample_y: f32) -> vec4<f32> {
     let tx = x - f32(x0);
     let ty = y - f32(y0);
 
-    let top = mix(effect_pixel(x0, y0), effect_pixel(x1, y0), tx);
-    let bottom = mix(effect_pixel(x0, y1), effect_pixel(x1, y1), tx);
+    // Per-tap linear-light only when this is a downscale bilinear (flag set); the
+    // shared upscale/NIS callers leave the flag clear, so those stay bit-exact.
+    var p00 = effect_pixel(x0, y0);
+    var p10 = effect_pixel(x1, y0);
+    var p01 = effect_pixel(x0, y1);
+    var p11 = effect_pixel(x1, y1);
+    if linear_downscale_active() {
+        p00 = vec4<f32>(srgb_to_linear(p00.rgb), p00.a);
+        p10 = vec4<f32>(srgb_to_linear(p10.rgb), p10.a);
+        p01 = vec4<f32>(srgb_to_linear(p01.rgb), p01.a);
+        p11 = vec4<f32>(srgb_to_linear(p11.rgb), p11.a);
+        let top = mix(p00, p10, tx);
+        let bottom = mix(p01, p11, tx);
+        let mixed = mix(top, bottom, ty);
+        return vec4<f32>(linear_to_srgb(mixed.rgb), mixed.a);
+    }
+    let top = mix(p00, p10, tx);
+    let bottom = mix(p01, p11, tx);
     return mix(top, bottom, ty);
 }
 
@@ -497,6 +555,7 @@ fn downscale_effect_sample(coord: vec2<f32>, method: u32) -> vec4<f32> {
     let weight_scale_x = min(scale_x, 3.0);
     let weight_scale_y = min(scale_y, 3.0);
     let base = vec2<i32>(floor(coord));
+    let linear = linear_downscale_active();
 
     var color = vec4<f32>(0.0);
     var total = 0.0;
@@ -509,13 +568,23 @@ fn downscale_effect_sample(coord: vec2<f32>, method: u32) -> vec4<f32> {
                 if abs(dx) <= radius_x {
                     let wx = downscale_filter_weight(method, dx / weight_scale_x);
                     let weight = wx * wy;
-                    color = color + effect_pixel_clamped(base.x + xx, base.y + yy) * weight;
+                    // Per-tap sRGB->linear so the weighted sum is physically
+                    // correct; alpha stays in its native (linear) encoding.
+                    var tap = effect_pixel_clamped(base.x + xx, base.y + yy);
+                    if linear {
+                        tap = vec4<f32>(srgb_to_linear(tap.rgb), tap.a);
+                    }
+                    color = color + tap * weight;
                     total = total + weight;
                 }
             }
         }
     }
-    return clamp(color / max(total, 0.0001), vec4<f32>(0.0), vec4<f32>(1.0));
+    var result = color / max(total, 0.0001);
+    if linear {
+        result = vec4<f32>(linear_to_srgb(result.rgb), result.a);
+    }
+    return clamp(result, vec4<f32>(0.0), vec4<f32>(1.0));
 }
 
 fn hardware_mipmap_sample(coord: vec2<f32>, lod: f32) -> vec4<f32> {
@@ -559,12 +628,13 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let color = sample_display(sample_x, sample_y);
     var rgb = color.rgb;
     // V12 output dither: when this composite sampled an fp16 quality-chain
-    // intermediate (upscale.w set by the Rust side), spread the final 8-bit
+    // intermediate (upscale.w bit 0 set by the Rust side; bit 1 is V13's
+    // linear-downscale flag, handled per-tap in the downscale legs), spread the final 8-bit
     // quantization into coordinate-stable, channel-shared noise the eye averages
     // out. One offset shared across RGB (no chroma tint); alpha untouched. Applied
     // last, before output. Direct-source draws leave upscale.w = 0 and pass
     // through bit-exact.
-    if params.upscale.w == 1u {
+    if (params.upscale.w & 1u) != 0u {
         let px = u32(floor(position.x));
         let py = u32(floor(position.y));
         let offset = (dither_hash_unit(px, py, DITHER_SALT) - 0.5) / 255.0;

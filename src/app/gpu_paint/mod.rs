@@ -638,4 +638,6 @@ fn viewport_rect(rect: Rect, screen_descriptor: &ScreenDescriptor) -> GpuDisplay
 }
 
 #[cfg(test)]
+mod linear_downscale_tests;
+#[cfg(test)]
 mod tests;
