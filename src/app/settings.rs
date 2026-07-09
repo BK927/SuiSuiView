@@ -577,7 +577,8 @@ pub(in crate::app) fn checkbox_with_help(
 pub(in crate::app) fn grid_label_with_help(ui: &mut egui::Ui, label: &str, help: &str) {
     ui.horizontal(|ui| {
         ui.add(egui::Label::new(label).sense(egui::Sense::hover()))
-            .on_hover_text(help);
+            .on_hover_text(help)
+            .on_hover_cursor(egui::CursorIcon::Help);
         info_icon(ui, help);
     });
 }
@@ -592,5 +593,6 @@ pub(in crate::app) fn info_icon(ui: &mut egui::Ui, help: &str) {
         ))
         .sense(egui::Sense::hover()),
     )
-    .on_hover_text(help);
+    .on_hover_text(help)
+    .on_hover_cursor(egui::CursorIcon::Help);
 }
