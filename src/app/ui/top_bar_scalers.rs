@@ -106,7 +106,7 @@ fn top_bar_scaler_summary(current_view: Option<&CurrentViewState>, i18n: I18n) -
     if let Some(prepare_label) = compact_prepare_scale_state_label(current_view.prepare_scale) {
         parts.push(prepare_label);
     }
-    if let Some(wgpu_label) = compact_wgpu_scale_state_label(current_view.wgpu_scale) {
+    if let Some(wgpu_label) = compact_wgpu_scale_state_label(current_view.wgpu_scale, i18n) {
         parts.push(wgpu_label);
     }
     if parts.is_empty() {
@@ -196,7 +196,7 @@ fn compact_prepare_scale_state_label(state: PrepareScaleState) -> Option<String>
     }
 }
 
-fn compact_wgpu_scale_state_label(state: WgpuScaleState) -> Option<String> {
+fn compact_wgpu_scale_state_label(state: WgpuScaleState, i18n: I18n) -> Option<String> {
     match state {
         WgpuScaleState::Inactive | WgpuScaleState::Native => None,
         WgpuScaleState::Mixed => Some("Bilinear".to_owned()),
@@ -209,7 +209,10 @@ fn compact_wgpu_scale_state_label(state: WgpuScaleState) -> Option<String> {
             origin,
             substituted_below,
         )),
-        WgpuScaleState::Downscale(method) => Some(method.label().to_owned()),
+        // The display downscaler is a fixed internal constant (C2), not a user
+        // choice: the chip says WHAT is happening in plain words; the tooltip
+        // still names the algorithm for the curious.
+        WgpuScaleState::Downscale(_method) => Some(i18n.text("topbar.scale.downscale")),
     }
 }
 
@@ -326,9 +329,11 @@ mod tests {
             WgpuScaleState::Downscale(WgpuDownscaleMethod::PyramidLanczos3),
         );
 
+        // The fixed display downscaler shows as plain "Downscale" on the chip
+        // (the technical name lives in the tooltip).
         assert_eq!(
             top_bar_scaler_summary(Some(&state), i18n),
-            "Hamming | Pyramid + Lanczos3"
+            "Hamming | Downscale"
         );
     }
 

@@ -459,6 +459,7 @@ const CATALOG_KO_KR: &[(&str, &str)] = &[
     ("topbar.scale.wgpu_disabled", "WGPU가 꺼져 있어 GPU 스케일러는 현재 적용되지 않습니다."),
     ("topbar.scale.current_prepare", "현재 준비"),
     ("topbar.scale.current_display", "현재 표시"),
+    ("topbar.scale.downscale", "축소"),
     ("topbar.scale.current_unknown", "아직 표시 중인 이미지 스케일 상태를 알 수 없습니다."),
     ("top_bar.scaler.origin.probe", "AUTO: 이 책의 라운드트립 측정으로 선택됨"),
     ("top_bar.scaler.origin.auto", "AUTO 기본값"),
@@ -1064,6 +1065,7 @@ const CATALOG_EN_US: &[(&str, &str)] = &[
     ("topbar.scale.wgpu_disabled", "WGPU is off, so GPU scalers are not currently applied."),
     ("topbar.scale.current_prepare", "Current prepare"),
     ("topbar.scale.current_display", "Current display"),
+    ("topbar.scale.downscale", "Downscale"),
     ("topbar.scale.current_unknown", "The current image scale state is not available yet."),
     (
         "top_bar.scaler.origin.probe",
