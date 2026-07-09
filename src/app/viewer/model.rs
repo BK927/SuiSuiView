@@ -1,4 +1,4 @@
-use super::super::{gpu_paint::GpuPaintSourceKey, PageCacheKey};
+use super::super::{gpu_paint::GpuPaintSourceKey, KernelChoice, PageCacheKey};
 use crate::core::effects::ViewEffects;
 use crate::core::gpu_effect::output_size_for_effects;
 use crate::core::state::{
@@ -338,6 +338,10 @@ pub(in crate::app) struct CurrentViewState {
     pub(in crate::app) decode_backend: DecodeBackend,
     pub(in crate::app) prepare_scale: PrepareScaleState,
     pub(in crate::app) wgpu_scale: WgpuScaleState,
+    /// The Glow kernel that drew this page at draw time, or `None` when the page
+    /// was drawn by the plain sampler / a non-Glow backend. Set after paint so the
+    /// top-bar chip can name the draw-time enlargement on native-prepared pages.
+    pub(in crate::app) glow_kernel: Option<KernelChoice>,
     pub(in crate::app) target_intent: PreparedTargetIntent,
 }
 
@@ -351,6 +355,7 @@ impl CurrentViewState {
             decode_backend: render.decode_backend,
             prepare_scale: render.prepare_scale,
             wgpu_scale: WgpuScaleState::Inactive,
+            glow_kernel: None,
             target_intent,
         }
     }
@@ -387,6 +392,7 @@ impl CurrentViewState {
                 wgpu_upscale_origin,
                 fixed_2x_sr_min_scale,
             ),
+            glow_kernel: None,
             target_intent,
         }
     }

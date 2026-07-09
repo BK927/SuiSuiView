@@ -2,7 +2,7 @@ use super::gpu_paint::{GpuPaintRequest, GpuPaintSourceKey};
 use super::perf;
 use super::{
     gpu_visual_needs_wgsl, rect_target_size, ui, PageCacheKey, SuiSuiViewApp, TextureCacheKey,
-    TextureEntry, BYTES_PER_RGBA_PIXEL,
+    TextureEntry, TextureSampling, BYTES_PER_RGBA_PIXEL,
 };
 use crate::core::effects::{
     apply_effects_to_image, compose_images_horizontally, transformed_page_size, ViewEffects,
@@ -53,6 +53,9 @@ struct SpreadPaint<'a> {
     offset: Vec2,
     scale: Vec2,
     alpha: f32,
+    /// Whether the Glow draw-time kernel may enlarge these pages. False during a
+    /// page-turn transition (moving/fading content stays on the plain path).
+    allow_kernel: bool,
 }
 
 /// Per-page paint result the spread and strip loops fold together: whether the
@@ -463,6 +466,7 @@ impl SuiSuiViewApp {
                     offset: paint.from_offset,
                     scale: paint.from_scale,
                     alpha: paint.from_alpha,
+                    allow_kernel: false,
                 },
             );
             if transition.style == PageTransitionStyle::BookFlip2d {
@@ -478,6 +482,7 @@ impl SuiSuiViewApp {
                     offset: paint.to_offset,
                     scale: paint.to_scale,
                     alpha: paint.to_alpha,
+                    allow_kernel: false,
                 },
             );
 
@@ -495,6 +500,7 @@ impl SuiSuiViewApp {
                     offset: Vec2::ZERO,
                     scale: Vec2::splat(1.0),
                     alpha: 1.0,
+                    allow_kernel: true,
                 },
             );
         }
@@ -615,6 +621,7 @@ impl SuiSuiViewApp {
                 visual,
                 page_rect,
                 request.alpha,
+                request.allow_kernel,
             );
             spread_fully_drawn &= outcome.fully_drawn;
             spread_uses_wgpu_paint_callback |= outcome.used_wgpu_callback;
@@ -646,6 +653,7 @@ impl SuiSuiViewApp {
         visual: PageVisual,
         page_rect: Rect,
         alpha: f32,
+        allow_kernel: bool,
     ) -> PagePaintOutcome {
         let size = page_visual_size(&visual);
         let tint = Color32::from_white_alpha((alpha.clamp(0.0, 1.0) * 255.0) as u8);
@@ -657,20 +665,32 @@ impl SuiSuiViewApp {
                 render_info,
                 ..
             } => {
+                // No render_info means the original-inspection texture-only path;
+                // treat it as nearest so the kernel never smooths an inspection page.
+                let sampling = render_info
+                    .map(|info| {
+                        TextureSampling::for_target_intent(
+                            self.prepared_target_intent_for_target(info.target_long_edge),
+                        )
+                    })
+                    .unwrap_or(TextureSampling::Nearest);
+                let glow_kernel = self.paint_page_image_kernel_or_plain(
+                    painter,
+                    &texture,
+                    page_rect,
+                    tint,
+                    ctx.pixels_per_point(),
+                    allow_kernel,
+                    sampling,
+                    index,
+                );
                 if let Some(render_info) = render_info {
                     let target_intent =
                         self.prepared_target_intent_for_target(render_info.target_long_edge);
-                    self.record_current_view_state(CurrentViewState::from_cpu(
-                        render_info,
-                        target_intent,
-                    ));
+                    let mut state = CurrentViewState::from_cpu(render_info, target_intent);
+                    state.glow_kernel = glow_kernel;
+                    self.record_current_view_state(state);
                 }
-                painter.image(
-                    texture.id(),
-                    page_rect,
-                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                    tint,
-                );
                 if full_alpha {
                     self.paint_pixel_grid(
                         painter,

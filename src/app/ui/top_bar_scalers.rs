@@ -1,7 +1,7 @@
 use super::super::viewer::{
     CurrentViewState, PrepareScaleState, UpscaleDecisionOrigin, WgpuScaleState,
 };
-use super::super::SuiSuiViewApp;
+use super::super::{KernelChoice, SuiSuiViewApp};
 use super::{icons, theme};
 use crate::core::i18n::I18n;
 use crate::core::state::{AppSettings, CpuScaleFilter, RendererMode, WgpuUpscaleMethod};
@@ -99,6 +99,11 @@ fn top_bar_scaler_summary(current_view: Option<&CurrentViewState>, i18n: I18n) -
     if let Some(prepare_label) = compact_prepare_scale_state_label(current_view.prepare_scale) {
         parts.push(prepare_label);
     }
+    // A native-prepared page that the Glow kernel enlarged at draw time reads as
+    // the filter's technical name (not the confusing "Native" prepare label).
+    if let Some(kernel_label) = compact_glow_kernel_label(current_view) {
+        parts.push(kernel_label);
+    }
     if let Some(wgpu_label) = compact_wgpu_scale_state_label(current_view.wgpu_scale, i18n) {
         parts.push(wgpu_label);
     }
@@ -124,10 +129,29 @@ fn top_bar_scaler_tooltip(current_view: Option<&CurrentViewState>, i18n: I18n) -
             current_view.wgpu_scale.label()
         ),
     ];
+    if let Some(kernel) = glow_kernel_for_chip(current_view) {
+        lines.push(i18n.with_vars(
+            "topbar.scale.glow_kernel",
+            &[("kernel", kernel.label().to_owned())],
+        ));
+    }
     if let Some(provenance) = wgpu_scale_provenance_sentence(current_view.wgpu_scale, i18n) {
         lines.push(provenance);
     }
     lines.join("\n")
+}
+
+/// The Glow draw-time kernel to surface on the chip: only when it drew this page
+/// and the prepared texture was native (so the chip does not shadow a real CPU
+/// prepare-resize label).
+fn glow_kernel_for_chip(current_view: &CurrentViewState) -> Option<KernelChoice> {
+    (current_view.prepare_scale == PrepareScaleState::Native)
+        .then_some(current_view.glow_kernel)
+        .flatten()
+}
+
+fn compact_glow_kernel_label(current_view: &CurrentViewState) -> Option<String> {
+    glow_kernel_for_chip(current_view).map(|kernel| kernel.label().to_owned())
 }
 
 fn cpu_filter_candidates(
@@ -287,6 +311,7 @@ mod tests {
     use crate::app::viewer::{
         CurrentViewState, PrepareScaleState, UpscaleDecisionOrigin, WgpuScaleState,
     };
+    use crate::app::KernelChoice;
     use crate::core::i18n::{I18n, ResolvedLanguage};
     use crate::core::state::{
         AppSettings, CpuScaleFilter, RendererMode, WgpuDownscaleMethod, WgpuUpscaleMethod,
@@ -404,6 +429,24 @@ mod tests {
     }
 
     #[test]
+    fn native_prepare_with_glow_kernel_shows_the_filter_label() {
+        let i18n = I18n::resolved(ResolvedLanguage::EnUs);
+        // Native prepare + a Glow draw-time kernel: the chip names the kernel
+        // instead of reading a confusing "Native".
+        let mut state = test_view_state(PrepareScaleState::Native, WgpuScaleState::Inactive);
+        state.glow_kernel = Some(KernelChoice::CatmullRom);
+        assert_eq!(top_bar_scaler_summary(Some(&state), i18n), "CatmullRom");
+
+        // A real CPU prepare-upscale label is not shadowed by the kernel field.
+        let mut cpu = test_view_state(
+            PrepareScaleState::CpuUpscale(CpuScaleFilter::Lanczos3),
+            WgpuScaleState::Inactive,
+        );
+        cpu.glow_kernel = Some(KernelChoice::Lanczos3);
+        assert_eq!(top_bar_scaler_summary(Some(&cpu), i18n), "Lanczos3");
+    }
+
+    #[test]
     fn wgpu_inactive_summary_does_not_imply_gpu_scaler_is_active() {
         let i18n = I18n::resolved(ResolvedLanguage::EnUs);
         let state = test_view_state(PrepareScaleState::Native, WgpuScaleState::Inactive);
@@ -434,6 +477,7 @@ mod tests {
             decode_backend: DecodeBackend::ImageCrate,
             prepare_scale,
             wgpu_scale,
+            glow_kernel: None,
             target_intent: PreparedTargetIntent::NormalNavigation,
         }
     }

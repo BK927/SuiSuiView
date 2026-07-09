@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use ui::{BookmarkFilter, BookmarkRowsCache, BookmarkThumbnails};
 
@@ -36,6 +36,7 @@ mod edge_prompt;
 pub(crate) mod fast_start;
 #[cfg(target_os = "windows")]
 mod file_associations;
+mod glow_scale;
 mod gpu_paint;
 mod image_header;
 mod image_info;
@@ -81,6 +82,7 @@ pub(in crate::app) use cache::{
 };
 pub(in crate::app) use delete_dialog::PendingDeleteDialog;
 pub(in crate::app) use edge_prompt::EdgePrompt;
+pub(in crate::app) use glow_scale::{GlowScaleState, KernelChoice};
 pub(crate) use opening::{start_startup_open_loader, StartupOpen};
 pub(in crate::app) use opening::{LoaderEvent, OpenOrigin};
 
@@ -268,6 +270,10 @@ pub struct SuiSuiViewApp {
     bookmark_thumbnails: Option<BookmarkThumbnails>,
     gpu_effects_available: bool,
     gpu_target_format: Option<wgpu::TextureFormat>,
+    /// Lazily compiled Glow draw-time kernel-upscale program, shared with the
+    /// paint callbacks. Inert (and never compiled) unless Glow is the runtime
+    /// renderer and a kernel filter is routed; latches `failed` on broken drivers.
+    glow_scale: Arc<Mutex<GlowScaleState>>,
     last_nav_direction: NavigationDirection,
     transition: Option<Transition>,
     pending_page_turn: Option<PendingPageTurn>,
@@ -432,6 +438,7 @@ impl SuiSuiViewApp {
             // `begin_handoff` once its render state is available.
             gpu_effects_available: false,
             gpu_target_format: None,
+            glow_scale: Arc::new(Mutex::new(GlowScaleState::new())),
             last_nav_direction: NavigationDirection::Forward,
             transition: None,
             pending_page_turn: None,
@@ -851,6 +858,7 @@ impl SuiSuiViewApp {
             self.fit_mode,
             self.manual_zoom,
             self.gpu_display_upscale_can_own_upscale(),
+            self.glow_kernel_available(),
             self.settings.cpu_upscale_filter,
         )
     }
@@ -2217,24 +2225,42 @@ mod tests {
             FitMode::FitPage,
             1.0,
             true,
+            false,
             CpuScaleFilter::Lanczos3,
         ));
         assert!(!should_allow_cpu_display_upscale(
             FitMode::Manual,
             2.0,
             true,
+            false,
             CpuScaleFilter::Lanczos3,
         ));
     }
 
     #[test]
+    fn glow_kernel_disables_cpu_prepare_upscale() {
+        // Glow with the kernel shader healthy owns the draw-time enlargement, so
+        // the page stays native regardless of the (kernel) CPU filter.
+        for fit_mode in [FitMode::FitPage, FitMode::FitWidth, FitMode::FitHeight] {
+            assert!(!should_allow_cpu_display_upscale(
+                fit_mode,
+                1.0,
+                false,
+                true,
+                CpuScaleFilter::Lanczos3,
+            ));
+        }
+    }
+
+    #[test]
     fn cpu_prepare_upscale_enabled_for_fit_modes_without_gpu_upscaler() {
-        // Glow mode (no GPU display upscaler): the user's CPU upscale filter enlarges
-        // fit-mode pages during preparation.
+        // Glow mode, no kernel routed (e.g. shader failed, or a non-kernel filter):
+        // the user's CPU upscale filter enlarges fit-mode pages during preparation.
         for fit_mode in [FitMode::FitPage, FitMode::FitWidth, FitMode::FitHeight] {
             assert!(should_allow_cpu_display_upscale(
                 fit_mode,
                 1.0,
+                false,
                 false,
                 CpuScaleFilter::Lanczos3,
             ));
@@ -2245,6 +2271,7 @@ mod tests {
             FitMode::FitPage,
             1.0,
             false,
+            false,
             CpuScaleFilter::Bilinear,
         ));
         // Manual zoom and original size never CPU-upscale.
@@ -2252,11 +2279,13 @@ mod tests {
             FitMode::Manual,
             1.25,
             false,
+            false,
             CpuScaleFilter::Lanczos3,
         ));
         assert!(!should_allow_cpu_display_upscale(
             FitMode::Original,
             4.0,
+            false,
             false,
             CpuScaleFilter::Lanczos3,
         ));

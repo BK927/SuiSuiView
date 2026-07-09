@@ -104,6 +104,7 @@ impl SuiSuiViewApp {
                 visual,
                 placement.rect,
                 1.0,
+                true,
             );
             if placement.index == self.current_page {
                 current_outcome = Some(outcome);

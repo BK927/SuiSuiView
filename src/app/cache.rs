@@ -506,10 +506,20 @@ impl SuiSuiViewApp {
     }
 }
 
+/// Whether the worker should pre-enlarge (CPU-upscale) a fit-mode page into the
+/// cache, versus keeping it native and enlarging at draw time. Enlargement now
+/// has two draw-time owners: the WGPU display upscaler (wgpu backend) and the
+/// Glow kernel shader (`glow_scale`). CPU pre-enlarge is the fallback only for
+/// kernel-less filters and for failed shaders / plain Glow.
+///
+/// Order: Manual/Original never re-prepare enlarged → false; a WGPU display
+/// upscaler owns it → false; the Glow kernel shader owns it → false; otherwise
+/// keep today's rule (native for Bilinear, which equals the free sampler).
 pub(in crate::app) fn should_allow_cpu_display_upscale(
     fit_mode: FitMode,
     manual_zoom: f32,
     gpu_display_upscale_can_own_upscale: bool,
+    glow_kernel_available: bool,
     cpu_upscale_filter: CpuScaleFilter,
 ) -> bool {
     let _ = manual_zoom;
@@ -520,6 +530,11 @@ pub(in crate::app) fn should_allow_cpu_display_upscale(
     // In WGPU mode the GPU display upscaler owns the enlargement, so preparing an
     // already-enlarged page on the CPU would be wasted work and cache memory.
     if gpu_display_upscale_can_own_upscale {
+        return false;
+    }
+    // In Glow, the kernel shader enlarges the native page at draw time when the
+    // filter maps to a kernel and the shader is healthy — so keep the page native.
+    if glow_kernel_available {
         return false;
     }
     // A Bilinear CPU upscale is identical to the free hardware texture sampler, so
