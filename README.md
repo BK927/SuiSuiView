@@ -170,7 +170,16 @@ standalone files.
   cached in the book record).
 - [ ] Modern format expansion, including JPEG XL, HEIC/HEIF, SVG, JPEG XR,
   and broader RAW preview support.
+- [ ] Clip Studio Paint (`.clip`) flattened preview, reusing the same
+  embedded-preview path as PSD.
+- [ ] Show AI generation metadata (Stable Diffusion prompt / `parameters`)
+  in the current-page info panel when present.
+- [ ] Loupe (magnifier) mode: zoom a region under the cursor without
+  changing the overall fit or zoom.
+- [ ] Session-only brightness and contrast adjustment for dark or aged
+  scans, alongside the existing gamma, sharpen, and smooth effects.
 - [ ] Printing, slideshow, and external editor workflows.
+- [ ] Long-term: HDR display output for HDR-capable formats and monitors.
 
 <details>
 <summary>Keyboard And Mouse Reference</summary>
