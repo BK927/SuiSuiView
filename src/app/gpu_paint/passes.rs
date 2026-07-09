@@ -5,6 +5,7 @@ use super::pools::{
 };
 use super::{GpuDisplayRect, GpuPaintResources, GpuPaintSourceKey};
 use crate::app::realtime_sr::RealtimeSrResources;
+use crate::core::deband::DebandStrength;
 use crate::core::effects::ViewEffects;
 use crate::core::gpu_effect::{
     output_size_for_effects, params_for_effects, params_for_effects_with_display,
@@ -24,6 +25,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 impl GpuPaintResources {
+    /// Run the deband pre-pass (if any) at source size, then resolve the draw
+    /// state against the debanded source. The deband intermediate is pinned into
+    /// the returned draw state so its texture outlives the frame.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn prepare_draw_state(
         &mut self,
@@ -40,6 +44,59 @@ impl GpuPaintResources {
         display_rect: GpuDisplayRect,
         opacity: f32,
         zoom_in_motion: bool,
+        deband: DebandStrength,
+        ctx: &egui::Context,
+    ) -> GpuDrawState {
+        let (source_bind_group, deband_pin) = self.ensure_debanded_source(
+            device,
+            encoder,
+            source_key,
+            source_size,
+            source_bind_group,
+            deband,
+        );
+        let mut draw_state = self.resolve_draw_state(
+            device,
+            encoder,
+            source_key,
+            source_bind_group,
+            source_size,
+            output_size,
+            effects,
+            wgpu_upscale_method,
+            wgpu_downscale_method,
+            fixed_2x_sr_min_scale,
+            display_rect,
+            opacity,
+            zoom_in_motion,
+            deband,
+            deband_pin.as_ref(),
+            ctx,
+        );
+        if let Some(pin) = deband_pin {
+            draw_state = draw_state.with_intermediate_pin(pin);
+        }
+        draw_state
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_draw_state(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source_key: GpuPaintSourceKey,
+        source_bind_group: Arc<wgpu::BindGroup>,
+        source_size: [usize; 2],
+        output_size: [usize; 2],
+        effects: ViewEffects,
+        wgpu_upscale_method: WgpuUpscaleMethod,
+        wgpu_downscale_method: WgpuDownscaleMethod,
+        fixed_2x_sr_min_scale: f32,
+        display_rect: GpuDisplayRect,
+        opacity: f32,
+        zoom_in_motion: bool,
+        deband: DebandStrength,
+        debanded: Option<&Arc<GpuIntermediateTexture>>,
         ctx: &egui::Context,
     ) -> GpuDrawState {
         let scale_plan = WgpuScalePlan::resolve(
@@ -52,7 +109,7 @@ impl GpuPaintResources {
         let effective_upscaler = scale_plan.effective_upscale_method;
         let effective_downscaler = scale_plan.effective_downscale_method;
         let source_content_key =
-            source_texture_content_key(source_key, source_size, output_size, effects);
+            source_texture_content_key(source_key, source_size, output_size, effects, deband);
         self.realtime_sr
             .cancel_inactive_pending_work(effective_upscaler);
         if RealtimeSrResources::is_supported(effective_upscaler) {
@@ -67,6 +124,8 @@ impl GpuPaintResources {
                 wgpu_downscale_method,
                 display_rect,
                 opacity,
+                deband,
+                debanded,
                 ctx,
             ) {
                 return draw_state;
@@ -80,6 +139,7 @@ impl GpuPaintResources {
                 effects,
                 effective_upscaler,
                 display_rect,
+                deband,
             );
             self.ensure_intermediate_texture(device, intermediate_key, display_rect.visible_size);
             let intermediate = self
@@ -256,6 +316,8 @@ impl GpuPaintResources {
         downscaler: WgpuDownscaleMethod,
         display_rect: GpuDisplayRect,
         opacity: f32,
+        deband: DebandStrength,
+        debanded: Option<&Arc<GpuIntermediateTexture>>,
         ctx: &egui::Context,
     ) -> Option<GpuDrawState> {
         let stack_passes = upscaler.fixed_2x_stack_passes(output_size, display_rect.full_size);
@@ -271,6 +333,7 @@ impl GpuPaintResources {
                 stage_index,
                 current_size,
                 stack_passes,
+                deband,
             );
             if self.should_defer_realtime_sr_first_frame(stage_key, upscaler) {
                 self.realtime_sr.warm_up_async(upscaler, device);
@@ -279,14 +342,27 @@ impl GpuPaintResources {
             }
 
             let next_intermediate = if stage_index == 0 {
-                self.ensure_realtime_sr_stage_texture_from_source(
-                    device,
-                    encoder,
-                    stage_key,
-                    source_key,
-                    current_size,
-                    upscaler,
-                )
+                // When a deband pre-pass ran, stage 0 upscales the debanded source
+                // rather than the raw source texture.
+                if let Some(debanded) = debanded {
+                    self.ensure_realtime_sr_stage_texture_from_view(
+                        device,
+                        encoder,
+                        stage_key,
+                        &debanded._view,
+                        current_size,
+                        upscaler,
+                    )
+                } else {
+                    self.ensure_realtime_sr_stage_texture_from_source(
+                        device,
+                        encoder,
+                        stage_key,
+                        source_key,
+                        current_size,
+                        upscaler,
+                    )
+                }
             } else {
                 let input = current_intermediate.as_ref()?;
                 self.ensure_realtime_sr_stage_texture_from_view(
@@ -1001,9 +1077,13 @@ pub(super) fn realtime_sr_stage_texture_key(
     stage_index: usize,
     input_size: [usize; 2],
     stack_passes: usize,
+    deband: DebandStrength,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     "realtime_sr_stage".hash(&mut hasher);
+    // Stage 0 renders from the debanded view when deband is active; the whole
+    // stage chain (and the post-SR content_key it seeds) must key on strength.
+    deband.token().hash(&mut hasher);
     source_key.hash(&mut hasher);
     base_source_size.hash(&mut hasher);
     wgpu_upscale_method.token().hash(&mut hasher);

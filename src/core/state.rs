@@ -17,6 +17,7 @@ mod scale_plan_tests;
 mod scalers;
 #[cfg(test)]
 mod settings_tests;
+pub use crate::core::deband::DebandStrength;
 pub use crate::core::i18n::Language;
 use bookmarks::path_key;
 pub use bookmarks::{
@@ -372,6 +373,9 @@ pub struct AppSettings {
     pub renderer_mode: RendererMode,
     #[serde(default)]
     pub wgpu_upscale_method: WgpuUpscaleMethod,
+    /// Debanding strength for the WGPU display path; `Off` by default.
+    #[serde(default)]
+    pub deband: DebandStrength,
     #[serde(default = "default_fixed_2x_sr_min_scale_pct")]
     pub fixed_2x_sr_min_scale_pct: u32,
     #[serde(default = "default_true")]
@@ -528,6 +532,7 @@ impl Default for AppSettings {
             gpu_effect_mode: GpuEffectMode::Auto,
             renderer_mode: RendererMode::LowMemoryGlow,
             wgpu_upscale_method: WgpuUpscaleMethod::None,
+            deband: DebandStrength::Off,
             fixed_2x_sr_min_scale_pct: default_fixed_2x_sr_min_scale_pct(),
             prefetch_enabled: true,
             progressive_preview_enabled: false,

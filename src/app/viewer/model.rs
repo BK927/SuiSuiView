@@ -1,4 +1,5 @@
 use super::super::{gpu_paint::GpuPaintSourceKey, KernelChoice, PageCacheKey};
+use crate::core::deband::DebandStrength;
 use crate::core::effects::ViewEffects;
 use crate::core::gpu_effect::output_size_for_effects;
 use crate::core::state::{
@@ -342,6 +343,9 @@ pub(in crate::app) struct CurrentViewState {
     /// was drawn by the plain sampler / a non-Glow backend. Set after paint so the
     /// top-bar chip can name the draw-time enlargement on native-prepared pages.
     pub(in crate::app) glow_kernel: Option<KernelChoice>,
+    /// Debanding strength active for this page (WGPU display path only); `Off`
+    /// for CPU/Glow pages and inspection views. Surfaced in the scaler tooltip.
+    pub(in crate::app) deband: DebandStrength,
     pub(in crate::app) target_intent: PreparedTargetIntent,
 }
 
@@ -356,6 +360,7 @@ impl CurrentViewState {
             prepare_scale: render.prepare_scale,
             wgpu_scale: WgpuScaleState::Inactive,
             glow_kernel: None,
+            deband: DebandStrength::Off,
             target_intent,
         }
     }
@@ -372,6 +377,7 @@ impl CurrentViewState {
         wgpu_downscale_method: WgpuDownscaleMethod,
         fixed_2x_sr_min_scale: f32,
         active: bool,
+        deband: DebandStrength,
         target_intent: PreparedTargetIntent,
     ) -> Self {
         let output_size = output_size_for_effects(image_size, effects);
@@ -393,6 +399,7 @@ impl CurrentViewState {
                 fixed_2x_sr_min_scale,
             ),
             glow_kernel: None,
+            deband,
             target_intent,
         }
     }

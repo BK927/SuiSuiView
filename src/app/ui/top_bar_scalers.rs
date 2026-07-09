@@ -135,6 +135,12 @@ fn top_bar_scaler_tooltip(current_view: Option<&CurrentViewState>, i18n: I18n) -
             &[("kernel", kernel.label().to_owned())],
         ));
     }
+    if current_view.deband.is_active() {
+        lines.push(i18n.with_vars(
+            "topbar.scale.deband",
+            &[("level", current_view.deband.label_i18n(i18n))],
+        ));
+    }
     if let Some(provenance) = wgpu_scale_provenance_sentence(current_view.wgpu_scale, i18n) {
         lines.push(provenance);
     }
@@ -314,7 +320,8 @@ mod tests {
     use crate::app::KernelChoice;
     use crate::core::i18n::{I18n, ResolvedLanguage};
     use crate::core::state::{
-        AppSettings, CpuScaleFilter, RendererMode, WgpuDownscaleMethod, WgpuUpscaleMethod,
+        AppSettings, CpuScaleFilter, DebandStrength, RendererMode, WgpuDownscaleMethod,
+        WgpuUpscaleMethod,
     };
     use crate::core::worker::{DecodeBackend, PreparedTargetIntent};
 
@@ -478,6 +485,7 @@ mod tests {
             prepare_scale,
             wgpu_scale,
             glow_kernel: None,
+            deband: DebandStrength::Off,
             target_intent: PreparedTargetIntent::NormalNavigation,
         }
     }

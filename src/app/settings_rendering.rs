@@ -1,6 +1,7 @@
 use super::fast_start::{self, FastStartReportAction};
 use super::settings::{checkbox_with_help, grid_label_with_help, setting_group};
 use super::ui::theme;
+use crate::core::deband::DebandStrength;
 use crate::core::i18n::I18n;
 use crate::core::state::{AppSettings, CpuScaleFilter, RendererMode, WgpuUpscaleMethod};
 use egui::{self, RichText};
@@ -173,6 +174,34 @@ pub(in crate::app) fn show_rendering_settings(
                             )
                             .changed();
                     });
+                    ui.end_row();
+
+                    let deband_help = i18n.text("settings.rendering.deband.help");
+                    grid_label_with_help(ui, &i18n.text("settings.rendering.deband"), &deband_help);
+                    let deband_response = ui
+                        .add_enabled_ui(gpu_enabled, |ui| {
+                            egui::ComboBox::from_id_salt("deband_strength")
+                                .selected_text(draft.deband.label_i18n(i18n))
+                                .show_ui(ui, |ui| {
+                                    for level in DebandStrength::ALL {
+                                        *changed |= ui
+                                            .selectable_value(
+                                                &mut draft.deband,
+                                                level,
+                                                level.label_i18n(i18n),
+                                            )
+                                            .changed();
+                                    }
+                                });
+                        })
+                        .response;
+                    if gpu_enabled {
+                        deband_response.on_hover_text(deband_help);
+                    } else {
+                        deband_response.on_disabled_hover_text(
+                            i18n.text("settings.rendering.gpu_upscaler.disabled"),
+                        );
+                    }
                     ui.end_row();
                 });
             ui.add_space(4.0);

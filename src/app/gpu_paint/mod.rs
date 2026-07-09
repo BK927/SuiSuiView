@@ -1,5 +1,6 @@
 use super::realtime_sr::RealtimeSrResources;
 use super::{PageCacheKey, SuiSuiViewApp};
+use crate::core::deband::DebandStrength;
 use crate::core::effects::ViewEffects;
 use crate::core::gpu_effect::output_size_for_effects;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -20,6 +21,7 @@ use std::sync::{Arc, OnceLock};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::time::Instant;
 
+mod deband;
 mod passes;
 mod pools;
 
@@ -81,6 +83,9 @@ pub(super) struct GpuPaintRequest {
     pub(super) wgpu_downscale_method: WgpuDownscaleMethod,
     pub(super) fixed_2x_sr_min_scale_pct: u32,
     pub(super) opacity: f32,
+    /// Debanding strength resolved for this page (already gated off for
+    /// Manual/Original inspection views and non-WGPU backends).
+    pub(super) deband: DebandStrength,
     /// Set while an interactive zoom gesture is in motion. When the resolved plan
     /// is a downscale, this reroutes rendering through the cached hardware-mipmap
     /// path so a continuous zoom does not re-render the quality downscale at a new
@@ -125,6 +130,22 @@ impl SuiSuiViewApp {
         wgpu_upscale_method_from_settings(self.settings.wgpu_upscale_method, span_manifest_present)
     }
 
+    /// The debanding strength active for the current view, or `Off`. Gated on the
+    /// same conditions as the display upscaler: WGPU backend live, GPU effects
+    /// available, WGSL not opted out, and a fit mode that is not the
+    /// Manual/Original source-inspection path (those must show true pixels).
+    pub(super) fn active_deband(&self) -> DebandStrength {
+        if !fit_mode_allows_display_upscale(self.fit_mode)
+            || !self.gpu_effects_available
+            || self.gpu_target_format.is_none()
+            || matches!(self.settings.gpu_effect_mode, GpuEffectMode::CpuOnly)
+            || !matches!(self.settings.renderer_mode, RendererMode::Wgpu)
+        {
+            return DebandStrength::Off;
+        }
+        self.settings.deband
+    }
+
     /// WGSL painting is governed by `gpu_effect_mode` (`CpuOnly` is the explicit
     /// opt-out) plus a usable `gpu_target_format`. The display downscaler is now a
     /// fixed pyramid Lanczos3 (`WGPU_DOWNSCALE_METHOD`), so the WGSL path is always
@@ -162,6 +183,7 @@ impl SuiSuiViewApp {
             wgpu_downscale_method: request.wgpu_downscale_method,
             fixed_2x_sr_min_scale_pct: request.fixed_2x_sr_min_scale_pct,
             opacity: request.opacity.clamp(0.0, 1.0),
+            deband: request.deband,
             zoom_in_motion: request.zoom_in_motion,
             pool_budgets,
             rect: request.rect,
@@ -174,6 +196,7 @@ impl SuiSuiViewApp {
                 request.fixed_2x_sr_min_scale_pct,
                 request.rect,
                 request.opacity,
+                request.deband,
                 request.zoom_in_motion,
             ),
             ctx: painter.ctx().clone(),
@@ -307,6 +330,7 @@ struct GpuEffectCallback {
     wgpu_downscale_method: WgpuDownscaleMethod,
     fixed_2x_sr_min_scale_pct: u32,
     opacity: f32,
+    deband: DebandStrength,
     zoom_in_motion: bool,
     pool_budgets: GpuPoolBudgets,
     rect: Rect,
@@ -406,6 +430,7 @@ impl CallbackTrait for GpuEffectCallback {
                 display_rect,
                 self.opacity,
                 self.zoom_in_motion,
+                self.deband,
                 &self.ctx,
             );
             resources.insert_draw_state(self.draw_id, draw_state);
@@ -470,6 +495,9 @@ struct GpuPaintResources {
     texture_sampler: wgpu::Sampler,
     pipeline: wgpu::RenderPipeline,
     intermediate_pipeline: wgpu::RenderPipeline,
+    /// Deband pre-pass pipeline (Rgba8Unorm intermediate target), sharing the
+    /// effect pipeline layout so the source bind group feeds it unchanged.
+    deband_pipeline: wgpu::RenderPipeline,
     source_textures: LruCache<GpuPaintSourceKey, GpuSourceTexture>,
     source_texture_bytes: usize,
     draw_bind_groups: LruCache<u64, GpuDrawState>,
@@ -497,6 +525,7 @@ fn draw_id(
     fixed_2x_sr_min_scale_pct: u32,
     rect: Rect,
     opacity: f32,
+    deband: DebandStrength,
     zoom_in_motion: bool,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -510,6 +539,9 @@ fn draw_id(
     rect.max.x.to_bits().hash(&mut hasher);
     rect.max.y.to_bits().hash(&mut hasher);
     opacity.to_bits().hash(&mut hasher);
+    // Distinct draw states per strength so a strength change re-renders instead
+    // of reusing the previous strength's cached draw.
+    deband.token().hash(&mut hasher);
     // The bool changes which pipeline renders (cached mipmap sample vs. the
     // quality downscale), so distinct draw states must not collide.
     zoom_in_motion.hash(&mut hasher);

@@ -1,4 +1,7 @@
 pub mod artcnn;
+pub mod deband;
+#[cfg(test)]
+mod deband_quality;
 pub mod decoder_backend;
 pub mod decoder_bench;
 pub mod effect_bench;

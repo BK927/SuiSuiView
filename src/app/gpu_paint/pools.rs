@@ -154,6 +154,7 @@ impl GpuPaintResources {
             wgpu::TextureFormat::Rgba8Unorm,
             "suisuiview-gpu-effect-intermediate-pipeline",
         );
+        let deband_pipeline = super::deband::create_deband_pipeline(device, &pipeline_layout);
         let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("suisuiview-gpu-effect-linear-sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -171,6 +172,7 @@ impl GpuPaintResources {
             texture_sampler,
             pipeline,
             intermediate_pipeline,
+            deband_pipeline,
             source_textures: LruCache::new(
                 NonZeroUsize::new(GPU_SOURCE_TEXTURE_CACHE_LIMIT).unwrap(),
             ),
@@ -591,8 +593,11 @@ pub(super) fn intermediate_texture_key(
     effects: ViewEffects,
     wgpu_upscale_method: WgpuUpscaleMethod,
     display_rect: GpuDisplayRect,
+    deband: crate::core::deband::DebandStrength,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // EASU renders from the (possibly debanded) source bind group; key on it.
+    deband.token().hash(&mut hasher);
     source_key.hash(&mut hasher);
     source_size.hash(&mut hasher);
     output_size.hash(&mut hasher);
@@ -609,6 +614,7 @@ pub(super) fn source_texture_content_key(
     source_size: [usize; 2],
     output_size: [usize; 2],
     effects: ViewEffects,
+    deband: crate::core::deband::DebandStrength,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     "source_texture_content".hash(&mut hasher);
@@ -616,6 +622,11 @@ pub(super) fn source_texture_content_key(
     source_size.hash(&mut hasher);
     output_size.hash(&mut hasher);
     effects.hash(&mut hasher);
+    // The debanded pre-pass changes the pixels every downstream stage renders
+    // from, so the content roots must separate per strength — otherwise a
+    // strength change keeps serving stale rendered=true chain intermediates
+    // until LRU eviction.
+    deband.token().hash(&mut hasher);
     hasher.finish()
 }
 

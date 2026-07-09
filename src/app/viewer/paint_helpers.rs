@@ -49,6 +49,7 @@ impl SuiSuiViewApp {
                 request.wgpu_upscale_method,
                 request.wgpu_downscale_method,
                 self.settings.fixed_2x_sr_min_scale(),
+                request.deband,
             )
         {
             let texture = self.texture_for_gpu_fallback(
@@ -320,8 +321,78 @@ mod tests {
     use super::{
         clamp_pan_to_viewport, pixel_grid_spacing, source_pixel_scale, texture_options_for_sampling,
     };
-    use crate::app::TextureSampling;
+    use crate::app::{gpu_visual_needs_wgsl, TextureSampling};
+    use crate::core::deband::DebandStrength;
+    use crate::core::effects::ViewEffects;
+    use crate::core::state::{WgpuDownscaleMethod, WgpuUpscaleMethod};
     use egui::{Pos2, Rect, TextureOptions, Vec2};
+
+    #[test]
+    fn auto_gpu_visual_uses_cpu_texture_path_for_downscale_without_effects() {
+        assert!(!gpu_visual_needs_wgsl(
+            [2000, 3000],
+            [1000, 1500],
+            ViewEffects::default(),
+            WgpuUpscaleMethod::Auto,
+            WgpuDownscaleMethod::Bilinear,
+            1.10,
+            DebandStrength::Off,
+        ));
+        assert!(gpu_visual_needs_wgsl(
+            [2000, 3000],
+            [1000, 1500],
+            ViewEffects::default(),
+            WgpuUpscaleMethod::Auto,
+            WgpuDownscaleMethod::Hamming,
+            1.10,
+            DebandStrength::Off,
+        ));
+        // Deband forces the WGSL path even for an otherwise-native downscale with
+        // no effects, so the pre-pass actually runs.
+        assert!(gpu_visual_needs_wgsl(
+            [2000, 3000],
+            [1000, 1500],
+            ViewEffects::default(),
+            WgpuUpscaleMethod::Auto,
+            WgpuDownscaleMethod::Bilinear,
+            1.10,
+            DebandStrength::Medium,
+        ));
+    }
+
+    #[test]
+    fn gpu_visual_uses_wgsl_for_auto_upscale_explicit_methods_and_effects() {
+        assert!(gpu_visual_needs_wgsl(
+            [800, 1200],
+            [1600, 2400],
+            ViewEffects::default(),
+            WgpuUpscaleMethod::Auto,
+            WgpuDownscaleMethod::Bilinear,
+            1.10,
+            DebandStrength::Off,
+        ));
+        assert!(gpu_visual_needs_wgsl(
+            [800, 1200],
+            [1600, 2400],
+            ViewEffects::default(),
+            WgpuUpscaleMethod::WgslNisStyle,
+            WgpuDownscaleMethod::Bilinear,
+            1.10,
+            DebandStrength::Off,
+        ));
+        assert!(gpu_visual_needs_wgsl(
+            [2000, 3000],
+            [1000, 1500],
+            ViewEffects {
+                invert_colors: true,
+                ..ViewEffects::default()
+            },
+            WgpuUpscaleMethod::Auto,
+            WgpuDownscaleMethod::Bilinear,
+            1.10,
+            DebandStrength::Off,
+        ));
+    }
 
     #[test]
     fn pixel_grid_spacing_reports_at_and_above_threshold() {

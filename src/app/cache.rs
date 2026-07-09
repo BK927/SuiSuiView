@@ -1,6 +1,7 @@
 #[cfg(any(test, feature = "perf-dev", feature = "perf-diagnostics"))]
 use super::perf;
 use super::SuiSuiViewApp;
+use crate::core::deband::DebandStrength;
 use crate::core::effects::ViewEffects;
 use crate::core::source::PageId;
 use crate::core::state::{
@@ -569,6 +570,7 @@ pub(in crate::app) fn gpu_visual_needs_wgsl(
     wgpu_upscale_method: WgpuUpscaleMethod,
     wgpu_downscale_method: WgpuDownscaleMethod,
     fixed_2x_sr_min_scale: f32,
+    deband: DebandStrength,
 ) -> bool {
     let scale_plan = WgpuScalePlan::resolve(
         image_size,
@@ -577,7 +579,10 @@ pub(in crate::app) fn gpu_visual_needs_wgsl(
         wgpu_downscale_method,
         fixed_2x_sr_min_scale,
     );
-    effects != ViewEffects::default()
+    // Deband must take the WGSL path even for an otherwise-native page (no
+    // effects, no scaling) so the pre-pass actually runs.
+    deband.is_active()
+        || effects != ViewEffects::default()
         || scale_plan.effective_upscale_method != WgpuUpscaleMethod::None
         || scale_plan.effective_downscale_method != WgpuDownscaleMethod::Bilinear
 }

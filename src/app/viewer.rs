@@ -716,6 +716,7 @@ impl SuiSuiViewApp {
                 let target_size = rect_target_size(page_rect, ctx.pixels_per_point());
                 let force_texture_fallback = self.sibling_book_transition_stabilizing();
                 let fixed_2x_sr_min_scale = self.settings.fixed_2x_sr_min_scale();
+                let deband = self.active_deband();
                 let active_wgsl = !force_texture_fallback
                     && gpu_visual_needs_wgsl(
                         image_size,
@@ -724,6 +725,7 @@ impl SuiSuiViewApp {
                         wgpu_upscale_method,
                         wgpu_downscale_method,
                         fixed_2x_sr_min_scale,
+                        deband,
                     );
                 let target_intent =
                     self.prepared_target_intent_for_target(render_info.target_long_edge);
@@ -737,6 +739,7 @@ impl SuiSuiViewApp {
                     wgpu_downscale_method,
                     fixed_2x_sr_min_scale,
                     active_wgsl,
+                    deband,
                     target_intent,
                 ));
                 let gpu_painted = self.paint_ready_gpu_visual(
@@ -752,6 +755,7 @@ impl SuiSuiViewApp {
                         wgpu_downscale_method,
                         fixed_2x_sr_min_scale_pct: self.settings.fixed_2x_sr_min_scale_pct,
                         opacity: alpha,
+                        deband,
                         zoom_in_motion: self.zoom_in_motion(),
                     },
                     force_texture_fallback,

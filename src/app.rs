@@ -1313,8 +1313,8 @@ mod tests {
         adjacent_sibling_book_paths, adjacent_sibling_book_paths_ordered, apply_effects_to_image,
         best_page_key_excluding_preview_fallback_in_cache, best_page_key_in_cache,
         command_for_shortcut, double_spread_indices, final_quality_page_key_in_cache,
-        gpu_visual_needs_wgsl, korean_font_candidates, load_first_existing_font,
-        lower_resolution_page_keys, ordered_spread_indices, page_cache_state_from_hit, platform,
+        korean_font_candidates, load_first_existing_font, lower_resolution_page_keys,
+        ordered_spread_indices, page_cache_state_from_hit, platform,
         prepared_target_intent_for_view, preview_prefetch_indices, relative_difference,
         sanitize_font_name, should_allow_cpu_display_upscale, sibling_book_path,
         smart_spread_indices_for_metrics, texture_cache_budget_bytes_for,
@@ -1325,9 +1325,9 @@ mod tests {
     use crate::core::source::PageId;
     use crate::core::state::{
         AppSettings, CacheMemoryMode, CpuScaleFilter, FitMode, KeyCode, KeyShortcut,
-        PageTransitionStyle, ReadingDirection, RendererMode, WgpuDownscaleMethod,
-        WgpuUpscaleMethod, AMPLE_TOTAL_BUDGET_BYTES, MANUAL_CACHE_MB_MAX, MANUAL_CACHE_MB_MIN,
-        SAVER_TOTAL_BUDGET_BYTES, STANDARD_TOTAL_BUDGET_BYTES,
+        PageTransitionStyle, ReadingDirection, RendererMode, AMPLE_TOTAL_BUDGET_BYTES,
+        MANUAL_CACHE_MB_MAX, MANUAL_CACHE_MB_MIN, SAVER_TOTAL_BUDGET_BYTES,
+        STANDARD_TOTAL_BUDGET_BYTES,
     };
     use crate::core::worker::{
         DecodeBackend, DecodeOptions, DecodeStrategy, NavigationDirection, PagePixels,
@@ -2288,57 +2288,6 @@ mod tests {
             false,
             false,
             CpuScaleFilter::Lanczos3,
-        ));
-    }
-
-    #[test]
-    fn auto_gpu_visual_uses_cpu_texture_path_for_downscale_without_effects() {
-        assert!(!gpu_visual_needs_wgsl(
-            [2000, 3000],
-            [1000, 1500],
-            ViewEffects::default(),
-            WgpuUpscaleMethod::Auto,
-            WgpuDownscaleMethod::Bilinear,
-            1.10,
-        ));
-        assert!(gpu_visual_needs_wgsl(
-            [2000, 3000],
-            [1000, 1500],
-            ViewEffects::default(),
-            WgpuUpscaleMethod::Auto,
-            WgpuDownscaleMethod::Hamming,
-            1.10,
-        ));
-    }
-
-    #[test]
-    fn gpu_visual_uses_wgsl_for_auto_upscale_explicit_methods_and_effects() {
-        assert!(gpu_visual_needs_wgsl(
-            [800, 1200],
-            [1600, 2400],
-            ViewEffects::default(),
-            WgpuUpscaleMethod::Auto,
-            WgpuDownscaleMethod::Bilinear,
-            1.10,
-        ));
-        assert!(gpu_visual_needs_wgsl(
-            [800, 1200],
-            [1600, 2400],
-            ViewEffects::default(),
-            WgpuUpscaleMethod::WgslNisStyle,
-            WgpuDownscaleMethod::Bilinear,
-            1.10,
-        ));
-        assert!(gpu_visual_needs_wgsl(
-            [2000, 3000],
-            [1000, 1500],
-            ViewEffects {
-                invert_colors: true,
-                ..ViewEffects::default()
-            },
-            WgpuUpscaleMethod::Auto,
-            WgpuDownscaleMethod::Bilinear,
-            1.10,
         ));
     }
 

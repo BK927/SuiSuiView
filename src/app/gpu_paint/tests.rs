@@ -1,4 +1,6 @@
+use super::pools::source_texture_content_key;
 use super::*;
+use crate::core::deband::DebandStrength;
 use crate::core::source::PageId;
 use crate::core::worker::DecodeOptions;
 use egui::{pos2, vec2};
@@ -25,6 +27,7 @@ fn draw_id_separates_same_page_in_different_panes() {
             110,
             left,
             1.0,
+            DebandStrength::Off,
             false,
         ),
         draw_id(
@@ -35,6 +38,7 @@ fn draw_id_separates_same_page_in_different_panes() {
             110,
             right,
             1.0,
+            DebandStrength::Off,
             false,
         )
     );
@@ -61,6 +65,7 @@ fn draw_id_separates_zoom_in_motion_from_settled() {
             110,
             rect,
             1.0,
+            DebandStrength::Off,
             zoom_in_motion,
         )
     };
@@ -198,6 +203,7 @@ fn realtime_sr_stage_texture_keys_separate_stack_stages() {
         0,
         [512, 512],
         2,
+        DebandStrength::Off,
     );
     let pass_2 = realtime_sr_stage_texture_key(
         source_key,
@@ -206,6 +212,7 @@ fn realtime_sr_stage_texture_keys_separate_stack_stages() {
         1,
         [1024, 1024],
         2,
+        DebandStrength::Off,
     );
     let single_pass = realtime_sr_stage_texture_key(
         source_key,
@@ -214,9 +221,41 @@ fn realtime_sr_stage_texture_keys_separate_stack_stages() {
         0,
         [512, 512],
         1,
+        DebandStrength::Off,
     );
     assert_ne!(pass_1, pass_2);
     assert_ne!(pass_1, single_pass);
+
+    // A deband-strength change alters every downstream stage's input pixels, so
+    // the SR stage key (and the direct-path content root) must separate per
+    // strength — otherwise rendered=true chain intermediates serve stale,
+    // un-debanded pixels until LRU eviction.
+    let pass_1_deband = realtime_sr_stage_texture_key(
+        source_key,
+        [512, 512],
+        WgpuUpscaleMethod::WgslAnime4kV32CnnX2S,
+        0,
+        [512, 512],
+        2,
+        DebandStrength::Medium,
+    );
+    assert_ne!(pass_1, pass_1_deband);
+    assert_ne!(
+        source_texture_content_key(
+            source_key,
+            [512, 512],
+            [1024, 1024],
+            ViewEffects::default(),
+            DebandStrength::Off,
+        ),
+        source_texture_content_key(
+            source_key,
+            [512, 512],
+            [1024, 1024],
+            ViewEffects::default(),
+            DebandStrength::Medium,
+        )
+    );
 }
 
 #[test]
@@ -590,6 +629,7 @@ fn render_gpu_frame(
         },
         1.0,
         false,
+        DebandStrength::Off,
         &egui::Context::default(),
     );
     let output_texture = device.create_texture(&wgpu::TextureDescriptor {
