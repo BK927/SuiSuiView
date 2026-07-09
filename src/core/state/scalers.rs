@@ -133,6 +133,14 @@ pub enum WgpuDownscaleMethod {
 /// quality-first pyramid Lanczos3 is the right default for all content (per-frame
 /// cost differences are ~1ms), so the option is no longer user-configurable.
 pub const WGPU_DOWNSCALE_METHOD: WgpuDownscaleMethod = WgpuDownscaleMethod::PyramidLanczos3;
+/// Fixed CPU display-downscale filter (option retired 2026-07-09): measured on
+/// real webtoon pages, the quality family (CatmullRom/Lanczos2/3) is
+/// indistinguishable (SSIM >= 0.9989) and the whole sweep costs ~2ms/page once
+/// per page+zoom, so no tradeoff earns a user choice. CatmullRom over Lanczos3
+/// because the still-WebP scaled-decode fast path (worker/webp.rs) only engages
+/// for Hamming/CatmullRom, it is ~16% cheaper, and it matches the CPU upscaler
+/// default.
+pub const CPU_DOWNSCALE_FILTER: CpuScaleFilter = CpuScaleFilter::CatmullRom;
 
 impl WgpuDownscaleMethod {
     pub const ALL: [Self; 14] = [

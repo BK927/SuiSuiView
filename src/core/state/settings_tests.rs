@@ -81,7 +81,6 @@ fn settings_defaults_match_viewer_policy() {
     assert_eq!(settings.decoder_preferences, DecoderPreferences::default());
     assert!(settings.fast_sampled_scaled_decode);
     assert_eq!(settings.cpu_upscale_filter, CpuScaleFilter::CatmullRom);
-    assert_eq!(settings.cpu_downscale_filter, CpuScaleFilter::Hamming);
     assert_eq!(settings.gpu_effect_mode, GpuEffectMode::Auto);
     assert_eq!(settings.renderer_mode, RendererMode::LowMemoryGlow);
     assert_eq!(settings.wgpu_upscale_method, WgpuUpscaleMethod::None);
@@ -390,7 +389,7 @@ fn retired_wgpu_downscale_json_keys_are_ignored() {
     // from AppSettings. Old state.json files still carry them; AppSettings has no
     // `deny_unknown_fields`, so they must be ignored on load rather than erroring.
     let mut state: PersistedState = serde_json::from_str(
-        r#"{"version":4,"settings":{"wgpu_downscale_method":"Hamming","top_bar_wgpu_downscale_methods":["Bilinear","PyramidLanczos3"]},"books":{}}"#,
+        r#"{"version":4,"settings":{"wgpu_downscale_method":"Hamming","cpu_downscale_filter":"Nearest","top_bar_wgpu_downscale_methods":["Bilinear","PyramidLanczos3"]},"books":{}}"#,
     )
     .unwrap();
 
@@ -418,7 +417,6 @@ fn app_settings_save_new_scaler_keys() {
     let json = serde_json::to_value(AppSettings {
         fast_sampled_scaled_decode: false,
         cpu_upscale_filter: CpuScaleFilter::Lanczos3,
-        cpu_downscale_filter: CpuScaleFilter::Hamming,
         wgpu_upscale_method: WgpuUpscaleMethod::WgslFsr1EasuRcas,
         ..AppSettings::default()
     })
@@ -427,7 +425,8 @@ fn app_settings_save_new_scaler_keys() {
 
     assert_eq!(object["fast_sampled_scaled_decode"], false);
     assert_eq!(object["cpu_upscale_filter"], "Lanczos3");
-    assert_eq!(object["cpu_downscale_filter"], "Hamming");
+    // The CPU downscale filter is fixed and no longer serialized.
+    assert!(!object.contains_key("cpu_downscale_filter"));
     assert_eq!(object["wgpu_upscale_method"], "WgslFsr1EasuRcas");
     // The WGPU downscaler is fixed and no longer serialized.
     assert!(!object.contains_key("wgpu_downscale_method"));

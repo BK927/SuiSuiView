@@ -26,6 +26,10 @@ use prewarm::{run_wgpu_prewarm, PrewarmReport, PrewarmedWgpu};
 // kept for external compatibility even though the module was renamed to winit_host.
 const REQUEST_ARG: &str = "--experimental-app-handoff";
 const REQUEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_APP_HANDOFF";
+/// Forces the Glow-only host regardless of the persisted renderer setting.
+/// Testing hook: lets a harness exercise the Glow path without touching the
+/// user's state.json (mirror of `REQUEST_ENV`, which forces WGPU).
+const FORCE_GLOW_ENV: &str = "SUISUIVIEW_FORCE_GLOW";
 const FAIL_STAGE_ENV: &str = "SUISUIVIEW_HANDOFF_FAIL_STAGE";
 
 pub(crate) struct WinitHostOptions {
@@ -40,6 +44,10 @@ pub(crate) struct WinitHostOptions {
 
 pub(crate) fn requested() -> bool {
     std::env::var_os(REQUEST_ENV).is_some() || std::env::args_os().any(|arg| arg == REQUEST_ARG)
+}
+
+pub(crate) fn glow_forced() -> bool {
+    std::env::var_os(FORCE_GLOW_ENV).is_some()
 }
 
 pub(crate) fn enabled_for_settings(settings: &AppSettings) -> bool {

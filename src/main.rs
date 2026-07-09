@@ -45,8 +45,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // WGPU fast-start handoff; LowMemoryGlow runs the Glow-only host; a handoff
     // failure persists the demotion and relaunches into the Glow-only host
     // (winit forbids a second event loop in one process).
-    let wants_wgpu =
-        app::winit_host::requested() || app::winit_host::enabled_for_settings(store.settings());
+    let wants_wgpu = !app::winit_host::glow_forced()
+        && (app::winit_host::requested()
+            || app::winit_host::enabled_for_settings(store.settings()));
     if wants_wgpu {
         let mut handoff_store = store.clone();
         handoff_store.clear_fast_start_failure_notice();

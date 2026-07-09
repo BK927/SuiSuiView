@@ -22,13 +22,6 @@ impl SuiSuiViewApp {
                 self.settings.cpu_upscale_filter,
                 |settings, filter| settings.cpu_upscale_filter = filter,
             );
-            self.show_cpu_filter_row(
-                ctx,
-                ui,
-                i18n.text("topbar.scale.cpu_down"),
-                self.settings.cpu_downscale_filter,
-                |settings, filter| settings.cpu_downscale_filter = filter,
-            );
 
             ui.separator();
             let gpu_enabled = matches!(self.settings.renderer_mode, RendererMode::Wgpu);

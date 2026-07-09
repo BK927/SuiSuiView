@@ -94,26 +94,6 @@ pub(in crate::app) fn show_rendering_settings(
                             }
                         });
                     ui.end_row();
-
-                    grid_label_with_help(
-                        ui,
-                        &i18n.text("settings.rendering.cpu_downscale_filter"),
-                        &i18n.text("settings.rendering.cpu_downscale_filter.help"),
-                    );
-                    egui::ComboBox::from_id_salt("cpu_downscale_filter")
-                        .selected_text(draft.cpu_downscale_filter.label())
-                        .show_ui(ui, |ui| {
-                            for filter in CpuScaleFilter::ALL {
-                                *changed |= ui
-                                    .selectable_value(
-                                        &mut draft.cpu_downscale_filter,
-                                        filter,
-                                        filter.label(),
-                                    )
-                                    .changed();
-                            }
-                        });
-                    ui.end_row();
                 });
 
             ui.add_space(10.0);

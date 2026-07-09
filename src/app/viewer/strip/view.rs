@@ -534,10 +534,20 @@ impl SuiSuiViewApp {
     }
 
     /// The book's typical page dimensions `[w, h]` in source pixels, or `None`
-    /// until at least one page has been measured.
+    /// until at least one page has been measured. Memoized against
+    /// `strip_dims_revision` so the O(page-count) median walk runs only when a
+    /// dimension actually changed, not every frame.
     fn strip_source_median_dims(&self) -> Option<[u32; 2]> {
+        if let Some((revision, median)) = self.strip_median_cache.get() {
+            if revision == self.strip_dims_revision {
+                return median;
+            }
+        }
         let source = self.source.as_ref()?;
-        self.strip_median_dims(source.as_ref(), source.page_count())
+        let median = self.strip_median_dims(source.as_ref(), source.page_count());
+        self.strip_median_cache
+            .set(Some((self.strip_dims_revision, median)));
+        median
     }
 
     /// Per-axis medians of every page whose size is known (page_metrics first,

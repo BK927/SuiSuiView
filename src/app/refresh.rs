@@ -186,6 +186,7 @@ impl SuiSuiViewApp {
             .retain(|page_id, _| new_source.page_index_for_id(*page_id).is_some());
         self.strip_dim_hints
             .retain(|page_id, _| new_source.page_index_for_id(*page_id).is_some());
+        self.note_strip_dims_changed();
         self.page_errors
             .retain(|key, _| new_source.page_index_for_id(key.page_id).is_some());
 

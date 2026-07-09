@@ -590,6 +590,7 @@ impl SuiSuiViewApp {
         self.decoded_pages.clear();
         self.decoded_bytes = 0;
         self.page_metrics.clear();
+        self.note_strip_dims_changed();
         self.textures.clear();
         self.clear_upscale_probe_state();
         self.seed_upscale_decision_from_record(&book_id);
@@ -725,7 +726,7 @@ fn startup_decode_options(settings: &AppSettings) -> DecodeOptions {
         decoder_preferences,
         fast_sampled_scaled_decode: settings.fast_sampled_scaled_decode,
         cpu_upscale_filter: settings.cpu_upscale_filter,
-        cpu_downscale_filter: settings.cpu_downscale_filter,
+        cpu_downscale_filter: crate::core::state::CPU_DOWNSCALE_FILTER,
         allow_display_upscale: false,
         apply_exif_orientation: settings.apply_exif_orientation,
         apply_embedded_icc: settings.apply_embedded_icc,

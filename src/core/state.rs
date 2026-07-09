@@ -33,7 +33,7 @@ pub use input::{
 pub use rendering::RendererMode;
 pub use scalers::{
     CpuScaleFilter, ResizeFilter, WgpuDownscaleMethod, WgpuScaleDirection, WgpuScalePlan,
-    WGPU_DOWNSCALE_METHOD,
+    CPU_DOWNSCALE_FILTER, WGPU_DOWNSCALE_METHOD,
 };
 
 pub const DEFAULT_TOP_BAR_CPU_SCALE_FILTERS: [CpuScaleFilter; 5] = [
@@ -366,8 +366,6 @@ pub struct AppSettings {
     pub fast_sampled_scaled_decode: bool,
     #[serde(default = "default_cpu_upscale_filter")]
     pub cpu_upscale_filter: CpuScaleFilter,
-    #[serde(default = "default_cpu_downscale_filter")]
-    pub cpu_downscale_filter: CpuScaleFilter,
     #[serde(default)]
     pub gpu_effect_mode: GpuEffectMode,
     #[serde(default)]
@@ -527,7 +525,6 @@ impl Default for AppSettings {
             decoder_preferences: DecoderPreferences::default(),
             fast_sampled_scaled_decode: true,
             cpu_upscale_filter: default_cpu_upscale_filter(),
-            cpu_downscale_filter: default_cpu_downscale_filter(),
             gpu_effect_mode: GpuEffectMode::Auto,
             renderer_mode: RendererMode::LowMemoryGlow,
             wgpu_upscale_method: WgpuUpscaleMethod::None,
@@ -872,10 +869,6 @@ fn default_strip_drag_scroll_pct() -> u32 {
 
 fn default_cpu_upscale_filter() -> CpuScaleFilter {
     CpuScaleFilter::CatmullRom
-}
-
-fn default_cpu_downscale_filter() -> CpuScaleFilter {
-    CpuScaleFilter::Hamming
 }
 
 pub fn default_top_bar_cpu_scale_filters() -> Vec<CpuScaleFilter> {

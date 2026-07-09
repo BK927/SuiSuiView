@@ -256,4 +256,104 @@ mod tests {
             }
         }
     }
+
+    /// Manual measurement harness for the CPU downscale filter decision (run
+    /// with `--ignored` and SUISUIVIEW_BENCH_CBZ pointing at a webtoon CBZ):
+    /// times every CpuScaleFilter over real pages at reading-relevant ratios
+    /// and reports each filter's SSIM against the Lanczos3 pivot.
+    #[test]
+    #[ignore = "manual bench; needs SUISUIVIEW_BENCH_CBZ"]
+    fn bench_cpu_downscale_filters() {
+        use crate::core::upscale_quality::compare_images;
+        use egui::ColorImage;
+        use std::io::Read as _;
+        use std::time::Instant;
+
+        let Ok(cbz) = std::env::var("SUISUIVIEW_BENCH_CBZ") else {
+            eprintln!("SUISUIVIEW_BENCH_CBZ not set; skipping");
+            return;
+        };
+        let file = std::fs::File::open(&cbz).expect("open cbz");
+        let mut archive = zip::ZipArchive::new(file).expect("read cbz");
+        let mut names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_owned())
+            .filter(|n| n.ends_with(".jpg") || n.ends_with(".png") || n.ends_with(".webp"))
+            .collect();
+        names.sort();
+        let picks: Vec<&String> = [0usize, 8, 20, 40, 60, 80]
+            .iter()
+            .filter_map(|&i| names.get(i))
+            .collect();
+        let mut pages: Vec<RgbaImage> = Vec::new();
+        for name in picks {
+            let mut entry = archive.by_name(name).expect("entry");
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).expect("read entry");
+            let img = image::load_from_memory(&bytes).expect("decode").to_rgba8();
+            pages.push(img);
+        }
+        eprintln!("pages: {} loaded from {cbz}", pages.len());
+
+        let ratios = [0.85f32, 0.6, 0.35];
+        let to_color = |img: &RgbaImage| {
+            ColorImage::from_rgba_unmultiplied(
+                [img.width() as usize, img.height() as usize],
+                img.as_raw(),
+            )
+        };
+
+        // Pivot outputs (Lanczos3) per (page, ratio).
+        let mut pivots: Vec<Vec<ColorImage>> = Vec::new();
+        for page in &pages {
+            let mut per_ratio = Vec::new();
+            for &ratio in &ratios {
+                let w = ((page.width() as f32 * ratio) as u32).max(1);
+                let h = ((page.height() as f32 * ratio) as u32).max(1);
+                per_ratio.push(to_color(&super::resize_rgba(
+                    page,
+                    w,
+                    h,
+                    CpuScaleFilter::Lanczos3,
+                )));
+            }
+            pivots.push(per_ratio);
+        }
+
+        eprintln!("filter        total_ms   min_ssim_vs_L3(0.85/0.6/0.35)");
+        for filter in CpuScaleFilter::ALL {
+            // Timing: best of 3 full sweeps (all pages x all ratios).
+            let mut best_ms = f64::MAX;
+            for _ in 0..3 {
+                let started = Instant::now();
+                for page in &pages {
+                    for &ratio in &ratios {
+                        let w = ((page.width() as f32 * ratio) as u32).max(1);
+                        let h = ((page.height() as f32 * ratio) as u32).max(1);
+                        std::hint::black_box(super::resize_rgba(page, w, h, filter));
+                    }
+                }
+                best_ms = best_ms.min(started.elapsed().as_secs_f64() * 1000.0);
+            }
+            // Quality: min SSIM vs the Lanczos3 pivot per ratio, across pages.
+            let mut min_ssim = [1.0f64; 3];
+            for (page_idx, page) in pages.iter().enumerate() {
+                for (ratio_idx, &ratio) in ratios.iter().enumerate() {
+                    let w = ((page.width() as f32 * ratio) as u32).max(1);
+                    let h = ((page.height() as f32 * ratio) as u32).max(1);
+                    let out = to_color(&super::resize_rgba(page, w, h, filter));
+                    let metrics =
+                        compare_images(&pivots[page_idx][ratio_idx], &out).expect("compare");
+                    min_ssim[ratio_idx] = min_ssim[ratio_idx].min(metrics.ssim);
+                }
+            }
+            eprintln!(
+                "{:<12} {:>8.1}   {:.4} / {:.4} / {:.4}",
+                filter.label(),
+                best_ms,
+                min_ssim[0],
+                min_ssim[1],
+                min_ssim[2]
+            );
+        }
+    }
 }

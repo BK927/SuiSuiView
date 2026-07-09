@@ -163,6 +163,7 @@ impl SuiSuiViewApp {
             worker.set_generation(self.strip_dim_scan_generation);
         }
         self.strip_dim_hints.clear();
+        self.note_strip_dims_changed();
     }
 
     /// Start prescanning the current book's page dimensions. No-op for a single
@@ -199,6 +200,7 @@ impl SuiSuiViewApp {
             }
             None => return,
         };
+        let mut inserted = false;
         for batch in batches {
             if batch.generation != self.strip_dim_scan_generation {
                 continue;
@@ -211,7 +213,11 @@ impl SuiSuiViewApp {
                     continue;
                 }
                 self.strip_dim_hints.insert(page_id, dims);
+                inserted = true;
             }
+        }
+        if inserted {
+            self.note_strip_dims_changed();
         }
     }
 }

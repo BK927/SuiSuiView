@@ -99,6 +99,7 @@ impl SuiSuiViewApp {
         }
         self.page_metrics
             .insert(seed.key.page_id, PageMetrics::from_page(&seed.page));
+        self.note_strip_dims_changed();
         self.insert_prepared_page(seed.key, seed.page);
         self.prune_decoded_cache();
     }

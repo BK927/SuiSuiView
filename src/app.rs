@@ -47,11 +47,11 @@ mod realtime_sr;
 mod refresh;
 mod runtime;
 mod settings;
-mod settings_bookmarks;
 mod settings_input;
 mod settings_performance;
 mod settings_reading;
 mod settings_rendering;
+mod settings_view;
 mod sibling_books;
 mod texture_prewarm;
 mod ui;
@@ -219,6 +219,14 @@ pub struct SuiSuiViewApp {
     decoded_pages: LruCache<PageCacheKey, Arc<PreparedPage>>,
     decoded_bytes: usize,
     page_metrics: HashMap<crate::core::source::PageId, PageMetrics>,
+    /// Bumped whenever known page dimensions change (page_metrics or
+    /// strip_dim_hints writes/clears); keys the strip's median-dims cache so the
+    /// per-frame median is recomputed only when it can differ.
+    strip_dims_revision: u64,
+    /// `(revision, median)` memo for `strip_source_median_dims`; a Cell so the
+    /// read-only accessor can refresh it without threading `&mut` through every
+    /// caller. Recomputed only when `strip_dims_revision` moves.
+    strip_median_cache: std::cell::Cell<Option<(u64, Option<[u32; 2]>)>>,
     page_errors: HashMap<PageCacheKey, String>,
     textures: LruCache<TextureCacheKey, TextureEntry>,
     debug_compare: DebugCompareState,
@@ -395,6 +403,8 @@ impl SuiSuiViewApp {
             decoded_pages: LruCache::new(NonZeroUsize::new(64).unwrap()),
             decoded_bytes: 0,
             page_metrics: HashMap::new(),
+            strip_dims_revision: 0,
+            strip_median_cache: std::cell::Cell::new(None),
             page_errors: HashMap::new(),
             textures: LruCache::new(NonZeroUsize::new(12).unwrap()),
             debug_compare: DebugCompareState::default(),
@@ -749,6 +759,7 @@ impl SuiSuiViewApp {
                 }
                 self.page_metrics
                     .insert(page_id, PageMetrics::from_page(&page));
+                self.note_strip_dims_changed();
                 self.insert_prepared_page(key, page.clone());
                 decoded_cache_changed = true;
                 self.maybe_enqueue_upscale_probe(key, page);
@@ -828,7 +839,7 @@ impl SuiSuiViewApp {
             decoder_preferences,
             fast_sampled_scaled_decode: self.settings.fast_sampled_scaled_decode,
             cpu_upscale_filter: self.settings.cpu_upscale_filter,
-            cpu_downscale_filter: self.settings.cpu_downscale_filter,
+            cpu_downscale_filter: crate::core::state::CPU_DOWNSCALE_FILTER,
             allow_display_upscale: self.should_allow_display_upscale(),
             apply_exif_orientation: self.settings.apply_exif_orientation,
             apply_embedded_icc: self.settings.apply_embedded_icc,
@@ -1023,6 +1034,12 @@ impl SuiSuiViewApp {
         }
     }
 
+    /// Note that the known page-dimension set changed (page_metrics or
+    /// strip_dim_hints); invalidates the strip's cached median dims.
+    pub(in crate::app) fn note_strip_dims_changed(&mut self) {
+        self.strip_dims_revision = self.strip_dims_revision.wrapping_add(1);
+    }
+
     fn clear_local_book_state(&mut self, status: impl Into<String>) {
         self.source = None;
         self.book_id = None;
@@ -1038,6 +1055,7 @@ impl SuiSuiViewApp {
         self.decoded_pages.clear();
         self.decoded_bytes = 0;
         self.page_metrics.clear();
+        self.note_strip_dims_changed();
         self.textures.clear();
         self.clear_debug_compare_requests();
         self.clear_upscale_probe_state();

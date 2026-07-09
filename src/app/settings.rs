@@ -1,7 +1,7 @@
 use super::ui::{dialog, icons, theme};
 use super::{
-    gpu_paint, platform, settings_bookmarks, settings_input, settings_performance,
-    settings_rendering, SuiSuiViewApp,
+    gpu_paint, platform, settings_input, settings_performance, settings_rendering, settings_view,
+    SuiSuiViewApp,
 };
 use crate::core::i18n::I18n;
 use crate::core::state::{AppSettings, GpuEffectMode, Language, RendererMode, WgpuUpscaleMethod};
@@ -167,7 +167,7 @@ impl SuiSuiViewApp {
                                         }
                                     }
                                     SettingsSection::View => {
-                                        settings_bookmarks::show_view_settings(
+                                        settings_view::show_view_settings(
                                             ui,
                                             &mut draft,
                                             &mut changed,
@@ -409,6 +409,7 @@ impl SuiSuiViewApp {
             self.decoded_bytes = 0;
             if decode_changed {
                 self.page_metrics.clear();
+                self.note_strip_dims_changed();
             }
             self.textures.clear();
             textures_invalidated = true;
