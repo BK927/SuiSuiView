@@ -141,6 +141,9 @@ fn top_bar_scaler_tooltip(current_view: Option<&CurrentViewState>, i18n: I18n) -
             &[("level", current_view.deband.label_i18n(i18n))],
         ));
     }
+    if current_view.refine_active {
+        lines.push(i18n.text("topbar.scale.refine"));
+    }
     if let Some(provenance) = wgpu_scale_provenance_sentence(current_view.wgpu_scale, i18n) {
         lines.push(provenance);
     }
@@ -486,6 +489,7 @@ mod tests {
             wgpu_scale,
             glow_kernel: None,
             deband: DebandStrength::Off,
+            refine_active: false,
             target_intent: PreparedTargetIntent::NormalNavigation,
         }
     }

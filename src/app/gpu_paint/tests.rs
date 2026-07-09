@@ -259,6 +259,40 @@ fn realtime_sr_stage_texture_keys_separate_stack_stages() {
 }
 
 #[test]
+fn refine_method_produces_distinct_stage_key_from_normal_method() {
+    // The refine chain reuses `realtime_sr_stage_texture_key` with the refine
+    // upscaler; a distinct method must yield a distinct stage key so a refine
+    // result is never confused with (or served from) the normal upscaler's cache.
+    let source_key = GpuPaintSourceKey {
+        book: 3,
+        page: PageCacheKey {
+            page_id: PageId(9),
+            target_long_edge: 2048,
+            decode: DecodeOptions::default(),
+        },
+    };
+    let normal = realtime_sr_stage_texture_key(
+        source_key,
+        [800, 1200],
+        WgpuUpscaleMethod::CunnyFastSoft,
+        0,
+        [800, 1200],
+        1,
+        DebandStrength::Off,
+    );
+    let refine = realtime_sr_stage_texture_key(
+        source_key,
+        [800, 1200],
+        WgpuUpscaleMethod::Cunny4x32Soft,
+        0,
+        [800, 1200],
+        1,
+        DebandStrength::Off,
+    );
+    assert_ne!(normal, refine);
+}
+
+#[test]
 fn post_sr_downscale_keys_include_intermediate_content() {
     let anime_content = 10;
     let cunny_content = 20;
@@ -630,6 +664,8 @@ fn render_gpu_frame(
         1.0,
         false,
         DebandStrength::Off,
+        None,
+        false,
         &egui::Context::default(),
     );
     let output_texture = device.create_texture(&wgpu::TextureDescriptor {

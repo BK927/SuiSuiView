@@ -344,6 +344,10 @@ impl SuiSuiViewApp {
                         // The compare pane is a static quality reference, not a live
                         // gesture, so it always renders the exact downscale path.
                         zoom_in_motion: false,
+                        // The compare pane pins the user's chosen upscaler for a
+                        // like-for-like reference; refine never rewrites it.
+                        refine_method: None,
+                        allow_refine_render: false,
                     },
                 ) {
                     self.paint_placeholder(

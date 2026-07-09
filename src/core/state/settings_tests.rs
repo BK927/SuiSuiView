@@ -2,8 +2,8 @@ use super::{
     default_key_bindings, default_top_bar_cpu_scale_filters, default_top_bar_wgpu_upscale_methods,
     AppSettings, CacheMemoryMode, CommandId, CpuScaleFilter, DecodeMode, DecoderPreferences,
     EdgePageAction, GpuEffectMode, KeyBinding, KeyCode, KeyShortcut, PageTransitionStyle,
-    PersistedState, RendererMode, TopBarItems, WgpuUpscaleMethod, WheelMode, WindowPlacement,
-    DEFAULT_MANUAL_CACHE_MB,
+    PersistedState, RefineUpscaler, RendererMode, TopBarItems, WgpuUpscaleMethod, WheelMode,
+    WindowPlacement, DEFAULT_MANUAL_CACHE_MB,
 };
 use crate::core::i18n::Language;
 
@@ -487,4 +487,49 @@ fn wgpu_upscale_method_settings_normalize_only_unselectable_methods_to_auto() {
         settings.wgpu_upscale_method,
         WgpuUpscaleMethod::WgslSrLabSpanX2
     );
+}
+
+#[test]
+fn refine_upscaler_default_is_off_with_no_method() {
+    assert_eq!(RefineUpscaler::default(), RefineUpscaler::Off);
+    assert_eq!(RefineUpscaler::Off.method(), None);
+}
+
+#[test]
+fn refine_upscaler_maps_each_tier_to_its_cunny_method() {
+    assert_eq!(
+        RefineUpscaler::Cunny4x32Soft.method(),
+        Some(WgpuUpscaleMethod::Cunny4x32Soft)
+    );
+    assert_eq!(
+        RefineUpscaler::Cunny4x32Ds.method(),
+        Some(WgpuUpscaleMethod::Cunny4x32Ds)
+    );
+    assert_eq!(
+        RefineUpscaler::Cunny8x32Nvl.method(),
+        Some(WgpuUpscaleMethod::Cunny8x32Nvl)
+    );
+    assert_eq!(
+        RefineUpscaler::Cunny8x32Ds.method(),
+        Some(WgpuUpscaleMethod::Cunny8x32Ds)
+    );
+}
+
+#[test]
+fn old_settings_without_refine_upscaler_load_off() {
+    // Legacy state.json predating the key must deserialize to Off, not error.
+    let state: PersistedState =
+        serde_json::from_str(r#"{"version":4,"settings":{},"books":{}}"#).unwrap();
+    assert_eq!(state.settings.refine_upscaler, RefineUpscaler::Off);
+}
+
+#[test]
+fn refine_upscaler_round_trips_through_serde() {
+    let settings = AppSettings {
+        refine_upscaler: RefineUpscaler::Cunny8x32Ds,
+        ..AppSettings::default()
+    };
+    let json = serde_json::to_string(&settings).unwrap();
+    let round_trip: AppSettings = serde_json::from_str(&json).unwrap();
+    assert_eq!(round_trip.refine_upscaler, RefineUpscaler::Cunny8x32Ds);
 }

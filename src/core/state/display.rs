@@ -61,6 +61,50 @@ pub enum WgpuUpscaleMethod {
     Cunny8x32Ds,
 }
 
+/// Idle-scheduled "refine" (정련) upscaler: a heavy CuNNy tier rendered once per
+/// page while the viewer is idle, replacing the displayed page with the higher
+/// quality result at zero per-frame cost. `Off` by default; these ports are
+/// experimental quality (see the settings help text).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RefineUpscaler {
+    #[default]
+    Off,
+    Cunny4x32Soft,
+    Cunny4x32Ds,
+    Cunny8x32Nvl,
+    Cunny8x32Ds,
+}
+
+impl RefineUpscaler {
+    pub const ALL: [Self; 5] = [
+        Self::Off,
+        Self::Cunny4x32Soft,
+        Self::Cunny4x32Ds,
+        Self::Cunny8x32Nvl,
+        Self::Cunny8x32Ds,
+    ];
+
+    /// The concrete WGSL upscaler this refine tier maps to, or `None` when off.
+    pub fn method(self) -> Option<WgpuUpscaleMethod> {
+        match self {
+            Self::Off => None,
+            Self::Cunny4x32Soft => Some(WgpuUpscaleMethod::Cunny4x32Soft),
+            Self::Cunny4x32Ds => Some(WgpuUpscaleMethod::Cunny4x32Ds),
+            Self::Cunny8x32Nvl => Some(WgpuUpscaleMethod::Cunny8x32Nvl),
+            Self::Cunny8x32Ds => Some(WgpuUpscaleMethod::Cunny8x32Ds),
+        }
+    }
+
+    /// Combo label: `Off` is localized; the concrete tiers keep their technical
+    /// English names (e.g. `CuNNy 4x32 SOFT`).
+    pub fn label_i18n(self, i18n: I18n) -> String {
+        match self.method() {
+            None => i18n.text("state.off"),
+            Some(method) => method.label().to_owned(),
+        }
+    }
+}
+
 mod upscaler_choices;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

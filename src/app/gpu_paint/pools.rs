@@ -192,6 +192,7 @@ impl GpuPaintResources {
                 NonZeroUsize::new(GPU_REALTIME_SR_DEFER_CACHE_LIMIT).unwrap(),
             ),
             realtime_sr: RealtimeSrResources::new(),
+            last_refine_log: None,
         };
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf_trace::record_duration(

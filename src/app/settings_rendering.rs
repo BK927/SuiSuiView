@@ -3,7 +3,9 @@ use super::settings::{checkbox_with_help, grid_label_with_help, setting_group};
 use super::ui::theme;
 use crate::core::deband::DebandStrength;
 use crate::core::i18n::I18n;
-use crate::core::state::{AppSettings, CpuScaleFilter, RendererMode, WgpuUpscaleMethod};
+use crate::core::state::{
+    AppSettings, CpuScaleFilter, RefineUpscaler, RendererMode, WgpuUpscaleMethod,
+};
 use egui::{self, RichText};
 
 // established call surface; a params struct would be pure boilerplate
@@ -156,6 +158,38 @@ pub(in crate::app) fn show_rendering_settings(
                     if selected_upscaler_changed {
                         draft.wgpu_upscale_method = selected_upscaler;
                         *changed = true;
+                    }
+                    ui.end_row();
+
+                    let refine_help = i18n.text("settings.rendering.refine_upscaler.help");
+                    grid_label_with_help(
+                        ui,
+                        &i18n.text("settings.rendering.refine_upscaler"),
+                        &refine_help,
+                    );
+                    let refine_response = ui
+                        .add_enabled_ui(gpu_enabled, |ui| {
+                            egui::ComboBox::from_id_salt("refine_upscaler")
+                                .selected_text(draft.refine_upscaler.label_i18n(i18n))
+                                .show_ui(ui, |ui| {
+                                    for tier in RefineUpscaler::ALL {
+                                        *changed |= ui
+                                            .selectable_value(
+                                                &mut draft.refine_upscaler,
+                                                tier,
+                                                tier.label_i18n(i18n),
+                                            )
+                                            .changed();
+                                    }
+                                });
+                        })
+                        .response;
+                    if gpu_enabled {
+                        refine_response.on_hover_text(refine_help);
+                    } else {
+                        refine_response.on_disabled_hover_text(
+                            i18n.text("settings.rendering.gpu_upscaler.disabled"),
+                        );
                     }
                     ui.end_row();
 
