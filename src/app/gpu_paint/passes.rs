@@ -112,6 +112,12 @@ impl GpuPaintResources {
             wgpu_downscale_method,
             fixed_2x_sr_min_scale,
         );
+        // The source bind group handed in here is the debanded fp16 intermediate
+        // whenever a deband pre-pass ran, so a draw that samples it directly (the
+        // single-pass fall-through, or a pyramid that ends up doing no work) must
+        // still dither the final quantization. A raw Off-deband source is bit-exact
+        // 8-bit and stays undithered.
+        let source_is_intermediate = debanded.is_some();
         let effective_upscaler = scale_plan.effective_upscale_method;
         let effective_downscaler = scale_plan.effective_downscale_method;
         let source_content_key =
@@ -217,7 +223,8 @@ impl GpuPaintResources {
                 display_rect.visible_size,
                 opacity,
             );
-            let params_bind_group = self.params_bind_group_for(device, rcas_params);
+            // Final composite samples the fp16 EASU intermediate -> dither on.
+            let params_bind_group = self.params_bind_group_for(device, rcas_params.with_dither());
             record_wgpu_upscale_method_render(
                 effective_upscaler,
                 source_size,
@@ -292,6 +299,7 @@ impl GpuPaintResources {
                 display_rect.origin,
                 display_rect.visible_size,
                 opacity,
+                source_is_intermediate,
             );
         }
 
@@ -319,6 +327,13 @@ impl GpuPaintResources {
             display_rect.full_size,
             opacity,
         );
+        // Dither only when this draw samples the debanded fp16 intermediate; a raw
+        // 8-bit source passes through bit-exact.
+        let params = if source_is_intermediate {
+            params.with_dither()
+        } else {
+            params
+        };
         GpuDrawState::new(
             source_bind_group,
             self.params_bind_group_for(device, params),
@@ -485,6 +500,8 @@ impl GpuPaintResources {
                     display_rect.origin,
                     display_rect.visible_size,
                     opacity,
+                    // The SR output is a pooled intermediate.
+                    true,
                 )
                 .with_intermediate_pin(intermediate);
         }
@@ -501,9 +518,11 @@ impl GpuPaintResources {
             display_rect.full_size,
             opacity,
         );
+        // Final composite samples the realtime-SR output (a pooled intermediate) ->
+        // dither on.
         GpuDrawState::new(
             intermediate.bind_group.clone(),
-            self.params_bind_group_for(device, params),
+            self.params_bind_group_for(device, params.with_dither()),
             vec![intermediate],
         )
     }
@@ -522,6 +541,12 @@ impl GpuPaintResources {
         origin: [u32; 2],
         target_size: [u32; 2],
         opacity: f32,
+        // Whether the incoming `source_bind_group` is itself a pooled intermediate
+        // (debanded source or realtime-SR output). Only consulted when no downscale
+        // stage runs and the source is presented directly; if any stage renders,
+        // the final composite samples an fp16 pyramid intermediate and always
+        // dithers.
+        source_is_intermediate: bool,
     ) -> GpuDrawState {
         let mut pins = Vec::new();
         let mut current_bind_group = source_bind_group.clone();
@@ -590,6 +615,13 @@ impl GpuPaintResources {
                 target_size,
                 opacity,
             );
+            // No stage ran: the composite samples the incoming source directly, so
+            // dither only if that source is already an fp16 intermediate.
+            let params = if source_is_intermediate {
+                params.with_dither()
+            } else {
+                params
+            };
             return GpuDrawState::new(
                 source_bind_group,
                 self.params_bind_group_for(device, params),
@@ -607,9 +639,10 @@ impl GpuPaintResources {
             target_size,
             opacity,
         );
+        // Final composite samples the last fp16 pyramid intermediate -> dither on.
         GpuDrawState::new(
             current_bind_group,
-            self.params_bind_group_for(device, params),
+            self.params_bind_group_for(device, params.with_dither()),
             pins,
         )
     }
@@ -768,9 +801,10 @@ impl GpuPaintResources {
             opacity,
             lod,
         );
+        // Final composite samples the fp16 mipmap intermediate -> dither on.
         GpuDrawState::new(
             intermediate.bind_group.clone(),
-            self.params_bind_group_for(device, params),
+            self.params_bind_group_for(device, params.with_dither()),
             vec![intermediate],
         )
     }

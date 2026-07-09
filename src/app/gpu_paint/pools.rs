@@ -151,7 +151,7 @@ impl GpuPaintResources {
             device,
             &shader,
             &pipeline_layout,
-            wgpu::TextureFormat::Rgba8Unorm,
+            INTERMEDIATE_TEXTURE_FORMAT,
             "suisuiview-gpu-effect-intermediate-pipeline",
         );
         let deband_pipeline = super::deband::create_deband_pipeline(device, &pipeline_layout);
@@ -330,7 +330,7 @@ impl GpuPaintResources {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: INTERMEDIATE_TEXTURE_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -383,7 +383,7 @@ impl GpuPaintResources {
             mip_level_count: mip_levels,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: INTERMEDIATE_TEXTURE_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -698,11 +698,28 @@ pub(super) fn texture_format_label(format: wgpu::TextureFormat) -> &'static str 
     }
 }
 
+/// Render-target format for the quality chain's intermediate textures (V12).
+/// `Rgba16Float` so every resample / deband / upscale hop keeps sub-8-bit
+/// precision instead of re-quantizing to 256 levels between passes; the final
+/// composite (`gpu_effect.wgsl`) then dithers the one remaining quantization to
+/// the egui target. Source uploads stay `Rgba8Unorm` — 8-bit decoded pixels gain
+/// nothing from fp16. `Rgba16Float` is a core WebGPU renderable + filterable
+/// format, so no feature gating is needed.
+pub(super) const INTERMEDIATE_TEXTURE_FORMAT: wgpu::TextureFormat =
+    wgpu::TextureFormat::Rgba16Float;
+
+/// Bytes per pixel of [`INTERMEDIATE_TEXTURE_FORMAT`]. The pool byte accounting
+/// (and, through the app-side floor, the eviction budget) must track this so the
+/// doubled intermediate footprint flows through instead of under-counting.
+const INTERMEDIATE_BYTES_PER_PIXEL: usize = 8;
+
 pub(super) fn texture_byte_size(size: [u32; 2], mip_levels: u32) -> usize {
     (0..mip_levels)
         .map(|level| {
             let mip_size = mip_size([size[0] as usize, size[1] as usize], level);
-            mip_size[0].saturating_mul(mip_size[1]).saturating_mul(4)
+            mip_size[0]
+                .saturating_mul(mip_size[1])
+                .saturating_mul(INTERMEDIATE_BYTES_PER_PIXEL)
         })
         .sum()
 }

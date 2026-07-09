@@ -633,6 +633,31 @@ fn render_gpu_frame(
     upscaler: WgpuUpscaleMethod,
     downscaler: WgpuDownscaleMethod,
 ) -> bool {
+    let pixels = capture_gpu_frame(
+        device,
+        queue,
+        fixture,
+        output_size,
+        target_size,
+        upscaler,
+        downscaler,
+    );
+    pixels
+        .chunks_exact(4)
+        .any(|pixel| pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0 || pixel[3] != 0)
+}
+
+/// Render one composite frame through the real paint chain and return the
+/// tightly packed (unpadded) RGBA8 output of `target_size`.
+fn capture_gpu_frame(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    fixture: &mut DownscaleSmokeFixture,
+    output_size: [usize; 2],
+    target_size: [u32; 2],
+    upscaler: WgpuUpscaleMethod,
+    downscaler: WgpuDownscaleMethod,
+) -> Vec<u8> {
     let resources = &mut fixture.resources;
     let source_key = fixture.source_key;
     let source_bind_group = resources
@@ -742,16 +767,19 @@ fn render_gpu_frame(
     device.poll(wgpu::PollType::Wait).unwrap();
     rx.recv().unwrap().unwrap();
     let mapped = buffer_slice.get_mapped_range();
-    let nonblank = mapped
-        .chunks_exact(4)
-        .any(|pixel| pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0 || pixel[3] != 0);
+    let row_bytes = target_size[0] as usize * 4;
+    let mut pixels = Vec::with_capacity(row_bytes * target_size[1] as usize);
+    for row in 0..target_size[1] as usize {
+        let start = row * padded_bytes_per_row as usize;
+        pixels.extend_from_slice(&mapped[start..start + row_bytes]);
+    }
     drop(mapped);
     readback.unmap();
     #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
     {
         let _ = crate::core::perf_trace::flush_timeout(Duration::from_secs(2));
     }
-    nonblank
+    pixels
 }
 
 fn smoke_rgba(size: [usize; 2]) -> Vec<u8> {
@@ -771,4 +799,206 @@ fn smoke_rgba(size: [usize; 2]) -> Vec<u8> {
 
 fn align_to_smoke(value: u32, alignment: u32) -> u32 {
     value.div_ceil(alignment) * alignment
+}
+
+/// Shallow horizontal 8-bit luma ramp (64 -> 80 across the width), constant down
+/// each column. Downscaling this through the fp16 quality chain produces the
+/// sub-8-bit fractional values the final composite dither must resolve.
+fn ramp_rgba(size: [usize; 2]) -> Vec<u8> {
+    let [width, height] = size;
+    let mut rgba = vec![0u8; width * height * 4];
+    for x in 0..width {
+        let t = x as f32 / (width.max(2) - 1) as f32;
+        let luma = (64.0 + 16.0 * t).round().clamp(0.0, 255.0) as u8;
+        for y in 0..height {
+            let offset = (y * width + x) * 4;
+            rgba[offset] = luma;
+            rgba[offset + 1] = luma;
+            rgba[offset + 2] = luma;
+            rgba[offset + 3] = 255;
+        }
+    }
+    rgba
+}
+
+impl DownscaleSmokeFixture {
+    fn with_rgba(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source_size: [usize; 2],
+        rgba: Vec<u8>,
+    ) -> Self {
+        let mut resources = GpuPaintResources::new(device, wgpu::TextureFormat::Rgba8Unorm);
+        let source_key = GpuPaintSourceKey {
+            book: 2,
+            page: PageCacheKey {
+                page_id: PageId(source_size[0] as u32),
+                target_long_edge: source_size[0] as u32,
+                decode: DecodeOptions::default(),
+            },
+        };
+        let pixels = PagePixels::Rgba(rgba.into());
+        resources.ensure_source_texture(device, queue, source_key, source_size, &pixels);
+        Self {
+            resources,
+            source_key,
+            source_size,
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a local WGPU adapter; renders the fp16 chain + output dither"]
+fn wgpu_output_dither_mixes_levels_and_tracks_ramp() {
+    pollster::block_on(async {
+        let Some((device, queue)) = smoke_device().await else {
+            eprintln!("Skipping output dither test: no adapter available");
+            return;
+        };
+        // Downscale 3:1 horizontally: forces the multi-pass pyramid, so the final
+        // composite samples an fp16 pyramid intermediate (dither on) rather than
+        // the raw 8-bit source.
+        let source_size = [3072, 64];
+        let target_size = [1024u32, 64u32];
+        let mut fixture =
+            DownscaleSmokeFixture::with_rgba(&device, &queue, source_size, ramp_rgba(source_size));
+        let pixels = capture_gpu_frame(
+            &device,
+            &queue,
+            &mut fixture,
+            source_size,
+            target_size,
+            WgpuUpscaleMethod::None,
+            WgpuDownscaleMethod::PyramidLanczos3,
+        );
+        let width = target_size[0] as usize;
+        let height = target_size[1] as usize;
+
+        // (c) Alpha stays fully opaque everywhere.
+        assert!(
+            pixels.chunks_exact(4).all(|pixel| pixel[3] == 255),
+            "output dither must leave alpha untouched"
+        );
+
+        // Per-column mean of the (gray) luma over every row. The ramp is constant
+        // down a column, so without dither each column would hold a single level
+        // and this mean would be an exact integer.
+        let column_mean: Vec<f64> = (0..width)
+            .map(|x| {
+                let sum: u32 = (0..height)
+                    .map(|y| pixels[(y * width + x) * 4] as u32)
+                    .sum();
+                sum as f64 / height as f64
+            })
+            .collect();
+
+        // Skip the filter-edge columns.
+        let lo = 96usize;
+        let hi = width - 96;
+
+        // (a) Dithered mixing, not a step function: the ramp is constant down each
+        // column, so a plain-rounding chain would make every row in a column
+        // identical (zero columns showing two levels). The coordinate-stable dither
+        // instead flips a fraction of rows wherever the fp16 ideal is not exactly an
+        // 8-bit level, so most columns carry BOTH neighbouring levels — and only
+        // those two (the dither is < 1 LSB, so no column spans more than one step).
+        let mut mixed_columns = 0usize;
+        for x in lo..hi {
+            let mut min = 255u8;
+            let mut max = 0u8;
+            for y in 0..height {
+                let value = pixels[(y * width + x) * 4];
+                min = min.min(value);
+                max = max.max(value);
+            }
+            assert!(
+                max - min <= 1,
+                "column {x}: spans levels {min}..={max} (> 1 LSB is not sub-level dither)"
+            );
+            if max > min {
+                mixed_columns += 1;
+            }
+        }
+        let interior = hi - lo;
+        assert!(
+            mixed_columns * 2 > interior,
+            "expected most columns to mix two 8-bit levels (dither active), \
+             got {mixed_columns} of {interior}"
+        );
+
+        // (b) Unbiasedness: 64-px window means track a least-squares line through
+        // the column means to < 0.75/255. Plain rounding of a shallow ramp cannot
+        // hold this once the noise is coordinate-stable and zero-mean.
+        let n = (hi - lo) as f64;
+        let sum_x: f64 = (lo..hi).map(|x| x as f64).sum();
+        let sum_y: f64 = (lo..hi).map(|x| column_mean[x]).sum();
+        let sum_xx: f64 = (lo..hi).map(|x| (x * x) as f64).sum();
+        let sum_xy: f64 = (lo..hi).map(|x| x as f64 * column_mean[x]).sum();
+        let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
+        let intercept = (sum_y - slope * sum_x) / n;
+        let mut window_start = lo;
+        while window_start + 64 <= hi {
+            let window_mean: f64 = (window_start..window_start + 64)
+                .map(|x| column_mean[x])
+                .sum::<f64>()
+                / 64.0;
+            let center = window_start as f64 + 31.5;
+            let fit = slope * center + intercept;
+            assert!(
+                (window_mean - fit).abs() < 0.75,
+                "window at {window_start}: mean {window_mean:.4} vs linear fit {fit:.4} \
+                 deviates >= 0.75/255"
+            );
+            window_start += 64;
+        }
+    });
+}
+
+#[test]
+fn output_dither_hash_is_stable_and_unbiased() {
+    // Rust mirror of DITHER_SALT + the integer hash in src/core/gpu_effect.wgsl
+    // (u32 arithmetic wraps by spec; same convention as the deband reference).
+    // Pins coordinate-stability and the zero-mean property without a GPU adapter.
+    const DITHER_SALT: u32 = 0x27D4_EB2F;
+    fn hash_u32(x: u32, y: u32, salt: u32) -> u32 {
+        let mut h = x.wrapping_mul(0x0100_0193)
+            ^ y.wrapping_mul(0x9E37_79B1)
+            ^ salt.wrapping_mul(0x85EB_CA77);
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2C1B_3C6D);
+        h ^= h >> 12;
+        h = h.wrapping_mul(0x297A_2D39);
+        h ^= h >> 15;
+        h
+    }
+    let unit = |x: u32, y: u32| hash_u32(x, y, DITHER_SALT) as f64 / 4_294_967_296.0;
+
+    // Coordinate-stable: the same pixel always yields the same offset.
+    assert_eq!(unit(17, 42), unit(17, 42));
+    assert_ne!(unit(17, 42), unit(18, 42));
+
+    // Zero-mean ordered dither: round(v + (u - 0.5)) over a strip averages back to
+    // the fractional ideal, and both neighbouring levels appear.
+    for &value in &[100.4f64, 12.7, 200.25, 63.5] {
+        let samples = 8192u32;
+        let mut sum = 0i64;
+        let mut saw_floor = false;
+        let mut saw_ceil = false;
+        let floor = value.floor() as i64;
+        for y in 0..samples {
+            let rounded = (value + (unit(31, y) - 0.5)).round() as i64;
+            sum += rounded;
+            saw_floor |= rounded == floor;
+            saw_ceil |= rounded == floor + 1;
+        }
+        let mean = sum as f64 / samples as f64;
+        assert!(
+            (mean - value).abs() < 0.05,
+            "dither biased for {value}: mean {mean:.4}"
+        );
+        assert!(
+            saw_floor && saw_ceil,
+            "dither failed to mix both levels for {value}"
+        );
+    }
 }

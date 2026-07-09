@@ -16,9 +16,30 @@ var source_sampler: sampler;
 @group(1) @binding(0)
 var<uniform> params: Params;
 
+// Output-dither salt. Distinct from deband's GRAIN_SALT so the two coordinate-
+// stable noise fields are independent.
+const DITHER_SALT: u32 = 0x27D4EB2Fu;
+
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
 };
+
+// Same integer-hash convention as src/core/deband.wgsl (WGSL u32 arithmetic wraps
+// by spec), only the salt differs. Used to draw a coordinate-stable [0,1) value
+// per output pixel for the final-composite dither.
+fn dither_hash_u32(x: u32, y: u32, salt: u32) -> u32 {
+    var h = x * 0x01000193u ^ y * 0x9E3779B1u ^ salt * 0x85EBCA77u;
+    h = h ^ (h >> 15u);
+    h = h * 0x2C1B3C6Du;
+    h = h ^ (h >> 12u);
+    h = h * 0x297A2D39u;
+    h = h ^ (h >> 15u);
+    return h;
+}
+
+fn dither_hash_unit(x: u32, y: u32, salt: u32) -> f32 {
+    return f32(dither_hash_u32(x, y, salt)) / 4294967296.0;
+}
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
@@ -536,5 +557,18 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let sample_x = (local_x + 0.5) * f32(params.source_output.z) / params.display.z - 0.5;
     let sample_y = (local_y + 0.5) * f32(params.source_output.w) / params.display.w - 0.5;
     let color = sample_display(sample_x, sample_y);
-    return vec4<f32>(color.rgb, color.a * params.opacity.x);
+    var rgb = color.rgb;
+    // V12 output dither: when this composite sampled an fp16 quality-chain
+    // intermediate (upscale.w set by the Rust side), spread the final 8-bit
+    // quantization into coordinate-stable, channel-shared noise the eye averages
+    // out. One offset shared across RGB (no chroma tint); alpha untouched. Applied
+    // last, before output. Direct-source draws leave upscale.w = 0 and pass
+    // through bit-exact.
+    if params.upscale.w == 1u {
+        let px = u32(floor(position.x));
+        let py = u32(floor(position.y));
+        let offset = (dither_hash_unit(px, py, DITHER_SALT) - 0.5) / 255.0;
+        rgb = rgb + vec3<f32>(offset, offset, offset);
+    }
+    return vec4<f32>(rgb, color.a * params.opacity.x);
 }

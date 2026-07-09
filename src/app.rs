@@ -2161,9 +2161,12 @@ mod tests {
         assert_eq!(super::cache_budget_bytes(&wgpu), share(35));
         assert_eq!(super::texture_cache_budget_cap_bytes(&wgpu), share(25));
         assert_eq!(super::gpu_source_texture_budget_bytes(&wgpu), share(25));
+        // V12: the fp16 intermediate floor (192 MB) now exceeds the 15% Ample share
+        // (~115 MB), so the floor dominates the intermediate pool here rather than
+        // the raw split. The three pools above still follow their shares.
         assert_eq!(
             super::gpu_intermediate_texture_budget_bytes(&wgpu),
-            share(15)
+            192 * 1024 * 1024
         );
 
         // Glow redistributes the unused 40% GPU share into decode + texture.
@@ -2191,14 +2194,16 @@ mod tests {
             super::texture_cache_budget_cap_bytes(&settings),
             64 * 1024 * 1024
         );
-        // GPU floors keep the current page + SR round-trip viable.
+        // GPU floors keep the current page + SR round-trip viable. The intermediate
+        // floor is 192 MB post-V12 (fp16 intermediates are 8 bytes/px, so one page's
+        // full chain costs ~2x what it did at 8-bit).
         assert_eq!(
             super::gpu_source_texture_budget_bytes(&settings),
             64 * 1024 * 1024
         );
         assert_eq!(
             super::gpu_intermediate_texture_budget_bytes(&settings),
-            96 * 1024 * 1024
+            192 * 1024 * 1024
         );
     }
 

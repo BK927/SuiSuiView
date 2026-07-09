@@ -129,4 +129,13 @@ pub(in crate::app) fn gpu_intermediate_texture_budget_bytes(settings: &AppSettin
 const MIN_DECODE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 pub(super) const MIN_TEXTURE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MIN_GPU_SOURCE_TEXTURE_BYTES: usize = 64 * 1024 * 1024;
-const MIN_GPU_INTERMEDIATE_TEXTURE_BYTES: usize = 96 * 1024 * 1024;
+// V12: the quality-chain intermediate textures are now Rgba16Float (8 bytes/px
+// vs. the former 4), so one page's full in-flight chain (deband source-size copy
+// + EASU / pyramid / mipmap render targets) costs about twice as much VRAM. The
+// floor scales with it — 96 MiB -> 192 MiB — so the "current page + SR round-trip
+// always fits" invariant holds at the doubled bpp. Under-scaling it would recreate
+// the commit 8912736 failure profile, where a chain exceeding the floor triggered
+// same-frame eviction that blanked pages (the current-pass pin now shields the
+// active frame, but the floor must still size one page's chain). Source textures
+// stay Rgba8Unorm, so [`MIN_GPU_SOURCE_TEXTURE_BYTES`] is unchanged.
+const MIN_GPU_INTERMEDIATE_TEXTURE_BYTES: usize = 192 * 1024 * 1024;

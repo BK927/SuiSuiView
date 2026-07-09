@@ -54,7 +54,12 @@ pub(super) fn log_enabled() -> bool {
 
 /// Build the deband render pipeline. Reuses the shared texture + params bind
 /// group layouts (via `pipeline_layout`) so the existing source bind group and
-/// the params buffer feed it unchanged; targets the Rgba8Unorm intermediate.
+/// the params buffer feed it unchanged; targets the fp16
+/// ([`INTERMEDIATE_TEXTURE_FORMAT`]) intermediate like every other quality-chain
+/// pass (V12). fp16 matters here: deband's computed in-between values (the
+/// replaced averages plus grain) now survive to the final composite instead of
+/// being re-quantized to 8 bits at this hop, and the output dither carries that
+/// precision into coordinate-stable noise.
 pub(super) fn create_deband_pipeline(
     device: &wgpu::Device,
     pipeline_layout: &wgpu::PipelineLayout,
@@ -70,7 +75,7 @@ pub(super) fn create_deband_pipeline(
         device,
         &shader,
         pipeline_layout,
-        wgpu::TextureFormat::Rgba8Unorm,
+        super::pools::INTERMEDIATE_TEXTURE_FORMAT,
         "suisuiview-deband-pipeline",
     )
 }

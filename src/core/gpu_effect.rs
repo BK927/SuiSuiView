@@ -14,9 +14,28 @@ pub(crate) struct EffectParams {
     source_output: [u32; 4],
     transform_filter: [u32; 4],
     color_origin: [u32; 4],
+    // `upscale`: x = shader upscale method, y = downscale method, z = hardware-mipmap
+    // flag, w = output-dither flag (V12; see `with_dither`). `w` was a free pad slot,
+    // so enabling dither adds no uniform-layout churn.
     upscale: [u32; 4],
     opacity: [f32; 4],
     display: [f32; 4],
+}
+
+impl EffectParams {
+    /// Turn on the final-composite output dither (`gpu_effect.wgsl` reads
+    /// `params.upscale.w`). Set only on the draw that composites to the egui
+    /// target when its sampled texture is an fp16 quality-chain intermediate, so
+    /// the last 8-bit quantization becomes coordinate-stable noise. Left off for
+    /// direct-source (native) draws so untouched pixels stay bit-exact, and never
+    /// set on intermediate render passes (they already write fp16).
+    // Only the binary crate's paint chain (app::gpu_paint::passes) sets this; the
+    // lib crate builds params without it, mirroring `params_for_hardware_mipmap_sample`.
+    #[allow(dead_code)]
+    pub(crate) fn with_dither(mut self) -> Self {
+        self.upscale[3] = 1;
+        self
+    }
 }
 
 pub struct GpuEffectBench {
