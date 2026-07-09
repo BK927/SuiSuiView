@@ -227,6 +227,12 @@ impl SuiSuiViewApp {
             page_rect.width() * pixels_per_point,
             page_rect.height() * pixels_per_point,
         ];
+        // The callback sets an unclamped gl.viewport spanning the whole page rect
+        // (see draw_kernel); stay under the GL_MAX_VIEWPORT_DIMS floor every
+        // GL 2.1+ driver guarantees, else take the plain path.
+        if dest[0] > 16384.0 || dest[1] > 16384.0 {
+            return None;
+        }
         let scale = (dest[0] / src[0]).min(dest[1] / src[1]);
         (scale > 1.0).then_some((choice, src, scale))
     }
@@ -243,7 +249,7 @@ impl SuiSuiViewApp {
         let ctx = painter.ctx().clone();
         let callback = PaintCallback {
             rect: page_rect,
-            callback: Arc::new(egui_glow::CallbackFn::new(move |_info, painter| {
+            callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
                 let gl = painter.gl();
                 let mut state = state.lock().unwrap();
                 if state.failed {
@@ -274,9 +280,10 @@ impl SuiSuiViewApp {
                     return;
                 };
                 // SAFETY: single GL context, called from egui_glow's paint pass
-                // with the callback viewport/scissor already set; egui_glow
-                // restores its own state after the callback returns.
-                unsafe { draw_kernel(gl, kernel, texture, src_size, choice) };
+                // with the scissor already set; egui_glow restores its own state
+                // (including the full-screen viewport) via prepare_painting after
+                // the callback returns.
+                unsafe { draw_kernel(gl, kernel, texture, src_size, choice, &info) };
             })),
         };
         painter.add(callback);
@@ -489,14 +496,42 @@ unsafe fn link_program(
     }
 }
 
+/// The page rect as an UNCLAMPED pixel viewport `(left, from_bottom, width,
+/// height)`. egui_glow pre-sets the viewport from `ViewportInPixels`, which
+/// clamps to the screen — that would squeeze the whole page into just its
+/// visible part whenever the rect extends past the framebuffer (a strip page
+/// scrolled half off-screen, a fit-width page taller than the window). A GL
+/// viewport is a coordinate transform, not a clip (the scissor egui_glow set
+/// does the clipping), so out-of-bounds values are legal and correct here.
+/// Rounding matches epaint's `ViewportInPixels::from_points`, sans the clamp.
+fn unclamped_viewport_px(
+    rect: &Rect,
+    pixels_per_point: f32,
+    screen_height_px: i32,
+) -> (i32, i32, i32, i32) {
+    let left = (pixels_per_point * rect.min.x).round() as i32;
+    let top = (pixels_per_point * rect.min.y).round() as i32;
+    let right = (pixels_per_point * rect.max.x).round() as i32;
+    let bottom = (pixels_per_point * rect.max.y).round() as i32;
+    (left, screen_height_px - bottom, right - left, bottom - top)
+}
+
 unsafe fn draw_kernel(
     gl: &glow::Context,
     kernel: &CompiledKernel,
     texture: glow::Texture,
     src_size: [f32; 2],
     choice: KernelChoice,
+    info: &egui::PaintCallbackInfo,
 ) {
     unsafe {
+        let (left, from_bottom, width, height) = unclamped_viewport_px(
+            &info.viewport,
+            info.pixels_per_point,
+            info.screen_size_px[1] as i32,
+        );
+        gl.viewport(left, from_bottom, width, height);
+
         gl.use_program(Some(kernel.program));
         if let Some(vao) = kernel.vao {
             gl.bind_vertex_array(Some(vao));
@@ -569,6 +604,26 @@ mod tests {
         } else {
             sinc(x) * sinc(x / a)
         }
+    }
+
+    #[test]
+    fn viewport_is_not_clamped_for_offscreen_rects() {
+        // A strip page scrolled half above a 1000px-tall screen: rect spans
+        // points [-400, 800) at ppp=2 → pixels [-800, 1600), 2400px tall. The
+        // whole rect must stay the viewport so the visible part shows the right
+        // slice of the page instead of the whole page squeezed into it (which is
+        // what epaint's screen-clamped ViewportInPixels would produce).
+        let rect = Rect::from_min_max(egui::pos2(10.0, -400.0), egui::pos2(310.0, 800.0));
+        let (left, from_bottom, width, height) = unclamped_viewport_px(&rect, 2.0, 1000);
+        assert_eq!((left, width, height), (20, 600, 2400));
+        // bottom_px = 1600 → from_bottom = screen_h - bottom = -600 (below screen).
+        assert_eq!(from_bottom, -600);
+        // Fully on-screen rects match the clamped math exactly (clamp is a no-op).
+        let on_screen = Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(110.0, 220.0));
+        assert_eq!(
+            unclamped_viewport_px(&on_screen, 2.0, 1000),
+            (20, 1000 - 440, 200, 400)
+        );
     }
 
     #[test]
