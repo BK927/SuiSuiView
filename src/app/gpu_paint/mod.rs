@@ -550,7 +550,7 @@ struct GpuPaintResources {
     texture_sampler: wgpu::Sampler,
     pipeline: wgpu::RenderPipeline,
     intermediate_pipeline: wgpu::RenderPipeline,
-    /// Deband pre-pass pipeline (Rgba8Unorm intermediate target), sharing the
+    /// Deband pre-pass pipeline (fp16 intermediate target since V12), sharing the
     /// effect pipeline layout so the source bind group feeds it unchanged.
     deband_pipeline: wgpu::RenderPipeline,
     source_textures: LruCache<GpuPaintSourceKey, GpuSourceTexture>,
