@@ -105,9 +105,8 @@ impl GlutinWindowContext {
         &self.window
     }
 
-    pub(super) fn reveal_after_first_frame(&self) {
-        crate::startup_window::reveal_main_windows();
-        self.window.set_visible(true);
+    pub(super) fn reveal_after_first_frame(&self, maximized: bool) {
+        reveal_main_window(&self.window, maximized);
     }
 
     pub(super) fn resize(&self, physical_size: winit::dpi::PhysicalSize<u32>) {
@@ -192,10 +191,77 @@ fn startup_window_attributes(
         }
         StartupPosition::OsDefault => {}
     }
-    if placement.maximized {
-        attributes = attributes.with_maximized(true);
-    }
+    // NOTE: maximize is intentionally NOT applied at creation. winit's Windows
+    // backend applies `with_maximized(true)` *after* CreateWindowEx via
+    // `set_maximized`, whose `apply_diff` runs `ShowWindow(SW_MAXIMIZE)` (which
+    // *shows* the window) and then `ShowWindow(SW_HIDE)` to re-honor
+    // `with_visible(false)` — the visible create-time show/hide "dance". The
+    // saved maximized flag is instead carried to reveal time (see
+    // `reveal_main_window`), where the first show is issued directly as
+    // `SW_SHOWMAXIMIZED`: a single WS_VISIBLE off->on transition that lands
+    // straight at the maximized rect.
     attributes
+}
+
+/// Whether the first show should land maximized, derived solely from the saved
+/// placement. Split from the attribute builder so the deferred-maximize flag is
+/// unit-testable and cannot drift into position/size handling.
+fn reveal_should_maximize(placement: &WindowPlacement) -> bool {
+    placement.maximized
+}
+
+/// The saved maximized flag, read at startup and carried to the first-frame
+/// reveal (the window is created non-maximized; see `startup_window_attributes`).
+pub(super) fn startup_maximized(store: &StateStore) -> bool {
+    reveal_should_maximize(store.window_placement())
+}
+
+/// Reveal the masked main window on the first rendered frame. Drops the
+/// alpha-0 flash-guard mask, then performs the single, final show: directly
+/// maximized when the saved placement was maximized, otherwise a plain show.
+pub(super) fn reveal_main_window(window: &winit::window::Window, maximized: bool) {
+    crate::startup_window::reveal_main_windows();
+    if maximized {
+        show_maximized_first(window);
+    } else {
+        window.set_visible(true);
+    }
+}
+
+/// First show == final show, maximized. On Windows this is a single raw
+/// `ShowWindow(SW_SHOWMAXIMIZED)` (shows *and* maximizes in one WS_VISIBLE
+/// off->on transition, landing directly at the maximized rect). winit's own
+/// `set_maximized` on the still-hidden window would instead show-then-hide, so
+/// it is avoided; the raw show is followed by winit `set_visible`/`set_maximized`
+/// (visible first, so `set_maximized` does not re-hide) purely to reconcile
+/// winit's internal window flags — `is_maximized()` and the maximize toggle then
+/// stay correct — without any further visible transition.
+#[cfg(target_os = "windows")]
+fn show_maximized_first(window: &winit::window::Window) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWMAXIMIZED};
+    let hwnd = match window.window_handle().map(|handle| handle.as_raw()) {
+        Ok(winit::raw_window_handle::RawWindowHandle::Win32(win32)) => {
+            win32.hwnd.get() as windows_sys::Win32::Foundation::HWND
+        }
+        _ => {
+            // No raw handle: fall back to winit (accepts the create-time dance
+            // rather than failing to maximize at all).
+            window.set_visible(true);
+            window.set_maximized(true);
+            return;
+        }
+    };
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+    }
+    window.set_visible(true);
+    window.set_maximized(true);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn show_maximized_first(window: &winit::window::Window) {
+    window.set_visible(true);
+    window.set_maximized(true);
 }
 
 /// How the saved outer position should be restored. Physical is preferred
@@ -475,5 +541,30 @@ mod tests {
             select_startup_position(None, None),
             StartupPosition::OsDefault
         );
+    }
+
+    #[test]
+    fn deferred_maximize_follows_saved_flag_independent_of_geometry() {
+        use super::reveal_should_maximize;
+        use crate::core::state::WindowPlacement;
+
+        // Saved geometry must not influence the deferred-maximize decision: only
+        // the maximized flag does. This guards the create-time/reveal-time split.
+        let maximized = WindowPlacement {
+            inner_size: Some([1280.0, 820.0]),
+            outer_position: Some([100.0, 120.0]),
+            outer_position_px: Some([150, 180]),
+            maximized: true,
+        };
+        assert!(reveal_should_maximize(&maximized));
+
+        let normal = WindowPlacement {
+            maximized: false,
+            ..maximized.clone()
+        };
+        assert!(!reveal_should_maximize(&normal));
+
+        // Default (first run): not maximized.
+        assert!(!reveal_should_maximize(&WindowPlacement::default()));
     }
 }

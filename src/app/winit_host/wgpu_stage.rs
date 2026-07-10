@@ -1,4 +1,4 @@
-use super::glow_window::create_plain_window;
+use super::glow_window::{create_plain_window, reveal_main_window, startup_maximized};
 use super::title_sync::{schedule_process_visible_window_title, sync_visible_window_title};
 use super::SuiSuiViewApp;
 use super::{elapsed_ms, injected_failure, HostFailureStage, Stage, WinitHostApp};
@@ -33,6 +33,7 @@ impl WinitHostApp {
             options.default_window_size,
             options.min_window_size,
         )?;
+        self.startup_maximized = startup_maximized(&options.store);
         self.wait_for_prewarm();
 
         self.dpi_size_guard.seed_initial(&window);
@@ -154,12 +155,10 @@ impl WinitHostApp {
             let now_ms = elapsed_ms(self.started_at.elapsed());
             self.metrics.first_wgpu_present_ms = Some(now_ms);
             // The flash guard (MaskMainUntilRevealed) has kept the main window
-            // masked (layered alpha 0) since it was shown inside create_window;
-            // now that a frame is painted, release the mask so it appears already
-            // rendered. set_visible is idempotent here (the window is already
-            // WS_VISIBLE) but keeps the intent explicit.
-            crate::startup_window::reveal_main_windows();
-            window.set_visible(true);
+            // masked (layered alpha 0, WS_VISIBLE off) since creation; now that a
+            // frame is painted, perform the single final show — directly
+            // maximized when the saved placement was maximized.
+            reveal_main_window(&window, self.startup_maximized);
         }
 
         if app_requested_close(&viewport_info) {

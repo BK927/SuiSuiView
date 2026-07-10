@@ -152,6 +152,10 @@ struct WinitHostApp {
     // `schedule_process_visible_window_title` so its generation bump kills any
     // stale timed re-assert that would otherwise restore the old title.
     glow_synced_title: Option<String>,
+    // Saved maximized flag, captured when the window is created (non-maximized)
+    // and applied at the first-frame reveal so the first show lands directly at
+    // the maximized rect. See `glow_window::reveal_main_window`.
+    startup_maximized: bool,
 }
 
 enum Stage {
@@ -212,6 +216,7 @@ impl WinitHostApp {
             wake_proxy,
             dpi_size_guard: DpiSizeGuard::new(),
             glow_synced_title: None,
+            startup_maximized: false,
         }
     }
 

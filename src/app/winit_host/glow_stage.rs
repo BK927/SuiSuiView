@@ -1,4 +1,4 @@
-use super::glow_window::{create_gl_display, GlutinWindowContext};
+use super::glow_window::{create_gl_display, startup_maximized, GlutinWindowContext};
 use super::title_sync::{schedule_process_visible_window_title, sync_visible_window_title};
 use super::SuiSuiViewApp;
 use super::{elapsed_ms, injected_failure, HostFailureStage, Stage, WinitHostApp};
@@ -25,6 +25,7 @@ impl WinitHostApp {
             options.default_window_size,
             options.min_window_size,
         )?;
+        self.startup_maximized = startup_maximized(&options.store);
         self.dpi_size_guard.seed_initial(gl_window.window());
         let gl = Arc::new(gl);
         let egui_glow = egui_glow::EguiGlow::new(
@@ -94,7 +95,7 @@ impl WinitHostApp {
         self.metrics.last_glow_present_ms = Some(now_ms);
         if self.metrics.first_glow_present_ms.is_none() {
             self.metrics.first_glow_present_ms = Some(now_ms);
-            gl_window.reveal_after_first_frame();
+            gl_window.reveal_after_first_frame(self.startup_maximized);
         }
         // egui_glow applies Title viewport commands itself, so detect changes from
         // the winit side. A change re-schedules the timed re-assert with the new
