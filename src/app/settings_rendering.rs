@@ -237,6 +237,27 @@ pub(in crate::app) fn show_rendering_settings(
                         );
                     }
                     ui.end_row();
+
+                    let linear_help = i18n.text("settings.rendering.linear_downscale.help");
+                    grid_label_with_help(
+                        ui,
+                        &i18n.text("settings.rendering.linear_downscale"),
+                        &linear_help,
+                    );
+                    let linear_response = ui
+                        .add_enabled_ui(gpu_enabled, |ui| {
+                            *changed |=
+                                ui.checkbox(&mut draft.linear_light_downscale, "").changed();
+                        })
+                        .response;
+                    if gpu_enabled {
+                        linear_response.on_hover_text(linear_help);
+                    } else {
+                        linear_response.on_disabled_hover_text(
+                            i18n.text("settings.rendering.gpu_upscaler.disabled"),
+                        );
+                    }
+                    ui.end_row();
                 });
             ui.add_space(4.0);
             ui.label(

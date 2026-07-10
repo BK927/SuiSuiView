@@ -213,6 +213,10 @@ impl SuiSuiViewApp {
         let Some(target_format) = self.gpu_target_format else {
             return false;
         };
+        // Publish the user's linear-downscale choice for the params constructors
+        // (mirror; see core/gpu_effect.rs). Also hashed into the downscale cache
+        // keys below so a live toggle can never serve stale gamma/linear pixels.
+        crate::core::gpu_effect::set_linear_downscale_setting(self.settings.linear_light_downscale);
         let pool_budgets = GpuPoolBudgets {
             source_texture_bytes: super::gpu_source_texture_budget_bytes(&self.settings),
             intermediate_texture_bytes: super::gpu_intermediate_texture_budget_bytes(

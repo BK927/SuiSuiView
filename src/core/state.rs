@@ -380,6 +380,11 @@ pub struct AppSettings {
     /// Debanding strength for the WGPU display path; `Off` by default.
     #[serde(default)]
     pub deband: DebandStrength,
+    /// Linear-light averaging for the WGPU downscale legs. Off (gamma) by
+    /// default: measured stroke washout on line art outweighed mean-luminance
+    /// correctness for comic content; photos benefit from turning it on.
+    #[serde(default)]
+    pub linear_light_downscale: bool,
     #[serde(default = "default_fixed_2x_sr_min_scale_pct")]
     pub fixed_2x_sr_min_scale_pct: u32,
     #[serde(default = "default_true")]
@@ -538,6 +543,7 @@ impl Default for AppSettings {
             wgpu_upscale_method: WgpuUpscaleMethod::None,
             refine_upscaler: RefineUpscaler::Off,
             deband: DebandStrength::Off,
+            linear_light_downscale: false,
             fixed_2x_sr_min_scale_pct: default_fixed_2x_sr_min_scale_pct(),
             prefetch_enabled: true,
             progressive_preview_enabled: false,

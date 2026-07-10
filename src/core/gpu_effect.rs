@@ -19,6 +19,22 @@ const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// `SUISUIVIEW_LINEAR_DOWNSCALE=1` (or `0`/`true`/`false`/`on`/`off`), parsed once.
 pub(crate) const LINEAR_DOWNSCALE: bool = false;
 
+/// Mirror of `AppSettings.linear_light_downscale`, stored by the app each time
+/// a WGSL page paint is requested (an atomic store per paint is free). A mirror
+/// instead of threading the flag through every `params_for_*` signature: those
+/// constructors are also called by CLI benches with no settings in scope.
+static LINEAR_DOWNSCALE_SETTING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(LINEAR_DOWNSCALE);
+
+/// Publish the user setting for subsequent draws. Called from the app's WGSL
+/// paint path; benches/tests that never call it get the const default.
+// The caller lives in the binary crate's app tree (gpu_paint/mod.rs); the lib
+// compilation sees no caller — same idiom as `params_for_hardware_mipmap_sample`.
+#[allow(dead_code)]
+pub(crate) fn set_linear_downscale_setting(enabled: bool) {
+    LINEAR_DOWNSCALE_SETTING.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn linear_downscale_env() -> Option<bool> {
     static ENV: OnceLock<Option<bool>> = OnceLock::new();
     *ENV.get_or_init(|| {
@@ -33,13 +49,16 @@ fn linear_downscale_env() -> Option<bool> {
 }
 
 /// Whether downscale params should carry the linear-light flag. Precedence:
-/// per-render test override (offscreen measurement only) → env → const default.
+/// per-render test override (offscreen measurement only) → env (diagnostic
+/// pin, wins over the UI so an A/B session cannot be disturbed mid-run) →
+/// the user setting mirror.
 pub(crate) fn linear_downscale_enabled() -> bool {
     #[cfg(test)]
     if let Some(forced) = linear_downscale_test_override() {
         return forced;
     }
-    linear_downscale_env().unwrap_or(LINEAR_DOWNSCALE)
+    linear_downscale_env()
+        .unwrap_or_else(|| LINEAR_DOWNSCALE_SETTING.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 // The offscreen measurement renders BOTH legs in one process, which the env

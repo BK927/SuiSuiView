@@ -631,11 +631,14 @@ pub(super) fn source_texture_content_key(
     hasher.finish()
 }
 
+// established key surface; the linear flag pushed it to 8 args
+#[allow(clippy::too_many_arguments)]
 pub(super) fn downscale_intermediate_texture_key(
     namespace: &'static str,
     content_key: u64,
     downscaler: WgpuDownscaleMethod,
     effects: ViewEffects,
+    linear_downscale: bool,
     stage_size: [u32; 2],
     current_size: [usize; 2],
     stage_index: u32,
@@ -649,12 +652,19 @@ pub(super) fn downscale_intermediate_texture_key(
     // post-realtime-SR path it does not, so hash `effects` here to keep the key content-complete
     // (harmless redundancy on the source path — it only splits cache entries).
     effects.hash(&mut hasher);
+    // Linear-light changes every downscale stage's pixels; keying on it lets a
+    // live settings toggle re-render instead of serving the other mode's
+    // rendered=true intermediates until LRU eviction (the V10 stale-key lesson).
+    linear_downscale.hash(&mut hasher);
     stage_size.hash(&mut hasher);
     current_size.hash(&mut hasher);
     stage_index.hash(&mut hasher);
     hasher.finish()
 }
 
+// NOTE: deliberately NOT keyed on linear-downscale — the hardware-mipmap chain
+// blends in hardware trilinear sampling and stays gamma regardless of the flag
+// (see the V13 deviation note in gpu_effect.wgsl), so its pixels are flag-free.
 pub(super) fn mipmap_intermediate_texture_key(content_key: u64, effects: ViewEffects) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     "hardware_mipmap_linear".hash(&mut hasher);

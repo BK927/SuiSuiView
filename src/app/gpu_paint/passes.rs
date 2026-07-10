@@ -670,6 +670,7 @@ impl GpuPaintResources {
             content_key,
             downscaler,
             effects,
+            crate::core::gpu_effect::linear_downscale_enabled(),
             [stage_size[0], stage_size[1]],
             current_size,
             stage_index,

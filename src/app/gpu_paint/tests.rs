@@ -293,6 +293,35 @@ fn refine_method_produces_distinct_stage_key_from_normal_method() {
 }
 
 #[test]
+fn downscale_keys_separate_linear_light_mode() {
+    // A live linear-light toggle changes every pyramid stage's pixels, so the
+    // stage keys must separate per mode or the toggle would serve the other
+    // mode's rendered=true intermediates until LRU eviction.
+    assert_ne!(
+        downscale_intermediate_texture_key(
+            "pyramid",
+            42,
+            WgpuDownscaleMethod::PyramidLanczos3,
+            ViewEffects::default(),
+            false,
+            [512, 512],
+            [1024, 1024],
+            0,
+        ),
+        downscale_intermediate_texture_key(
+            "pyramid",
+            42,
+            WgpuDownscaleMethod::PyramidLanczos3,
+            ViewEffects::default(),
+            true,
+            [512, 512],
+            [1024, 1024],
+            0,
+        )
+    );
+}
+
+#[test]
 fn post_sr_downscale_keys_include_intermediate_content() {
     let anime_content = 10;
     let cunny_content = 20;
@@ -301,6 +330,7 @@ fn post_sr_downscale_keys_include_intermediate_content() {
         anime_content,
         WgpuDownscaleMethod::PyramidLanczos3,
         ViewEffects::default(),
+        false,
         [1536, 1536],
         [2048, 2048],
         0,
@@ -310,6 +340,7 @@ fn post_sr_downscale_keys_include_intermediate_content() {
         cunny_content,
         WgpuDownscaleMethod::PyramidLanczos3,
         ViewEffects::default(),
+        false,
         [1536, 1536],
         [2048, 2048],
         0,
@@ -336,6 +367,7 @@ fn downscale_and_mipmap_keys_separate_effects() {
             42,
             WgpuDownscaleMethod::PyramidLanczos3,
             ViewEffects::default(),
+            false,
             [1536, 1536],
             [2048, 2048],
             0,
@@ -345,6 +377,7 @@ fn downscale_and_mipmap_keys_separate_effects() {
             42,
             WgpuDownscaleMethod::PyramidLanczos3,
             inverted,
+            false,
             [1536, 1536],
             [2048, 2048],
             0,
