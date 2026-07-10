@@ -290,8 +290,10 @@ impl SuiSuiViewApp {
             ],
             egui::Stroke::new(1.0, Color32::from_gray(70)),
         );
-        self.paint_compare_target(ctx, painter, left, self.debug_compare.left, "A");
-        self.paint_compare_target(ctx, painter, right, self.debug_compare.right, "B");
+        // Distinct GPU draw-slots so the two panes' identical source_key never
+        // recycle the same params buffer against each other in one frame.
+        self.paint_compare_target(ctx, painter, left, self.debug_compare.left, "A", 1);
+        self.paint_compare_target(ctx, painter, right, self.debug_compare.right, "B", 2);
     }
 
     fn paint_compare_target(
@@ -301,6 +303,7 @@ impl SuiSuiViewApp {
         viewport: Rect,
         target: DebugCompareTarget,
         side_label: &str,
+        slot: u8,
     ) {
         let visual = self.compare_visual(ctx, target);
         let natural = page_visual_size(&visual);
@@ -332,6 +335,7 @@ impl SuiSuiViewApp {
                     painter,
                     GpuPaintRequest {
                         rect: page_rect,
+                        slot,
                         source_key,
                         image_size,
                         pixels,

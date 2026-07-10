@@ -76,12 +76,13 @@ purpose = "Render-pass preparation and recording for the WGPU paint bridge."
 [[files]]
 path = "src/app/gpu_paint/tests.rs"
 kind = "legacy-large"
-# Registered at current size for V12: the required offscreen GPU dither test plus
-# its ramp fixture / frame-capture harness pushed the shared paint-bridge test
-# module past the 900-line new-file budget. Its unit tests and the real-device
-# render harness share private helpers (smoke_device, DownscaleSmokeFixture,
-# capture_gpu_frame), so splitting means promoting those to a shared test module.
-baseline_lines = 1004
+# Re-baselined at current size for V15 (per-slot params-buffer recycle + source-pool
+# pass shield): the required offscreen recycle test (prepare/insert/render-readback
+# to prove write_buffer landed) plus the source-shield device test pushed the module
+# past the V12 ratchet. Its unit tests and the real-device render harness share
+# private helpers (smoke_device, DownscaleSmokeFixture, capture_gpu_frame), so
+# splitting means promoting those to a shared test module.
+baseline_lines = 1328
 growth_warn_lines = 80
 growth_fail_lines = 160
 purpose = "Unit tests plus the real-device offscreen render harness for the WGPU paint bridge."

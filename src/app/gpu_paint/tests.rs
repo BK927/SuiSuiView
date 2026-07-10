@@ -15,33 +15,51 @@ fn draw_id_separates_same_page_in_different_panes() {
             decode: DecodeOptions::default(),
         },
     };
-    let left = Rect::from_min_size(pos2(0.0, 0.0), vec2(640.0, 900.0));
-    let right = Rect::from_min_size(pos2(640.0, 0.0), vec2(640.0, 900.0));
 
-    assert_ne!(
+    // Panes now separate purely by the slot discriminator (V15): the display rect
+    // no longer feeds the id, so the compare panes must pass distinct slots.
+    let id_for = |slot| {
         draw_id(
             source_key,
             ViewEffects::default(),
             WgpuUpscaleMethod::WgslFsr1Style,
             WgpuDownscaleMethod::Bilinear,
             110,
-            left,
-            1.0,
             DebandStrength::Off,
             false,
-        ),
-        draw_id(
-            source_key,
-            ViewEffects::default(),
-            WgpuUpscaleMethod::WgslFsr1Style,
-            WgpuDownscaleMethod::Bilinear,
-            110,
-            right,
-            1.0,
-            DebandStrength::Off,
-            false,
+            slot,
         )
-    );
+    };
+    assert_ne!(id_for(1), id_for(2));
+}
+
+#[test]
+fn draw_id_is_stable_within_a_slot() {
+    // The stability property that makes the persistent params buffer possible: the
+    // id no longer takes the display rect or opacity, so the same page + slot maps
+    // to ONE draw state (and one buffer) as a scroll changes rect/opacity every
+    // frame, instead of minting a fresh id per frame.
+    let source_key = GpuPaintSourceKey {
+        book: 7,
+        page: PageCacheKey {
+            page_id: PageId(3),
+            target_long_edge: 2048,
+            decode: DecodeOptions::default(),
+        },
+    };
+    let id = || {
+        draw_id(
+            source_key,
+            ViewEffects::default(),
+            WgpuUpscaleMethod::WgslFsr1Style,
+            WgpuDownscaleMethod::Bilinear,
+            110,
+            DebandStrength::Off,
+            false,
+            0,
+        )
+    };
+    assert_eq!(id(), id());
 }
 
 #[test]
@@ -54,7 +72,6 @@ fn draw_id_separates_zoom_in_motion_from_settled() {
             decode: DecodeOptions::default(),
         },
     };
-    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(640.0, 900.0));
 
     let id_for = |zoom_in_motion| {
         draw_id(
@@ -63,10 +80,9 @@ fn draw_id_separates_zoom_in_motion_from_settled() {
             WgpuUpscaleMethod::None,
             WgpuDownscaleMethod::PyramidLanczos3,
             110,
-            rect,
-            1.0,
             DebandStrength::Off,
             zoom_in_motion,
+            0,
         )
     };
 
@@ -704,6 +720,8 @@ pub(super) fn capture_gpu_frame(
     });
     let draw_state = resources.prepare_draw_state(
         device,
+        queue,
+        0,
         &mut encoder,
         source_key,
         source_bind_group,
@@ -758,7 +776,7 @@ pub(super) fn capture_gpu_frame(
         });
         pass.set_pipeline(&resources.pipeline);
         pass.set_bind_group(0, draw_state.texture_bind_group.as_ref(), &[]);
-        pass.set_bind_group(1, &draw_state.params_bind_group, &[]);
+        pass.set_bind_group(1, draw_state.params_bind_group.as_ref(), &[]);
         pass.draw(0..3, 0..1);
     }
 
@@ -1034,4 +1052,277 @@ fn output_dither_hash_is_stable_and_unbiased() {
             "dither failed to mix both levels for {value}"
         );
     }
+}
+
+#[test]
+#[ignore = "requires a local WGPU adapter; exercises the V15 slot params-buffer recycle"]
+fn params_buffer_recycles_across_prepares_within_a_slot() {
+    pollster::block_on(async {
+        let Some((device, queue)) = smoke_device().await else {
+            eprintln!("Skipping params-buffer recycle test: no adapter available");
+            return;
+        };
+        let source_size = [2048, 2048];
+        // 2:1 downscale stays on the single-pass path (no pyramid), so the draw is
+        // one final composite whose params run through `recycle_params_pair`.
+        let target_size = [1024u32, 1024u32];
+        let mut fixture = DownscaleSmokeFixture::new(&device, &queue, source_size);
+        let slot_id = 0u64;
+
+        let buffer_a =
+            prepare_insert_slot(&device, &queue, &mut fixture, slot_id, target_size, 1.0);
+        assert_eq!(
+            fixture.resources.params_buffer_creations(),
+            1,
+            "first prepare at a fresh slot allocates exactly one params buffer"
+        );
+
+        // Same slot, different params (opacity): must recycle the buffer in place.
+        let buffer_b =
+            prepare_insert_slot(&device, &queue, &mut fixture, slot_id, target_size, 0.25);
+        assert_eq!(
+            fixture.resources.params_buffer_creations(),
+            1,
+            "second prepare at the same slot must recycle, not allocate"
+        );
+        assert!(
+            std::sync::Arc::ptr_eq(&buffer_a, &buffer_b),
+            "recycled draw state must keep the same params buffer allocation"
+        );
+
+        // Confirm the second prepare's opacity actually landed in the buffer: the
+        // composite alpha = source_alpha * opacity over a transparent clear, so an
+        // opaque source at opacity 0.25 reads back near 64 — far from the opaque
+        // 255 a stale (un-rewritten) buffer would still show.
+        let pixels =
+            render_stored_slot_rgba(&device, &queue, &fixture.resources, slot_id, target_size);
+        let width = target_size[0] as usize;
+        let height = target_size[1] as usize;
+        let (mut sum, mut count) = (0u64, 0u64);
+        for y in (height / 4)..(3 * height / 4) {
+            for x in (width / 4)..(3 * width / 4) {
+                sum += u64::from(pixels[(y * width + x) * 4 + 3]);
+                count += 1;
+            }
+        }
+        let mean_alpha = sum / count.max(1);
+        assert!(
+            (40..=100).contains(&mean_alpha),
+            "written opacity 0.25 should read back as ~64 alpha, got {mean_alpha}"
+        );
+    });
+}
+
+#[test]
+#[ignore = "requires a local WGPU adapter; exercises the V15 source-pool pass shield"]
+fn source_textures_survive_prune_within_current_pass() {
+    pollster::block_on(async {
+        let Some((device, queue)) = smoke_device().await else {
+            eprintln!("Skipping source-pool shield test: no adapter available");
+            return;
+        };
+        let mut resources = GpuPaintResources::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        // A budget too small for even one source, so a budget-only prune would
+        // start evicting as soon as len() > 1.
+        resources.source_texture_budget_bytes = 1;
+        resources.current_pass = 5;
+
+        let size = [256, 256];
+        let key_a = GpuPaintSourceKey {
+            book: 1,
+            page: PageCacheKey {
+                page_id: PageId(10),
+                target_long_edge: 256,
+                decode: DecodeOptions::default(),
+            },
+        };
+        let key_b = GpuPaintSourceKey {
+            book: 1,
+            page: PageCacheKey {
+                page_id: PageId(11),
+                target_long_edge: 256,
+                decode: DecodeOptions::default(),
+            },
+        };
+        let pixels = PagePixels::Rgba(smoke_rgba(size).into());
+        resources.ensure_source_texture(&device, &queue, key_a, size, &pixels);
+        resources.ensure_source_texture(&device, &queue, key_b, size, &pixels);
+
+        // Both sources were touched this pass, so the shield keeps them alive even
+        // though the pool is far over budget (the blank-viewer class of bug).
+        assert!(resources.source_textures.peek(&key_a).is_some());
+        assert!(resources.source_textures.peek(&key_b).is_some());
+        assert_eq!(resources.source_textures.len(), 2);
+
+        // Advance the pass: the shield lifts and the budget is enforced again.
+        resources.current_pass = 6;
+        resources.prune_source_textures();
+        assert_eq!(
+            resources.source_textures.len(),
+            1,
+            "budget must be enforced once the current-pass shield lifts"
+        );
+    });
+}
+
+/// Prepare a single-pass native draw for `slot_id` at the given `opacity`, insert
+/// it into the pool, and return the params buffer the stored draw state carries so
+/// a caller can compare allocations across prepares.
+fn prepare_insert_slot(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    fixture: &mut DownscaleSmokeFixture,
+    slot_id: u64,
+    target_size: [u32; 2],
+    opacity: f32,
+) -> std::sync::Arc<wgpu::Buffer> {
+    let source_key = fixture.source_key;
+    let source_bind_group = fixture
+        .resources
+        .source_textures
+        .peek(&source_key)
+        .expect("smoke source texture should be uploaded")
+        .bind_group
+        .clone();
+    let output_size = fixture.source_size;
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("suisuiview-params-recycle-prepare-encoder"),
+    });
+    let draw_state = fixture.resources.prepare_draw_state(
+        device,
+        queue,
+        slot_id,
+        &mut encoder,
+        source_key,
+        source_bind_group,
+        fixture.source_size,
+        output_size,
+        ViewEffects::default(),
+        WgpuUpscaleMethod::None,
+        WgpuDownscaleMethod::Bilinear,
+        1.10,
+        GpuDisplayRect {
+            origin: [0, 0],
+            visible_size: target_size,
+            sample_offset: [0, 0],
+            full_size: target_size,
+        },
+        opacity,
+        false,
+        DebandStrength::Off,
+        None,
+        false,
+        &egui::Context::default(),
+    );
+    // Flush any recorded work (empty for this single-pass native path) so a pending
+    // `recycle_params_pair` write lands before the caller renders the slot.
+    queue.submit(Some(encoder.finish()));
+    fixture.resources.insert_draw_state(slot_id, draw_state);
+    fixture
+        .resources
+        .draw_bind_groups
+        .peek(&slot_id)
+        .expect("draw state should be inserted at the slot")
+        .params_buffer
+        .clone()
+}
+
+/// Render the draw state stored at `slot_id` to a tightly packed RGBA8 buffer of
+/// `target_size`, so a test can read back the composite the recycled params produce.
+fn render_stored_slot_rgba(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    resources: &GpuPaintResources,
+    slot_id: u64,
+    target_size: [u32; 2],
+) -> Vec<u8> {
+    let draw_state = resources
+        .draw_bind_groups
+        .peek(&slot_id)
+        .expect("slot draw state should exist");
+    let output_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("suisuiview-params-recycle-output"),
+        size: wgpu::Extent3d {
+            width: target_size[0],
+            height: target_size[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("suisuiview-params-recycle-render-encoder"),
+    });
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("suisuiview-params-recycle-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &output_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&resources.pipeline);
+        pass.set_bind_group(0, draw_state.texture_bind_group.as_ref(), &[]);
+        pass.set_bind_group(1, draw_state.params_bind_group.as_ref(), &[]);
+        pass.draw(0..3, 0..1);
+    }
+    let padded_bytes_per_row =
+        align_to_smoke(target_size[0] * 4, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("suisuiview-params-recycle-readback"),
+        size: padded_bytes_per_row as u64 * u64::from(target_size[1]),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &output_texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_bytes_per_row),
+                rows_per_image: Some(target_size[1]),
+            },
+        },
+        wgpu::Extent3d {
+            width: target_size[0],
+            height: target_size[1],
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit(Some(encoder.finish()));
+    let buffer_slice = readback.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = tx.send(result);
+    });
+    device.poll(wgpu::PollType::Wait).unwrap();
+    rx.recv().unwrap().unwrap();
+    let mapped = buffer_slice.get_mapped_range();
+    let row_bytes = target_size[0] as usize * 4;
+    let mut pixels = Vec::with_capacity(row_bytes * target_size[1] as usize);
+    for row in 0..target_size[1] as usize {
+        let start = row * padded_bytes_per_row as usize;
+        pixels.extend_from_slice(&mapped[start..start + row_bytes]);
+    }
+    drop(mapped);
+    readback.unmap();
+    pixels
 }

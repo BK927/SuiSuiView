@@ -15,6 +15,8 @@ use lru::LruCache;
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -28,11 +30,22 @@ pub(super) struct GpuSourceTexture {
     pub(super) view: wgpu::TextureView,
     pub(super) bind_group: Arc<wgpu::BindGroup>,
     byte_size: usize,
+    /// egui pass number that last used this source (cache hit or fresh upload);
+    /// entries from the CURRENT pass are never pruned (see
+    /// `prune_source_textures`), mirroring the intermediate/draw-state shields so
+    /// a multi-page frame whose sources exceed budget does not evict-and-reupload
+    /// a still-visible page's source on the very next frame.
+    last_used_pass: AtomicU64,
 }
 
 pub(super) struct GpuDrawState {
     pub(super) texture_bind_group: Arc<wgpu::BindGroup>,
-    pub(super) params_bind_group: wgpu::BindGroup,
+    /// The params uniform buffer backing `params_bind_group`. Held as an `Arc`
+    /// so a stable-slot recycle can clone it out of the previous frame's draw
+    /// state, rewrite it in place, and keep it alive under the new draw state
+    /// (V15). The old state dropping never destroys the buffer.
+    pub(super) params_buffer: Arc<wgpu::Buffer>,
+    pub(super) params_bind_group: Arc<wgpu::BindGroup>,
     _intermediate_pins: Vec<Arc<GpuIntermediateTexture>>,
     pub(super) intermediate_byte_size: usize,
     /// egui pass number that inserted this state; entries from the CURRENT pass
@@ -61,7 +74,8 @@ pub(super) struct GpuIntermediateTexture {
 impl GpuDrawState {
     pub(super) fn new(
         texture_bind_group: Arc<wgpu::BindGroup>,
-        params_bind_group: wgpu::BindGroup,
+        params_buffer: Arc<wgpu::Buffer>,
+        params_bind_group: Arc<wgpu::BindGroup>,
         intermediate_pins: Vec<Arc<GpuIntermediateTexture>>,
     ) -> Self {
         let intermediate_byte_size = intermediate_pins
@@ -70,6 +84,7 @@ impl GpuDrawState {
             .sum();
         Self {
             texture_bind_group,
+            params_buffer,
             params_bind_group,
             _intermediate_pins: intermediate_pins,
             intermediate_byte_size,
@@ -193,6 +208,8 @@ impl GpuPaintResources {
             ),
             realtime_sr: RealtimeSrResources::new(),
             last_refine_log: None,
+            #[cfg(test)]
+            params_buffer_creations: AtomicUsize::new(0),
         };
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf_trace::record_duration(
@@ -217,7 +234,12 @@ impl GpuPaintResources {
         image_size: [usize; 2],
         pixels: &PagePixels,
     ) -> bool {
-        if self.source_textures.get(&key).is_some() {
+        if let Some(texture) = self.source_textures.get(&key) {
+            // Cache hit: refresh both the stamp and LRU recency so a re-touched
+            // source is shielded this pass, mirroring the intermediate pool.
+            texture
+                .last_used_pass
+                .store(self.current_pass, Ordering::Relaxed);
             return false;
         }
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -287,6 +309,7 @@ impl GpuPaintResources {
                 view,
                 bind_group,
                 byte_size,
+                last_used_pass: AtomicU64::new(self.current_pass),
             },
         ) {
             self.source_texture_bytes = self
@@ -468,6 +491,65 @@ impl GpuPaintResources {
         })
     }
 
+    /// Params uniform buffer + bind group for a stable draw slot, recycling the
+    /// pair already stored at `slot_id` when the previous frame left one there
+    /// (V15). On a slot hit the existing buffer is rewritten in place via
+    /// `queue.write_buffer` — no allocation, no dropped buffer — and its bind
+    /// group, which still points at that same buffer, is reused unchanged. Only a
+    /// slot miss allocates a fresh pair through `create_params_pair`.
+    ///
+    /// Ordering: egui-wgpu flushes every `prepare`-stage queue write before the
+    /// frame's paint pass, so the recycled buffer already holds this frame's
+    /// params by the time `paint` samples it — no extra synchronization needed.
+    /// The rewrite is destructive per slot, so two draws that coexist in one
+    /// frame MUST carry distinct `slot_id`s (see `draw_id`'s `slot`), or the
+    /// second write would clobber the first draw's params.
+    pub(super) fn recycle_params_pair(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        slot_id: u64,
+        params: crate::core::gpu_effect::EffectParams,
+    ) -> (Arc<wgpu::Buffer>, Arc<wgpu::BindGroup>) {
+        if let Some(existing) = self.draw_bind_groups.peek(&slot_id) {
+            let buffer = existing.params_buffer.clone();
+            let bind_group = existing.params_bind_group.clone();
+            queue.write_buffer(&buffer, 0, bytemuck::bytes_of(&params));
+            return (buffer, bind_group);
+        }
+        self.create_params_pair(device, params)
+    }
+
+    fn create_params_pair(
+        &self,
+        device: &wgpu::Device,
+        params: crate::core::gpu_effect::EffectParams,
+    ) -> (Arc<wgpu::Buffer>, Arc<wgpu::BindGroup>) {
+        #[cfg(test)]
+        self.params_buffer_creations.fetch_add(1, Ordering::Relaxed);
+        // COPY_DST so `recycle_params_pair` can rewrite it in place on later slot
+        // hits (the one-shot stage helper above stays UNIFORM-only).
+        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("suisuiview-gpu-effect-params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("suisuiview-gpu-effect-params-bind-group"),
+            layout: &self.params_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            }],
+        });
+        (Arc::new(params_buffer), Arc::new(bind_group))
+    }
+
+    #[cfg(test)]
+    pub(super) fn params_buffer_creations(&self) -> usize {
+        self.params_buffer_creations.load(Ordering::Relaxed)
+    }
+
     /// Mirror the current byte counters into the read-only `*_LIVE` statics so the app/UI thread
     /// can display live GPU pool usage. Display-only; does not affect budget or eviction logic.
     pub(super) fn publish_gpu_pool_bytes(&self) {
@@ -481,6 +563,21 @@ impl GpuPaintResources {
         while self.source_texture_bytes > self.source_texture_budget_bytes
             && self.source_textures.len() > 1
         {
+            // Same current-pass shield as the intermediate/draw-state pools: a
+            // multi-page frame can legitimately need more source VRAM than the
+            // steady-state budget at once, and evicting a source the current pass
+            // still uses just forces a re-upload of it next frame (a ping-pong).
+            // Stamps and LRU recency move together, so once the LRU tail is
+            // current-pass, everything ahead of it is too.
+            if self
+                .source_textures
+                .peek_lru()
+                .is_some_and(|(_key, texture)| {
+                    texture.last_used_pass.load(Ordering::Relaxed) == self.current_pass
+                })
+            {
+                break;
+            }
             let Some((_key, texture)) = self.source_textures.pop_lru() else {
                 break;
             };

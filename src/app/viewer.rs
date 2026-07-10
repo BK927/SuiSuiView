@@ -43,6 +43,12 @@ pub(in crate::app) use transition::{
 
 const TRANSITION_MS: f32 = 120.0;
 pub(in crate::app) const SPREAD_GAP_POINTS: f32 = 14.0;
+/// GPU draw-slots (see `GpuPaintRequest::slot`): the settled spread and a
+/// transition's to-leg share 0; the from-leg uses a distinct slot so the two
+/// legs never recycle one params buffer in a frame. Debug-compare panes use 1/2,
+/// but that mode never coexists with a transition.
+const MAIN_VIEWER_SLOT: u8 = 0;
+const TRANSITION_FROM_SLOT: u8 = 3;
 const WGPU_PRESENT_CONFIRM_REPAINT_DELAY: Duration = Duration::from_millis(16);
 const WGPU_SIBLING_VISIBLE_HOLD: Duration = Duration::from_millis(260);
 
@@ -56,6 +62,8 @@ struct SpreadPaint<'a> {
     /// Whether the Glow draw-time kernel may enlarge these pages. False during a
     /// page-turn transition (moving/fading content stays on the plain path).
     allow_kernel: bool,
+    /// GPU draw-slot for this leg's pages (see `GpuPaintRequest::slot`).
+    slot: u8,
 }
 
 /// Per-page paint result the spread and strip loops fold together: whether the
@@ -467,6 +475,7 @@ impl SuiSuiViewApp {
                     scale: paint.from_scale,
                     alpha: paint.from_alpha,
                     allow_kernel: false,
+                    slot: TRANSITION_FROM_SLOT,
                 },
             );
             if transition.style == PageTransitionStyle::BookFlip2d {
@@ -483,6 +492,7 @@ impl SuiSuiViewApp {
                     scale: paint.to_scale,
                     alpha: paint.to_alpha,
                     allow_kernel: false,
+                    slot: MAIN_VIEWER_SLOT,
                 },
             );
 
@@ -501,6 +511,7 @@ impl SuiSuiViewApp {
                     scale: Vec2::splat(1.0),
                     alpha: 1.0,
                     allow_kernel: true,
+                    slot: MAIN_VIEWER_SLOT,
                 },
             );
         }
@@ -622,6 +633,7 @@ impl SuiSuiViewApp {
                 page_rect,
                 request.alpha,
                 request.allow_kernel,
+                request.slot,
             );
             spread_fully_drawn &= outcome.fully_drawn;
             spread_uses_wgpu_paint_callback |= outcome.used_wgpu_callback;
@@ -654,6 +666,7 @@ impl SuiSuiViewApp {
         page_rect: Rect,
         alpha: f32,
         allow_kernel: bool,
+        slot: u8,
     ) -> PagePaintOutcome {
         let size = page_visual_size(&visual);
         let tint = Color32::from_white_alpha((alpha.clamp(0.0, 1.0) * 255.0) as u8);
@@ -761,6 +774,7 @@ impl SuiSuiViewApp {
                     painter,
                     GpuPaintRequest {
                         rect: page_rect,
+                        slot,
                         source_key,
                         image_size,
                         pixels,

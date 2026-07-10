@@ -32,6 +32,8 @@ impl GpuPaintResources {
     pub(super) fn prepare_draw_state(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        slot_id: u64,
         encoder: &mut wgpu::CommandEncoder,
         source_key: GpuPaintSourceKey,
         source_bind_group: Arc<wgpu::BindGroup>,
@@ -59,6 +61,8 @@ impl GpuPaintResources {
         );
         let mut draw_state = self.resolve_draw_state(
             device,
+            queue,
+            slot_id,
             encoder,
             source_key,
             source_bind_group,
@@ -87,6 +91,8 @@ impl GpuPaintResources {
     fn resolve_draw_state(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        slot_id: u64,
         encoder: &mut wgpu::CommandEncoder,
         source_key: GpuPaintSourceKey,
         source_bind_group: Arc<wgpu::BindGroup>,
@@ -144,6 +150,8 @@ impl GpuPaintResources {
         if RealtimeSrResources::is_supported(sr_upscaler) {
             if let Some(draw_state) = self.prepare_realtime_sr_draw_state(
                 device,
+                queue,
+                slot_id,
                 encoder,
                 source_key,
                 source_size,
@@ -224,7 +232,8 @@ impl GpuPaintResources {
                 opacity,
             );
             // Final composite samples the fp16 EASU intermediate -> dither on.
-            let params_bind_group = self.params_bind_group_for(device, rcas_params.with_dither());
+            let (params_buffer, params_bind_group) =
+                self.recycle_params_pair(device, queue, slot_id, rcas_params.with_dither());
             record_wgpu_upscale_method_render(
                 effective_upscaler,
                 source_size,
@@ -238,6 +247,7 @@ impl GpuPaintResources {
             );
             return GpuDrawState::new(
                 intermediate_bind_group,
+                params_buffer,
                 params_bind_group,
                 vec![intermediate],
             );
@@ -255,6 +265,8 @@ impl GpuPaintResources {
         if zoom_in_motion && scale_plan.direction == WgpuScaleDirection::Downscale {
             return self.prepare_hardware_mipmap_draw_state(
                 device,
+                queue,
+                slot_id,
                 encoder,
                 source_content_key,
                 source_bind_group,
@@ -273,6 +285,8 @@ impl GpuPaintResources {
         if effective_downscaler.is_hardware_mipmap() {
             return self.prepare_hardware_mipmap_draw_state(
                 device,
+                queue,
+                slot_id,
                 encoder,
                 source_content_key,
                 source_bind_group,
@@ -289,6 +303,8 @@ impl GpuPaintResources {
         {
             return self.prepare_pyramid_downscale_draw_state(
                 device,
+                queue,
+                slot_id,
                 encoder,
                 source_content_key,
                 source_bind_group,
@@ -334,9 +350,12 @@ impl GpuPaintResources {
         } else {
             params
         };
+        let (params_buffer, params_bind_group) =
+            self.recycle_params_pair(device, queue, slot_id, params);
         GpuDrawState::new(
             source_bind_group,
-            self.params_bind_group_for(device, params),
+            params_buffer,
+            params_bind_group,
             Vec::new(),
         )
     }
@@ -345,6 +364,8 @@ impl GpuPaintResources {
     fn prepare_realtime_sr_draw_state(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        slot_id: u64,
         encoder: &mut wgpu::CommandEncoder,
         source_key: GpuPaintSourceKey,
         source_size: [usize; 2],
@@ -439,6 +460,8 @@ impl GpuPaintResources {
         );
         Some(self.prepare_realtime_sr_presentation_draw_state(
             device,
+            queue,
+            slot_id,
             encoder,
             effects,
             downscaler,
@@ -452,6 +475,8 @@ impl GpuPaintResources {
     fn prepare_realtime_sr_presentation_draw_state(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        slot_id: u64,
         encoder: &mut wgpu::CommandEncoder,
         effects: ViewEffects,
         downscaler: WgpuDownscaleMethod,
@@ -472,6 +497,8 @@ impl GpuPaintResources {
             return self
                 .prepare_hardware_mipmap_draw_state(
                     device,
+                    queue,
+                    slot_id,
                     encoder,
                     intermediate.content_key,
                     intermediate.bind_group.clone(),
@@ -490,6 +517,8 @@ impl GpuPaintResources {
             return self
                 .prepare_pyramid_downscale_draw_state(
                     device,
+                    queue,
+                    slot_id,
                     encoder,
                     intermediate.content_key,
                     intermediate.bind_group.clone(),
@@ -520,9 +549,12 @@ impl GpuPaintResources {
         );
         // Final composite samples the realtime-SR output (a pooled intermediate) ->
         // dither on.
+        let (params_buffer, params_bind_group) =
+            self.recycle_params_pair(device, queue, slot_id, params.with_dither());
         GpuDrawState::new(
             intermediate.bind_group.clone(),
-            self.params_bind_group_for(device, params.with_dither()),
+            params_buffer,
+            params_bind_group,
             vec![intermediate],
         )
     }
@@ -531,6 +563,8 @@ impl GpuPaintResources {
     fn prepare_pyramid_downscale_draw_state(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        slot_id: u64,
         encoder: &mut wgpu::CommandEncoder,
         content_key: u64,
         source_bind_group: Arc<wgpu::BindGroup>,
@@ -622,9 +656,12 @@ impl GpuPaintResources {
             } else {
                 params
             };
+            let (params_buffer, params_bind_group) =
+                self.recycle_params_pair(device, queue, slot_id, params);
             return GpuDrawState::new(
                 source_bind_group,
-                self.params_bind_group_for(device, params),
+                params_buffer,
+                params_bind_group,
                 Vec::new(),
             );
         }
@@ -640,11 +677,9 @@ impl GpuPaintResources {
             opacity,
         );
         // Final composite samples the last fp16 pyramid intermediate -> dither on.
-        GpuDrawState::new(
-            current_bind_group,
-            self.params_bind_group_for(device, params.with_dither()),
-            pins,
-        )
+        let (params_buffer, params_bind_group) =
+            self.recycle_params_pair(device, queue, slot_id, params.with_dither());
+        GpuDrawState::new(current_bind_group, params_buffer, params_bind_group, pins)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -724,6 +759,8 @@ impl GpuPaintResources {
     fn prepare_hardware_mipmap_draw_state(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        slot_id: u64,
         encoder: &mut wgpu::CommandEncoder,
         content_key: u64,
         source_bind_group: Arc<wgpu::BindGroup>,
@@ -803,9 +840,12 @@ impl GpuPaintResources {
             lod,
         );
         // Final composite samples the fp16 mipmap intermediate -> dither on.
+        let (params_buffer, params_bind_group) =
+            self.recycle_params_pair(device, queue, slot_id, params.with_dither());
         GpuDrawState::new(
             intermediate.bind_group.clone(),
-            self.params_bind_group_for(device, params.with_dither()),
+            params_buffer,
+            params_bind_group,
             vec![intermediate],
         )
     }

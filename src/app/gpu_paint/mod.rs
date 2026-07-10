@@ -75,6 +75,11 @@ pub(super) struct GpuPaintSourceKey {
 
 pub(super) struct GpuPaintRequest {
     pub(super) rect: Rect,
+    /// Stable draw-slot discriminator for this request, so two draws that share
+    /// a source_key but coexist in one frame (debug-compare panes, the two legs
+    /// of a page-turn transition) get distinct `draw_id`s and never recycle the
+    /// same params buffer against each other. 0 = the main viewer draw.
+    pub(super) slot: u8,
     pub(super) source_key: GpuPaintSourceKey,
     pub(super) image_size: [usize; 2],
     pub(super) pixels: PagePixels,
@@ -245,10 +250,9 @@ impl SuiSuiViewApp {
                 request.wgpu_upscale_method,
                 request.wgpu_downscale_method,
                 request.fixed_2x_sr_min_scale_pct,
-                request.rect,
-                request.opacity,
                 request.deband,
                 request.zoom_in_motion,
+                request.slot,
             ),
             ctx: painter.ctx().clone(),
         };
@@ -471,6 +475,8 @@ impl CallbackTrait for GpuEffectCallback {
         {
             let draw_state = resources.prepare_draw_state(
                 device,
+                queue,
+                self.draw_id,
                 egui_encoder,
                 self.source_key,
                 source_bind_group,
@@ -538,7 +544,7 @@ impl CallbackTrait for GpuEffectCallback {
         };
         render_pass.set_pipeline(&resources.pipeline);
         render_pass.set_bind_group(0, draw_state.texture_bind_group.as_ref(), &[]);
-        render_pass.set_bind_group(1, &draw_state.params_bind_group, &[]);
+        render_pass.set_bind_group(1, draw_state.params_bind_group.as_ref(), &[]);
         render_pass.draw(0..3, 0..1);
     }
 }
@@ -572,6 +578,11 @@ struct GpuPaintResources {
     /// Last emitted `[refine]` log signature `(page_id, method, kind)`, so the
     /// diagnostic dedups a steady state to one line instead of per-frame spam.
     last_refine_log: Option<(u32, WgpuUpscaleMethod, u8)>,
+    /// Test-only tally of params uniform buffers freshly allocated by
+    /// `create_params_pair` (a slot miss). The V15 recycle test asserts a second
+    /// prepare at the same slot does NOT bump this. Absent from product builds.
+    #[cfg(test)]
+    params_buffer_creations: AtomicUsize,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -581,28 +592,31 @@ fn draw_id(
     wgpu_upscale_method: WgpuUpscaleMethod,
     wgpu_downscale_method: WgpuDownscaleMethod,
     fixed_2x_sr_min_scale_pct: u32,
-    rect: Rect,
-    opacity: f32,
     deband: DebandStrength,
     zoom_in_motion: bool,
+    slot: u8,
 ) -> u64 {
+    // A STABLE draw-slot identity: deliberately independent of the display rect
+    // and opacity, so scrolling (which changes both every frame) reuses the one
+    // draw state — and its persistent params buffer — for a page instead of
+    // minting a new id + buffer per frame (V15). Rect/opacity now live only in
+    // the params uniform, rewritten in place via `recycle_params_pair`.
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     source_key.hash(&mut hasher);
     effects.hash(&mut hasher);
     wgpu_upscale_method.token().hash(&mut hasher);
     wgpu_downscale_method.token().hash(&mut hasher);
     fixed_2x_sr_min_scale_pct.hash(&mut hasher);
-    rect.min.x.to_bits().hash(&mut hasher);
-    rect.min.y.to_bits().hash(&mut hasher);
-    rect.max.x.to_bits().hash(&mut hasher);
-    rect.max.y.to_bits().hash(&mut hasher);
-    opacity.to_bits().hash(&mut hasher);
     // Distinct draw states per strength so a strength change re-renders instead
     // of reusing the previous strength's cached draw.
     deband.token().hash(&mut hasher);
     // The bool changes which pipeline renders (cached mipmap sample vs. the
     // quality downscale), so distinct draw states must not collide.
     zoom_in_motion.hash(&mut hasher);
+    // Separates draws that share every field above but coexist in one frame
+    // (debug-compare panes, the two legs of a page-turn transition), so their
+    // per-slot params buffers never write over each other.
+    slot.hash(&mut hasher);
     hasher.finish()
 }
 

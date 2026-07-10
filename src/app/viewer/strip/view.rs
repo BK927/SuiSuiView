@@ -105,6 +105,9 @@ impl SuiSuiViewApp {
                 placement.rect,
                 1.0,
                 true,
+                // Strip pages each carry a distinct source_key, so one slot is
+                // enough — their `draw_id`s never collide within a frame.
+                0,
             );
             if placement.index == self.current_page {
                 current_outcome = Some(outcome);
