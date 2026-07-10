@@ -17,9 +17,25 @@ pub(super) enum SettingsSection {
     Performance,
     Keyboard,
     Mouse,
+    // File associations and Windows default-app registration only exist on
+    // Windows, so the whole section is compiled out elsewhere.
+    #[cfg(target_os = "windows")]
+    FileAssociations,
 }
 
 impl SettingsSection {
+    #[cfg(target_os = "windows")]
+    const ALL: [Self; 8] = [
+        Self::General,
+        Self::View,
+        Self::Reading,
+        Self::Rendering,
+        Self::Performance,
+        Self::Keyboard,
+        Self::Mouse,
+        Self::FileAssociations,
+    ];
+    #[cfg(not(target_os = "windows"))]
     const ALL: [Self; 7] = [
         Self::General,
         Self::View,
@@ -39,6 +55,8 @@ impl SettingsSection {
             Self::Performance => i18n.text("settings.section.performance"),
             Self::Keyboard => i18n.text("settings.section.keyboard"),
             Self::Mouse => i18n.text("settings.section.mouse"),
+            #[cfg(target_os = "windows")]
+            Self::FileAssociations => i18n.text("settings.section.file_associations"),
         }
     }
 
@@ -51,6 +69,8 @@ impl SettingsSection {
             Self::Performance => i18n.text("settings.section.performance.desc"),
             Self::Keyboard => i18n.text("settings.section.keyboard.desc"),
             Self::Mouse => i18n.text("settings.section.mouse.desc"),
+            #[cfg(target_os = "windows")]
+            Self::FileAssociations => i18n.text("settings.section.file_associations.desc"),
         }
     }
 
@@ -63,6 +83,8 @@ impl SettingsSection {
             Self::Performance => (icons::LOCK_OPEN, icons::IconStyle::Regular),
             Self::Keyboard => (icons::KEYBOARD, icons::IconStyle::Regular),
             Self::Mouse => (icons::CURSOR_CLICK, icons::IconStyle::Regular),
+            #[cfg(target_os = "windows")]
+            Self::FileAssociations => (icons::DOCUMENT, icons::IconStyle::Regular),
         }
     }
 }
@@ -158,13 +180,6 @@ impl SuiSuiViewApp {
                                 .show(ui, |ui| match active_section {
                                     SettingsSection::General => {
                                         show_general_settings(ui, &mut draft, &mut changed, i18n);
-                                        // File associations moved into General as a
-                                        // group; keep its Windows-only gating here.
-                                        #[cfg(target_os = "windows")]
-                                        {
-                                            ui.add_space(8.0);
-                                            self.show_file_association_settings(ui, i18n);
-                                        }
                                     }
                                     SettingsSection::View => {
                                         settings_view::show_view_settings(
@@ -225,6 +240,10 @@ impl SuiSuiViewApp {
                                             &mut changed,
                                             i18n,
                                         );
+                                    }
+                                    #[cfg(target_os = "windows")]
+                                    SettingsSection::FileAssociations => {
+                                        self.show_file_association_settings(ui, i18n);
                                     }
                                 });
                         });
