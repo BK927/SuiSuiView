@@ -76,3 +76,14 @@ zune-psd = "0.5"
 
 [build-dependencies]
 winresource = "0.1"
+
+# winit 0.30.13 + the 0.30.x backport of rust-windowing/winit#4341 ("use the
+# WM_DPICHANGED suggested rect directly on Windows 11"), which upstream merged
+# 2025-08 but has not released (0.31 is still beta and egui-winit — through
+# 0.35 — pins winit ^0.30.13). Fixes the mixed-DPI drag jitter/grip-slip and
+# the windowed-reveal teleport race on this codebase's 150%/125% desktop.
+# DELETE this patch the moment egui moves to a winit release that contains the
+# fix (egui-winit requiring winit >= 0.31); the fork is that release's early
+# adoption, not a divergence.
+[patch.crates-io]
+winit = { git = "https://github.com/BK927/winit", rev = "313e5c26b5c1a72661615b7aa2fda0a0d0a5fe96" }
