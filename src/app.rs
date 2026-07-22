@@ -1217,6 +1217,10 @@ impl SuiSuiViewApp {
         if let Some(path) = request {
             self.open_path(path);
         }
+        // Restore first: Visible(true)/Focus alone do not un-minimize an iconic
+        // window, so a forwarded open would land while the window stays in the
+        // taskbar.
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         ctx.request_repaint();

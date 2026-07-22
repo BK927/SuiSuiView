@@ -140,7 +140,15 @@ impl SuiSuiViewApp {
         // read *before* the maximized early-return: the restore position stays
         // valid while maximized, so it must stay saveable. inner_size, by
         // contrast, is frozen while maximized (handled after the return).
-        let outer_position = outer_rect
+        //
+        // egui's `outer_rect` is preferred when present, but only while NOT
+        // maximized: today egui leaves it None on Windows (so the native value
+        // wins), but if a future upgrade populates ViewportInfo it would report
+        // the MAXIMIZED rect while maximized, poisoning the restore-position hint.
+        // rcNormalPosition (the native value) is the restore rect in both cases.
+        let outer_position = (!placement.maximized)
+            .then_some(outer_rect)
+            .flatten()
             .map(|rect| rect.min)
             .or_else(|| native.and_then(|state| state.outer_position_points));
         if let Some(position) = outer_position {
