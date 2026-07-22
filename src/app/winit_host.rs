@@ -152,10 +152,11 @@ struct WinitHostApp {
     // `schedule_process_visible_window_title` so its generation bump kills any
     // stale timed re-assert that would otherwise restore the old title.
     glow_synced_title: Option<String>,
-    // Saved maximized flag, captured when the window is created (non-maximized)
-    // and applied at the first-frame reveal so the first show lands directly at
-    // the maximized rect. See `glow_window::reveal_main_window`.
-    startup_maximized: bool,
+    // Saved placement (restore rect + maximized flag), captured when the window
+    // is created (non-maximized) and applied at the first-frame reveal so the
+    // first show lands directly at the saved rect on the correct monitor. See
+    // `glow_window::reveal_main_window`.
+    startup_placement: glow_window::StartupPlacement,
 }
 
 enum Stage {
@@ -216,7 +217,7 @@ impl WinitHostApp {
             wake_proxy,
             dpi_size_guard: DpiSizeGuard::new(),
             glow_synced_title: None,
-            startup_maximized: false,
+            startup_placement: glow_window::StartupPlacement::default(),
         }
     }
 
@@ -392,15 +393,24 @@ impl winit::application::ApplicationHandler<()> for WinitHostApp {
         _window_id: winit::window::WindowId,
         mut event: winit::event::WindowEvent,
     ) {
+        // Resolve the event window up front and read its LIVE visibility +
+        // maximized state, so the DPI guard never resizes/learns from a maximized
+        // window (OS-determined size) and never emits a correction while the window
+        // is still hidden (which could land post-reveal). See `window_live_state`
+        // for why this reads Win32 style bits rather than winit's cached flags.
+        let window = match self.stage.as_ref() {
+            Some(Stage::Glow { gl_window, .. }) => Some(gl_window.window()),
+            Some(Stage::Wgpu { window, .. }) => Some(window),
+            None => None,
+        };
+        let live = window.map(window_live_state).unwrap_or(dpi_guard::WindowLiveState {
+            visible: true,
+            maximized: false,
+        });
         // Non-consuming: the event still flows to egui below (see the method doc).
-        if let Some((w, h)) = self.dpi_size_guard.defend_scale_change(&mut event) {
+        if let Some((w, h)) = self.dpi_size_guard.defend_scale_change(&mut event, live) {
             // A stale DPI suggested rect was applied as a plain Resized with no
             // scale event to hang the correction on; re-request the tracked size.
-            let window = match self.stage.as_ref() {
-                Some(Stage::Glow { gl_window, .. }) => Some(gl_window.window()),
-                Some(Stage::Wgpu { window, .. }) => Some(window),
-                None => None,
-            };
             if let Some(window) = window {
                 let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(w, h));
             }
@@ -478,6 +488,44 @@ impl winit::application::ApplicationHandler<()> for WinitHostApp {
 
 fn elapsed_ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
+}
+
+/// The window's live visibility + maximized style, read from Win32
+/// (`IsWindowVisible`/`IsZoomed`). Deliberately NOT winit's cached
+/// `is_maximized()`/visibility: the reveal path shows+maximizes via
+/// `SetWindowPlacement`, whose `Resized` reaches `window_event` BEFORE the
+/// winit-flag reconcile (`set_visible(true)`/`set_maximized(true)`) runs, so
+/// winit's cached flags still lag at that instant while the live style bits are
+/// already correct. The DPI guard depends on the true state to avoid (a)
+/// fighting/shrinking the freshly maximized window and (b) emitting a correction
+/// while the window is still hidden that lands post-reveal.
+#[cfg(target_os = "windows")]
+fn window_live_state(window: &winit::window::Window) -> dpi_guard::WindowLiveState {
+    use winit::raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{IsWindowVisible, IsZoomed};
+
+    let Ok(RawWindowHandle::Win32(win32)) = window.window_handle().map(|handle| handle.as_raw())
+    else {
+        // No raw handle: default to visible/non-maximized (behavior as before the
+        // gate, i.e. the guard is free to act).
+        return dpi_guard::WindowLiveState {
+            visible: true,
+            maximized: false,
+        };
+    };
+    let hwnd = win32.hwnd.get() as windows_sys::Win32::Foundation::HWND;
+    dpi_guard::WindowLiveState {
+        visible: unsafe { IsWindowVisible(hwnd) != 0 },
+        maximized: unsafe { IsZoomed(hwnd) != 0 },
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn window_live_state(_window: &winit::window::Window) -> dpi_guard::WindowLiveState {
+    dpi_guard::WindowLiveState {
+        visible: true,
+        maximized: false,
+    }
 }
 
 fn injected_failure(stage: HostFailureStage) -> Option<String> {

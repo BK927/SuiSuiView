@@ -507,6 +507,15 @@ pub struct WindowPlacement {
     pub outer_position: Option<[f32; 2]>,
     #[serde(default)]
     pub outer_position_px: Option<[i32; 2]>,
+    /// Raw `rcNormalPosition` (the restore rect) from GetWindowPlacement, stored
+    /// VERBATIM in workspace coordinates as `[left, top, right, bottom]`. It is
+    /// restored via SetWindowPlacement in the same coordinate space, so no
+    /// workspace<->screen or physical<->logical translation ever happens for the
+    /// authoritative placement. The `inner_size`/`outer_position*` fields remain
+    /// as creation-time hints (so the window is born near the right monitor at
+    /// the right scale) and as a legacy fallback for state saved by older builds.
+    #[serde(default)]
+    pub normal_rect_px: Option<[i32; 4]>,
     #[serde(default)]
     pub maximized: bool,
 }
@@ -614,6 +623,9 @@ impl StateStore {
             .and_then(|text| serde_json::from_str::<PersistedState>(&text).ok())
             .unwrap_or_default();
         state.settings.normalize_product_choices();
+        if looks_like_maximized_rect_artifact(&state.window) {
+            state.window = WindowPlacement::default();
+        }
 
         let mut store = Self {
             path,
@@ -834,6 +846,30 @@ impl StateStore {
     }
 }
 
+/// One-time heal for window placement corrupted by the pre-fix maximize bug,
+/// where the *maximized* rect (the monitor work area plus the invisible resize
+/// borders) was persisted as the normal geometry with `maximized == false`. That
+/// artifact is unmistakable: a non-maximized placement whose physical origin is
+/// negative on both axes (the resize-border overhang a maximized window sits at)
+/// paired with an implausibly tall restore height. A genuine normal window can
+/// never produce that combination, so reset it to the default rather than
+/// restoring the window off-screen at monitor size. The real fix (native
+/// GetWindowPlacement + visibility gating) prevents new corruption; this only
+/// cleans the existing one. Intentionally narrow — it targets the observed
+/// corruption, not a general "too big" heuristic.
+fn looks_like_maximized_rect_artifact(placement: &WindowPlacement) -> bool {
+    if placement.maximized {
+        return false;
+    }
+    let Some([x, y]) = placement.outer_position_px else {
+        return false;
+    };
+    let Some([_, height]) = placement.inner_size else {
+        return false;
+    };
+    x < 0 && y < 0 && height > 1800.0
+}
+
 fn looks_like_archive_book(record: &BookRecord) -> bool {
     record.known_paths.iter().any(|path| {
         Path::new(path)
@@ -893,4 +929,48 @@ pub fn default_top_bar_cpu_scale_filters() -> Vec<CpuScaleFilter> {
 
 pub fn default_top_bar_wgpu_upscale_methods() -> Vec<WgpuUpscaleMethod> {
     DEFAULT_TOP_BAR_WGPU_UPSCALE_METHODS.to_vec()
+}
+
+#[cfg(test)]
+mod window_heal_tests {
+    use super::{looks_like_maximized_rect_artifact, WindowPlacement};
+
+    #[test]
+    fn heals_saved_maximized_rect_artifact() {
+        // Exact corrupt values observed in the field: the maximized rect of a
+        // left portrait monitor saved as normal geometry with maximized=false.
+        let placement = WindowPlacement {
+            inner_size: Some([1152.0, 1977.0]),
+            outer_position: Some([-1159.0, -7.0]),
+            outer_position_px: Some([-1449, -9]),
+            normal_rect_px: None,
+            maximized: false,
+        };
+        assert!(looks_like_maximized_rect_artifact(&placement));
+    }
+
+    #[test]
+    fn keeps_sane_placement() {
+        let placement = WindowPlacement {
+            inner_size: Some([1280.0, 820.0]),
+            outer_position: Some([100.0, 100.0]),
+            outer_position_px: Some([100, 100]),
+            normal_rect_px: None,
+            maximized: false,
+        };
+        assert!(!looks_like_maximized_rect_artifact(&placement));
+    }
+
+    #[test]
+    fn ignores_genuinely_maximized_placement() {
+        // A real maximized window carries maximized=true and must not be reset.
+        let placement = WindowPlacement {
+            inner_size: Some([1152.0, 1977.0]),
+            outer_position: Some([-1159.0, -7.0]),
+            outer_position_px: Some([-1449, -9]),
+            normal_rect_px: None,
+            maximized: true,
+        };
+        assert!(!looks_like_maximized_rect_artifact(&placement));
+    }
 }

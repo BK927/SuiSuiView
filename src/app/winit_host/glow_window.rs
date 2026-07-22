@@ -105,8 +105,8 @@ impl GlutinWindowContext {
         &self.window
     }
 
-    pub(super) fn reveal_after_first_frame(&self, maximized: bool) {
-        reveal_main_window(&self.window, maximized);
+    pub(super) fn reveal_after_first_frame(&self, placement: StartupPlacement) {
+        reveal_main_window(&self.window, placement);
     }
 
     pub(super) fn resize(&self, physical_size: winit::dpi::PhysicalSize<u32>) {
@@ -191,6 +191,12 @@ fn startup_window_attributes(
         }
         StartupPosition::OsDefault => {}
     }
+    // NOTE: the position/size set above are now only *hints* — they exist so the
+    // hidden window is born near the right monitor at the right initial scale
+    // (avoiding a create-time DPI shuffle). The authoritative placement is planted
+    // at reveal via SetWindowPlacement from the saved `normal_rect_px` (see
+    // `reveal_main_window`); creation geometry is deliberately not relied upon.
+    //
     // NOTE: maximize is intentionally NOT applied at creation. winit's Windows
     // backend applies `with_maximized(true)` *after* CreateWindowEx via
     // `set_maximized`, whose `apply_diff` runs `ShowWindow(SW_MAXIMIZE)` (which
@@ -203,29 +209,146 @@ fn startup_window_attributes(
     attributes
 }
 
-/// Whether the first show should land maximized, derived solely from the saved
-/// placement. Split from the attribute builder so the deferred-maximize flag is
-/// unit-testable and cannot drift into position/size handling.
-fn reveal_should_maximize(placement: &WindowPlacement) -> bool {
-    placement.maximized
+/// The saved placement carried from window creation to the first-frame reveal:
+/// the authoritative restore rect (`normal_rect_px`, verbatim workspace
+/// coordinates) plus the maximized flag. The window is created non-maximized
+/// (see `startup_window_attributes`); the reveal plants this placement.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct StartupPlacement {
+    pub(super) maximized: bool,
+    pub(super) normal_rect_px: Option<[i32; 4]>,
 }
 
-/// The saved maximized flag, read at startup and carried to the first-frame
-/// reveal (the window is created non-maximized; see `startup_window_attributes`).
-pub(super) fn startup_maximized(store: &StateStore) -> bool {
-    reveal_should_maximize(store.window_placement())
+/// Read the startup placement from the store at creation time, to be carried to
+/// the first-frame reveal.
+pub(super) fn startup_placement(store: &StateStore) -> StartupPlacement {
+    let placement = store.window_placement();
+    StartupPlacement {
+        maximized: placement.maximized,
+        normal_rect_px: placement.normal_rect_px,
+    }
 }
 
-/// Reveal the masked main window on the first rendered frame. Drops the
-/// alpha-0 flash-guard mask, then performs the single, final show: directly
-/// maximized when the saved placement was maximized, otherwise a plain show.
-pub(super) fn reveal_main_window(window: &winit::window::Window, maximized: bool) {
-    crate::startup_window::reveal_main_windows();
+/// The reveal strategy, decided purely so it is testable without Win32.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RevealPlan {
+    /// Plant the saved restore rect + show state in one SetWindowPlacement call.
+    SetPlacement,
+    /// No usable saved rect (absent, off all monitors, or no Win32 handle): fall
+    /// back to the plain first-show path.
+    Fallback,
+}
+
+/// Choose SetWindowPlacement vs the fallback show: use the saved restore rect
+/// only when it is present AND still lands on a connected monitor. Split out so
+/// the decision is unit-testable without Win32.
+fn plan_reveal(normal_rect: Option<[i32; 4]>, monitor_connected: bool) -> RevealPlan {
+    match normal_rect {
+        Some(_) if monitor_connected => RevealPlan::SetPlacement,
+        _ => RevealPlan::Fallback,
+    }
+}
+
+/// Pure map from the saved maximized flag to the `WINDOWPLACEMENT::showCmd` used
+/// at reveal. Split out so the maximize decision is unit-testable and cannot
+/// drift from the SetWindowPlacement construction. The restore rect determines
+/// *where* the window lands; this flag only decides maximized-or-not.
+#[cfg(target_os = "windows")]
+fn reveal_show_cmd(maximized: bool) -> i32 {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SW_SHOWMAXIMIZED, SW_SHOWNORMAL};
     if maximized {
+        SW_SHOWMAXIMIZED
+    } else {
+        SW_SHOWNORMAL
+    }
+}
+
+/// Reveal the masked main window on the first rendered frame. Drops the alpha-0
+/// flash-guard mask, then performs the single, final show. On Windows the show
+/// is a SetWindowPlacement round-trip of the saved restore rect (authoritative,
+/// no coordinate translation): one WS_VISIBLE off->on transition that both shows
+/// the window and lands it on the monitor of the saved rect — fixing the
+/// wrong-monitor maximize — maximized or not. Falls back to the plain first-show
+/// when there is no usable saved rect.
+pub(super) fn reveal_main_window(window: &winit::window::Window, placement: StartupPlacement) {
+    crate::startup_window::reveal_main_windows();
+    #[cfg(target_os = "windows")]
+    if try_reveal_via_set_placement(window, placement) {
+        return;
+    }
+    if placement.maximized {
         show_maximized_first(window);
     } else {
         window.set_visible(true);
     }
+}
+
+/// Plant the saved restore rect via SetWindowPlacement, returning whether it was
+/// used. The saved `normal_rect_px` round-trips through Set/GetWindowPlacement in
+/// the *same* workspace coordinate space it was captured in — no offset is ever
+/// applied to the rect itself, which is the whole point of storing it verbatim.
+#[cfg(target_os = "windows")]
+fn try_reveal_via_set_placement(
+    window: &winit::window::Window,
+    placement: StartupPlacement,
+) -> bool {
+    use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::{MonitorFromRect, MONITOR_DEFAULTTONULL};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPlacement, WINDOWPLACEMENT};
+
+    let Some(normal_rect) = placement.normal_rect_px else {
+        return false;
+    };
+    let hwnd = match window.window_handle().map(|handle| handle.as_raw()) {
+        Ok(winit::raw_window_handle::RawWindowHandle::Win32(win32)) => win32.hwnd.get() as HWND,
+        _ => return false,
+    };
+
+    // Probe monitor connectivity in *screen* space: rcNormalPosition is in
+    // workspace coordinates, so shift it by the primary work-area origin (the
+    // same deterministic offset the save side uses) ONLY for the probe. The rect
+    // handed to SetWindowPlacement stays verbatim so it round-trips faithfully.
+    let monitor_connected = crate::app::window::primary_work_area_origin()
+        .map(|[ox, oy]| RECT {
+            left: normal_rect[0] + ox,
+            top: normal_rect[1] + oy,
+            right: normal_rect[2] + ox,
+            bottom: normal_rect[3] + oy,
+        })
+        .is_some_and(|screen_rect| unsafe {
+            !MonitorFromRect(&screen_rect, MONITOR_DEFAULTTONULL).is_null()
+        });
+    if plan_reveal(Some(normal_rect), monitor_connected) != RevealPlan::SetPlacement {
+        return false;
+    }
+
+    let mut wp = unsafe { std::mem::zeroed::<WINDOWPLACEMENT>() };
+    wp.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+    wp.flags = 0;
+    wp.showCmd = reveal_show_cmd(placement.maximized) as u32;
+    // (-1, -1) is the documented default for the min/max positions; they only
+    // matter for windows already in the minimized/maximized *style*, which the
+    // restore rect does not depend on.
+    wp.ptMinPosition = POINT { x: -1, y: -1 };
+    wp.ptMaxPosition = POINT { x: -1, y: -1 };
+    wp.rcNormalPosition = RECT {
+        left: normal_rect[0],
+        top: normal_rect[1],
+        right: normal_rect[2],
+        bottom: normal_rect[3],
+    };
+    if unsafe { SetWindowPlacement(hwnd, &wp) } == 0 {
+        return false;
+    }
+
+    // Reconcile winit's internal flags without a further visible transition:
+    // set_visible(true) FIRST so the subsequent set_maximized does not re-hide the
+    // window (winit's set_maximized on a hidden window show-then-hides). The show
+    // and placement already happened via SetWindowPlacement; these only sync
+    // winit's bookkeeping so is_maximized()/the maximize toggle stay correct.
+    window.set_visible(true);
+    window.set_maximized(placement.maximized);
+    true
 }
 
 /// First show == final show, maximized. On Windows this is a single raw
@@ -452,7 +575,8 @@ fn position_probe_on_virtual_screen(position: [i32; 2], screen: ScreenRect) -> b
 #[cfg(test)]
 mod tests {
     use super::{
-        position_probe_on_virtual_screen, select_startup_position, ScreenRect, StartupPosition,
+        plan_reveal, position_probe_on_virtual_screen, select_startup_position, RevealPlan,
+        ScreenRect, StartupPosition,
     };
 
     const SCREEN: ScreenRect = ScreenRect {
@@ -544,27 +668,29 @@ mod tests {
     }
 
     #[test]
-    fn deferred_maximize_follows_saved_flag_independent_of_geometry() {
-        use super::reveal_should_maximize;
-        use crate::core::state::WindowPlacement;
+    fn plan_reveal_uses_saved_rect_only_when_on_a_connected_monitor() {
+        // Saved restore rect that still lands on a monitor -> plant it verbatim.
+        assert_eq!(
+            plan_reveal(Some([0, 0, 1280, 820]), true),
+            RevealPlan::SetPlacement
+        );
+        // Present but off all monitors (e.g. a disconnected display) -> fall back.
+        assert_eq!(
+            plan_reveal(Some([0, 0, 1280, 820]), false),
+            RevealPlan::Fallback
+        );
+        // No saved rect (legacy state / first run) -> fall back regardless.
+        assert_eq!(plan_reveal(None, true), RevealPlan::Fallback);
+    }
 
-        // Saved geometry must not influence the deferred-maximize decision: only
-        // the maximized flag does. This guards the create-time/reveal-time split.
-        let maximized = WindowPlacement {
-            inner_size: Some([1280.0, 820.0]),
-            outer_position: Some([100.0, 120.0]),
-            outer_position_px: Some([150, 180]),
-            maximized: true,
-        };
-        assert!(reveal_should_maximize(&maximized));
-
-        let normal = WindowPlacement {
-            maximized: false,
-            ..maximized.clone()
-        };
-        assert!(!reveal_should_maximize(&normal));
-
-        // Default (first run): not maximized.
-        assert!(!reveal_should_maximize(&WindowPlacement::default()));
+    // The show command follows only the maximized flag (the restore rect decides
+    // *where* the window lands): guards the create-time/reveal-time split that
+    // `deferred_maximize_follows_saved_flag_independent_of_geometry` used to.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn reveal_show_cmd_follows_maximized_flag_independent_of_geometry() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{SW_SHOWMAXIMIZED, SW_SHOWNORMAL};
+        assert_eq!(super::reveal_show_cmd(true), SW_SHOWMAXIMIZED);
+        assert_eq!(super::reveal_show_cmd(false), SW_SHOWNORMAL);
     }
 }

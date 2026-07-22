@@ -34,6 +34,7 @@ fn window_placement_round_trip_keeps_physical_position() {
         inner_size: Some([1280.0, 820.0]),
         outer_position: Some([100.0, 120.0]),
         outer_position_px: Some([150, 180]),
+        normal_rect_px: None,
         maximized: false,
     };
 

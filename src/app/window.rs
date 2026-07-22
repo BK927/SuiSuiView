@@ -36,15 +36,23 @@ impl SuiSuiViewApp {
     }
 
     fn sync_viewport_flags(&mut self, ctx: &egui::Context) {
-        ctx.input(|input| {
+        let (egui_maximized, egui_fullscreen) = ctx.input(|input| {
             let viewport = input.viewport();
-            if let Some(maximized) = viewport.maximized {
-                self.maximized = maximized;
-            }
-            if let Some(fullscreen) = viewport.fullscreen {
-                self.fullscreen = fullscreen;
-            }
+            (viewport.maximized, viewport.fullscreen)
         });
+        if let Some(fullscreen) = egui_fullscreen {
+            self.fullscreen = fullscreen;
+        }
+        // egui/winit reports `viewport.maximized` as `None` on Windows in this
+        // host, so `self.maximized` would desync from the OS — e.g. after a
+        // maximized launch the first ToggleMaximized would send a no-op
+        // Maximized(true) instead of restoring. Fall back to the native Win32
+        // read when egui has no value.
+        if let Some(maximized) = egui_maximized
+            .or_else(|| native_window_state(ctx.pixels_per_point()).map(|state| state.maximized))
+        {
+            self.maximized = maximized;
+        }
     }
 
     fn ensure_window_position_visible(&mut self, ctx: &egui::Context) {
@@ -107,6 +115,14 @@ impl SuiSuiViewApp {
                 )
             });
         let native = native_window_state(ctx.pixels_per_point());
+        // The window is created hidden and revealed only after the first present
+        // (see the winit host). Persisting before the reveal would capture the
+        // still-hidden window and race the reveal's SW_SHOWMAXIMIZED, so gate all
+        // writes until Win32 reports the window visible. Non-Windows: `native` is
+        // `None`, so this never gates.
+        if native.is_some_and(|state| !state.visible) {
+            return None;
+        }
         let is_minimized = minimized == Some(true) || native.is_some_and(|state| state.minimized);
         if is_minimized || fullscreen == Some(true) || self.fullscreen {
             return None;
@@ -119,6 +135,31 @@ impl SuiSuiViewApp {
         placement.maximized = maximized
             .or(native.map(|state| state.maximized))
             .unwrap_or(placement.maximized);
+
+        // Update the restore position from the native (rcNormalPosition-derived)
+        // read *before* the maximized early-return: the restore position stays
+        // valid while maximized, so it must stay saveable. inner_size, by
+        // contrast, is frozen while maximized (handled after the return).
+        let outer_position = outer_rect
+            .map(|rect| rect.min)
+            .or_else(|| native.and_then(|state| state.outer_position_points));
+        if let Some(position) = outer_position {
+            if position.x.is_finite() && position.y.is_finite() {
+                placement.outer_position = Some(round_pos(position));
+            }
+        }
+        // egui reports no physical geometry on Windows, so the scale-free
+        // physical position comes solely from the native Win32 read.
+        if let Some(position_px) = native.and_then(|state| state.outer_position_px) {
+            placement.outer_position_px = Some(position_px);
+        }
+        // The authoritative restore rect, saved verbatim (workspace coordinates,
+        // no translation) for a SetWindowPlacement round-trip at next launch. Like
+        // the position above, it stays valid — and saveable — while maximized.
+        if let Some(rect) = native.map(|state| state.normal_rect_px) {
+            placement.normal_rect_px = Some(rect);
+        }
+
         if placement.maximized {
             return Some(placement);
         }
@@ -133,21 +174,6 @@ impl SuiSuiViewApp {
         {
             self.suspend_dpi_artifact_size_save_if_needed(inner_size, now);
             placement.inner_size = Some(self.inner_size_for_persistence(inner_size, now));
-        }
-
-        let outer_position = outer_rect
-            .map(|rect| rect.min)
-            .or_else(|| native.and_then(|state| state.outer_position_points));
-        if let Some(position) = outer_position {
-            if position.x.is_finite() && position.y.is_finite() {
-                placement.outer_position = Some(round_pos(position));
-            }
-        }
-
-        // egui reports no physical geometry on Windows, so the scale-free
-        // physical position comes solely from the native Win32 read.
-        if let Some(position_px) = native.and_then(|state| state.outer_position_px) {
-            placement.outer_position_px = Some(position_px);
         }
 
         placement.inner_size.map(|_| placement)
@@ -233,6 +259,10 @@ fn round_pos(value: Pos2) -> [f32; 2] {
 struct NativeWindowState {
     minimized: bool,
     maximized: bool,
+    visible: bool,
+    /// Raw `rcNormalPosition` (restore rect) in workspace coordinates, saved
+    /// verbatim for a Set/GetWindowPlacement round-trip. No offset is applied.
+    normal_rect_px: [i32; 4],
     outer_position_points: Option<Pos2>,
     outer_position_px: Option<[i32; 2]>,
 }
@@ -241,12 +271,21 @@ struct NativeWindowState {
 // flags as `None` on Windows here, so the egui-blessed read path cannot observe
 // the window. Read the live state from Win32 instead, reproducing the same
 // logical-point coordinate space egui would have reported (physical / ppp).
+//
+// Uses GetWindowPlacement rather than GetWindowRect + IsZoomed/IsIconic:
+// GetWindowRect returns the *current* rect, so any instant where the window sits
+// at a maximized-sized rect without the WS_MAXIMIZE style (e.g. mid-restore, or
+// pre-reveal) would be persisted as normal geometry — the exact bug that saved
+// the maximized rect as the "normal" placement. GetWindowPlacement exposes the
+// restore rect (`rcNormalPosition`) and the true show state, both valid even
+// while maximized.
 #[cfg(windows)]
 fn native_window_state(ppp: f32) -> Option<NativeWindowState> {
     use std::sync::atomic::{AtomicIsize, Ordering};
-    use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClassNameW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsZoomed,
+        EnumWindows, GetClassNameW, GetWindowPlacement, GetWindowThreadProcessId, IsWindowVisible,
+        SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, WINDOWPLACEMENT,
     };
 
     const MAIN_WINDOW_CLASS: &str = "Window Class";
@@ -285,21 +324,50 @@ fn native_window_state(ppp: f32) -> Option<NativeWindowState> {
         HWND_CACHE.store(hwnd as isize, Ordering::Relaxed);
     }
 
-    let mut rect = unsafe { std::mem::zeroed::<RECT>() };
-    let (outer_position_px, outer_position_points) =
-        if unsafe { GetWindowRect(hwnd, &mut rect) } != 0 {
-            // The physical position is scale-free and stored as-is; the logical
-            // position is only meaningful when the current scale is known.
-            let points = (ppp.is_finite() && ppp > 0.0)
-                .then(|| egui::pos2(rect.left as f32 / ppp, rect.top as f32 / ppp));
-            (Some([rect.left, rect.top]), points)
-        } else {
-            (None, None)
-        };
+    let mut placement = unsafe { std::mem::zeroed::<WINDOWPLACEMENT>() };
+    placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+    if unsafe { GetWindowPlacement(hwnd, &mut placement) } == 0 {
+        return None;
+    }
+    // `showCmd` is u32 in windows-sys; the SW_* constants are i32.
+    let show_cmd = placement.showCmd as i32;
+    let minimized = show_cmd == SW_SHOWMINIMIZED;
+    let maximized = show_cmd == SW_SHOWMAXIMIZED;
+    let visible = unsafe { IsWindowVisible(hwnd) } != 0;
+
+    // The restore rect, saved verbatim in workspace coordinates for a
+    // Set/GetWindowPlacement round-trip on the restore side (no translation).
+    let normal_rect_px = [
+        placement.rcNormalPosition.left,
+        placement.rcNormalPosition.top,
+        placement.rcNormalPosition.right,
+        placement.rcNormalPosition.bottom,
+    ];
+    // Restore-rect origin, in workspace coordinates.
+    let normal = [placement.rcNormalPosition.left, placement.rcNormalPosition.top];
+
+    // `rcNormalPosition` is in *workspace* coordinates, which diverge from screen
+    // coordinates only when an appbar (the taskbar) is docked to the top or left
+    // edge of the primary monitor. The legacy `outer_position*` fields want screen
+    // coordinates, so shift by the primary work-area origin (the definitional
+    // offset). This is only for the legacy/hint fields — `normal_rect_px` above is
+    // the authoritative value and is never translated.
+    //
+    // If the query fails the screen position is unknown, so withhold it and let
+    // the caller keep the stored value; otherwise the offset resolves the restore
+    // position even while maximized — the point of GetWindowPlacement.
+    let outer_position_px = apply_workspace_offset(normal, primary_work_area_origin());
+    // The physical position is scale-free and stored as-is; the logical position
+    // is only meaningful when the current scale is known.
+    let outer_position_points = outer_position_px.and_then(|[x, y]| {
+        (ppp.is_finite() && ppp > 0.0).then(|| egui::pos2(x as f32 / ppp, y as f32 / ppp))
+    });
 
     Some(NativeWindowState {
-        minimized: unsafe { IsIconic(hwnd) } != 0,
-        maximized: unsafe { IsZoomed(hwnd) } != 0,
+        minimized,
+        maximized,
+        visible,
+        normal_rect_px,
         outer_position_points,
         outer_position_px,
     })
@@ -308,6 +376,49 @@ fn native_window_state(ppp: f32) -> Option<NativeWindowState> {
 #[cfg(not(windows))]
 fn native_window_state(_ppp: f32) -> Option<NativeWindowState> {
     None
+}
+
+/// The primary monitor's work-area origin (top-left) — the deterministic offset
+/// between workspace and screen coordinates. `None` when the query fails.
+///
+/// Shared by the save side (translating the legacy `outer_position*` hint fields)
+/// and the restore side (probing whether a saved restore rect still lands on a
+/// connected monitor). An earlier save-side version learned this offset
+/// empirically from `GetWindowRect - rcNormalPosition` while showCmd was
+/// SW_SHOWNORMAL; that was unsound — Aero Snap (drag-to-edge, Win+Arrow, vertical
+/// maximize) and mid-drag mixed-DPI storms hold showCmd at SW_SHOWNORMAL while
+/// GetWindowRect (the snapped/current rect) diverges from rcNormalPosition (the
+/// pre-snap restore rect), poisoning the cached offset. The work-area origin is
+/// the definitional value and needs no such heuristic.
+#[cfg(windows)]
+pub(in crate::app) fn primary_work_area_origin() -> Option<[i32; 2]> {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWORKAREA};
+
+    let mut work_area = unsafe { std::mem::zeroed::<RECT>() };
+    (unsafe {
+        SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            &mut work_area as *mut RECT as *mut core::ffi::c_void,
+            0,
+        )
+    } != 0)
+        .then_some([work_area.left, work_area.top])
+}
+
+#[cfg(not(windows))]
+pub(in crate::app) fn primary_work_area_origin() -> Option<[i32; 2]> {
+    None
+}
+
+/// Apply the workspace->screen offset (the primary monitor's work-area origin)
+/// to a restore-rect origin. `offset` is `None` only when the work-area query
+/// failed; with no offset the screen position is unknown and callers keep the
+/// stored value.
+fn apply_workspace_offset(normal_top_left: [i32; 2], offset: Option<[i32; 2]>) -> Option<[i32; 2]> {
+    let [ox, oy] = offset?;
+    Some([normal_top_left[0] + ox, normal_top_left[1] + oy])
 }
 
 fn take_startup_reveal_request(pending: &mut bool) -> bool {
@@ -403,8 +514,8 @@ fn clamped_window_position(outer_rect: Rect, monitor_size: Vec2) -> Option<Pos2>
 #[cfg(test)]
 mod tests {
     use super::{
-        clamped_window_position, looks_like_dpi_size_artifact, persistent_inner_size,
-        scale_changed, size_close_to, take_startup_reveal_request,
+        apply_workspace_offset, clamped_window_position, looks_like_dpi_size_artifact,
+        persistent_inner_size, scale_changed, size_close_to, take_startup_reveal_request,
     };
     use egui::{pos2, vec2, Rect};
 
@@ -498,6 +609,25 @@ mod tests {
             [1280.0, 820.0],
             vec2(1275.0, 817.0)
         ));
+    }
+
+    #[test]
+    fn workspace_offset_shifts_restore_origin_by_work_area_origin() {
+        // Bottom/right taskbar: work-area origin (0, 0) leaves the origin as-is.
+        assert_eq!(
+            apply_workspace_offset([120, 90], Some([0, 0])),
+            Some([120, 90])
+        );
+        // Top-docked taskbar: work-area origin (0, 48) shifts into screen space.
+        assert_eq!(
+            apply_workspace_offset([0, 0], Some([0, 48])),
+            Some([0, 48])
+        );
+    }
+
+    #[test]
+    fn workspace_offset_withheld_when_work_area_query_fails() {
+        assert_eq!(apply_workspace_offset([120, 90], None), None);
     }
 
     #[test]
