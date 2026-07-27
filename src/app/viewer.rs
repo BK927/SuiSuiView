@@ -870,13 +870,28 @@ impl SuiSuiViewApp {
         ctx.request_repaint_after(WGPU_PRESENT_CONFIRM_REPAINT_DELAY);
     }
 
+    /// Record what this frame actually drew for the current page (the top bar's
+    /// scaler chip reads it). Transition frames are skipped: a page-turn animates
+    /// the incoming page's geometry (BookFlip2d squeezes x to 0.92), and the scale
+    /// plan resolves from that geometry — so a page needing only a little over the
+    /// fixed-2x minimum scale substitutes for those frames and the chip flickers
+    /// away from the model and back. The settled state simply stays until the
+    /// transition drops (it always does, past `TRANSITION_MS` in `show_viewer`).
     fn record_current_view_state(&mut self, state: CurrentViewState) {
+        if self.transition.is_some() {
+            return;
+        }
         if state.page_index == self.current_page {
             self.current_view_state = Some(state);
         }
     }
 
     fn clear_current_view_state_for(&mut self, index: usize) {
+        // Held across a transition for the same reason as `record_current_view_state`;
+        // a page that stays unpaintable clears on the first settled frame.
+        if self.transition.is_some() {
+            return;
+        }
         if index == self.current_page {
             self.current_view_state = None;
         }
