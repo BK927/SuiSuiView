@@ -403,10 +403,12 @@ impl winit::application::ApplicationHandler<()> for WinitHostApp {
             Some(Stage::Wgpu { window, .. }) => Some(window),
             None => None,
         };
-        let live = window.map(window_live_state).unwrap_or(dpi_guard::WindowLiveState {
-            visible: true,
-            maximized: false,
-        });
+        let live = window
+            .map(window_live_state)
+            .unwrap_or(dpi_guard::WindowLiveState {
+                visible: true,
+                maximized: false,
+            });
         // Non-consuming: the event still flows to egui below (see the method doc).
         if let Some((w, h)) = self.dpi_size_guard.defend_scale_change(&mut event, live) {
             // A stale DPI suggested rect was applied as a plain Resized with no
@@ -501,8 +503,8 @@ fn elapsed_ms(duration: Duration) -> f64 {
 /// while the window is still hidden that lands post-reveal.
 #[cfg(target_os = "windows")]
 fn window_live_state(window: &winit::window::Window) -> dpi_guard::WindowLiveState {
-    use winit::raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
     use windows_sys::Win32::UI::WindowsAndMessaging::{IsWindowVisible, IsZoomed};
+    use winit::raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
 
     let Ok(RawWindowHandle::Win32(win32)) = window.window_handle().map(|handle| handle.as_raw())
     else {

@@ -443,10 +443,15 @@ mod tests {
         // non-maximized deviating resize is still corrected to the ORIGINAL size.
         let now = Instant::now();
         let (mut guard, confirmed) = seeded(1.5, now);
-        guard.on_scale_change(1.25, confirmed, VISIBLE); // opens the storm window
+        // Opens the storm window.
+        guard.on_scale_change(1.25, confirmed, VISIBLE);
         // The maximized Resized (huge, deviating) is ignored, not corrected.
         assert_eq!(
-            guard.observe_resize((1458, 2518), confirmed + Duration::from_millis(5), MAXIMIZED),
+            guard.observe_resize(
+                (1458, 2518),
+                confirmed + Duration::from_millis(5),
+                MAXIMIZED
+            ),
             None
         );
         // stable_logical is untouched: a non-maximized deviating resize inside the
@@ -463,9 +468,13 @@ mod tests {
         // or stable — otherwise a later scale change would request the maximized
         // size. The pre-maximize stable size is what a later transition uses.
         let t0 = Instant::now();
-        let (mut guard, confirmed) = seeded(1.5, t0); // stable = 860x691 @1.5
+        // Seeded stable = 860x691 @1.5.
+        let (mut guard, confirmed) = seeded(1.5, t0);
         // Maximized calm resize (huge): ignored, does not become pending/stable.
-        assert_eq!(guard.observe_resize((1458, 2518), confirmed, MAXIMIZED), None);
+        assert_eq!(
+            guard.observe_resize((1458, 2518), confirmed, MAXIMIZED),
+            None
+        );
         // A later scale change still requests the PRE-maximize stable size.
         assert_eq!(
             guard.on_scale_change(1.25, confirmed + Duration::from_secs(1), VISIBLE),
@@ -499,7 +508,8 @@ mod tests {
         // seeded stable size intact: once visible, corrections use it again.
         let now = Instant::now();
         let (mut guard, confirmed) = seeded(1.5, now);
-        guard.on_scale_change(1.25, confirmed, HIDDEN); // storm opens while hidden
+        // Storm opens while hidden.
+        guard.on_scale_change(1.25, confirmed, HIDDEN);
         // Hidden deviating Resized: no correction emitted.
         assert_eq!(
             guard.observe_resize((1425, 1230), confirmed + Duration::from_millis(5), HIDDEN),
@@ -519,7 +529,8 @@ mod tests {
         // become pending/stable, so a later visible scale change still requests
         // the seeded pre-hidden-churn size, not the churned one.
         let t0 = Instant::now();
-        let (mut guard, confirmed) = seeded(1.5, t0); // stable = 860x691 @1.5
+        // Seeded stable = 860x691 @1.5.
+        let (mut guard, confirmed) = seeded(1.5, t0);
         // Hidden calm resize (different size): ignored, not learned.
         assert_eq!(guard.observe_resize((1520, 840), confirmed, HIDDEN), None);
         // A later visible scale change still requests the seeded stable size.

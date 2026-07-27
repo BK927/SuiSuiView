@@ -352,7 +352,10 @@ fn native_window_state(ppp: f32) -> Option<NativeWindowState> {
         placement.rcNormalPosition.bottom,
     ];
     // Restore-rect origin, in workspace coordinates.
-    let normal = [placement.rcNormalPosition.left, placement.rcNormalPosition.top];
+    let normal = [
+        placement.rcNormalPosition.left,
+        placement.rcNormalPosition.top,
+    ];
 
     // `rcNormalPosition` is in *workspace* coordinates, which diverge from screen
     // coordinates only when an appbar (the taskbar) is docked to the top or left
@@ -627,10 +630,7 @@ mod tests {
             Some([120, 90])
         );
         // Top-docked taskbar: work-area origin (0, 48) shifts into screen space.
-        assert_eq!(
-            apply_workspace_offset([0, 0], Some([0, 48])),
-            Some([0, 48])
-        );
+        assert_eq!(apply_workspace_offset([0, 0], Some([0, 48])), Some([0, 48]));
     }
 
     #[test]
