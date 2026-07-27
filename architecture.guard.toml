@@ -145,6 +145,22 @@ remediation = [
   "Keep new stage-specific code in the matching submodule (glow_stage.rs, wgpu_stage.rs, or title_sync.rs) rather than the host root."
 ]
 
+[[files]]
+path = "src/app/viewer.rs"
+kind = "legacy-large"
+# Registered as a ratchet rather than split: the file is one frame of the paged
+# viewer, and its remaining pieces are welded to SuiSuiViewApp. page_visual alone
+# touches 18 distinct members, so moving it out buys no encapsulation — only a
+# second impl block reaching into the same state from another file. Spread math,
+# pointer handling, transitions, and the strip already live in submodules.
+baseline_lines = 914
+growth_warn_lines = 80
+growth_fail_lines = 160
+purpose = "Paged viewer frame: show_viewer entry, spread paint, page-visual resolution, and the settled-view bookkeeping. Spread math is in model.rs, pointer handling in interaction.rs, page-turn animation in transition.rs, and continuous scroll in strip/."
+remediation = [
+  "The one real seam is resolve-vs-paint: page_visual + original_texture_only_visual (cache lookup, texture upload, GPU/CPU branch) never touch a Painter, and both paint_spread and strip/view.rs call them. Extract to viewer/visual.rs only if that pair grows its own policy — a move alone trades adjacency for nothing."
+]
+
 [[routing]]
 name = "App commands and shortcuts"
 avoid_paths = ["src/app.rs"]
