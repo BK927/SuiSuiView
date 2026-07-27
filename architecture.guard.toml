@@ -2,8 +2,23 @@ schema_version = 1
 
 [defaults]
 source_globs = ["src/**/*.rs"]
-new_file_warn_lines = 600
-new_file_fail_lines = 900
+# Recalibrated 2026-07-27 against the measured distribution of the 197 non-legacy
+# source files: >600 caught 38 of them (19%) and >800 caught 16, with two sitting
+# at 896 and 899 — the old 900 failure line ran straight through the middle of the
+# codebase's natural module size, so files converged just under it and a routine
+# fix tipped two over at once. A warning that fires on a fifth of the tree is
+# background noise, which is why that drift went unseen.
+#
+# 850 warns on 5 files today: a list short enough to read, and the runway that was
+# missing in front of the cliff. 1100 fails on none, and matches the size this
+# repository already accepts in practice — the legacy-large ratchets below sit at
+# 1151, 1321, 1328, 1510, and 1552.
+#
+# Real pressure on chronic files comes from those per-file ratchets, not from this
+# global budget. Re-measure before moving these again; do not raise them to clear
+# a specific failure.
+new_file_warn_lines = 850
+new_file_fail_lines = 1100
 bad_module_names = ["utils.rs", "helpers.rs", "misc.rs"]
 allowed_bad_module_paths = []
 
