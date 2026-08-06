@@ -104,6 +104,38 @@ impl SuiSuiViewApp {
         }
     }
 
+    /// "Force one-page move": step by exactly one page and, in Smart two-page
+    /// mode, re-phase the pairing grid so the page stepped onto becomes the left
+    /// page of the spread.
+    ///
+    /// Smart mode pairs from a fixed grid, so moving `current_page` alone left
+    /// the same two pages on screen and the command read as a no-op — there was
+    /// no way to re-phase a book whose single cover shifts every later spread.
+    /// The other modes have no grid to fight, so they just move.
+    pub(in crate::app) fn force_move_pages(&mut self, delta: isize) {
+        if self.view_mode.is_smart() {
+            let Some(source) = self.source.as_ref() else {
+                return;
+            };
+            let max_page = source.page_count().saturating_sub(1);
+            let target = if delta.is_negative() {
+                self.current_page.saturating_sub(delta.unsigned_abs())
+            } else {
+                self.current_page.saturating_add(delta as usize)
+            };
+            if target > max_page {
+                self.handle_edge_page(NavigationDirection::Forward);
+                return;
+            }
+            if target == self.current_page {
+                return;
+            }
+            self.smart_spread_phase = (target % 2) as u8;
+            self.persist_reading_position();
+        }
+        self.move_pages(delta);
+    }
+
     pub(in crate::app) fn move_pages(&mut self, delta: isize) {
         let Some(source) = self.source.as_ref() else {
             return;
@@ -383,7 +415,7 @@ impl SuiSuiViewApp {
             return;
         };
         self.worker.set_page(
-            worker_center_page_for_mode(pending.target, self.view_mode),
+            worker_center_page_for_mode(pending.target, self.view_mode, self.smart_spread_phase),
             pending.direction,
             self.target_long_edge,
             self.queued_worker_visible_page_count(),

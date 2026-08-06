@@ -275,6 +275,10 @@ pub struct SuiSuiViewApp {
     /// renderer and a kernel filter is routed; latches `failed` on broken drivers.
     glow_scale: Arc<Mutex<GlowScaleState>>,
     last_nav_direction: NavigationDirection,
+    /// Which index the Smart two-page pairing grid starts on (0 or 1). A book
+    /// whose cover is a single page needs 1, so its interior spreads pair up the
+    /// way they were drawn. `ForceMovePages` sets it; persisted per book.
+    smart_spread_phase: u8,
     transition: Option<Transition>,
     pending_page_turn: Option<PendingPageTurn>,
     queued_page_turns: Option<QueuedPageTurns>,
@@ -440,6 +444,7 @@ impl SuiSuiViewApp {
             gpu_target_format: None,
             glow_scale: Arc::new(Mutex::new(GlowScaleState::new())),
             last_nav_direction: NavigationDirection::Forward,
+            smart_spread_phase: 0,
             transition: None,
             pending_page_turn: None,
             queued_page_turns: None,
@@ -566,6 +571,7 @@ impl SuiSuiViewApp {
             manual_zoom: self.current_bookmark_manual_zoom(),
             view_mode: Some(self.view_mode.token()),
             strip_offset_frac,
+            smart_spread_phase: self.smart_spread_phase,
         });
         self.bookmark_rows.clear();
         self.pending_state_save_at = None;
@@ -592,6 +598,7 @@ impl SuiSuiViewApp {
             manual_zoom: self.current_bookmark_manual_zoom(),
             view_mode: Some(self.view_mode.token()),
             strip_offset_frac,
+            smart_spread_phase: self.smart_spread_phase,
         });
         if changed {
             self.bookmark_rows.clear();
@@ -955,7 +962,7 @@ impl SuiSuiViewApp {
             AppCommand::NextPage => self.next_page(),
             AppCommand::PreviousPage => self.previous_page(),
             AppCommand::MovePages(delta) => self.move_pages(delta),
-            AppCommand::ForceMovePages(delta) => self.move_pages(delta),
+            AppCommand::ForceMovePages(delta) => self.force_move_pages(delta),
             AppCommand::Home => self.set_page(0, NavigationDirection::Backward),
             AppCommand::End => {
                 if let Some(source) = self.source.as_ref() {
@@ -1409,9 +1416,9 @@ mod tests {
         .collect();
         let at = |index: usize| metrics.get(&index).copied();
 
-        assert_eq!(smart_spread_indices_for_metrics(0, 4, at), vec![0, 1]);
-        assert_eq!(smart_spread_indices_for_metrics(1, 4, at), vec![0, 1]);
-        assert_eq!(smart_spread_indices_for_metrics(2, 4, at), vec![2, 3]);
+        assert_eq!(smart_spread_indices_for_metrics(0, 4, 0, at), vec![0, 1]);
+        assert_eq!(smart_spread_indices_for_metrics(1, 4, 0, at), vec![0, 1]);
+        assert_eq!(smart_spread_indices_for_metrics(2, 4, 0, at), vec![2, 3]);
     }
 
     #[test]
@@ -1428,12 +1435,12 @@ mod tests {
         .collect();
         let at = |index: usize| metrics.get(&index).copied();
 
-        assert_eq!(smart_spread_indices_for_metrics(0, 6, at), vec![0]);
-        assert_eq!(smart_spread_indices_for_metrics(1, 6, at), vec![1]);
-        assert_eq!(smart_spread_indices_for_metrics(2, 6, at), vec![2]);
-        assert_eq!(smart_spread_indices_for_metrics(3, 6, at), vec![3]);
-        assert_eq!(smart_spread_indices_for_metrics(4, 6, at), vec![4]);
-        assert_eq!(smart_spread_indices_for_metrics(5, 6, at), vec![5]);
+        assert_eq!(smart_spread_indices_for_metrics(0, 6, 0, at), vec![0]);
+        assert_eq!(smart_spread_indices_for_metrics(1, 6, 0, at), vec![1]);
+        assert_eq!(smart_spread_indices_for_metrics(2, 6, 0, at), vec![2]);
+        assert_eq!(smart_spread_indices_for_metrics(3, 6, 0, at), vec![3]);
+        assert_eq!(smart_spread_indices_for_metrics(4, 6, 0, at), vec![4]);
+        assert_eq!(smart_spread_indices_for_metrics(5, 6, 0, at), vec![5]);
     }
 
     #[test]
@@ -1442,8 +1449,8 @@ mod tests {
             [(0, page_metrics(900.0, 1400.0))].into_iter().collect();
         let at = |index: usize| metrics.get(&index).copied();
 
-        assert_eq!(smart_spread_indices_for_metrics(0, 2, at), vec![0]);
-        assert_eq!(smart_spread_indices_for_metrics(1, 2, at), vec![1]);
+        assert_eq!(smart_spread_indices_for_metrics(0, 2, 0, at), vec![0]);
+        assert_eq!(smart_spread_indices_for_metrics(1, 2, 0, at), vec![1]);
     }
 
     #[test]
@@ -1471,15 +1478,15 @@ mod tests {
     #[test]
     fn smart_spread_worker_request_starts_from_pair_anchor() {
         assert_eq!(
-            worker_center_page_for_mode(3, ViewMode::SmartDoubleLeftToRight),
+            worker_center_page_for_mode(3, ViewMode::SmartDoubleLeftToRight, 0),
             2
         );
         assert_eq!(
-            worker_center_page_for_mode(3, ViewMode::DoubleLeftToRight),
+            worker_center_page_for_mode(3, ViewMode::DoubleLeftToRight, 0),
             3
         );
         assert_eq!(
-            worker_center_page_for_mode(0, ViewMode::SmartDoubleRightToLeft),
+            worker_center_page_for_mode(0, ViewMode::SmartDoubleRightToLeft, 0),
             0
         );
     }

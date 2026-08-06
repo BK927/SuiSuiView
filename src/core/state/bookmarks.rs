@@ -24,6 +24,10 @@ pub struct BookRecord {
     /// paged modes.
     #[serde(default)]
     pub strip_offset_frac: Option<f32>,
+    /// Which index the Smart two-page pairing grid starts on (0 or 1); 0 on
+    /// legacy records, which is the behavior they were saved with.
+    #[serde(default)]
+    pub smart_spread_phase: u8,
     #[serde(default)]
     pub path_positions: BTreeMap<String, ReadingPosition>,
     #[serde(default)]
@@ -60,6 +64,8 @@ pub struct ReadingPosition {
     pub view_mode: Option<String>,
     #[serde(default)]
     pub strip_offset_frac: Option<f32>,
+    #[serde(default)]
+    pub smart_spread_phase: u8,
     pub updated_at: u64,
 }
 
@@ -73,6 +79,7 @@ impl ReadingPosition {
             manual_zoom: input.manual_zoom,
             view_mode: input.view_mode.map(ToOwned::to_owned),
             strip_offset_frac: input.strip_offset_frac,
+            smart_spread_phase: input.smart_spread_phase,
             updated_at: now,
         }
     }
@@ -86,6 +93,7 @@ impl ReadingPosition {
             manual_zoom: record.manual_zoom,
             view_mode: record.view_mode.clone(),
             strip_offset_frac: record.strip_offset_frac,
+            smart_spread_phase: record.smart_spread_phase,
             updated_at: record.updated_at,
         }
     }
@@ -98,6 +106,7 @@ impl ReadingPosition {
             && self.manual_zoom == input.manual_zoom
             && self.view_mode.as_deref() == input.view_mode
             && self.strip_offset_frac == input.strip_offset_frac
+            && self.smart_spread_phase == input.smart_spread_phase
     }
 }
 
@@ -113,6 +122,7 @@ pub struct BookRecordInput<'a> {
     pub manual_zoom: Option<f32>,
     pub view_mode: Option<&'a str>,
     pub strip_offset_frac: Option<f32>,
+    pub smart_spread_phase: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

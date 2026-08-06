@@ -157,16 +157,39 @@ pub(in crate::app) fn double_spread_indices(page: usize, page_count: usize) -> V
     indices
 }
 
+/// Left page of the spread `page` belongs to, for a pairing grid shifted by
+/// `phase` (0 or 1).
+///
+/// Smart mode pairs from a fixed grid so a spread stays the same two pages
+/// however you arrive at it. `phase` is which index the grid starts on: 0 pairs
+/// (0,1), (2,3)…; 1 leaves page 0 alone and pairs (1,2), (3,4)…, which is what a
+/// book with a single cover page needs. Without it the grid is welded to even
+/// indices and a cover-shifted book can never be re-phased — the reason
+/// `ForceMovePages` looked like a no-op.
+pub(in crate::app) fn smart_spread_anchor(page: usize, phase: u8) -> usize {
+    let phase = usize::from(phase.min(1));
+    if page < phase {
+        return page;
+    }
+    phase + (page - phase) / 2 * 2
+}
+
 pub(in crate::app) fn smart_spread_indices_for_metrics(
     page: usize,
     page_count: usize,
+    phase: u8,
     metrics_at: impl Fn(usize) -> Option<PageMetrics>,
 ) -> Vec<usize> {
     if page_count == 0 {
         return Vec::new();
     }
     let page = page.min(page_count - 1);
-    let anchor = page - (page % 2);
+    // Pages ahead of the grid's start are the lone cover the phase exists for;
+    // they must not pair forward or phase 1 would just be phase 0 again.
+    if page < usize::from(phase.min(1)) {
+        return vec![page];
+    }
+    let anchor = smart_spread_anchor(page, phase);
     let Some(next) = anchor.checked_add(1).filter(|next| *next < page_count) else {
         return vec![page];
     };
@@ -188,9 +211,15 @@ pub(in crate::app) fn relative_difference(left: f32, right: f32) -> f32 {
     (left - right).abs() / base
 }
 
-pub(in crate::app) fn worker_center_page_for_mode(current_page: usize, mode: ViewMode) -> usize {
+pub(in crate::app) fn worker_center_page_for_mode(
+    current_page: usize,
+    mode: ViewMode,
+    phase: u8,
+) -> usize {
     if mode.is_smart() {
-        current_page - (current_page % 2)
+        // Must use the same grid as `smart_spread_indices_for_metrics`, or the
+        // worker centres its prefetch on a page the viewer is not showing.
+        smart_spread_anchor(current_page, phase)
     } else {
         current_page
     }
@@ -474,8 +503,67 @@ pub(super) fn refine_render_idle(
 
 #[cfg(test)]
 mod tests {
-    use super::{refine_render_idle, ViewMode};
+    use super::{
+        refine_render_idle, smart_spread_anchor, smart_spread_indices_for_metrics,
+        worker_center_page_for_mode, PageMetrics, ViewMode,
+    };
     use crate::core::state::ReadingDirection;
+
+    fn uniform_metrics(_index: usize) -> Option<PageMetrics> {
+        Some(PageMetrics {
+            width: 900.0,
+            height: 1400.0,
+        })
+    }
+
+    #[test]
+    fn smart_spread_phase_one_leaves_the_cover_alone_and_shifts_every_pair() {
+        // Phase 1 is the single-cover book: page 0 stands alone, then pairs.
+        assert_eq!(
+            smart_spread_indices_for_metrics(0, 6, 1, uniform_metrics),
+            vec![0]
+        );
+        assert_eq!(
+            smart_spread_indices_for_metrics(1, 6, 1, uniform_metrics),
+            vec![1, 2]
+        );
+        assert_eq!(
+            smart_spread_indices_for_metrics(2, 6, 1, uniform_metrics),
+            vec![1, 2]
+        );
+        assert_eq!(
+            smart_spread_indices_for_metrics(3, 6, 1, uniform_metrics),
+            vec![3, 4]
+        );
+        // Phase 0 is the legacy grid, unchanged.
+        assert_eq!(
+            smart_spread_indices_for_metrics(0, 6, 0, uniform_metrics),
+            vec![0, 1]
+        );
+        assert_eq!(
+            smart_spread_indices_for_metrics(2, 6, 0, uniform_metrics),
+            vec![2, 3]
+        );
+    }
+
+    #[test]
+    fn smart_spread_anchor_matches_the_worker_centre_for_both_phases() {
+        // The viewer's spread and the worker's prefetch centre must agree, or the
+        // worker warms pages the reader is not looking at.
+        for phase in [0u8, 1] {
+            for page in 0..8usize {
+                assert_eq!(
+                    smart_spread_anchor(page, phase),
+                    worker_center_page_for_mode(page, ViewMode::SmartDoubleLeftToRight, phase),
+                    "phase {phase}, page {page}"
+                );
+            }
+        }
+        assert_eq!(smart_spread_anchor(0, 1), 0);
+        assert_eq!(smart_spread_anchor(1, 1), 1);
+        assert_eq!(smart_spread_anchor(2, 1), 1);
+        assert_eq!(smart_spread_anchor(4, 1), 3);
+    }
 
     #[test]
     fn refine_is_idle_only_when_every_signal_is_clear() {

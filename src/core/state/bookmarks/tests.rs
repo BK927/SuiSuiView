@@ -96,6 +96,7 @@ fn page_bookmarks_add_and_remove() {
         manual_zoom: None,
         view_mode: None,
         strip_offset_frac: None,
+        smart_spread_phase: 0,
     });
 
     let source_path = Path::new("C:/books/book-1");
@@ -144,6 +145,7 @@ fn page_bookmarks_are_scoped_by_source_path() {
         manual_zoom: None,
         view_mode: None,
         strip_offset_frac: None,
+        smart_spread_phase: 0,
     });
 
     let first = Path::new("C:/books/first/book.cbz");
@@ -177,6 +179,7 @@ fn reading_position_can_use_identity_or_exact_path() {
         manual_zoom: None,
         view_mode: None,
         strip_offset_frac: None,
+        smart_spread_phase: 0,
     });
     store.upsert_book_record(BookRecordInput {
         book_id: "book-1",
@@ -190,6 +193,7 @@ fn reading_position_can_use_identity_or_exact_path() {
         manual_zoom: Some(1.5),
         view_mode: None,
         strip_offset_frac: None,
+        smart_spread_phase: 0,
     });
 
     let original = store
@@ -226,6 +230,7 @@ fn all_page_bookmarks_and_clear_all_keep_book_records() {
             manual_zoom: None,
             view_mode: None,
             strip_offset_frac: None,
+            smart_spread_phase: 0,
         });
     }
     store.upsert_page_bookmark(
@@ -341,6 +346,7 @@ fn book_records_persist_across_store_instances() {
         manual_zoom: None,
         view_mode: None,
         strip_offset_frac: None,
+        smart_spread_phase: 0,
     });
 
     let reopened = store_at(&base);
@@ -367,6 +373,7 @@ fn deferred_write_is_flushed_when_switching_books() {
         manual_zoom: None,
         view_mode: None,
         strip_offset_frac: None,
+        smart_spread_phase: 0,
     });
     assert!(changed);
 
@@ -383,6 +390,7 @@ fn deferred_write_is_flushed_when_switching_books() {
         manual_zoom: None,
         view_mode: None,
         strip_offset_frac: None,
+        smart_spread_phase: 0,
     });
 
     let reopened = store_at(&base);
@@ -483,6 +491,7 @@ fn smoke_real_folder_book_resume_round_trip() {
         manual_zoom: None,
         view_mode: None,
         strip_offset_frac: None,
+        smart_spread_phase: 0,
     });
     let reopened = store_at(&store_dir);
     assert_eq!(
@@ -526,6 +535,7 @@ fn smoke_real_zip_book_resume_round_trip() {
         manual_zoom: None,
         view_mode: None,
         strip_offset_frac: None,
+        smart_spread_phase: 0,
     });
 
     // Reopening the same archive from a fresh store restores the page (by name).

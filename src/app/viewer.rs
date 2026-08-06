@@ -149,7 +149,9 @@ impl SuiSuiViewApp {
         page: usize,
         page_count: usize,
     ) -> Vec<usize> {
-        smart_spread_indices_for_metrics(page, page_count, |index| self.page_metrics_at(index))
+        smart_spread_indices_for_metrics(page, page_count, self.smart_spread_phase, |index| {
+            self.page_metrics_at(index)
+        })
     }
 
     /// Metrics for the page currently at `index`, resolved through the page's
@@ -181,7 +183,7 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn worker_center_page(&self) -> usize {
-        worker_center_page_for_mode(self.current_page, self.view_mode)
+        worker_center_page_for_mode(self.current_page, self.view_mode, self.smart_spread_phase)
     }
 
     fn page_visual(

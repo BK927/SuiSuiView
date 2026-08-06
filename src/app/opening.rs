@@ -72,6 +72,9 @@ struct ResolvedOpenView {
     reading_direction: ReadingDirection,
     fit_mode: FitMode,
     manual_zoom: f32,
+    /// Smart two-page pairing grid offset (0 or 1). Books without a record start
+    /// at 0, the grid every build before this one used.
+    smart_spread_phase: u8,
     /// Persisted/inherited view mode, or `None` for legacy records with no
     /// token and no fallback — the caller then keeps today's session behavior.
     view_mode: Option<ViewMode>,
@@ -529,6 +532,7 @@ impl SuiSuiViewApp {
         self.reading_direction = resolved_view.reading_direction;
         self.fit_mode = resolved_view.fit_mode;
         self.manual_zoom = resolved_view.manual_zoom;
+        self.smart_spread_phase = resolved_view.smart_spread_phase;
         match resolved_view.view_mode {
             // A persisted/inherited mode enters via the open-path helper (fit
             // forcing without the worker/persist side effects of set_view_mode).
@@ -786,6 +790,7 @@ fn resolve_open_view(
         Some(position) => ResolvedOpenView {
             reading_direction: position.reading_direction,
             fit_mode: position.fit_mode,
+            smart_spread_phase: position.smart_spread_phase.min(1),
             manual_zoom: if remember_zoom_per_book {
                 position.manual_zoom.unwrap_or(1.0)
             } else {
@@ -799,6 +804,7 @@ fn resolve_open_view(
                 reading_direction: ReadingDirection::default(),
                 fit_mode: FitMode::default(),
                 manual_zoom: 1.0,
+                smart_spread_phase: 0,
                 view_mode: None,
                 strip_offset_frac: None,
             },
@@ -806,6 +812,9 @@ fn resolve_open_view(
                 reading_direction: fallback.reading_direction,
                 fit_mode: fallback.fit_mode,
                 manual_zoom: fallback.manual_zoom,
+                // A sibling book starts on the default grid: the phase describes
+                // one book's own cover structure, not the series'.
+                smart_spread_phase: 0,
                 // A sibling book without its own record inherits the current
                 // mode explicitly (matches the implicit session-field behavior).
                 view_mode: Some(fallback.view_mode),

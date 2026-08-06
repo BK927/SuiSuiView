@@ -97,6 +97,7 @@ fn saved_reading_position_wins_over_sibling_view_fallback() {
         manual_zoom: Some(1.25),
         view_mode: None,
         strip_offset_frac: None,
+        smart_spread_phase: 0,
         updated_at: 10,
     };
 
@@ -139,6 +140,7 @@ fn saved_vertical_strip_position_resolves_mode_and_offset() {
         manual_zoom: None,
         view_mode: Some("vertical_strip".to_owned()),
         strip_offset_frac: Some(0.42),
+        smart_spread_phase: 0,
         updated_at: 7,
     };
 
@@ -211,6 +213,7 @@ fn reading_position(last_page: usize, last_page_name: Option<&str>) -> ReadingPo
         manual_zoom: None,
         view_mode: None,
         strip_offset_frac: None,
+        smart_spread_phase: 0,
         updated_at: 0,
     }
 }
