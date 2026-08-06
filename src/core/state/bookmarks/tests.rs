@@ -2,6 +2,7 @@ use super::super::{
     AppSettings, BookRecordInput, FitMode, PersistedState, ReadingDirection, StateStore,
 };
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -579,14 +580,22 @@ fn write_test_zip(path: &Path, page_names: &[&str]) {
     zip.finish().expect("zip finish");
 }
 
+/// A books directory no other test can be looking at. `cargo test` runs the lib
+/// and bin targets as separate processes at the same time, and both compile
+/// `core`, so the same test name runs twice concurrently. The Windows system
+/// clock advances in ~15 ms steps, so a timestamp alone can collide — and tests
+/// that scan the whole directory (`load_all_book_records`) then see each other's
+/// records. Process id plus a per-process counter makes the name unique.
 fn unique_base(name: &str) -> std::path::PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
+    let seq = NEXT.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir()
         .join("suisuiview-tests")
-        .join(format!("{name}-{stamp}"))
+        .join(format!("{name}-{stamp}-{}-{seq}", std::process::id()))
 }
 
 fn store_at(base: &Path) -> StateStore {
