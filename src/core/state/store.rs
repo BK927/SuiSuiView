@@ -210,7 +210,12 @@ impl StateStore {
                 .insert(path_text.clone(), ReadingPosition::from_input(&input, now));
         }
 
-        if !record.known_paths.iter().any(|known| known == &path_text) {
+        // "Remember recent locations" used to hide the list while still writing
+        // every path to disk, so unchecking it stopped nothing and re-checking it
+        // brought the whole history back. Honour it at the point of recording.
+        if self.state.settings.remember_recent_locations
+            && !record.known_paths.iter().any(|known| known == &path_text)
+        {
             record.known_paths.push(path_text);
             changed = true;
         }
