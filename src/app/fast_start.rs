@@ -236,7 +236,7 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn dismiss_fast_start_failure_notice(&mut self) {
+    pub(in crate::app) fn dismiss_fast_start_failure_notice(&mut self) {
         if let Some(notice) = self.fast_start_failure_notice.as_mut() {
             notice.shown = true;
         }

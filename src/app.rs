@@ -907,6 +907,22 @@ impl SuiSuiViewApp {
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
+        // The fast-start failure report blocks the pointer, so it must block the
+        // keyboard too: Escape used to fall through to the Quit binding and take
+        // the app down, and because the notice was never marked shown the same
+        // dialog greeted the user again on the next launch.
+        if self
+            .fast_start_failure_notice
+            .as_ref()
+            .is_some_and(|notice| !notice.shown)
+        {
+            if ctx.input(|input| {
+                input.key_pressed(egui::Key::Escape) || input.key_pressed(egui::Key::Enter)
+            }) {
+                self.dismiss_fast_start_failure_notice();
+            }
+            return;
+        }
         if self.pending_delete_dialog.is_some() {
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                 self.cancel_delete_confirmation();
