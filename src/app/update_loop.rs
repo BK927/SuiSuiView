@@ -58,7 +58,13 @@ impl SuiSuiViewApp {
         self.handle_dropped_files(ctx);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("handle_dropped_files");
-        if !self.settings_is_capturing_keyboard() {
+        // A focused text field owns the keyboard. This runs before the UI is
+        // built, so without the gate the bookmark search box never gets a chance
+        // to consume its own keystrokes and typing fires viewer commands instead
+        // ("x" is the default Quit chord). egui clears focus on Escape centrally,
+        // and only TextEdit/DragValue/Tab take focus, so ordinary clicks on the
+        // toolbar never suppress shortcuts.
+        if !self.settings_is_capturing_keyboard() && !ctx.wants_keyboard_input() {
             self.handle_keyboard(ctx);
         }
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
