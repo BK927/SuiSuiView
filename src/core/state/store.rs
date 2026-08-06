@@ -264,6 +264,15 @@ fn looks_like_maximized_rect_artifact(placement: &WindowPlacement) -> bool {
     if placement.maximized {
         return false;
     }
+    // `normal_rect_px` did not exist before the fix that made placement a pure
+    // GetWindowPlacement round-trip, so its presence proves this state was written
+    // by a build that can no longer produce the corruption. Without this the
+    // heuristic is not one-time at all: a tall window on a monitor arranged left
+    // of and above the primary has a legitimately negative origin on both axes,
+    // and gets reset to the default size on every single launch.
+    if placement.normal_rect_px.is_some() {
+        return false;
+    }
     let Some([x, y]) = placement.outer_position_px else {
         return false;
     };
@@ -308,6 +317,21 @@ mod window_heal_tests {
             outer_position: Some([100.0, 100.0]),
             outer_position_px: Some([100, 100]),
             normal_rect_px: None,
+            maximized: false,
+        };
+        assert!(!looks_like_maximized_rect_artifact(&placement));
+    }
+
+    #[test]
+    fn keeps_a_tall_left_and_above_placement_written_by_a_fixed_build() {
+        // Same shape as the artifact, but carrying `normal_rect_px` — only a build
+        // past the placement fix writes that, so this is a real window the user
+        // put on a portrait monitor arranged left of and above the primary.
+        let placement = WindowPlacement {
+            inner_size: Some([1152.0, 1900.0]),
+            outer_position: Some([-1159.0, -7.0]),
+            outer_position_px: Some([-1449, -9]),
+            normal_rect_px: Some([-1449, -9, -297, 1891]),
             maximized: false,
         };
         assert!(!looks_like_maximized_rect_artifact(&placement));
