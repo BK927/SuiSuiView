@@ -560,6 +560,16 @@ impl SuiSuiViewApp {
         self.persist_reading_position();
     }
 
+    /// Put back the paged fit mode the strip displaced on entry. Every path that
+    /// leaves `ViewMode::VerticalStrip` must call this, or the strip's forced
+    /// `FitWidth` leaks into the paged view and is persisted to the book record.
+    /// A no-op when the strip was never entered from a paged view.
+    pub(in crate::app) fn restore_paged_fit_after_strip(&mut self) {
+        if let Some(mode) = self.paged_fit_mode_before_strip.take() {
+            self.set_fit_mode(mode);
+        }
+    }
+
     fn request_page_if_decode_or_target_intent_changed(
         &mut self,
         previous_decode: DecodeOptions,
@@ -581,10 +591,14 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn set_double_mode(&mut self, direction: ReadingDirection) {
         self.clear_pending_page_turns();
+        let leaving_strip = self.view_mode == ViewMode::VerticalStrip;
         self.view_mode = match direction {
             ReadingDirection::LeftToRight => ViewMode::DoubleLeftToRight,
             ReadingDirection::RightToLeft => ViewMode::DoubleRightToLeft,
         };
+        if leaving_strip {
+            self.restore_paged_fit_after_strip();
+        }
         self.reading_direction = direction;
         self.worker.set_page(
             self.worker_center_page(),
@@ -598,6 +612,7 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn toggle_double_mode(&mut self) {
         self.clear_pending_page_turns();
+        let leaving_strip = self.view_mode == ViewMode::VerticalStrip;
         self.view_mode = match self.view_mode {
             // From strip, toggling leaves into the double mode for the current
             // reading direction (same as toggling up from Single).
@@ -610,6 +625,9 @@ impl SuiSuiViewApp {
             | ViewMode::SmartDoubleLeftToRight
             | ViewMode::SmartDoubleRightToLeft => ViewMode::Single,
         };
+        if leaving_strip {
+            self.restore_paged_fit_after_strip();
+        }
         if let Some(direction) = self.view_mode.reading_direction() {
             self.reading_direction = direction;
         }

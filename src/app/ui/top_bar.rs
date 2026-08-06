@@ -425,8 +425,14 @@ impl SuiSuiViewApp {
             self.transition = None;
             self.pan = Vec2::ZERO;
             // Strip is fit-width by definition; forces the fit and persists it via
-            // the immediate save path.
+            // the immediate save path. Remember what it displaced so the strip's
+            // canon default cannot leak into the paged view, or into the book
+            // record, once the reader toggles back.
+            self.paged_fit_mode_before_strip = Some(self.fit_mode);
             self.set_fit_mode(FitMode::FitWidth);
+        }
+        if leaving_strip {
+            self.restore_paged_fit_after_strip();
         }
         if self.source.is_some() {
             self.worker.set_page(

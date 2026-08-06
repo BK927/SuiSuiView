@@ -262,6 +262,11 @@ pub struct SuiSuiViewApp {
     /// Drag-release inertia distance not yet applied; drained alongside
     /// `strip_scroll_pending_px` but with the slower flick decay.
     strip_flick_pending_px: f32,
+    /// The paged fit mode the strip displaced. Entering the strip forces
+    /// `FitWidth` (uniform column width is the webtoon invariant) and persists
+    /// it, so without stashing the outgoing value a round trip through the strip
+    /// would silently rewrite the book's saved fit. Restored on the way out.
+    paged_fit_mode_before_strip: Option<FitMode>,
     /// Lazily analysed panel-gutter ranges per page, `(start_frac, end_frac)` of
     /// the page height, feeding the keyboard panel-snap step. Filled on demand
     /// from already-decoded pixels; an empty list is a cached "analysed, none".
@@ -432,6 +437,7 @@ impl SuiSuiViewApp {
             strip_anchor: None,
             strip_scroll_pending_px: 0.0,
             strip_flick_pending_px: 0.0,
+            paged_fit_mode_before_strip: None,
             strip_panel_gutters: HashMap::new(),
             strip_visible_indices: Vec::new(),
             strip_last_scroll_dir: NavigationDirection::Forward,

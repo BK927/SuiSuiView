@@ -594,6 +594,12 @@ impl SuiSuiViewApp {
         self.decoded_pages.clear();
         self.decoded_bytes = 0;
         self.page_metrics.clear();
+        // PageIds restart at 0 for every book session, so a gutter map kept from
+        // the previous book would answer for this one's pages and land the strip's
+        // panel steps mid-panel. `clear_local_book_state` already does this on
+        // close; opening straight into another book must too.
+        self.strip_panel_gutters.clear();
+        self.paged_fit_mode_before_strip = None;
         self.note_strip_dims_changed();
         self.textures.clear();
         self.clear_upscale_probe_state();
