@@ -563,13 +563,24 @@ impl SuiSuiViewApp {
             pending_page,
         );
         // Seed the strip anchor so the first painted frame lands at the saved
-        // scroll instead of snapping to the top of the start page.
+        // scroll instead of snapping to the top of the start page. The saved
+        // offset belongs to the record's own page: when a bookmark, an explicit
+        // page, or a forced page overrides the resume position, it would drop the
+        // reader deep inside the page they asked for, so those anchor at the top
+        // exactly like `strip_jump_to_page` does for an already-open book.
         if self.view_mode == ViewMode::VerticalStrip {
+            let resumed_page =
+                selected_open_page(source.as_ref(), None, None, reading_position.as_ref(), None);
+            let offset_frac = if self.current_page == resumed_page {
+                resolved_view.strip_offset_frac.unwrap_or(0.0)
+            } else {
+                0.0
+            };
             self.strip_anchor = source
                 .page_id(self.current_page)
                 .map(|page_id| StripAnchor {
                     page_id,
-                    offset_frac: resolved_view.strip_offset_frac.unwrap_or(0.0),
+                    offset_frac,
                 });
         }
         let clear_pending_bookmark_jump = pending_page.is_some()
