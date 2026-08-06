@@ -737,13 +737,25 @@ fn command_shortcut_hover(bindings: &[KeyBinding], indices: &[usize], i18n: I18n
     }
 }
 
+/// Restore `command`'s factory shortcuts, skipping any chord another command has
+/// since taken. Without the skip the table can hold one chord twice, and
+/// `collect_shortcut_commands` then dispatches both commands on a single press —
+/// e.g. `N` toggling fullscreen and firing a delete at the same time. This is the
+/// same guard `adopt_default_bindings_for_new_commands` applies.
 fn reset_command_shortcuts(bindings: &mut Vec<KeyBinding>, command: CommandId) {
     bindings.retain(|binding| binding.command != command);
-    bindings.extend(
-        default_key_bindings()
-            .into_iter()
-            .filter(|binding| binding.command == command),
-    );
+    for default in default_key_bindings()
+        .into_iter()
+        .filter(|binding| binding.command == command)
+    {
+        if bindings
+            .iter()
+            .any(|binding| binding.shortcut == default.shortcut)
+        {
+            continue;
+        }
+        bindings.push(default);
+    }
 }
 
 fn mouse_command_combo(
