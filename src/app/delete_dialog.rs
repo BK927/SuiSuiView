@@ -22,8 +22,17 @@ impl PendingDeleteDialog {
             mode,
             plan,
             skip_recycle_confirmation: false,
-            selected_action: DeleteDialogAction::Confirm,
+            selected_action: initial_dialog_action(mode),
         }
+    }
+}
+
+/// A recycle-bin delete is undoable, so Confirm may lead. A permanent delete is
+/// not, so Enter must not fire it without a deliberate move first.
+fn initial_dialog_action(mode: DeleteMode) -> DeleteDialogAction {
+    match mode {
+        DeleteMode::Permanent => DeleteDialogAction::Cancel,
+        DeleteMode::Recycle => DeleteDialogAction::Confirm,
     }
 }
 
@@ -255,7 +264,10 @@ fn delete_dialog_keyboard_action_from_keys(
 ) -> DeleteDialogKeyboardAction {
     if key_pressed(egui::Key::Escape) {
         DeleteDialogKeyboardAction::Cancel
-    } else if key_pressed(egui::Key::Enter) || key_pressed(egui::Key::Space) {
+    } else if key_pressed(egui::Key::Enter) {
+        // Space is deliberately absent: it is the default next-page chord, so a
+        // reflexive tap right after Shift+Delete would confirm an irreversible
+        // delete. The modal swallows it instead.
         DeleteDialogKeyboardAction::Activate(selected)
     } else if key_pressed(egui::Key::ArrowLeft) || key_pressed(egui::Key::ArrowUp) {
         DeleteDialogKeyboardAction::Select(DeleteDialogAction::Cancel)
@@ -279,7 +291,8 @@ fn selected_button_stroke(selected: bool, normal: Stroke) -> Stroke {
 #[cfg(test)]
 mod tests {
     use super::{
-        delete_dialog_keyboard_action_from_keys, DeleteDialogAction, DeleteDialogKeyboardAction,
+        delete_dialog_keyboard_action_from_keys, initial_dialog_action, DeleteDialogAction,
+        DeleteDialogKeyboardAction, DeleteMode,
     };
 
     #[test]
@@ -315,6 +328,32 @@ mod tests {
         assert_eq!(
             action_for_key(DeleteDialogAction::Confirm, egui::Key::Enter),
             DeleteDialogKeyboardAction::Activate(DeleteDialogAction::Confirm)
+        );
+    }
+
+    #[test]
+    fn delete_dialog_space_never_activates() {
+        // Space is the default next-page chord; confirming an irreversible delete
+        // with it would defeat the confirmation entirely.
+        assert_eq!(
+            action_for_key(DeleteDialogAction::Confirm, egui::Key::Space),
+            DeleteDialogKeyboardAction::None
+        );
+        assert_eq!(
+            action_for_key(DeleteDialogAction::Cancel, egui::Key::Space),
+            DeleteDialogKeyboardAction::None
+        );
+    }
+
+    #[test]
+    fn permanent_delete_dialog_starts_on_cancel() {
+        assert_eq!(
+            initial_dialog_action(DeleteMode::Permanent),
+            DeleteDialogAction::Cancel
+        );
+        assert_eq!(
+            initial_dialog_action(DeleteMode::Recycle),
+            DeleteDialogAction::Confirm
         );
     }
 
