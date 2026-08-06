@@ -684,3 +684,81 @@ fn remap_page_bookmarks_leaves_other_source_paths_alone() {
         .collect();
     assert_eq!(remaining, vec!["Elsewhere".to_owned()]);
 }
+
+#[test]
+fn adopt_record_for_path_rekeys_an_edited_folder_and_keeps_bookmarks() {
+    let mut store = test_store("adopt-record-path");
+    let folder = Path::new("C:/books/edited-folder");
+    store.upsert_book_record(BookRecordInput {
+        book_id: "folder:before",
+        title: "Edited Folder",
+        last_page: 12,
+        last_page_name: Some("013.jpg"),
+        total_pages: 40,
+        path: folder,
+        reading_direction: ReadingDirection::LeftToRight,
+        fit_mode: FitMode::FitWidth,
+        manual_zoom: None,
+        view_mode: None,
+        strip_offset_frac: None,
+        smart_spread_phase: 0,
+    });
+    store.upsert_page_bookmark("folder:before", folder, 12, "Scene", Some("013.jpg".into()));
+
+    // One image was added, so the content fingerprint is a different book id.
+    assert!(store.adopt_record_for_path("folder:after", folder));
+
+    let adopted = store.book_record("folder:after").expect("re-keyed record");
+    assert_eq!(adopted.last_page, 12);
+    assert_eq!(adopted.last_page_name.as_deref(), Some("013.jpg"));
+    assert_eq!(adopted.page_bookmarks.len(), 1);
+    assert_eq!(adopted.page_bookmarks[0].title, "Scene");
+    // The old id must not linger, or `page_bookmarks` would list the book twice.
+    assert!(store.book_record("folder:before").is_none());
+}
+
+#[test]
+fn adopt_record_for_path_does_nothing_when_the_id_already_resolves() {
+    let mut store = test_store("adopt-record-existing");
+    let folder = Path::new("C:/books/intact-folder");
+    store.upsert_book_record(BookRecordInput {
+        book_id: "folder:intact",
+        title: "Intact",
+        last_page: 3,
+        last_page_name: None,
+        total_pages: 10,
+        path: folder,
+        reading_direction: ReadingDirection::LeftToRight,
+        fit_mode: FitMode::FitPage,
+        manual_zoom: None,
+        view_mode: None,
+        strip_offset_frac: None,
+        smart_spread_phase: 0,
+    });
+
+    assert!(!store.adopt_record_for_path("folder:intact", folder));
+    assert_eq!(store.book_record("folder:intact").unwrap().last_page, 3);
+}
+
+#[test]
+fn adopt_record_for_path_ignores_records_from_other_paths() {
+    let mut store = test_store("adopt-record-other-path");
+    store.upsert_book_record(BookRecordInput {
+        book_id: "folder:elsewhere",
+        title: "Elsewhere",
+        last_page: 7,
+        last_page_name: None,
+        total_pages: 20,
+        path: Path::new("C:/books/elsewhere"),
+        reading_direction: ReadingDirection::LeftToRight,
+        fit_mode: FitMode::FitPage,
+        manual_zoom: None,
+        view_mode: None,
+        strip_offset_frac: None,
+        smart_spread_phase: 0,
+    });
+
+    assert!(!store.adopt_record_for_path("folder:new", Path::new("C:/books/unrelated")));
+    assert!(store.book_record("folder:new").is_none());
+    assert!(store.book_record("folder:elsewhere").is_some());
+}

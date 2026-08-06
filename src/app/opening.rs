@@ -517,6 +517,13 @@ impl SuiSuiViewApp {
         let page_count = source.page_count();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::arm_open_to_first_visible(&mut self.open_to_first_visible_trace, &book_id);
+        // Editing a folder's images (including this app deleting a page) changes
+        // its content fingerprint, so the record saved under the old id would go
+        // unreachable. Re-key it onto the new id first, then read as usual.
+        self.store.adopt_record_for_path(
+            &book_id,
+            bookmark_path_for_open(origin, &opened_path, source.as_ref()),
+        );
         let reading_position = reading_position_for_open(
             &self.store,
             source.as_ref(),

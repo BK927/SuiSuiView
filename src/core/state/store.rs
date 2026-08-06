@@ -42,6 +42,52 @@ impl StateStore {
         self.read_book_record(book_id)
     }
 
+    /// Re-key an existing record onto `book_id` when this exact path is one it
+    /// already knows. Returns whether anything was adopted.
+    ///
+    /// A book's identity is its content fingerprint, which survives moving and
+    /// renaming — but not editing. Adding, removing, or re-saving a single image
+    /// changes a folder's `book_id`, and the reading position and every bookmark
+    /// become unreachable under an id nothing will ask for again. The app causes
+    /// this itself: deleting one page from a folder book re-opens the same folder
+    /// with a fresh fingerprint.
+    ///
+    /// The path is the second identity axis, so it covers exactly the case the
+    /// fingerprint cannot. Adoption requires an exact path match, so the only way
+    /// to inherit the wrong record is to replace a book with a different one at
+    /// the same path — rarer, and milder, than losing the record outright.
+    pub fn adopt_record_for_path(&mut self, book_id: &str, path: &Path) -> bool {
+        if self.read_book_record(book_id).is_some() {
+            return false;
+        }
+        let wanted = path_key(path);
+        // `known_paths` follows the recent-locations setting, but `path_positions`
+        // is always written for per-path resume, so the fallback keeps working
+        // with the recent list turned off.
+        let Some(mut record) = self
+            .load_all_book_records()
+            .into_iter()
+            .filter(|record| {
+                record.known_paths.iter().any(|known| known == &wanted)
+                    || record.path_positions.contains_key(&wanted)
+            })
+            .max_by_key(|record| record.updated_at)
+        else {
+            return false;
+        };
+
+        let previous_book_id = std::mem::replace(&mut record.book_id, book_id.to_owned());
+        if previous_book_id == book_id {
+            return false;
+        }
+        if self.write_book_record(&record).is_err() {
+            return false;
+        }
+        // Only once the new file is on disk, so a failed write cannot lose it.
+        self.remove_book_record_file(&previous_book_id);
+        true
+    }
+
     pub fn reading_position(
         &self,
         book_id: &str,

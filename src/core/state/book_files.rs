@@ -47,6 +47,10 @@ impl StateStore {
         write_atomic(&book_file_path(&self.books_dir, &record.book_id), &text)
     }
 
+    pub(super) fn remove_book_record_file(&self, book_id: &str) {
+        let _ = fs::remove_file(book_file_path(&self.books_dir, book_id));
+    }
+
     pub(super) fn load_all_book_records(&self) -> Vec<BookRecord> {
         let mut records: Vec<BookRecord> = Vec::new();
         if let Ok(entries) = fs::read_dir(&self.books_dir) {
