@@ -91,7 +91,7 @@ impl SuiSuiViewApp {
                 (last < max_page).then(|| last.saturating_add(1).min(max_page))
             }
             NavigationDirection::Forward => {
-                (page < max_page).then(|| page.saturating_add(self.view_mode.step()).min(max_page))
+                plain_forward_step(page, self.view_mode.step(), max_page)
             }
             NavigationDirection::Backward if self.view_mode.is_smart() => {
                 let indices = self.spread_indices_for_unordered(page);
@@ -772,6 +772,22 @@ impl SuiSuiViewApp {
             }
         }
     }
+}
+
+/// Forward page-turn target for the non-smart view modes: the next anchor, or
+/// `None` when the current spread already ends the book so the caller runs the
+/// first/last-page edge action.
+///
+/// The whole spread decides, not just its anchor. Clamping the step to
+/// `max_page` used to spend a turn re-showing the last page alone whenever the
+/// final spread was full — anchor 8 of a 10-page book stepped to 9, which was
+/// already on screen — so `next file` needed two presses and the Ask prompt was
+/// preceded by a duplicate page. A lone trailing page in an odd-count book still
+/// steps normally, because its anchor sits a full step short of the end.
+/// Pure for testing.
+fn plain_forward_step(page: usize, step: usize, max_page: usize) -> Option<usize> {
+    let next = page.saturating_add(step);
+    (next <= max_page).then_some(next)
 }
 
 /// Whether a zoom gesture recorded at `last` is still in motion at `now`

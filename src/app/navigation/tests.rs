@@ -1,8 +1,9 @@
 use super::super::QueuedPageTurns;
 use super::{
-    normalize_sibling_book_direction, push_queued_page_turn, push_queued_sibling_book_turn,
-    should_open_edge_prompt, skip_missing_target, zoom_motion_active, EdgePrompt,
-    MAX_QUEUED_PAGE_TURNS, MAX_QUEUED_SIBLING_BOOK_TURNS, ZOOM_SETTLE_MS,
+    normalize_sibling_book_direction, plain_forward_step, push_queued_page_turn,
+    push_queued_sibling_book_turn, should_open_edge_prompt, skip_missing_target,
+    zoom_motion_active, EdgePrompt, MAX_QUEUED_PAGE_TURNS, MAX_QUEUED_SIBLING_BOOK_TURNS,
+    ZOOM_SETTLE_MS,
 };
 use crate::core::worker::NavigationDirection;
 use std::collections::VecDeque;
@@ -24,6 +25,28 @@ fn zoom_motion_is_active_only_inside_the_settle_window() {
         Some(now),
         now + settle + Duration::from_millis(1)
     ));
+}
+
+#[test]
+fn plain_forward_step_ends_the_book_on_a_full_final_spread() {
+    // 10 pages, two-page mode: the [8, 9] spread already shows the last page, so
+    // the turn must end the book instead of re-showing page 9 alone.
+    assert_eq!(plain_forward_step(8, 2, 9), None);
+    assert_eq!(plain_forward_step(6, 2, 9), Some(8));
+}
+
+#[test]
+fn plain_forward_step_still_reaches_a_lone_trailing_page() {
+    // 9 pages, two-page mode: the [6, 7] spread leaves page 8 unseen.
+    assert_eq!(plain_forward_step(6, 2, 8), Some(8));
+    assert_eq!(plain_forward_step(8, 2, 8), None);
+}
+
+#[test]
+fn plain_forward_step_is_unchanged_for_single_page_mode() {
+    assert_eq!(plain_forward_step(0, 1, 2), Some(1));
+    assert_eq!(plain_forward_step(1, 1, 2), Some(2));
+    assert_eq!(plain_forward_step(2, 1, 2), None);
 }
 
 #[test]
