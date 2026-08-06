@@ -1,4 +1,4 @@
-use super::{OpenOrigin, SuiSuiViewApp};
+use super::{opening, OpenOrigin, SuiSuiViewApp};
 use crate::core::source::{BookSource, SharedSource, SourceError};
 use crate::core::worker::NavigationDirection;
 use std::path::PathBuf;
@@ -190,7 +190,29 @@ impl SuiSuiViewApp {
         self.page_errors
             .retain(|key, _| new_source.page_index_for_id(key.page_id).is_some());
 
+        // Saved bookmarks are stored by page index, so the snapshot's new ordering
+        // has to be written back or every bookmark past a removed file points one
+        // image off. `page_name` is the identity to re-resolve them by; a name that
+        // no longer exists means the file itself is gone.
+        if let Some(book_id) = self.book_id.clone() {
+            let source_path = old_source.source_path().to_path_buf();
+            self.store
+                .remap_page_bookmarks(&book_id, &source_path, |page_name| {
+                    opening::page_index_for_name(new_source.as_ref(), page_name)
+                });
+            self.bookmark_rows.clear();
+        }
+
         self.transition = None;
+        // A page turn waiting on its target's decode requested this refresh's
+        // snapshot swap; dropping it swallows the keypress outright. Carry the
+        // target across by identity and re-issue it against the new snapshot once
+        // the source is installed.
+        let pending_turn = self.pending_page_turn.take().and_then(|pending| {
+            let page_id = old_source.page_id(pending.target)?;
+            let target = new_source.page_index_for_id(page_id)?;
+            Some((target, pending.direction))
+        });
         self.clear_pending_page_turns();
         self.source = Some(new_source.clone());
 
@@ -209,6 +231,11 @@ impl SuiSuiViewApp {
             "status.folder_refreshed",
             &[("count", page_count.to_string())],
         ));
+        if let Some((target, direction)) = pending_turn {
+            // Either commits on the refreshed snapshot or re-defers against it,
+            // exactly as the original press would have.
+            self.set_page(target, direction);
+        }
         self.egui_ctx.request_repaint();
     }
 }

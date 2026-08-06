@@ -602,3 +602,76 @@ fn store_at(base: &Path) -> StateStore {
 fn test_store(name: &str) -> StateStore {
     store_at(&unique_base(name))
 }
+
+#[test]
+fn remap_page_bookmarks_follows_names_and_drops_vanished_pages() {
+    let mut store = test_store("page-bookmark-remap");
+    store.upsert_book_record(BookRecordInput {
+        book_id: "book-1",
+        title: "Book One",
+        last_page: 0,
+        last_page_name: None,
+        total_pages: 4,
+        path: Path::new("C:/books/book-1"),
+        reading_direction: ReadingDirection::LeftToRight,
+        fit_mode: FitMode::FitPage,
+        manual_zoom: None,
+        view_mode: None,
+        strip_offset_frac: None,
+        smart_spread_phase: 0,
+    });
+
+    let source_path = Path::new("C:/books/book-1");
+    store.upsert_page_bookmark("book-1", source_path, 1, "Second", Some("002.jpg".into()));
+    store.upsert_page_bookmark("book-1", source_path, 2, "Third", Some("003.jpg".into()));
+    store.upsert_page_bookmark("book-1", source_path, 3, "Fourth", Some("004.jpg".into()));
+    // A legacy bookmark with no remembered name cannot be re-resolved.
+    store.upsert_page_bookmark("book-1", source_path, 0, "First", None);
+
+    // "002.jpg" was deleted from the folder, so everything after it shifts down.
+    store.remap_page_bookmarks("book-1", source_path, |page_name| match page_name {
+        "003.jpg" => Some(1),
+        "004.jpg" => Some(2),
+        _ => None,
+    });
+
+    let bookmarks = store.page_bookmarks("book-1");
+    let by_title: Vec<_> = bookmarks
+        .iter()
+        .map(|bookmark| (bookmark.title.as_str(), bookmark.page))
+        .collect();
+    assert_eq!(by_title, vec![("First", 0), ("Third", 1), ("Fourth", 2)]);
+}
+
+#[test]
+fn remap_page_bookmarks_leaves_other_source_paths_alone() {
+    let mut store = test_store("page-bookmark-remap-scope");
+    store.upsert_book_record(BookRecordInput {
+        book_id: "book-1",
+        title: "Book One",
+        last_page: 0,
+        last_page_name: None,
+        total_pages: 4,
+        path: Path::new("C:/books/book-1"),
+        reading_direction: ReadingDirection::LeftToRight,
+        fit_mode: FitMode::FitPage,
+        manual_zoom: None,
+        view_mode: None,
+        strip_offset_frac: None,
+        smart_spread_phase: 0,
+    });
+
+    let refreshed = Path::new("C:/books/book-1");
+    let other = Path::new("C:/books/elsewhere");
+    store.upsert_page_bookmark("book-1", refreshed, 2, "Here", Some("003.jpg".into()));
+    store.upsert_page_bookmark("book-1", other, 2, "Elsewhere", Some("003.jpg".into()));
+
+    store.remap_page_bookmarks("book-1", refreshed, |_| None);
+
+    let remaining: Vec<_> = store
+        .page_bookmarks("book-1")
+        .iter()
+        .map(|bookmark| bookmark.title.clone())
+        .collect();
+    assert_eq!(remaining, vec!["Elsewhere".to_owned()]);
+}

@@ -243,6 +243,58 @@ impl StateStore {
         let _ = self.write_book_record(&record);
     }
 
+    /// Re-point this book's bookmarks at their pages after the page set changed
+    /// underneath them (a folder snapshot refresh). `resolve` maps a remembered
+    /// `page_name` to its index in the new snapshot; `None` drops the bookmark,
+    /// because the file it marked is gone. Bookmarks for other source paths, and
+    /// legacy bookmarks with no `page_name`, are left exactly as they are — there
+    /// is nothing to re-resolve them by.
+    ///
+    /// Without this the current page is remapped by identity while the bookmarks
+    /// keep pointing at stale indices: every bookmark past a deleted file lands
+    /// one image off, and toggling one there deletes a bookmark the reader never
+    /// made.
+    pub fn remap_page_bookmarks(
+        &mut self,
+        book_id: &str,
+        source_path: &Path,
+        resolve: impl Fn(&str) -> Option<usize>,
+    ) {
+        let source_path = path_key(source_path);
+        let Some(mut record) = self.read_book_record(book_id) else {
+            return;
+        };
+
+        let mut changed = false;
+        record.page_bookmarks.retain_mut(|bookmark| {
+            if bookmark.source_path != source_path {
+                return true;
+            }
+            let Some(page_name) = bookmark.page_name.as_deref() else {
+                return true;
+            };
+            match resolve(page_name) {
+                Some(page) => {
+                    if bookmark.page != page {
+                        bookmark.page = page;
+                        changed = true;
+                    }
+                    true
+                }
+                None => {
+                    changed = true;
+                    false
+                }
+            }
+        });
+        if !changed {
+            return;
+        }
+        record.page_bookmarks.sort_by(page_bookmark_order);
+        record.updated_at = now_unix_seconds();
+        let _ = self.write_book_record(&record);
+    }
+
     /// Attach the AUTO upscaler probe outcome to an existing book record. Mirrors the
     /// bookmark read-modify-write path so a buffered pending record stays consistent; a
     /// no-op if the record does not exist yet (callers persist it first) or is unchanged.
