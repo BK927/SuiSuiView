@@ -31,9 +31,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let restart_bypasses_single_instance =
         std::env::var_os(RESTART_BYPASS_SINGLE_INSTANCE_ENV).is_some();
-    let ipc_rx = if store.settings().single_instance && !restart_bypasses_single_instance {
+    let ipc_rx = if store.settings().single_instance {
         let pipe_name = single_instance::pipe_name_for_key(&store.path().display().to_string());
-        if single_instance::send_open_request(&pipe_name, startup_open_path.as_deref()) {
+        // A self-restart (GPU toggle, WGPU demotion) must not hand its path back to
+        // the instance it is replacing — but it still has to listen, or the setting
+        // silently stops working for the rest of the session and every later open
+        // from Explorer spawns another window.
+        if !restart_bypasses_single_instance
+            && single_instance::send_open_request(&pipe_name, startup_open_path.as_deref())
+        {
             return Ok(());
         }
         Some(single_instance::start_listener(pipe_name))
