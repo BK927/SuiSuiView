@@ -638,10 +638,189 @@ fn apply_command(
     }
 }
 
+/// Collapse everything queued into the one command with the same net effect.
+///
+/// Only *page parameters* may be superseded. A `LoadBook`'s source and a
+/// `ClearBook`'s acknowledgement have to survive the collapse: keeping just the
+/// newest message drops the book install whenever a `SetPage` lands behind it —
+/// which the app does within the same frame it opens a book (`install_source`
+/// sends `load_book`, then the central panel's target/recenter pass sends
+/// `set_page`). The worker would keep serving the previous book, every
+/// `PageReady` would carry the stale `book_id` the app rejects, and no later
+/// command could repair it because only `LoadBook` installs a source.
 fn drain_latest_command(command_rx: &Receiver<WorkerCommand>) -> Option<WorkerCommand> {
-    let mut latest = None;
+    let mut folded = None;
     while let Ok(command) = command_rx.try_recv() {
-        latest = Some(command);
+        folded = Some(fold_command(folded, command));
     }
-    latest
+    folded
+}
+
+fn fold_command(previous: Option<WorkerCommand>, next: WorkerCommand) -> WorkerCommand {
+    let Some(previous) = previous else {
+        return next;
+    };
+    match (previous, next) {
+        // Shutdown is terminal; nothing queued behind it can matter.
+        (WorkerCommand::Shutdown, _) => WorkerCommand::Shutdown,
+        // A superseded ClearBook still owes `clear_book_blocking` its ack, or the
+        // caller reports a timeout for a release that did happen. Whatever
+        // supersedes it either installs another source or shuts down, so the old
+        // one is dropped either way.
+        (WorkerCommand::ClearBook { ack }, next) => {
+            let _ = ack.send(());
+            next
+        }
+        // The newest page parameters win, but the book install rides through.
+        (
+            WorkerCommand::LoadBook { source, .. },
+            WorkerCommand::SetPage {
+                center,
+                direction,
+                target_long_edge,
+                visible_pages,
+                options,
+            },
+        ) => WorkerCommand::LoadBook {
+            source,
+            center,
+            direction,
+            target_long_edge,
+            visible_pages,
+            options,
+        },
+        (_, next) => next,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::source::{BookSource, SourceError};
+    use crossbeam_channel::{bounded, unbounded};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    struct StubSource {
+        book_id: String,
+        path: PathBuf,
+    }
+
+    impl BookSource for StubSource {
+        fn title(&self) -> &str {
+            &self.book_id
+        }
+        fn source_path(&self) -> &Path {
+            &self.path
+        }
+        fn book_id(&self) -> &str {
+            &self.book_id
+        }
+        fn page_count(&self) -> usize {
+            1
+        }
+        fn page_name(&self, _index: usize) -> Option<&str> {
+            Some("001.png")
+        }
+        fn read_page(&self, _index: usize) -> Result<Vec<u8>, SourceError> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn stub_source(book_id: &str) -> SharedSource {
+        Arc::new(StubSource {
+            book_id: book_id.to_owned(),
+            path: PathBuf::from(book_id),
+        })
+    }
+
+    fn load_book(book_id: &str, center: usize) -> WorkerCommand {
+        WorkerCommand::LoadBook {
+            source: stub_source(book_id),
+            center,
+            direction: NavigationDirection::Forward,
+            target_long_edge: 2048,
+            visible_pages: 1,
+            options: WorkerOptions::default(),
+        }
+    }
+
+    fn set_page(center: usize) -> WorkerCommand {
+        WorkerCommand::SetPage {
+            center,
+            direction: NavigationDirection::Forward,
+            target_long_edge: 4096,
+            visible_pages: 2,
+            options: WorkerOptions::default(),
+        }
+    }
+
+    #[test]
+    fn drain_keeps_the_book_install_when_a_set_page_lands_behind_it() {
+        let (tx, rx) = unbounded();
+        tx.send(load_book("book-b", 0)).unwrap();
+        tx.send(set_page(7)).unwrap();
+
+        let folded = drain_latest_command(&rx).expect("a command");
+
+        match folded {
+            WorkerCommand::LoadBook {
+                source,
+                center,
+                target_long_edge,
+                visible_pages,
+                ..
+            } => {
+                assert_eq!(source.book_id(), "book-b");
+                // The newest page parameters still win.
+                assert_eq!(center, 7);
+                assert_eq!(target_long_edge, 4096);
+                assert_eq!(visible_pages, 2);
+            }
+            _ => panic!("book install was dropped by the drain"),
+        }
+    }
+
+    #[test]
+    fn drain_keeps_the_newest_book_when_two_loads_are_queued() {
+        let (tx, rx) = unbounded();
+        tx.send(load_book("book-a", 0)).unwrap();
+        tx.send(load_book("book-b", 3)).unwrap();
+
+        match drain_latest_command(&rx).expect("a command") {
+            WorkerCommand::LoadBook { source, center, .. } => {
+                assert_eq!(source.book_id(), "book-b");
+                assert_eq!(center, 3);
+            }
+            _ => panic!("newest book install was dropped by the drain"),
+        }
+    }
+
+    #[test]
+    fn drain_acknowledges_a_superseded_clear_book() {
+        let (tx, rx) = unbounded();
+        let (ack, done) = bounded(1);
+        tx.send(WorkerCommand::ClearBook { ack }).unwrap();
+        tx.send(load_book("book-b", 0)).unwrap();
+
+        let folded = drain_latest_command(&rx).expect("a command");
+
+        assert!(
+            done.try_recv().is_ok(),
+            "clear_book_blocking would report a timeout for a release that happened"
+        );
+        assert!(matches!(folded, WorkerCommand::LoadBook { .. }));
+    }
+
+    #[test]
+    fn drain_never_supersedes_shutdown() {
+        let (tx, rx) = unbounded();
+        tx.send(WorkerCommand::Shutdown).unwrap();
+        tx.send(set_page(2)).unwrap();
+
+        assert!(matches!(
+            drain_latest_command(&rx).expect("a command"),
+            WorkerCommand::Shutdown
+        ));
+    }
 }
