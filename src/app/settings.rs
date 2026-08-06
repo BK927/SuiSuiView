@@ -399,7 +399,9 @@ impl SuiSuiViewApp {
         }
         self.store.update_settings(self.settings.clone());
         self.refresh_single_instance_listener();
-        self.pending_state_save_at = None;
+        // `update_settings` writes `state.json` itself, but a book record may still
+        // be buffered behind the shared debounce timer; flush rather than discard.
+        self.flush_deferred_state_save();
         platform::apply_window_level(ctx, self.settings.always_on_top);
 
         if previous_renderer_mode != self.settings.renderer_mode {

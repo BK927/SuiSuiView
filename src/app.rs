@@ -581,7 +581,11 @@ impl SuiSuiViewApp {
             smart_spread_phase: self.smart_spread_phase,
         });
         self.bookmark_rows.clear();
-        self.pending_state_save_at = None;
+        // The debounce timer covers the pending book record *and* a dirty
+        // `state.json` (window geometry). Writing the record here settles only the
+        // first half, so blanking the timer used to drop a window move/resize made
+        // in the same debounce window. Flushing settles both and clears it.
+        self.flush_deferred_state_save();
     }
 
     fn persist_reading_position_deferred(&mut self) {
