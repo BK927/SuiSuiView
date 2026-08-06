@@ -62,6 +62,11 @@ struct SpreadPaint<'a> {
     /// Whether the Glow draw-time kernel may enlarge these pages. False during a
     /// page-turn transition (moving/fading content stays on the plain path).
     allow_kernel: bool,
+    /// Whether this is the steady-state paint of the current spread rather than a
+    /// transition leg. Only a settled paint may record the view state the top
+    /// bar's scaler chip reads: a transition animates the incoming page's
+    /// geometry, so the plan resolved from it is not what the page will settle on.
+    settled: bool,
     /// GPU draw-slot for this leg's pages (see `GpuPaintRequest::slot`).
     slot: u8,
 }
@@ -477,6 +482,7 @@ impl SuiSuiViewApp {
                     scale: paint.from_scale,
                     alpha: paint.from_alpha,
                     allow_kernel: false,
+                    settled: false,
                     slot: TRANSITION_FROM_SLOT,
                 },
             );
@@ -494,6 +500,7 @@ impl SuiSuiViewApp {
                     scale: paint.to_scale,
                     alpha: paint.to_alpha,
                     allow_kernel: false,
+                    settled: false,
                     slot: MAIN_VIEWER_SLOT,
                 },
             );
@@ -513,6 +520,7 @@ impl SuiSuiViewApp {
                     scale: Vec2::splat(1.0),
                     alpha: 1.0,
                     allow_kernel: true,
+                    settled: true,
                     slot: MAIN_VIEWER_SLOT,
                 },
             );
@@ -635,6 +643,7 @@ impl SuiSuiViewApp {
                 page_rect,
                 request.alpha,
                 request.allow_kernel,
+                request.settled,
                 request.slot,
             );
             spread_fully_drawn &= outcome.fully_drawn;
@@ -668,6 +677,7 @@ impl SuiSuiViewApp {
         page_rect: Rect,
         alpha: f32,
         allow_kernel: bool,
+        settled: bool,
         slot: u8,
     ) -> PagePaintOutcome {
         let size = page_visual_size(&visual);
@@ -704,7 +714,7 @@ impl SuiSuiViewApp {
                         self.prepared_target_intent_for_target(render_info.target_long_edge);
                     let mut state = CurrentViewState::from_cpu(render_info, target_intent);
                     state.glow_kernel = glow_kernel;
-                    self.record_current_view_state(state);
+                    self.record_current_view_state(state, settled);
                 }
                 if full_alpha {
                     self.paint_pixel_grid(
@@ -754,10 +764,10 @@ impl SuiSuiViewApp {
                     )
                 };
                 let allow_refine_render =
-                    refine_method.is_some() && self.refine_render_allowed(ctx);
+                    refine_method.is_some() && self.refine_render_allowed(ctx, settled);
                 let target_intent =
                     self.prepared_target_intent_for_target(render_info.target_long_edge);
-                self.record_current_view_state(CurrentViewState::from_gpu(
+                let gpu_view_state = CurrentViewState::from_gpu(
                     render_info,
                     image_size,
                     effects,
@@ -770,7 +780,8 @@ impl SuiSuiViewApp {
                     deband,
                     refine_method,
                     target_intent,
-                ));
+                );
+                self.record_current_view_state(gpu_view_state, settled);
                 let gpu_painted = self.paint_ready_gpu_visual(
                     ctx,
                     painter,
@@ -820,7 +831,7 @@ impl SuiSuiViewApp {
                 outcome
             }
             PageVisual::Loading { .. } => {
-                self.clear_current_view_state_for(index);
+                self.clear_current_view_state_for(index, settled);
                 self.paint_placeholder(
                     painter,
                     page_rect,
@@ -831,7 +842,7 @@ impl SuiSuiViewApp {
                 PagePaintOutcome::default()
             }
             PageVisual::Failed { message, .. } => {
-                self.clear_current_view_state_for(index);
+                self.clear_current_view_state_for(index, settled);
                 self.paint_placeholder(
                     painter,
                     page_rect,
@@ -873,14 +884,20 @@ impl SuiSuiViewApp {
     }
 
     /// Record what this frame actually drew for the current page (the top bar's
-    /// scaler chip reads it). Transition frames are skipped: a page-turn animates
-    /// the incoming page's geometry (BookFlip2d squeezes x to 0.92), and the scale
-    /// plan resolves from that geometry — so a page needing only a little over the
-    /// fixed-2x minimum scale substitutes for those frames and the chip flickers
-    /// away from the model and back. The settled state simply stays until the
-    /// transition drops (it always does, past `TRANSITION_MS` in `show_viewer`).
-    fn record_current_view_state(&mut self, state: CurrentViewState) {
-        if self.transition.is_some() {
+    /// scaler chip reads it). Only the settled paint may write it: a page-turn
+    /// animates the incoming page's geometry (BookFlip2d squeezes x to 0.92) and
+    /// the scale plan resolves from that geometry, so a page needing only a little
+    /// over the fixed-2x minimum scale substitutes for those frames and the chip
+    /// flickers away from the model and back. The settled state simply stays until
+    /// the transition drops (it always does, past `TRANSITION_MS` in
+    /// `show_viewer`).
+    ///
+    /// `settled` has to be passed in rather than read from `self.transition`:
+    /// `show_viewer` takes the transition out by value for the duration of the
+    /// paint, so the field is always `None` here — the frames this guard exists
+    /// for are exactly the ones where reading it would say "no transition".
+    fn record_current_view_state(&mut self, state: CurrentViewState, settled: bool) {
+        if !settled {
             return;
         }
         if state.page_index == self.current_page {
@@ -888,10 +905,10 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn clear_current_view_state_for(&mut self, index: usize) {
+    fn clear_current_view_state_for(&mut self, index: usize, settled: bool) {
         // Held across a transition for the same reason as `record_current_view_state`;
         // a page that stays unpaintable clears on the first settled frame.
-        if self.transition.is_some() {
+        if !settled {
             return;
         }
         if index == self.current_page {
@@ -903,10 +920,16 @@ impl SuiSuiViewApp {
     /// this frame: no transition, no pending/queued page turn, no strip scroll
     /// debt, no zoom in motion, and no active pointer drag. The heavy refine
     /// render must never land on an interaction frame.
-    fn refine_render_allowed(&self, ctx: &egui::Context) -> bool {
+    /// `settled` stands in for "no transition": this is called from inside the
+    /// paint, where `show_viewer` has taken `self.transition` out by value, so
+    /// reading the field here would report no transition on exactly the animating
+    /// frames the idle gate exists to exclude — and a page turn clears
+    /// `pending_page_turn` before the animation starts, so nothing else covers
+    /// them.
+    fn refine_render_allowed(&self, ctx: &egui::Context, settled: bool) -> bool {
         let drag_active = ctx.input(|input| input.pointer.is_decidedly_dragging());
         model::refine_render_idle(
-            self.transition.is_some(),
+            !settled,
             self.pending_page_turn.is_some() || self.queued_page_turns.is_some(),
             self.strip_scroll_pending_px != 0.0 || self.strip_flick_pending_px != 0.0,
             self.zoom_in_motion(),

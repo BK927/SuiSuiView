@@ -105,6 +105,9 @@ impl SuiSuiViewApp {
                 placement.rect,
                 1.0,
                 true,
+                // The strip has no page-turn transition; every strip paint is the
+                // settled one.
+                true,
                 // Strip pages each carry a distinct source_key, so one slot is
                 // enough — their `draw_id`s never collide within a frame.
                 0,
