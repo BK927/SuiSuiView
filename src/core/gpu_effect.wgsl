@@ -547,8 +547,14 @@ fn downscale_effect_sample(coord: vec2<f32>, method: u32) -> vec4<f32> {
         return sample_effect(coord.x, coord.y);
     }
 
-    let scale_x = max(f32(params.source_output.z) / max(params.opacity.y, 1.0), 1.0);
-    let scale_y = max(f32(params.source_output.w) / max(params.opacity.z, 1.0), 1.0);
+    // Derive the kernel scale from the FULL target the draw maps onto, not the
+    // clipped visible slice in `opacity.yz`. A page hanging off the window edge
+    // otherwise reports a larger shrink than it performs, widens the kernel
+    // radius, and comes out softer along the clipped axis than the same page
+    // fully on screen. `display.zw` is the full target size for every caller, so
+    // unclipped and pyramid-stage draws are unchanged.
+    let scale_x = max(f32(params.source_output.z) / max(params.display.z, 1.0), 1.0);
+    let scale_y = max(f32(params.source_output.w) / max(params.display.w, 1.0), 1.0);
     let support = downscale_filter_support(method);
     let radius_x = min(support * scale_x, 3.0);
     let radius_y = min(support * scale_y, 3.0);
