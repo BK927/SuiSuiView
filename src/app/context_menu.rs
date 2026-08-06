@@ -1,9 +1,9 @@
 use super::{
-    commands::{AppCommand, DeleteMode},
+    commands::{app_command_for_id, AppCommand, DeleteMode},
     SuiSuiViewApp,
 };
 use crate::core::effects::ImageFilter;
-use crate::core::state::{FitMode, ReadingDirection};
+use crate::core::state::{CommandId, FitMode, ReadingDirection};
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn show_context_menu(
@@ -449,6 +449,33 @@ impl SuiSuiViewApp {
         });
     }
 
+    /// The chord actually bound to `command` right now, falling back to the
+    /// factory literal when the command has no `CommandId` or the user unbound it.
+    /// The menu used to print the literal unconditionally, so every rebinding left
+    /// it advertising a key that no longer did anything.
+    fn context_shortcut(&self, command: AppCommand, fallback: &str) -> String {
+        let Some(id) = CommandId::ALL
+            .into_iter()
+            .find(|id| app_command_for_id(*id) == Some(command))
+        else {
+            return fallback.to_owned();
+        };
+        // All of them, matching the settings table and the multi-chord literals
+        // this replaced (Fit Page really is bound three ways by default).
+        let bound = self
+            .settings
+            .key_bindings
+            .iter()
+            .filter(|binding| binding.command == id)
+            .map(|binding| binding.shortcut.label())
+            .collect::<Vec<_>>();
+        if bound.is_empty() {
+            // Deliberately unbound: say so rather than advertise the factory key.
+            return String::from("-");
+        }
+        bound.join(" / ")
+    }
+
     fn context_action(
         &mut self,
         ui: &mut egui::Ui,
@@ -458,7 +485,8 @@ impl SuiSuiViewApp {
         command: AppCommand,
         enabled: bool,
     ) {
-        if context_button(ui, label, shortcut, enabled).clicked() {
+        let shortcut = self.context_shortcut(command, shortcut);
+        if context_button(ui, label, &shortcut, enabled).clicked() {
             self.apply_command(ctx, command);
             ui.close();
         }
@@ -473,9 +501,12 @@ impl SuiSuiViewApp {
         filter: ImageFilter,
         enabled: bool,
     ) {
-        if context_selectable(ui, self.effects.filter == filter, label, shortcut, enabled).clicked()
+        let command = AppCommand::SetFilter(filter);
+        let shortcut = self.context_shortcut(command, shortcut);
+        if context_selectable(ui, self.effects.filter == filter, label, &shortcut, enabled)
+            .clicked()
         {
-            self.apply_command(ctx, AppCommand::SetFilter(filter));
+            self.apply_command(ctx, command);
             ui.close();
         }
     }
@@ -489,8 +520,10 @@ impl SuiSuiViewApp {
         mode: FitMode,
         enabled: bool,
     ) {
-        if context_selectable(ui, self.fit_mode == mode, label, shortcut, enabled).clicked() {
-            self.apply_command(ctx, AppCommand::SetFitMode(mode));
+        let command = AppCommand::SetFitMode(mode);
+        let shortcut = self.context_shortcut(command, shortcut);
+        if context_selectable(ui, self.fit_mode == mode, label, &shortcut, enabled).clicked() {
+            self.apply_command(ctx, command);
             ui.close();
         }
     }
@@ -505,7 +538,8 @@ impl SuiSuiViewApp {
         command: AppCommand,
     ) {
         let enabled = self.source.is_some();
-        if context_selectable(ui, selected, label, shortcut, enabled).clicked() {
+        let shortcut = self.context_shortcut(command, shortcut);
+        if context_selectable(ui, selected, label, &shortcut, enabled).clicked() {
             self.apply_command(ctx, command);
             ui.close();
         }
