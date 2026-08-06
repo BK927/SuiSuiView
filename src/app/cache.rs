@@ -23,9 +23,15 @@ mod original;
 #[cfg(test)]
 pub(in crate::app) use budgets::automatic_total_budget_bytes_for;
 pub(in crate::app) use budgets::{
-    cache_budget_bytes, gpu_intermediate_texture_budget_bytes, gpu_source_texture_budget_bytes,
-    texture_cache_budget_cap_bytes, total_memory_budget_bytes,
+    cache_budget_bytes, effective_total_budget_bytes, gpu_intermediate_texture_budget_bytes,
+    gpu_source_texture_budget_bytes, texture_cache_budget_cap_bytes,
 };
+// The nominal total is an input to the per-pool budgets rather than a number any
+// surface shows on its own (the settings window prints
+// `effective_total_budget_bytes`, which accounts for the pool floors). Kept
+// reachable because the budget tests pin the preset totals directly.
+#[allow(unused_imports)]
+pub(in crate::app) use budgets::total_memory_budget_bytes;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(in crate::app) struct PageCacheKey {

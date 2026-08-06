@@ -76,9 +76,10 @@ use cache::{
     touch_normal_navigation_page_keys,
 };
 pub(in crate::app) use cache::{
-    gpu_intermediate_texture_budget_bytes, gpu_source_texture_budget_bytes, gpu_visual_needs_wgsl,
-    rect_target_size, should_allow_cpu_display_upscale, total_memory_budget_bytes, PageCacheKey,
-    TextureCacheKey, TextureEntry, TextureSampling, BYTES_PER_RGBA_PIXEL,
+    effective_total_budget_bytes, gpu_intermediate_texture_budget_bytes,
+    gpu_source_texture_budget_bytes, gpu_visual_needs_wgsl, rect_target_size,
+    should_allow_cpu_display_upscale, PageCacheKey, TextureCacheKey, TextureEntry, TextureSampling,
+    BYTES_PER_RGBA_PIXEL,
 };
 pub(in crate::app) use delete_dialog::PendingDeleteDialog;
 pub(in crate::app) use edge_prompt::EdgePrompt;
@@ -2091,12 +2092,12 @@ mod tests {
         };
 
         assert_eq!(
-            super::total_memory_budget_bytes(&settings),
+            super::cache::total_memory_budget_bytes(&settings),
             MANUAL_CACHE_MB_MIN as usize * 1024 * 1024
         );
         settings.manual_cache_mb = MANUAL_CACHE_MB_MAX + 1;
         assert_eq!(
-            super::total_memory_budget_bytes(&settings),
+            super::cache::total_memory_budget_bytes(&settings),
             MANUAL_CACHE_MB_MAX as usize * 1024 * 1024
         );
     }
@@ -2110,15 +2111,15 @@ mod tests {
                 ..AppSettings::default()
             };
             assert_eq!(
-                super::total_memory_budget_bytes(&settings(CacheMemoryMode::Saver)),
+                super::cache::total_memory_budget_bytes(&settings(CacheMemoryMode::Saver)),
                 SAVER_TOTAL_BUDGET_BYTES
             );
             assert_eq!(
-                super::total_memory_budget_bytes(&settings(CacheMemoryMode::Standard)),
+                super::cache::total_memory_budget_bytes(&settings(CacheMemoryMode::Standard)),
                 STANDARD_TOTAL_BUDGET_BYTES
             );
             assert_eq!(
-                super::total_memory_budget_bytes(&settings(CacheMemoryMode::Ample)),
+                super::cache::total_memory_budget_bytes(&settings(CacheMemoryMode::Ample)),
                 AMPLE_TOTAL_BUDGET_BYTES
             );
         }
@@ -2202,7 +2203,7 @@ mod tests {
             ..AppSettings::default()
         };
         assert_eq!(
-            super::total_memory_budget_bytes(&settings),
+            super::cache::total_memory_budget_bytes(&settings),
             64 * 1024 * 1024
         );
         // Decode + texture floors are both 64 MB.

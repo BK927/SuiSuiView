@@ -102,6 +102,22 @@ fn scale_share(total_bytes: usize, numerator: usize) -> usize {
     total_bytes / POOL_SHARE_DENOMINATOR * numerator
 }
 
+/// What the four pools may actually occupy, which is what the settings window has
+/// to show. Every pool has a floor sized to keep one page's work resident, so a
+/// small chosen total does not scale all the way down — printing the nominal
+/// total instead lets the live RAM/GPU readout exceed the limit the user just
+/// picked. The Glow session has no GPU pools, so only the two CPU pools count.
+pub(in crate::app) fn effective_total_budget_bytes(settings: &AppSettings) -> usize {
+    let cpu = cache_budget_bytes(settings) + texture_cache_budget_cap_bytes(settings);
+    match settings.renderer_mode {
+        RendererMode::Wgpu => {
+            cpu + gpu_source_texture_budget_bytes(settings)
+                + gpu_intermediate_texture_budget_bytes(settings)
+        }
+        RendererMode::LowMemoryGlow => cpu,
+    }
+}
+
 /// Texture cache budget cap (bytes): the total's texture share, floored at
 /// [`MIN_TEXTURE_CACHE_BYTES`] so visible spreads always fit.
 pub(in crate::app) fn texture_cache_budget_cap_bytes(settings: &AppSettings) -> usize {

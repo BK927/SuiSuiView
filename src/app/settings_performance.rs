@@ -1,5 +1,5 @@
+use super::effective_total_budget_bytes;
 use super::settings::{checkbox_with_help, grid_label_with_help, info_icon, setting_group};
-use super::total_memory_budget_bytes;
 use super::ui::theme;
 use crate::core::i18n::I18n;
 use crate::core::state::{
@@ -301,7 +301,7 @@ pub(in crate::app) fn show_performance_settings(
                         ("mode", draft.cache_memory_mode.label_i18n(i18n)),
                         (
                             "cache",
-                            format!("{:.0}", mib(total_memory_budget_bytes(draft))),
+                            format!("{:.0}", mib(effective_total_budget_bytes(draft))),
                         ),
                     ],
                 ))
@@ -369,13 +369,15 @@ fn mib(bytes: usize) -> f32 {
 /// showing the number is what makes the difference legible). Manual stays
 /// bare; its DragValue sits right next to it.
 fn memory_mode_radio_label(mode: CacheMemoryMode, draft: &AppSettings, i18n: I18n) -> String {
+    // The pool floors mean a preset's nominal total is not what the app may
+    // occupy; label the radio with the ceiling the choice actually buys.
     let budget_bytes = match mode {
         CacheMemoryMode::Manual => return mode.label_i18n(i18n),
-        CacheMemoryMode::Auto => total_memory_budget_bytes(&AppSettings {
+        CacheMemoryMode::Auto => effective_total_budget_bytes(&AppSettings {
             cache_memory_mode: CacheMemoryMode::Auto,
             ..draft.clone()
         }),
-        _ => total_memory_budget_bytes(&AppSettings {
+        _ => effective_total_budget_bytes(&AppSettings {
             cache_memory_mode: mode,
             ..draft.clone()
         }),
