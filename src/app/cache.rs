@@ -1,5 +1,6 @@
 #[cfg(any(test, feature = "perf-dev", feature = "perf-diagnostics"))]
 use super::perf;
+use super::viewer::ViewMode;
 use super::SuiSuiViewApp;
 use crate::core::deband::DebandStrength;
 use crate::core::effects::ViewEffects;
@@ -77,7 +78,18 @@ impl SuiSuiViewApp {
         &self,
         target_long_edge: u32,
     ) -> PreparedTargetIntent {
-        prepared_target_intent_for_view(self.fit_mode, self.manual_zoom, target_long_edge)
+        // The strip decodes fit-width against its column no matter which fit mode
+        // the user picked (see `target_long_edge_for`), so it must be classified
+        // the same way. Reading `Original`/manual zoom literally here called a
+        // column-sized target "source-pixel inspection", which suppresses preview
+        // and nearby-page prefetch — leaving pages above the viewport centre stuck
+        // on the loading placeholder while scrolling up.
+        let (fit_mode, manual_zoom) = if self.view_mode == ViewMode::VerticalStrip {
+            (FitMode::FitWidth, 1.0)
+        } else {
+            (self.fit_mode, self.manual_zoom)
+        };
+        prepared_target_intent_for_view(fit_mode, manual_zoom, target_long_edge)
     }
 
     pub(in crate::app) fn texture_sampling_for_page_key(
@@ -415,9 +427,18 @@ impl SuiSuiViewApp {
                 continue;
             };
             keys.insert(key);
+            // Pin the preview a painting page may still be showing. Gating on the
+            // 4096px ceiling instead of the intent left large fit-display targets
+            // (high-DPI viewports, tall strip pages) able to evict the very
+            // preview on screen, blanking the page back to the placeholder for the
+            // rest of its decode. Original inspection stays out: the scheduler
+            // emits no preview jobs for it.
             if self.settings.progressive_preview_enabled
                 && target_long_edge > PREVIEW_TARGET_LONG_EDGE
-                && target_long_edge <= MAX_TARGET_LONG_EDGE
+                && !matches!(
+                    self.prepared_target_intent_for_target(target_long_edge),
+                    PreparedTargetIntent::OriginalInspection
+                )
             {
                 keys.insert(PageCacheKey {
                     target_long_edge: PREVIEW_TARGET_LONG_EDGE,
