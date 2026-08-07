@@ -28,6 +28,7 @@ Usage:
   suisuiview-cli --effect-bench <path> [--target-long-edge <px>] [--effect-report <report.json>] [--effect-report-default]
   suisuiview-cli --upscale-bench <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-method <token>] [--upscale-max-pages <count>] [--upscale-report <report.json>] [--upscale-report-default]
   suisuiview-cli --upscale-quality-scan <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-quality-method <token>] [--upscale-quality-max-pages <count>] [--upscale-quality-report <report.json>] [--upscale-quality-report-default] [--upscale-quality-visuals <dir>]
+  suisuiview-cli --cunny-probe --probe-method <token> [--probe-edge <px>] [--probe-report <report.json>] [--probe-report-default]
   suisuiview-cli --cunny-stage-stats <image> --stage-method <token> [--stage-long-edge <px>] [--stage-report <report.json>] [--stage-report-default]
 
   suisuiview-cli --upscale-render <method> <image> --upscale-output <png> --upscale-output-size <width>x<height>
@@ -89,6 +90,13 @@ pub enum CliCommand {
         max_pages: Option<usize>,
         report_path: Option<PathBuf>,
         visual_dir: Option<PathBuf>,
+    },
+    /// Synthetic structural probes for one CuNNy variant: impulse, flat field
+    /// and per-axis edges, for telling a wiring fault from a weights fault.
+    CunnyProbe {
+        method: crate::core::state::WgpuUpscaleMethod,
+        probe_edge: u32,
+        report_path: Option<PathBuf>,
     },
     /// Per-pass activation statistics for one CuNNy variant: the check that
     /// localises a silently mis-ported convolution chain to a pass index.
@@ -238,6 +246,9 @@ pub fn parse_args(args: Vec<OsString>) -> Result<CliAction, CliError> {
     if first == "--upscale-render" {
         return upscale_render_args::parse(args).map(CliAction::Command);
     }
+    if first == "--cunny-probe" {
+        return parse_cunny_probe(args).map(CliAction::Command);
+    }
     if first == "--cunny-stage-stats" {
         return parse_cunny_stage_stats(args).map(CliAction::Command);
     }
@@ -293,6 +304,7 @@ fn is_cli_command_arg(arg: &OsString) -> bool {
         || arg == "--upscale-bench"
         || arg == "--upscale-quality-scan"
         || arg == "--cunny-stage-stats"
+        || arg == "--cunny-probe"
         || arg == "--upscale-render"
         || arg == "--gpu-copy-bench"
         || arg == "--decoder-bench"
@@ -375,6 +387,19 @@ impl CliCommand {
                 max_pages,
             )
             .map_err(|error| format!("upscale quality scan failed: {error}")),
+            Self::CunnyProbe {
+                method,
+                probe_edge,
+                report_path,
+            } => crate::core::cunny_probe::run_cunny_probe(method, probe_edge)
+                .map_err(|error| format!("cunny probe failed: {error}"))
+                .and_then(|report| {
+                    crate::core::cunny_probe::print_cunny_probe_report(&report);
+                    match report_path {
+                        Some(path) => write_json_report(&path, &report),
+                        None => Ok(()),
+                    }
+                }),
             Self::CunnyStageStats {
                 image,
                 method,
@@ -385,7 +410,7 @@ impl CliCommand {
                 .and_then(|report| {
                     crate::core::cunny_stage_stats::print_cunny_stage_report(&report);
                     match report_path {
-                        Some(path) => write_cunny_stage_report(&path, &report),
+                        Some(path) => write_json_report(&path, &report),
                         None => Ok(()),
                     }
                 }),
@@ -656,6 +681,31 @@ fn parse_upscale_bench(mut args: impl Iterator<Item = OsString>) -> Result<CliCo
     })
 }
 
+fn parse_cunny_probe(mut args: impl Iterator<Item = OsString>) -> Result<CliCommand, CliError> {
+    let mut method = None;
+    let mut probe_edge = crate::core::cunny_probe::DEFAULT_PROBE_EDGE;
+    let mut report_path = None;
+    while let Some(arg) = args.next() {
+        if arg == "--probe-method" {
+            method = Some(upscale_method_arg::required(&mut args, "--probe-method")?);
+        } else if arg == "--probe-edge" {
+            probe_edge = required_u32(&mut args, "--probe-edge")?;
+        } else if arg == "--probe-report" {
+            report_path = Some(required_path(&mut args, "--probe-report requires a path")?);
+        } else if arg == "--probe-report-default" {
+            report_path = Some(crate::core::cunny_probe::default_cunny_probe_report_path());
+        } else {
+            return Err(unknown_arg(arg));
+        }
+    }
+    let method = method.ok_or_else(|| CliError::new("--cunny-probe requires --probe-method"))?;
+    Ok(CliCommand::CunnyProbe {
+        method,
+        probe_edge,
+        report_path,
+    })
+}
+
 fn parse_cunny_stage_stats(
     mut args: impl Iterator<Item = OsString>,
 ) -> Result<CliCommand, CliError> {
@@ -691,9 +741,9 @@ fn parse_cunny_stage_stats(
     })
 }
 
-fn write_cunny_stage_report(
+fn write_json_report<T: serde::Serialize>(
     path: &std::path::Path,
-    report: &crate::core::cunny_stage_stats::CunnyStageReport,
+    report: &T,
 ) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
