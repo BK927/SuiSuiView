@@ -339,9 +339,9 @@ fn product_wgpu_upscale_methods_keep_experiments_separate() {
     assert!(WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::Cunny4x24Ds));
     assert!(WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::Cunny4x32Nvl));
     assert!(WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::Cunny8x32Nvl));
-    // Cunny4x32Soft, Cunny4x32Ds and Cunny8x32Ds are withdrawn from ALL: they
-    // measured below plain bilinear. `withdrawn_upscalers_are_not_offered_but_stay_measurable`
-    // in settings_tests.rs pins that, and that they stay in GPU_METHODS.
+    // The three mpv-ported 32-feature models that measured below plain bilinear
+    // are gone entirely: `port_cunny_mpv.py` refuses to regenerate them, so the
+    // shaders had nothing behind them. Only the NVL pair survives at 32.
     assert!(
         WgpuUpscaleMethod::WgslAnime4kV32CnnX2S
             .candidate()
@@ -391,9 +391,8 @@ fn product_wgpu_upscale_methods_keep_experiments_separate() {
     assert_eq!(WgpuUpscaleMethod::Cunny4x16Ds.candidate().family, "CuNNy");
     assert_eq!(WgpuUpscaleMethod::Cunny4x24Soft.candidate().family, "CuNNy");
     assert_eq!(WgpuUpscaleMethod::Cunny4x24Ds.candidate().family, "CuNNy");
-    assert_eq!(WgpuUpscaleMethod::Cunny4x32Soft.candidate().family, "CuNNy");
-    assert_eq!(WgpuUpscaleMethod::Cunny4x32Ds.candidate().family, "CuNNy");
-    assert_eq!(WgpuUpscaleMethod::Cunny8x32Ds.candidate().family, "CuNNy");
+    assert_eq!(WgpuUpscaleMethod::Cunny4x32Nvl.candidate().family, "CuNNy");
+    assert_eq!(WgpuUpscaleMethod::Cunny8x32Nvl.candidate().family, "CuNNy");
     assert!(WgpuUpscaleMethod::Cunny4x16Soft.candidate().product_visible);
     assert!(WgpuUpscaleMethod::Cunny4x16Ds.candidate().product_visible);
     assert!(WgpuUpscaleMethod::Cunny4x24Soft.candidate().product_visible);
@@ -402,15 +401,12 @@ fn product_wgpu_upscale_methods_keep_experiments_separate() {
     assert!(WgpuUpscaleMethod::Cunny4x16Ds.product_selectable());
     assert!(WgpuUpscaleMethod::Cunny4x24Soft.product_selectable());
     assert!(WgpuUpscaleMethod::Cunny4x24Ds.product_selectable());
-    // Cunny4x32Soft / Cunny4x32Ds / Cunny8x32Ds are withdrawn from the
-    // product lists (measured below bilinear); see settings_tests.rs.
     assert!(!WgpuUpscaleMethod::Cunny4x16Soft.is_benchmark_only());
     assert!(!WgpuUpscaleMethod::Cunny4x16Ds.is_benchmark_only());
     assert!(!WgpuUpscaleMethod::Cunny4x24Soft.is_benchmark_only());
     assert!(!WgpuUpscaleMethod::Cunny4x24Ds.is_benchmark_only());
-    assert!(!WgpuUpscaleMethod::Cunny4x32Soft.is_benchmark_only());
-    assert!(!WgpuUpscaleMethod::Cunny4x32Ds.is_benchmark_only());
-    assert!(!WgpuUpscaleMethod::Cunny8x32Ds.is_benchmark_only());
+    assert!(!WgpuUpscaleMethod::Cunny4x32Nvl.is_benchmark_only());
+    assert!(!WgpuUpscaleMethod::Cunny8x32Nvl.is_benchmark_only());
     assert_eq!(
         WgpuUpscaleMethod::CunnyVeryfastSoft.label(),
         "CuNNy veryfast SOFT"
@@ -435,10 +431,7 @@ fn product_wgpu_upscale_methods_keep_experiments_separate() {
     assert_eq!(WgpuUpscaleMethod::Cunny4x24Soft.label(), "CuNNy 4x24 SOFT");
     assert_eq!(WgpuUpscaleMethod::Cunny4x24Ds.label(), "CuNNy 4x24 DS");
     assert_eq!(WgpuUpscaleMethod::Cunny4x32Nvl.label(), "CuNNy 4x32 NVL");
-    assert_eq!(WgpuUpscaleMethod::Cunny4x32Soft.label(), "CuNNy 4x32 SOFT");
-    assert_eq!(WgpuUpscaleMethod::Cunny4x32Ds.label(), "CuNNy 4x32 DS");
     assert_eq!(WgpuUpscaleMethod::Cunny8x32Nvl.label(), "CuNNy 8x32 NVL");
-    assert_eq!(WgpuUpscaleMethod::Cunny8x32Ds.label(), "CuNNy 8x32 DS");
 }
 
 fn resolve_wgpu_upscale_for_test(
@@ -716,20 +709,8 @@ fn exact_cunny_variants_render_only_when_upscaling() {
         Some(WgpuUpscaleMethod::Cunny4x32Nvl)
     );
     assert_eq!(
-        resolve_wgpu_upscale_for_test(WgpuUpscaleMethod::Cunny4x32Soft, [800, 1200], [1600, 2400]),
-        Some(WgpuUpscaleMethod::Cunny4x32Soft)
-    );
-    assert_eq!(
-        resolve_wgpu_upscale_for_test(WgpuUpscaleMethod::Cunny4x32Ds, [800, 1200], [1600, 2400]),
-        Some(WgpuUpscaleMethod::Cunny4x32Ds)
-    );
-    assert_eq!(
         resolve_wgpu_upscale_for_test(WgpuUpscaleMethod::Cunny8x32Nvl, [800, 1200], [1600, 2400]),
         Some(WgpuUpscaleMethod::Cunny8x32Nvl)
-    );
-    assert_eq!(
-        resolve_wgpu_upscale_for_test(WgpuUpscaleMethod::Cunny8x32Ds, [800, 1200], [1600, 2400]),
-        Some(WgpuUpscaleMethod::Cunny8x32Ds)
     );
     assert_eq!(
         resolve_wgpu_upscale_for_test(

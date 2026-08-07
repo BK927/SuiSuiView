@@ -590,7 +590,7 @@ struct CunnyVariantSource {
     pass_specs: &'static [CunnyPassSpec],
 }
 
-const CUNNY_VARIANTS: [CunnyVariantSource; 27] = [
+const CUNNY_VARIANTS: [CunnyVariantSource; 24] = [
     CunnyVariantSource {
         method: WgpuUpscaleMethod::CunnyVeryfastNvl,
         name: "CuNNy veryfast NVL",
@@ -753,31 +753,10 @@ const CUNNY_VARIANTS: [CunnyVariantSource; 27] = [
         pass_specs: &CUNNY_4X32_NVL_PASSES,
     },
     CunnyVariantSource {
-        method: WgpuUpscaleMethod::Cunny4x32Soft,
-        name: "CuNNy 4x32 SOFT",
-        shader: include_str!("../../cunny_4x32_soft.wgsl"),
-        entry_points: &CUNNY_4X32_SOFT_ENTRY_POINTS,
-        pass_specs: &CUNNY_4X32_NVL_PASSES,
-    },
-    CunnyVariantSource {
-        method: WgpuUpscaleMethod::Cunny4x32Ds,
-        name: "CuNNy 4x32 DS",
-        shader: include_str!("../../cunny_4x32_ds.wgsl"),
-        entry_points: &CUNNY_4X32_DS_ENTRY_POINTS,
-        pass_specs: &CUNNY_4X32_NVL_PASSES,
-    },
-    CunnyVariantSource {
         method: WgpuUpscaleMethod::Cunny8x32Nvl,
         name: "CuNNy 8x32 NVL",
         shader: include_str!("../../cunny_8x32_nvl.wgsl"),
         entry_points: &CUNNY_8X32_NVL_ENTRY_POINTS,
-        pass_specs: &CUNNY_8X32_NVL_PASSES,
-    },
-    CunnyVariantSource {
-        method: WgpuUpscaleMethod::Cunny8x32Ds,
-        name: "CuNNy 8x32 DS",
-        shader: include_str!("../../cunny_8x32_ds.wgsl"),
-        entry_points: &CUNNY_8X32_DS_ENTRY_POINTS,
         pass_specs: &CUNNY_8X32_NVL_PASSES,
     },
 ];

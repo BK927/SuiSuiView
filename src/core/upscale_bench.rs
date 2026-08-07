@@ -664,7 +664,7 @@ mod tests {
         assert!(!default_methods.contains(&WgpuUpscaleMethod::WgslArtcnnC4F16));
         assert!(!default_methods.contains(&WgpuUpscaleMethod::WgslArtcnnC4F32Ds));
         assert!(!default_methods.contains(&WgpuUpscaleMethod::CunnyVeryfastSoft));
-        assert!(!default_methods.contains(&WgpuUpscaleMethod::Cunny8x32Ds));
+        assert!(!default_methods.contains(&WgpuUpscaleMethod::Cunny8x32Nvl));
         assert_eq!(
             gpu_methods_for_filter(Some(WgpuUpscaleMethod::WgslArtcnnC4F16)),
             vec![WgpuUpscaleMethod::WgslArtcnnC4F16]

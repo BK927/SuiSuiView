@@ -496,10 +496,20 @@ fn an_upscaler_this_build_dropped_costs_only_that_one_setting() {
     // error, so a name no longer in the enum has to read as absent rather than
     // fail. Anything else and withdrawing an upscaler silently resets the window
     // placement, the book list and every unrelated preference along with it.
-    let settings: AppSettings = serde_json::from_str(
-        r#"{"wgpu_upscale_method":"CunnyModelThisBuildNeverHad","strip_wheel_scroll_pct":42}"#,
-    )
-    .unwrap();
-    assert_eq!(settings.wgpu_upscale_method, WgpuUpscaleMethod::default());
-    assert_eq!(settings.strip_wheel_scroll_pct, 42);
+    for name in [
+        "CunnyModelThisBuildNeverHad",
+        // The three the porter can no longer regenerate, dropped with their
+        // shaders. Anyone who selected one before they were withdrawn still has
+        // the name sitting in their state.json.
+        "Cunny4x32Soft",
+        "Cunny4x32Ds",
+        "Cunny8x32Ds",
+    ] {
+        let settings: AppSettings = serde_json::from_str(&format!(
+            r#"{{"wgpu_upscale_method":"{name}","strip_wheel_scroll_pct":42}}"#
+        ))
+        .unwrap_or_else(|error| panic!("{name} must not fail the parse: {error}"));
+        assert_eq!(settings.wgpu_upscale_method, WgpuUpscaleMethod::default());
+        assert_eq!(settings.strip_wheel_scroll_pct, 42);
+    }
 }

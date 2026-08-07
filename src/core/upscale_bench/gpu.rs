@@ -498,10 +498,7 @@ impl GpuUpscaleBench {
                 | WgpuUpscaleMethod::Cunny4x24Soft
                 | WgpuUpscaleMethod::Cunny4x24Ds
                 | WgpuUpscaleMethod::Cunny4x32Nvl
-                | WgpuUpscaleMethod::Cunny4x32Soft
-                | WgpuUpscaleMethod::Cunny4x32Ds
                 | WgpuUpscaleMethod::Cunny8x32Nvl
-                | WgpuUpscaleMethod::Cunny8x32Ds
         ) {
             return self
                 .cunny

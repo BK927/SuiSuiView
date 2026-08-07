@@ -55,10 +55,7 @@ pub enum WgpuUpscaleMethod {
     Cunny4x24Soft,
     Cunny4x24Ds,
     Cunny4x32Nvl,
-    Cunny4x32Soft,
-    Cunny4x32Ds,
     Cunny8x32Nvl,
-    Cunny8x32Ds,
 }
 
 mod upscaler_choices;
@@ -521,41 +518,11 @@ impl WgpuUpscaleMethod {
                 "wgpu compute",
                 true,
             ),
-            Self::Cunny4x32Soft => upscaler_candidate!(
-                "CuNNy",
-                "CuNNy 4x32 SOFT",
-                "funnyplanter/CuNNy mpv soft",
-                "LGPL-3.0-or-later",
-                "2x",
-                "16",
-                "wgpu compute",
-                true,
-            ),
-            Self::Cunny4x32Ds => upscaler_candidate!(
-                "CuNNy",
-                "CuNNy 4x32 DS",
-                "funnyplanter/CuNNy mpv ds",
-                "LGPL-3.0-or-later",
-                "2x",
-                "16",
-                "wgpu compute",
-                true,
-            ),
             Self::Cunny8x32Nvl => upscaler_candidate!(
                 "CuNNy",
                 "CuNNy 8x32 NVL",
                 "funnyplanter/CuNNy magpie normal",
                 "LGPL-3.0-or-later / GPL-3.0-or-later effect header",
-                "2x",
-                "28",
-                "wgpu compute",
-                true,
-            ),
-            Self::Cunny8x32Ds => upscaler_candidate!(
-                "CuNNy",
-                "CuNNy 8x32 DS",
-                "funnyplanter/CuNNy mpv ds",
-                "LGPL-3.0-or-later",
                 "2x",
                 "28",
                 "wgpu compute",
@@ -621,10 +588,7 @@ impl WgpuUpscaleMethod {
             Self::Cunny4x24Soft => "cunny_4x24_soft",
             Self::Cunny4x24Ds => "cunny_4x24_ds",
             Self::Cunny4x32Nvl => "cunny_4x32_nvl",
-            Self::Cunny4x32Soft => "cunny_4x32_soft",
-            Self::Cunny4x32Ds => "cunny_4x32_ds",
             Self::Cunny8x32Nvl => "cunny_8x32_nvl",
-            Self::Cunny8x32Ds => "cunny_8x32_ds",
         }
     }
 
@@ -670,10 +634,7 @@ impl WgpuUpscaleMethod {
                 | Self::Cunny4x24Soft
                 | Self::Cunny4x24Ds
                 | Self::Cunny4x32Nvl
-                | Self::Cunny4x32Soft
-                | Self::Cunny4x32Ds
                 | Self::Cunny8x32Nvl
-                | Self::Cunny8x32Ds
         )
     }
 
@@ -729,10 +690,7 @@ impl WgpuUpscaleMethod {
             | Self::Cunny4x24Soft
             | Self::Cunny4x24Ds
             | Self::Cunny4x32Nvl
-            | Self::Cunny4x32Soft
-            | Self::Cunny4x32Ds
-            | Self::Cunny8x32Nvl
-            | Self::Cunny8x32Ds => 0,
+            | Self::Cunny8x32Nvl => 0,
         }
     }
 

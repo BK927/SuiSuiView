@@ -40,7 +40,7 @@ impl WgpuUpscaleMethod {
         Self::Cunny8x32Nvl,
     ];
 
-    pub const GPU_METHODS: [Self; 45] = [
+    pub const GPU_METHODS: [Self; 42] = [
         Self::WgslBilinear,
         Self::WgslFsr1Style,
         Self::WgslFsr1EasuRcas,
@@ -82,10 +82,7 @@ impl WgpuUpscaleMethod {
         Self::Cunny4x24Soft,
         Self::Cunny4x24Ds,
         Self::Cunny4x32Nvl,
-        Self::Cunny4x32Soft,
-        Self::Cunny4x32Ds,
         Self::Cunny8x32Nvl,
-        Self::Cunny8x32Ds,
     ];
 
     pub const EXPERIMENTAL: [Self; 7] = [

@@ -249,7 +249,7 @@ mod tests {
         let image = ColorImage::new([4, 4], vec![egui::Color32::BLACK; 16]);
         let report = build_report(
             Path::new("probe.png"),
-            WgpuUpscaleMethod::Cunny4x32Soft,
+            WgpuUpscaleMethod::Cunny4x32Nvl,
             &image,
             &samples,
         );

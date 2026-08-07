@@ -230,44 +230,6 @@ pub(super) const CUNNY_4X32_NVL_ENTRY_POINTS: [&str; 16] = [
     "cunny_4x32_nvl_pass_5",
 ];
 
-pub(super) const CUNNY_4X32_SOFT_ENTRY_POINTS: [&str; 16] = [
-    "cunny_4x32_soft_pass_0_chunk_0",
-    "cunny_4x32_soft_pass_0_chunk_1",
-    "cunny_4x32_soft_pass_0_chunk_2",
-    "cunny_4x32_soft_pass_1_chunk_0",
-    "cunny_4x32_soft_pass_1_chunk_1",
-    "cunny_4x32_soft_pass_1_chunk_2",
-    "cunny_4x32_soft_pass_2_chunk_0",
-    "cunny_4x32_soft_pass_2_chunk_1",
-    "cunny_4x32_soft_pass_2_chunk_2",
-    "cunny_4x32_soft_pass_3_chunk_0",
-    "cunny_4x32_soft_pass_3_chunk_1",
-    "cunny_4x32_soft_pass_3_chunk_2",
-    "cunny_4x32_soft_pass_4_chunk_0",
-    "cunny_4x32_soft_pass_4_chunk_1",
-    "cunny_4x32_soft_pass_4_chunk_2",
-    "cunny_4x32_soft_pass_5",
-];
-
-pub(super) const CUNNY_4X32_DS_ENTRY_POINTS: [&str; 16] = [
-    "cunny_4x32_ds_pass_0_chunk_0",
-    "cunny_4x32_ds_pass_0_chunk_1",
-    "cunny_4x32_ds_pass_0_chunk_2",
-    "cunny_4x32_ds_pass_1_chunk_0",
-    "cunny_4x32_ds_pass_1_chunk_1",
-    "cunny_4x32_ds_pass_1_chunk_2",
-    "cunny_4x32_ds_pass_2_chunk_0",
-    "cunny_4x32_ds_pass_2_chunk_1",
-    "cunny_4x32_ds_pass_2_chunk_2",
-    "cunny_4x32_ds_pass_3_chunk_0",
-    "cunny_4x32_ds_pass_3_chunk_1",
-    "cunny_4x32_ds_pass_3_chunk_2",
-    "cunny_4x32_ds_pass_4_chunk_0",
-    "cunny_4x32_ds_pass_4_chunk_1",
-    "cunny_4x32_ds_pass_4_chunk_2",
-    "cunny_4x32_ds_pass_5",
-];
-
 pub(super) const CUNNY_8X32_NVL_ENTRY_POINTS: [&str; 28] = [
     "cunny_8x32_nvl_pass_0_chunk_0",
     "cunny_8x32_nvl_pass_0_chunk_1",
@@ -297,37 +259,6 @@ pub(super) const CUNNY_8X32_NVL_ENTRY_POINTS: [&str; 28] = [
     "cunny_8x32_nvl_pass_8_chunk_1",
     "cunny_8x32_nvl_pass_8_chunk_2",
     "cunny_8x32_nvl_pass_9",
-];
-
-pub(super) const CUNNY_8X32_DS_ENTRY_POINTS: [&str; 28] = [
-    "cunny_8x32_ds_pass_0_chunk_0",
-    "cunny_8x32_ds_pass_0_chunk_1",
-    "cunny_8x32_ds_pass_0_chunk_2",
-    "cunny_8x32_ds_pass_1_chunk_0",
-    "cunny_8x32_ds_pass_1_chunk_1",
-    "cunny_8x32_ds_pass_1_chunk_2",
-    "cunny_8x32_ds_pass_2_chunk_0",
-    "cunny_8x32_ds_pass_2_chunk_1",
-    "cunny_8x32_ds_pass_2_chunk_2",
-    "cunny_8x32_ds_pass_3_chunk_0",
-    "cunny_8x32_ds_pass_3_chunk_1",
-    "cunny_8x32_ds_pass_3_chunk_2",
-    "cunny_8x32_ds_pass_4_chunk_0",
-    "cunny_8x32_ds_pass_4_chunk_1",
-    "cunny_8x32_ds_pass_4_chunk_2",
-    "cunny_8x32_ds_pass_5_chunk_0",
-    "cunny_8x32_ds_pass_5_chunk_1",
-    "cunny_8x32_ds_pass_5_chunk_2",
-    "cunny_8x32_ds_pass_6_chunk_0",
-    "cunny_8x32_ds_pass_6_chunk_1",
-    "cunny_8x32_ds_pass_6_chunk_2",
-    "cunny_8x32_ds_pass_7_chunk_0",
-    "cunny_8x32_ds_pass_7_chunk_1",
-    "cunny_8x32_ds_pass_7_chunk_2",
-    "cunny_8x32_ds_pass_8_chunk_0",
-    "cunny_8x32_ds_pass_8_chunk_1",
-    "cunny_8x32_ds_pass_8_chunk_2",
-    "cunny_8x32_ds_pass_9",
 ];
 
 pub(super) const CUNNY_VERYFAST_NVL_PASSES: [CunnyPassSpec; 4] = [
