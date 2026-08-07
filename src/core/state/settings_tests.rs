@@ -491,44 +491,15 @@ fn wgpu_upscale_method_settings_normalize_only_unselectable_methods_to_auto() {
 }
 
 #[test]
-fn withdrawn_upscalers_are_not_offered_but_stay_measurable() {
-    // Measured below plain bilinear on two content types at two scales: offering
-    // them lets a user make the page worse than doing nothing.
-    for method in [
-        WgpuUpscaleMethod::Cunny4x32Soft,
-        WgpuUpscaleMethod::Cunny4x32Ds,
-        WgpuUpscaleMethod::Cunny8x32Ds,
-    ] {
-        assert!(
-            !method.user_selectable(),
-            "{} must not be offered",
-            method.token()
-        );
-        assert!(
-            !WgpuUpscaleMethod::SETTINGS_CHOICES.contains(&method),
-            "{} must not be listed in settings",
-            method.token()
-        );
-        // Still reachable from the CLI bench so the port can be re-checked.
-        assert!(
-            WgpuUpscaleMethod::GPU_METHODS.contains(&method),
-            "{} must stay benchmarkable",
-            method.token()
-        );
-    }
-    // The healthy 32-feature ports are untouched.
-    assert!(WgpuUpscaleMethod::Cunny4x32Nvl.user_selectable());
-    assert!(WgpuUpscaleMethod::Cunny8x32Nvl.user_selectable());
-}
-
-#[test]
-fn withdrawn_upscalers_still_deserialize_from_an_existing_state_file() {
-    // The enum variants remain so an existing state.json is never a parse error;
-    // `normalize_product_choices` is what migrates the value.
-    let settings: AppSettings =
-        serde_json::from_str(r#"{"wgpu_upscale_method":"Cunny4x32Soft"}"#).unwrap();
-    assert_eq!(
-        settings.wgpu_upscale_method,
-        WgpuUpscaleMethod::Cunny4x32Soft
-    );
+fn an_upscaler_this_build_dropped_costs_only_that_one_setting() {
+    // `StateStore::load` falls back to a default `PersistedState` on any parse
+    // error, so a name no longer in the enum has to read as absent rather than
+    // fail. Anything else and withdrawing an upscaler silently resets the window
+    // placement, the book list and every unrelated preference along with it.
+    let settings: AppSettings = serde_json::from_str(
+        r#"{"wgpu_upscale_method":"CunnyModelThisBuildNeverHad","strip_wheel_scroll_pct":42}"#,
+    )
+    .unwrap();
+    assert_eq!(settings.wgpu_upscale_method, WgpuUpscaleMethod::default());
+    assert_eq!(settings.strip_wheel_scroll_pct, 42);
 }

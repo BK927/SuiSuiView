@@ -370,7 +370,12 @@ pub struct AppSettings {
     pub gpu_effect_mode: GpuEffectMode,
     #[serde(default)]
     pub renderer_mode: RendererMode,
-    #[serde(default)]
+    /// Falls back to the default rather than failing the parse: `load` drops the
+    /// whole file on any deserialization error, so an upscaler that a later
+    /// version withdraws would otherwise take the window placement, the book
+    /// list and every other setting with it. `normalize_product_choices` is
+    /// what settles on the replacement.
+    #[serde(default, deserialize_with = "deserialize_known_upscale_method")]
     pub wgpu_upscale_method: WgpuUpscaleMethod,
     /// Debanding strength for the WGPU display path; `Off` by default.
     #[serde(default)]
@@ -649,6 +654,16 @@ fn default_strip_drag_scroll_pct() -> u32 {
 
 fn default_cpu_upscale_filter() -> CpuScaleFilter {
     CpuScaleFilter::CatmullRom
+}
+
+/// Read a `WgpuUpscaleMethod`, treating a name this build no longer knows as
+/// absent instead of as a parse failure.
+fn deserialize_known_upscale_method<'de, D>(deserializer: D) -> Result<WgpuUpscaleMethod, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 pub fn default_top_bar_cpu_scale_filters() -> Vec<CpuScaleFilter> {
