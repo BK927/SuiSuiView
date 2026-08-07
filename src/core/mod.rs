@@ -1,4 +1,5 @@
 pub mod artcnn;
+pub mod cunny_stage_stats;
 pub mod deband;
 #[cfg(test)]
 mod deband_quality;

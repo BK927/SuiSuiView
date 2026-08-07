@@ -13,6 +13,7 @@ mod anime4k;
 mod anime4k_m;
 mod artcnn;
 mod cunny;
+mod cunny_tables;
 mod nvidia_nis;
 mod span;
 use acnet::AcnetBench;
@@ -44,6 +45,144 @@ pub(crate) struct GpuUpscaleBench {
     span: Option<SpanBench>,
     acnet: Option<AcnetBench>,
     cunny: Option<CunnyBench>,
+}
+
+/// Sentinel `slot` marking the chain's visible 2x output rather than one of the
+/// numbered intermediates.
+pub(crate) const FINAL_OUTPUT_SLOT: usize = usize::MAX;
+
+/// Read a whole texture back to RGBA bytes, unpadding the copy rows. Diagnostic
+/// path only: it stalls the GPU.
+fn read_texture_bytes(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, String> {
+    let padded_bytes_per_row = align_to(width * 4, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("suisuiview-cunny-stage-readback"),
+        size: padded_bytes_per_row as u64 * height as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("suisuiview-cunny-stage-readback-encoder"),
+    });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_bytes_per_row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit(Some(encoder.finish()));
+
+    let slice = buffer.slice(..);
+    let (sender, receiver) = mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = sender.send(result.map_err(|error| error.to_string()));
+    });
+    device
+        .poll(wgpu::PollType::Wait)
+        .map_err(|error| format!("wgpu poll failed: {error}"))?;
+    receiver
+        .recv()
+        .map_err(|error| format!("wgpu readback channel failed: {error}"))?
+        .map_err(|error| format!("wgpu readback failed: {error}"))?;
+
+    let mapped = slice.get_mapped_range();
+    let row_bytes = width as usize * 4;
+    let mut pixels = vec![0_u8; row_bytes * height as usize];
+    for y in 0..height as usize {
+        let src = y * padded_bytes_per_row as usize;
+        let dst = y * row_bytes;
+        pixels[dst..dst + row_bytes].copy_from_slice(&mapped[src..src + row_bytes]);
+    }
+    drop(mapped);
+    buffer.unmap();
+    Ok(pixels)
+}
+
+/// Summary of one texture's bytes. Enough to spot the ways a mis-ported
+/// convolution chain fails — saturation at either rail, a collapse to a constant,
+/// or a dead (all-zero) plane — without moving whole images around.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub(crate) struct ByteStats {
+    pub(crate) mean: f64,
+    pub(crate) std_dev: f64,
+    pub(crate) min: u8,
+    pub(crate) max: u8,
+    /// Fraction of bytes at exactly 0 and exactly 255. A healthy activation map
+    /// keeps both small; a broken one pins to a rail.
+    pub(crate) zero_ratio: f64,
+    pub(crate) saturated_ratio: f64,
+}
+
+impl ByteStats {
+    pub(crate) fn of(bytes: &[u8]) -> Self {
+        if bytes.is_empty() {
+            return Self {
+                mean: 0.0,
+                std_dev: 0.0,
+                min: 0,
+                max: 0,
+                zero_ratio: 0.0,
+                saturated_ratio: 0.0,
+            };
+        }
+        let count = bytes.len() as f64;
+        let mut sum = 0.0;
+        let mut sum_sq = 0.0;
+        let mut min = u8::MAX;
+        let mut max = u8::MIN;
+        let mut zeros = 0u64;
+        let mut saturated = 0u64;
+        for &byte in bytes {
+            let value = byte as f64;
+            sum += value;
+            sum_sq += value * value;
+            min = min.min(byte);
+            max = max.max(byte);
+            if byte == 0 {
+                zeros += 1;
+            } else if byte == u8::MAX {
+                saturated += 1;
+            }
+        }
+        let mean = sum / count;
+        Self {
+            mean,
+            std_dev: (sum_sq / count - mean * mean).max(0.0).sqrt(),
+            min,
+            max,
+            zero_ratio: zeros as f64 / count,
+            saturated_ratio: saturated as f64 / count,
+        }
+    }
+}
+
+/// One intermediate texture as it stood right after the pass that wrote it.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub(crate) struct CunnyStageSample {
+    pub(crate) pass: usize,
+    pub(crate) slot: usize,
+    pub(crate) stats: ByteStats,
 }
 
 pub(crate) struct GpuUpscaleOutput {
@@ -247,6 +386,27 @@ impl GpuUpscaleBench {
             acnet,
             cunny,
         })
+    }
+
+    /// Per-pass activation statistics for one CuNNy variant (see
+    /// [`cunny::CunnyBench::stage_stats`]). Only the CuNNy family is chained
+    /// deeply enough for this to say anything, so other methods are rejected
+    /// rather than silently returning an empty run.
+    pub(crate) fn cunny_stage_stats(
+        &self,
+        method: WgpuUpscaleMethod,
+        image: &ColorImage,
+    ) -> Result<Vec<CunnyStageSample>, String> {
+        if !method.is_cunny() {
+            return Err(format!(
+                "{} is not a CuNNy variant; stage stats only apply to the CuNNy chain",
+                method.label()
+            ));
+        }
+        self.cunny
+            .as_ref()
+            .ok_or_else(|| "CuNNy GPU pipelines unavailable".to_owned())?
+            .stage_stats(method, &self.device, &self.queue, image)
     }
 
     pub(crate) fn apply(

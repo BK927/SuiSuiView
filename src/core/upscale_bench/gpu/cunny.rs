@@ -1,4 +1,8 @@
-use super::{align_to, GpuUpscaleOutput, TEXTURE_FORMAT};
+use super::cunny_tables::*;
+use super::{
+    align_to, read_texture_bytes, ByteStats, CunnyStageSample, GpuUpscaleOutput, FINAL_OUTPUT_SLOT,
+    TEXTURE_FORMAT,
+};
 use crate::core::gpu_effect::color_image_to_rgba;
 use crate::core::state::WgpuUpscaleMethod;
 use egui::ColorImage;
@@ -10,10 +14,10 @@ use wgpu::util::DeviceExt;
 const CUNNY_INPUT_SLOTS: usize = 8;
 const CUNNY_OUTPUT_SLOTS: usize = 3;
 const CUNNY_INTERMEDIATE_CAPACITY: usize = 16;
-const DUMMY_READ: usize = CUNNY_INTERMEDIATE_CAPACITY;
-const DUMMY_OUT0: usize = DUMMY_READ + 1;
-const DUMMY_OUT1: usize = DUMMY_READ + 2;
-const DUMMY_OUT2: usize = DUMMY_READ + 3;
+pub(super) const DUMMY_READ: usize = CUNNY_INTERMEDIATE_CAPACITY;
+pub(super) const DUMMY_OUT0: usize = DUMMY_READ + 1;
+pub(super) const DUMMY_OUT1: usize = DUMMY_READ + 2;
+pub(super) const DUMMY_OUT2: usize = DUMMY_READ + 3;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -38,9 +42,9 @@ struct CunnyVariantBench {
 }
 
 #[derive(Clone, Copy)]
-struct CunnyPassSpec {
-    inputs: &'static [usize],
-    outputs: &'static [usize],
+pub(super) struct CunnyPassSpec {
+    pub(super) inputs: &'static [usize],
+    pub(super) outputs: &'static [usize],
 }
 
 impl CunnyBench {
@@ -318,6 +322,169 @@ impl CunnyBench {
             image: ColorImage::from_rgba_unmultiplied([output_width, output_height], &pixels),
             elapsed,
         })
+    }
+
+    /// Run the chain one pass at a time, reading every intermediate a pass writes
+    /// back to the CPU and summarising it. Diagnostic only — a readback and a full
+    /// GPU stall per pass make this far slower than [`Self::apply`].
+    ///
+    /// This is how a ported model is checked for a silent break. A healthy CuNNy
+    /// chain keeps its activations spread across the byte range; a mis-ported one
+    /// saturates, flatlines, or collapses to a constant at the pass where the port
+    /// went wrong. Comparing a suspect variant against a known-good sibling of the
+    /// same family localises the defect to a pass index.
+    pub(super) fn stage_stats(
+        &self,
+        method: WgpuUpscaleMethod,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        image: &ColorImage,
+    ) -> Result<Vec<CunnyStageSample>, String> {
+        let variant = self
+            .variants
+            .iter()
+            .find(|variant| variant.method == method)
+            .ok_or_else(|| format!("{} GPU pipelines unavailable", method.label()))?;
+        let [source_width, source_height] = image.size;
+        if source_width == 0 || source_height == 0 {
+            return Err("stage stats need a non-empty image".to_owned());
+        }
+        let source_extent = wgpu::Extent3d {
+            width: source_width as u32,
+            height: source_height as u32,
+            depth_or_array_layers: 1,
+        };
+        let output_extent = wgpu::Extent3d {
+            width: (source_width * 2) as u32,
+            height: (source_height * 2) as u32,
+            depth_or_array_layers: 1,
+        };
+
+        let source_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("suisuiview-cunny-stage-source"),
+            size: source_extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEXTURE_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &source_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &color_image_to_rgba(image),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some((source_width * 4) as u32),
+                rows_per_image: Some(source_height as u32),
+            },
+            source_extent,
+        );
+
+        let intermediates: Vec<wgpu::Texture> = (0..intermediate_count(variant.pass_specs))
+            .map(|index| create_intermediate_texture(device, source_extent, index))
+            .collect();
+        let intermediate_views: Vec<wgpu::TextureView> = intermediates
+            .iter()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect();
+        let dummy_read_texture = create_intermediate_texture(device, source_extent, DUMMY_READ);
+        let dummy_read_view =
+            dummy_read_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let dummy_output_textures: Vec<wgpu::Texture> = (0..CUNNY_OUTPUT_SLOTS)
+            .map(dummy_output_index)
+            .map(|index| create_intermediate_texture(device, source_extent, index))
+            .collect();
+        let dummy_output_views: Vec<wgpu::TextureView> = dummy_output_textures
+            .iter()
+            .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect();
+        let output_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("suisuiview-cunny-stage-output"),
+            size: output_extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEXTURE_FORMAT,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let params = CunnyParams {
+            source_width: source_width as u32,
+            source_height: source_height as u32,
+            output_width: output_extent.width,
+            output_height: output_extent.height,
+        };
+        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("suisuiview-cunny-stage-params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        let mut samples = Vec::new();
+        for (index, pass_spec) in variant.pass_specs.iter().enumerate() {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("suisuiview-cunny-stage-encoder"),
+            });
+            self.run_pass(
+                &mut RunPassCtx {
+                    device,
+                    encoder: &mut encoder,
+                    source_view: &source_view,
+                    intermediate_views: &intermediate_views,
+                    dummy_read_view: &dummy_read_view,
+                    dummy_output_views: &dummy_output_views,
+                    output_view: &output_view,
+                    params_buffer: &params_buffer,
+                    variant,
+                },
+                index,
+                *pass_spec,
+                [source_width as u32, source_height as u32],
+            );
+            queue.submit(Some(encoder.finish()));
+
+            for slot in pass_spec.outputs.iter().copied() {
+                let Some(texture) = intermediates.get(slot) else {
+                    continue;
+                };
+                let bytes = read_texture_bytes(
+                    device,
+                    queue,
+                    texture,
+                    source_width as u32,
+                    source_height as u32,
+                )?;
+                samples.push(CunnyStageSample {
+                    pass: index,
+                    slot,
+                    stats: ByteStats::of(&bytes),
+                });
+            }
+        }
+
+        // The final pass writes the 2x output rather than an intermediate; report
+        // it under the sentinel slot so a run always ends with the visible result.
+        let final_bytes = read_texture_bytes(
+            device,
+            queue,
+            &output_texture,
+            output_extent.width,
+            output_extent.height,
+        )?;
+        samples.push(CunnyStageSample {
+            pass: variant.pass_specs.len().saturating_sub(1),
+            slot: FINAL_OUTPUT_SLOT,
+            stats: ByteStats::of(&final_bytes),
+        });
+        Ok(samples)
     }
 
     fn run_pass(
@@ -623,793 +790,6 @@ fn cunny_variant_sources(
         .filter(move |variant| method_filter.is_none_or(|method| variant.method == method))
 }
 
-const CUNNY_VERYFAST_NVL_ENTRY_POINTS: [&str; 4] = [
-    "cunny_veryfast_nvl_pass_0",
-    "cunny_veryfast_nvl_pass_1",
-    "cunny_veryfast_nvl_pass_2",
-    "cunny_veryfast_nvl_pass_3",
-];
-
-const CUNNY_VERYFAST_SOFT_ENTRY_POINTS: [&str; 4] = [
-    "cunny_veryfast_soft_pass_0",
-    "cunny_veryfast_soft_pass_1",
-    "cunny_veryfast_soft_pass_2",
-    "cunny_veryfast_soft_pass_3",
-];
-
-const CUNNY_FASTER_NVL_ENTRY_POINTS: [&str; 4] = [
-    "cunny_faster_nvl_pass_0",
-    "cunny_faster_nvl_pass_1",
-    "cunny_faster_nvl_pass_2",
-    "cunny_faster_nvl_pass_3",
-];
-
-const CUNNY_FASTER_SOFT_ENTRY_POINTS: [&str; 4] = [
-    "cunny_faster_soft_pass_0",
-    "cunny_faster_soft_pass_1",
-    "cunny_faster_soft_pass_2",
-    "cunny_faster_soft_pass_3",
-];
-
-const CUNNY_FASTER_DS_ENTRY_POINTS: [&str; 4] = [
-    "cunny_faster_ds_pass_0",
-    "cunny_faster_ds_pass_1",
-    "cunny_faster_ds_pass_2",
-    "cunny_faster_ds_pass_3",
-];
-
-const CUNNY_FAST_NVL_ENTRY_POINTS: [&str; 4] = [
-    "cunny_fast_nvl_pass_0",
-    "cunny_fast_nvl_pass_1",
-    "cunny_fast_nvl_pass_2",
-    "cunny_fast_nvl_pass_3",
-];
-
-const CUNNY_FAST_SOFT_ENTRY_POINTS: [&str; 4] = [
-    "cunny_fast_soft_pass_0",
-    "cunny_fast_soft_pass_1",
-    "cunny_fast_soft_pass_2",
-    "cunny_fast_soft_pass_3",
-];
-
-const CUNNY_FAST_DS_ENTRY_POINTS: [&str; 4] = [
-    "cunny_fast_ds_pass_0",
-    "cunny_fast_ds_pass_1",
-    "cunny_fast_ds_pass_2",
-    "cunny_fast_ds_pass_3",
-];
-
-const CUNNY_2X12_SOFT_ENTRY_POINTS: [&str; 4] = [
-    "cunny_2x12_soft_pass_0",
-    "cunny_2x12_soft_pass_1",
-    "cunny_2x12_soft_pass_2",
-    "cunny_2x12_soft_pass_3",
-];
-
-const CUNNY_2X12_DS_ENTRY_POINTS: [&str; 4] = [
-    "cunny_2x12_ds_pass_0",
-    "cunny_2x12_ds_pass_1",
-    "cunny_2x12_ds_pass_2",
-    "cunny_2x12_ds_pass_3",
-];
-
-const CUNNY_3X12_NVL_ENTRY_POINTS: [&str; 5] = [
-    "cunny_3x12_nvl_pass_0",
-    "cunny_3x12_nvl_pass_1",
-    "cunny_3x12_nvl_pass_2",
-    "cunny_3x12_nvl_pass_3",
-    "cunny_3x12_nvl_pass_4",
-];
-
-const CUNNY_3X12_SOFT_ENTRY_POINTS: [&str; 5] = [
-    "cunny_3x12_soft_pass_0",
-    "cunny_3x12_soft_pass_1",
-    "cunny_3x12_soft_pass_2",
-    "cunny_3x12_soft_pass_3",
-    "cunny_3x12_soft_pass_4",
-];
-
-const CUNNY_3X12_DS_ENTRY_POINTS: [&str; 5] = [
-    "cunny_3x12_ds_pass_0",
-    "cunny_3x12_ds_pass_1",
-    "cunny_3x12_ds_pass_2",
-    "cunny_3x12_ds_pass_3",
-    "cunny_3x12_ds_pass_4",
-];
-
-const CUNNY_4X12_NVL_ENTRY_POINTS: [&str; 6] = [
-    "cunny_4x12_nvl_pass_0",
-    "cunny_4x12_nvl_pass_1",
-    "cunny_4x12_nvl_pass_2",
-    "cunny_4x12_nvl_pass_3",
-    "cunny_4x12_nvl_pass_4",
-    "cunny_4x12_nvl_pass_5",
-];
-
-const CUNNY_4X12_SOFT_ENTRY_POINTS: [&str; 6] = [
-    "cunny_4x12_soft_pass_0",
-    "cunny_4x12_soft_pass_1",
-    "cunny_4x12_soft_pass_2",
-    "cunny_4x12_soft_pass_3",
-    "cunny_4x12_soft_pass_4",
-    "cunny_4x12_soft_pass_5",
-];
-
-const CUNNY_4X12_DS_ENTRY_POINTS: [&str; 6] = [
-    "cunny_4x12_ds_pass_0",
-    "cunny_4x12_ds_pass_1",
-    "cunny_4x12_ds_pass_2",
-    "cunny_4x12_ds_pass_3",
-    "cunny_4x12_ds_pass_4",
-    "cunny_4x12_ds_pass_5",
-];
-
-const CUNNY_4X16_NVL_ENTRY_POINTS: [&str; 11] = [
-    "cunny_4x16_nvl_pass_0_chunk_0",
-    "cunny_4x16_nvl_pass_0_chunk_1",
-    "cunny_4x16_nvl_pass_1_chunk_0",
-    "cunny_4x16_nvl_pass_1_chunk_1",
-    "cunny_4x16_nvl_pass_2_chunk_0",
-    "cunny_4x16_nvl_pass_2_chunk_1",
-    "cunny_4x16_nvl_pass_3_chunk_0",
-    "cunny_4x16_nvl_pass_3_chunk_1",
-    "cunny_4x16_nvl_pass_4_chunk_0",
-    "cunny_4x16_nvl_pass_4_chunk_1",
-    "cunny_4x16_nvl_pass_5",
-];
-
-const CUNNY_4X16_SOFT_ENTRY_POINTS: [&str; 11] = [
-    "cunny_4x16_soft_pass_0_chunk_0",
-    "cunny_4x16_soft_pass_0_chunk_1",
-    "cunny_4x16_soft_pass_1_chunk_0",
-    "cunny_4x16_soft_pass_1_chunk_1",
-    "cunny_4x16_soft_pass_2_chunk_0",
-    "cunny_4x16_soft_pass_2_chunk_1",
-    "cunny_4x16_soft_pass_3_chunk_0",
-    "cunny_4x16_soft_pass_3_chunk_1",
-    "cunny_4x16_soft_pass_4_chunk_0",
-    "cunny_4x16_soft_pass_4_chunk_1",
-    "cunny_4x16_soft_pass_5",
-];
-
-const CUNNY_4X16_DS_ENTRY_POINTS: [&str; 11] = [
-    "cunny_4x16_ds_pass_0_chunk_0",
-    "cunny_4x16_ds_pass_0_chunk_1",
-    "cunny_4x16_ds_pass_1_chunk_0",
-    "cunny_4x16_ds_pass_1_chunk_1",
-    "cunny_4x16_ds_pass_2_chunk_0",
-    "cunny_4x16_ds_pass_2_chunk_1",
-    "cunny_4x16_ds_pass_3_chunk_0",
-    "cunny_4x16_ds_pass_3_chunk_1",
-    "cunny_4x16_ds_pass_4_chunk_0",
-    "cunny_4x16_ds_pass_4_chunk_1",
-    "cunny_4x16_ds_pass_5",
-];
-
-const CUNNY_4X24_NVL_ENTRY_POINTS: [&str; 11] = [
-    "cunny_4x24_nvl_pass_0_chunk_0",
-    "cunny_4x24_nvl_pass_0_chunk_1",
-    "cunny_4x24_nvl_pass_1_chunk_0",
-    "cunny_4x24_nvl_pass_1_chunk_1",
-    "cunny_4x24_nvl_pass_2_chunk_0",
-    "cunny_4x24_nvl_pass_2_chunk_1",
-    "cunny_4x24_nvl_pass_3_chunk_0",
-    "cunny_4x24_nvl_pass_3_chunk_1",
-    "cunny_4x24_nvl_pass_4_chunk_0",
-    "cunny_4x24_nvl_pass_4_chunk_1",
-    "cunny_4x24_nvl_pass_5",
-];
-
-const CUNNY_4X24_SOFT_ENTRY_POINTS: [&str; 11] = [
-    "cunny_4x24_soft_pass_0_chunk_0",
-    "cunny_4x24_soft_pass_0_chunk_1",
-    "cunny_4x24_soft_pass_1_chunk_0",
-    "cunny_4x24_soft_pass_1_chunk_1",
-    "cunny_4x24_soft_pass_2_chunk_0",
-    "cunny_4x24_soft_pass_2_chunk_1",
-    "cunny_4x24_soft_pass_3_chunk_0",
-    "cunny_4x24_soft_pass_3_chunk_1",
-    "cunny_4x24_soft_pass_4_chunk_0",
-    "cunny_4x24_soft_pass_4_chunk_1",
-    "cunny_4x24_soft_pass_5",
-];
-
-const CUNNY_4X24_DS_ENTRY_POINTS: [&str; 11] = [
-    "cunny_4x24_ds_pass_0_chunk_0",
-    "cunny_4x24_ds_pass_0_chunk_1",
-    "cunny_4x24_ds_pass_1_chunk_0",
-    "cunny_4x24_ds_pass_1_chunk_1",
-    "cunny_4x24_ds_pass_2_chunk_0",
-    "cunny_4x24_ds_pass_2_chunk_1",
-    "cunny_4x24_ds_pass_3_chunk_0",
-    "cunny_4x24_ds_pass_3_chunk_1",
-    "cunny_4x24_ds_pass_4_chunk_0",
-    "cunny_4x24_ds_pass_4_chunk_1",
-    "cunny_4x24_ds_pass_5",
-];
-
-const CUNNY_4X32_NVL_ENTRY_POINTS: [&str; 16] = [
-    "cunny_4x32_nvl_pass_0_chunk_0",
-    "cunny_4x32_nvl_pass_0_chunk_1",
-    "cunny_4x32_nvl_pass_0_chunk_2",
-    "cunny_4x32_nvl_pass_1_chunk_0",
-    "cunny_4x32_nvl_pass_1_chunk_1",
-    "cunny_4x32_nvl_pass_1_chunk_2",
-    "cunny_4x32_nvl_pass_2_chunk_0",
-    "cunny_4x32_nvl_pass_2_chunk_1",
-    "cunny_4x32_nvl_pass_2_chunk_2",
-    "cunny_4x32_nvl_pass_3_chunk_0",
-    "cunny_4x32_nvl_pass_3_chunk_1",
-    "cunny_4x32_nvl_pass_3_chunk_2",
-    "cunny_4x32_nvl_pass_4_chunk_0",
-    "cunny_4x32_nvl_pass_4_chunk_1",
-    "cunny_4x32_nvl_pass_4_chunk_2",
-    "cunny_4x32_nvl_pass_5",
-];
-
-const CUNNY_4X32_SOFT_ENTRY_POINTS: [&str; 16] = [
-    "cunny_4x32_soft_pass_0_chunk_0",
-    "cunny_4x32_soft_pass_0_chunk_1",
-    "cunny_4x32_soft_pass_0_chunk_2",
-    "cunny_4x32_soft_pass_1_chunk_0",
-    "cunny_4x32_soft_pass_1_chunk_1",
-    "cunny_4x32_soft_pass_1_chunk_2",
-    "cunny_4x32_soft_pass_2_chunk_0",
-    "cunny_4x32_soft_pass_2_chunk_1",
-    "cunny_4x32_soft_pass_2_chunk_2",
-    "cunny_4x32_soft_pass_3_chunk_0",
-    "cunny_4x32_soft_pass_3_chunk_1",
-    "cunny_4x32_soft_pass_3_chunk_2",
-    "cunny_4x32_soft_pass_4_chunk_0",
-    "cunny_4x32_soft_pass_4_chunk_1",
-    "cunny_4x32_soft_pass_4_chunk_2",
-    "cunny_4x32_soft_pass_5",
-];
-
-const CUNNY_4X32_DS_ENTRY_POINTS: [&str; 16] = [
-    "cunny_4x32_ds_pass_0_chunk_0",
-    "cunny_4x32_ds_pass_0_chunk_1",
-    "cunny_4x32_ds_pass_0_chunk_2",
-    "cunny_4x32_ds_pass_1_chunk_0",
-    "cunny_4x32_ds_pass_1_chunk_1",
-    "cunny_4x32_ds_pass_1_chunk_2",
-    "cunny_4x32_ds_pass_2_chunk_0",
-    "cunny_4x32_ds_pass_2_chunk_1",
-    "cunny_4x32_ds_pass_2_chunk_2",
-    "cunny_4x32_ds_pass_3_chunk_0",
-    "cunny_4x32_ds_pass_3_chunk_1",
-    "cunny_4x32_ds_pass_3_chunk_2",
-    "cunny_4x32_ds_pass_4_chunk_0",
-    "cunny_4x32_ds_pass_4_chunk_1",
-    "cunny_4x32_ds_pass_4_chunk_2",
-    "cunny_4x32_ds_pass_5",
-];
-
-const CUNNY_8X32_NVL_ENTRY_POINTS: [&str; 28] = [
-    "cunny_8x32_nvl_pass_0_chunk_0",
-    "cunny_8x32_nvl_pass_0_chunk_1",
-    "cunny_8x32_nvl_pass_0_chunk_2",
-    "cunny_8x32_nvl_pass_1_chunk_0",
-    "cunny_8x32_nvl_pass_1_chunk_1",
-    "cunny_8x32_nvl_pass_1_chunk_2",
-    "cunny_8x32_nvl_pass_2_chunk_0",
-    "cunny_8x32_nvl_pass_2_chunk_1",
-    "cunny_8x32_nvl_pass_2_chunk_2",
-    "cunny_8x32_nvl_pass_3_chunk_0",
-    "cunny_8x32_nvl_pass_3_chunk_1",
-    "cunny_8x32_nvl_pass_3_chunk_2",
-    "cunny_8x32_nvl_pass_4_chunk_0",
-    "cunny_8x32_nvl_pass_4_chunk_1",
-    "cunny_8x32_nvl_pass_4_chunk_2",
-    "cunny_8x32_nvl_pass_5_chunk_0",
-    "cunny_8x32_nvl_pass_5_chunk_1",
-    "cunny_8x32_nvl_pass_5_chunk_2",
-    "cunny_8x32_nvl_pass_6_chunk_0",
-    "cunny_8x32_nvl_pass_6_chunk_1",
-    "cunny_8x32_nvl_pass_6_chunk_2",
-    "cunny_8x32_nvl_pass_7_chunk_0",
-    "cunny_8x32_nvl_pass_7_chunk_1",
-    "cunny_8x32_nvl_pass_7_chunk_2",
-    "cunny_8x32_nvl_pass_8_chunk_0",
-    "cunny_8x32_nvl_pass_8_chunk_1",
-    "cunny_8x32_nvl_pass_8_chunk_2",
-    "cunny_8x32_nvl_pass_9",
-];
-
-const CUNNY_8X32_DS_ENTRY_POINTS: [&str; 28] = [
-    "cunny_8x32_ds_pass_0_chunk_0",
-    "cunny_8x32_ds_pass_0_chunk_1",
-    "cunny_8x32_ds_pass_0_chunk_2",
-    "cunny_8x32_ds_pass_1_chunk_0",
-    "cunny_8x32_ds_pass_1_chunk_1",
-    "cunny_8x32_ds_pass_1_chunk_2",
-    "cunny_8x32_ds_pass_2_chunk_0",
-    "cunny_8x32_ds_pass_2_chunk_1",
-    "cunny_8x32_ds_pass_2_chunk_2",
-    "cunny_8x32_ds_pass_3_chunk_0",
-    "cunny_8x32_ds_pass_3_chunk_1",
-    "cunny_8x32_ds_pass_3_chunk_2",
-    "cunny_8x32_ds_pass_4_chunk_0",
-    "cunny_8x32_ds_pass_4_chunk_1",
-    "cunny_8x32_ds_pass_4_chunk_2",
-    "cunny_8x32_ds_pass_5_chunk_0",
-    "cunny_8x32_ds_pass_5_chunk_1",
-    "cunny_8x32_ds_pass_5_chunk_2",
-    "cunny_8x32_ds_pass_6_chunk_0",
-    "cunny_8x32_ds_pass_6_chunk_1",
-    "cunny_8x32_ds_pass_6_chunk_2",
-    "cunny_8x32_ds_pass_7_chunk_0",
-    "cunny_8x32_ds_pass_7_chunk_1",
-    "cunny_8x32_ds_pass_7_chunk_2",
-    "cunny_8x32_ds_pass_8_chunk_0",
-    "cunny_8x32_ds_pass_8_chunk_1",
-    "cunny_8x32_ds_pass_8_chunk_2",
-    "cunny_8x32_ds_pass_9",
-];
-
-const CUNNY_VERYFAST_NVL_PASSES: [CunnyPassSpec; 4] = [
-    CunnyPassSpec {
-        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: &[0, 1, DUMMY_OUT0],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, DUMMY_READ],
-        outputs: &[2, 3, DUMMY_OUT0],
-    },
-    CunnyPassSpec {
-        inputs: &[2, 3, DUMMY_READ],
-        outputs: &[0, DUMMY_OUT0, DUMMY_OUT1],
-    },
-    CunnyPassSpec {
-        inputs: &[0, DUMMY_READ, DUMMY_READ],
-        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
-    },
-];
-
-const CUNNY_VERYFAST_SOFT_PASSES: [CunnyPassSpec; 4] = [
-    CunnyPassSpec {
-        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: &[0, 1, DUMMY_OUT0],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, DUMMY_READ],
-        outputs: &[2, 3, DUMMY_OUT0],
-    },
-    CunnyPassSpec {
-        inputs: &[2, 3, DUMMY_READ],
-        outputs: &[0, DUMMY_OUT0, DUMMY_OUT1],
-    },
-    CunnyPassSpec {
-        inputs: &[0, DUMMY_READ, DUMMY_READ],
-        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
-    },
-];
-
-const CUNNY_FASTER_NVL_PASSES: [CunnyPassSpec; 4] = [
-    CunnyPassSpec {
-        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: &[0, 1, DUMMY_OUT0],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, DUMMY_READ],
-        outputs: &[2, 3, DUMMY_OUT0],
-    },
-    CunnyPassSpec {
-        inputs: &[2, 3, DUMMY_READ],
-        outputs: &[0, 1, DUMMY_OUT0],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, DUMMY_READ],
-        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
-    },
-];
-
-const CUNNY_FASTER_SOFT_PASSES: [CunnyPassSpec; 4] = [
-    CunnyPassSpec {
-        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: &[0, 1, DUMMY_OUT0],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, DUMMY_READ],
-        outputs: &[2, 3, DUMMY_OUT0],
-    },
-    CunnyPassSpec {
-        inputs: &[2, 3, DUMMY_READ],
-        outputs: &[0, 1, DUMMY_OUT0],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, DUMMY_READ],
-        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
-    },
-];
-
-const CUNNY_FASTER_DS_PASSES: [CunnyPassSpec; 4] = CUNNY_FASTER_SOFT_PASSES;
-
-const CUNNY_FAST_NVL_PASSES: [CunnyPassSpec; 4] = [
-    CunnyPassSpec {
-        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[3, 4, 5],
-        outputs: &[0, 1, DUMMY_OUT0],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, DUMMY_READ],
-        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
-    },
-];
-
-const CUNNY_FAST_SOFT_PASSES: [CunnyPassSpec; 4] = [
-    CunnyPassSpec {
-        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[3, 4, 5],
-        outputs: &[0, 1, DUMMY_OUT0],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, DUMMY_READ],
-        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
-    },
-];
-
-const CUNNY_FAST_DS_PASSES: [CunnyPassSpec; 4] = CUNNY_FAST_SOFT_PASSES;
-
-const CUNNY_2X12_MPV_PASSES: [CunnyPassSpec; 4] = [
-    CunnyPassSpec {
-        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[3, 4, 5],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2],
-        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
-    },
-];
-
-const CUNNY_3X12_NVL_PASSES: [CunnyPassSpec; 5] = [
-    CunnyPassSpec {
-        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[3, 4, 5],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[3, 4, 5],
-        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
-    },
-];
-
-const CUNNY_4X12_NVL_PASSES: [CunnyPassSpec; 6] = [
-    CunnyPassSpec {
-        inputs: &[DUMMY_READ, DUMMY_READ, DUMMY_READ],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[3, 4, 5],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[3, 4, 5],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2],
-        outputs: &[DUMMY_OUT0, DUMMY_OUT1, DUMMY_OUT2],
-    },
-];
-
-const CUNNY_4X16_NVL_PASSES: [CunnyPassSpec; 11] = [
-    CunnyPassSpec {
-        inputs: &[],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[],
-        outputs: &[3],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3],
-        outputs: &[4, 5, 6],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3],
-        outputs: &[7],
-    },
-    CunnyPassSpec {
-        inputs: &[4, 5, 6, 7],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[4, 5, 6, 7],
-        outputs: &[3],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3],
-        outputs: &[4, 5, 6],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3],
-        outputs: &[7],
-    },
-    CunnyPassSpec {
-        inputs: &[4, 5, 6, 7],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[4, 5, 6, 7],
-        outputs: &[3],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3],
-        outputs: &[],
-    },
-];
-
-const CUNNY_4X24_NVL_PASSES: [CunnyPassSpec; 11] = [
-    CunnyPassSpec {
-        inputs: &[],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5],
-        outputs: &[6, 7, 8],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5],
-        outputs: &[9, 10, 11],
-    },
-    CunnyPassSpec {
-        inputs: &[6, 7, 8, 9, 10, 11],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[6, 7, 8, 9, 10, 11],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5],
-        outputs: &[6, 7, 8],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5],
-        outputs: &[9, 10, 11],
-    },
-    CunnyPassSpec {
-        inputs: &[6, 7, 8, 9, 10, 11],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[6, 7, 8, 9, 10, 11],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5],
-        outputs: &[],
-    },
-];
-
-const CUNNY_4X32_NVL_PASSES: [CunnyPassSpec; 16] = [
-    CunnyPassSpec {
-        inputs: &[],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[],
-        outputs: &[6, 7],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[8, 9, 10],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[11, 12, 13],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[14, 15],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[6, 7],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[8, 9, 10],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[11, 12, 13],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[14, 15],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[6, 7],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[],
-    },
-];
-
-const CUNNY_8X32_NVL_PASSES: [CunnyPassSpec; 28] = [
-    CunnyPassSpec {
-        inputs: &[],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[],
-        outputs: &[6, 7],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[8, 9, 10],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[11, 12, 13],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[14, 15],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[6, 7],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[8, 9, 10],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[11, 12, 13],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[14, 15],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[6, 7],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[8, 9, 10],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[11, 12, 13],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[14, 15],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[6, 7],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[8, 9, 10],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[11, 12, 13],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[14, 15],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[0, 1, 2],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[3, 4, 5],
-    },
-    CunnyPassSpec {
-        inputs: &[8, 9, 10, 11, 12, 13, 14, 15],
-        outputs: &[6, 7],
-    },
-    CunnyPassSpec {
-        inputs: &[0, 1, 2, 3, 4, 5, 6, 7],
-        outputs: &[],
-    },
-];
-
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -1480,7 +860,12 @@ fn create_intermediate_texture(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: TEXTURE_FORMAT,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+        // COPY_SRC lets `stage_stats` read a pass's output back for inspection.
+        // Storage textures are never copied on the timed `apply` path, so the
+        // extra usage costs nothing there.
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     })
 }

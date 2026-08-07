@@ -28,6 +28,8 @@ Usage:
   suisuiview-cli --effect-bench <path> [--target-long-edge <px>] [--effect-report <report.json>] [--effect-report-default]
   suisuiview-cli --upscale-bench <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-method <token>] [--upscale-max-pages <count>] [--upscale-report <report.json>] [--upscale-report-default]
   suisuiview-cli --upscale-quality-scan <path> [--source-long-edge <px>] [--target-long-edge <px>] [--upscale-quality-method <token>] [--upscale-quality-max-pages <count>] [--upscale-quality-report <report.json>] [--upscale-quality-report-default] [--upscale-quality-visuals <dir>]
+  suisuiview-cli --cunny-stage-stats <image> --stage-method <token> [--stage-long-edge <px>] [--stage-report <report.json>] [--stage-report-default]
+
   suisuiview-cli --upscale-render <method> <image> --upscale-output <png> --upscale-output-size <width>x<height>
   suisuiview-cli --gpu-copy-bench <path> [--target-long-edge <px>] [--gpu-copy-iterations <count>] [--gpu-copy-max-pages <count>] [--gpu-copy-report <report.json>] [--gpu-copy-report-default]
   suisuiview-cli --decoder-bench <path> [--decoder-iterations <count>] [--decoder-max-pages <count>] [--decoder-report <report.json>] [--decoder-report-default]
@@ -87,6 +89,14 @@ pub enum CliCommand {
         max_pages: Option<usize>,
         report_path: Option<PathBuf>,
         visual_dir: Option<PathBuf>,
+    },
+    /// Per-pass activation statistics for one CuNNy variant: the check that
+    /// localises a silently mis-ported convolution chain to a pass index.
+    CunnyStageStats {
+        image: PathBuf,
+        method: crate::core::state::WgpuUpscaleMethod,
+        long_edge: u32,
+        report_path: Option<PathBuf>,
     },
     GpuCopyBench {
         path: PathBuf,
@@ -228,6 +238,9 @@ pub fn parse_args(args: Vec<OsString>) -> Result<CliAction, CliError> {
     if first == "--upscale-render" {
         return upscale_render_args::parse(args).map(CliAction::Command);
     }
+    if first == "--cunny-stage-stats" {
+        return parse_cunny_stage_stats(args).map(CliAction::Command);
+    }
     if first == "--gpu-copy-bench" {
         return gpu_copy_args::parse(args).map(CliAction::Command);
     }
@@ -279,6 +292,7 @@ fn is_cli_command_arg(arg: &OsString) -> bool {
         || arg == "--effect-bench"
         || arg == "--upscale-bench"
         || arg == "--upscale-quality-scan"
+        || arg == "--cunny-stage-stats"
         || arg == "--upscale-render"
         || arg == "--gpu-copy-bench"
         || arg == "--decoder-bench"
@@ -361,6 +375,20 @@ impl CliCommand {
                 max_pages,
             )
             .map_err(|error| format!("upscale quality scan failed: {error}")),
+            Self::CunnyStageStats {
+                image,
+                method,
+                long_edge,
+                report_path,
+            } => crate::core::cunny_stage_stats::run_cunny_stage_stats(&image, method, long_edge)
+                .map_err(|error| format!("cunny stage stats failed: {error}"))
+                .and_then(|report| {
+                    crate::core::cunny_stage_stats::print_cunny_stage_report(&report);
+                    match report_path {
+                        Some(path) => write_cunny_stage_report(&path, &report),
+                        None => Ok(()),
+                    }
+                }),
             Self::GpuCopyBench {
                 path,
                 target_long_edge,
@@ -626,6 +654,56 @@ fn parse_upscale_bench(mut args: impl Iterator<Item = OsString>) -> Result<CliCo
         max_pages,
         report_path,
     })
+}
+
+fn parse_cunny_stage_stats(
+    mut args: impl Iterator<Item = OsString>,
+) -> Result<CliCommand, CliError> {
+    let image = required_path(
+        &mut args,
+        "usage: suisuiview-cli --cunny-stage-stats <image> --stage-method <token>",
+    )?;
+    let mut method = None;
+    let mut long_edge = crate::core::cunny_stage_stats::DEFAULT_STAGE_LONG_EDGE;
+    let mut report_path = None;
+
+    while let Some(arg) = args.next() {
+        if arg == "--stage-method" {
+            method = Some(upscale_method_arg::required(&mut args, "--stage-method")?);
+        } else if arg == "--stage-long-edge" {
+            long_edge = required_u32(&mut args, "--stage-long-edge")?;
+        } else if arg == "--stage-report" {
+            report_path = Some(required_path(&mut args, "--stage-report requires a path")?);
+        } else if arg == "--stage-report-default" {
+            report_path = Some(crate::core::cunny_stage_stats::default_cunny_stage_report_path());
+        } else {
+            return Err(unknown_arg(arg));
+        }
+    }
+
+    let method =
+        method.ok_or_else(|| CliError::new("--cunny-stage-stats requires --stage-method"))?;
+    Ok(CliCommand::CunnyStageStats {
+        image,
+        method,
+        long_edge,
+        report_path,
+    })
+}
+
+fn write_cunny_stage_report(
+    path: &std::path::Path,
+    report: &crate::core::cunny_stage_stats::CunnyStageReport,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("{}: {error}", parent.display()))?;
+    }
+    let text =
+        serde_json::to_string_pretty(report).map_err(|error| format!("stage report: {error}"))?;
+    std::fs::write(path, text).map_err(|error| format!("{}: {error}", path.display()))?;
+    println!("Report: {}", path.display());
+    Ok(())
 }
 
 fn parse_upscale_quality_scan(
