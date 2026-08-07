@@ -248,10 +248,30 @@ def dot4_expr(vector: str, matrix_numbers: list[str]) -> str:
 def load_expr(macro: str, dx: str, dy: str, block: PassBlock) -> str:
     source_mode = block.macro_sources.get(macro)
     if source_mode is None:
+        # No `#define lN(x, y)` to read the tile offset from. That happens in the
+        # gather-staged passes, which fill `shared G[k]` from the components of a
+        # 2x2 `textureGather` footprint instead of naming each tile. Reading k as
+        # a tile index is only correct when one footprint covers the whole tile
+        # grid — i.e. a grid no larger than 2x2. Past that the pass needs several
+        # gathers at different positions, k enumerates (footprint, corner) pairs,
+        # and treating it as a linear tile index silently routes features to the
+        # wrong slots. That is exactly what produced `4x32 SOFT`, `4x32 DS` and
+        # `8x32 DS`, all of which measured below plain bilinear: their grids are
+        # 4x2. `--cunny-probe` is the check (one impulse lobe, a flat field that
+        # stays flat, no axis asymmetry).
         layer_match = re.fullmatch(r"l(\d+)", macro)
         feature_sources = [bind for bind in block.binds if bind != "LUMA"]
         if not layer_match or len(feature_sources) != 1:
             raise ValueError(f"Unsupported sample macro {macro} in {block.desc}")
+        layout = feature_layout(block.width, block.height)
+        if layout.width_mul > 2 or layout.height_mul > 2:
+            raise ValueError(
+                f"{block.desc}: cannot infer the tile of {macro} on a "
+                f"{layout.width_mul}x{layout.height_mul} feature grid; only a grid "
+                "within one 2x2 gather footprint makes the layer index equal the "
+                "tile index. Teach the porter the gather footprint mapping, or "
+                "port this model from its Magpie HLSL instead."
+            )
         source = feature_sources[0]
         mode = int(layer_match.group(1))
     else:
