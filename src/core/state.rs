@@ -446,6 +446,10 @@ impl AppSettings {
             self.wgpu_upscale_method = WgpuUpscaleMethod::Auto;
         }
 
+        if !self.refine_upscaler.selectable() {
+            self.refine_upscaler = RefineUpscaler::Off;
+        }
+
         self.fixed_2x_sr_min_scale_pct = self
             .fixed_2x_sr_min_scale_pct
             .clamp(FIXED_2X_SR_MIN_SCALE_PCT_MIN, FIXED_2X_SR_MIN_SCALE_PCT_MAX);

@@ -534,3 +534,63 @@ fn refine_upscaler_round_trips_through_serde() {
     let round_trip: AppSettings = serde_json::from_str(&json).unwrap();
     assert_eq!(round_trip.refine_upscaler, RefineUpscaler::Cunny8x32Ds);
 }
+
+#[test]
+fn withdrawn_upscalers_are_not_offered_but_stay_measurable() {
+    // Measured below plain bilinear on two content types at two scales: offering
+    // them lets a user make the page worse than doing nothing.
+    for method in [
+        WgpuUpscaleMethod::Cunny4x32Soft,
+        WgpuUpscaleMethod::Cunny4x32Ds,
+        WgpuUpscaleMethod::Cunny8x32Ds,
+    ] {
+        assert!(
+            !method.user_selectable(),
+            "{} must not be offered",
+            method.token()
+        );
+        assert!(
+            !WgpuUpscaleMethod::SETTINGS_CHOICES.contains(&method),
+            "{} must not be listed in settings",
+            method.token()
+        );
+        // Still reachable from the CLI bench so the port can be re-checked.
+        assert!(
+            WgpuUpscaleMethod::GPU_METHODS.contains(&method),
+            "{} must stay benchmarkable",
+            method.token()
+        );
+    }
+    // The healthy 32-feature ports are untouched.
+    assert!(WgpuUpscaleMethod::Cunny4x32Nvl.user_selectable());
+    assert!(WgpuUpscaleMethod::Cunny8x32Nvl.user_selectable());
+}
+
+#[test]
+fn saved_settings_naming_a_withdrawn_refine_tier_fall_back_to_off() {
+    let mut settings = AppSettings {
+        refine_upscaler: RefineUpscaler::Cunny4x32Soft,
+        ..AppSettings::default()
+    };
+    settings.normalize_product_choices();
+    assert_eq!(settings.refine_upscaler, RefineUpscaler::Off);
+
+    let mut kept = AppSettings {
+        refine_upscaler: RefineUpscaler::Cunny8x32Nvl,
+        ..AppSettings::default()
+    };
+    kept.normalize_product_choices();
+    assert_eq!(kept.refine_upscaler, RefineUpscaler::Cunny8x32Nvl);
+}
+
+#[test]
+fn withdrawn_upscalers_still_deserialize_from_an_existing_state_file() {
+    // The enum variants remain so an existing state.json is never a parse error;
+    // `normalize_product_choices` is what migrates the value.
+    let settings: AppSettings =
+        serde_json::from_str(r#"{"wgpu_upscale_method":"Cunny4x32Soft"}"#).unwrap();
+    assert_eq!(
+        settings.wgpu_upscale_method,
+        WgpuUpscaleMethod::Cunny4x32Soft
+    );
+}

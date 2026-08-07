@@ -76,13 +76,20 @@ pub enum RefineUpscaler {
 }
 
 impl RefineUpscaler {
-    pub const ALL: [Self; 5] = [
-        Self::Off,
-        Self::Cunny4x32Soft,
-        Self::Cunny4x32Ds,
-        Self::Cunny8x32Nvl,
-        Self::Cunny8x32Ds,
-    ];
+    /// Offerable tiers. `Cunny4x32Soft`, `Cunny4x32Ds` and `Cunny8x32Ds` are
+    /// deliberately absent: measured against a Lanczos3 reference they score
+    /// *below* plain bilinear on both line art and illustration, at two scales —
+    /// picking one made the page worse than doing nothing. The variants stay in
+    /// the enum so a persisted setting still deserializes (and so the CLI bench
+    /// can re-check them), but nothing offers them until the port is fixed.
+    /// See `selectable()` for the migration of an already-saved choice.
+    pub const ALL: [Self; 2] = [Self::Off, Self::Cunny8x32Nvl];
+
+    /// Whether this tier may be offered or kept. A saved setting naming a
+    /// withdrawn tier falls back to `Off` rather than silently degrading pages.
+    pub fn selectable(self) -> bool {
+        Self::ALL.contains(&self)
+    }
 
     /// The concrete WGSL upscaler this refine tier maps to, or `None` when off.
     pub fn method(self) -> Option<WgpuUpscaleMethod> {

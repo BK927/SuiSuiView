@@ -338,10 +338,10 @@ fn product_wgpu_upscale_methods_keep_experiments_separate() {
     assert!(WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::Cunny4x24Soft));
     assert!(WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::Cunny4x24Ds));
     assert!(WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::Cunny4x32Nvl));
-    assert!(WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::Cunny4x32Soft));
-    assert!(WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::Cunny4x32Ds));
     assert!(WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::Cunny8x32Nvl));
-    assert!(WgpuUpscaleMethod::ALL.contains(&WgpuUpscaleMethod::Cunny8x32Ds));
+    // Cunny4x32Soft, Cunny4x32Ds and Cunny8x32Ds are withdrawn from ALL: they
+    // measured below plain bilinear. `withdrawn_upscalers_are_not_offered_but_stay_measurable`
+    // in settings_tests.rs pins that, and that they stay in GPU_METHODS.
     assert!(
         WgpuUpscaleMethod::WgslAnime4kV32CnnX2S
             .candidate()
@@ -398,16 +398,12 @@ fn product_wgpu_upscale_methods_keep_experiments_separate() {
     assert!(WgpuUpscaleMethod::Cunny4x16Ds.candidate().product_visible);
     assert!(WgpuUpscaleMethod::Cunny4x24Soft.candidate().product_visible);
     assert!(WgpuUpscaleMethod::Cunny4x24Ds.candidate().product_visible);
-    assert!(WgpuUpscaleMethod::Cunny4x32Soft.candidate().product_visible);
-    assert!(WgpuUpscaleMethod::Cunny4x32Ds.candidate().product_visible);
-    assert!(WgpuUpscaleMethod::Cunny8x32Ds.candidate().product_visible);
     assert!(WgpuUpscaleMethod::Cunny4x16Soft.product_selectable());
     assert!(WgpuUpscaleMethod::Cunny4x16Ds.product_selectable());
     assert!(WgpuUpscaleMethod::Cunny4x24Soft.product_selectable());
     assert!(WgpuUpscaleMethod::Cunny4x24Ds.product_selectable());
-    assert!(WgpuUpscaleMethod::Cunny4x32Soft.product_selectable());
-    assert!(WgpuUpscaleMethod::Cunny4x32Ds.product_selectable());
-    assert!(WgpuUpscaleMethod::Cunny8x32Ds.product_selectable());
+    // Cunny4x32Soft / Cunny4x32Ds / Cunny8x32Ds are withdrawn from the
+    // product lists (measured below bilinear); see settings_tests.rs.
     assert!(!WgpuUpscaleMethod::Cunny4x16Soft.is_benchmark_only());
     assert!(!WgpuUpscaleMethod::Cunny4x16Ds.is_benchmark_only());
     assert!(!WgpuUpscaleMethod::Cunny4x24Soft.is_benchmark_only());
