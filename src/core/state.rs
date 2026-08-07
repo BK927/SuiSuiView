@@ -24,7 +24,7 @@ pub use bookmarks::{
     UpscaleProbeRecord, UPSCALE_PROBE_VERSION,
 };
 pub use decoders::{DecodeMode, DecoderPreference, DecoderPreferences};
-pub use display::{GpuEffectMode, RefineUpscaler, WgpuUpscaleMethod};
+pub use display::{GpuEffectMode, WgpuUpscaleMethod};
 pub use fast_start::FastStartFailureNotice;
 pub use input::{
     adopt_default_bindings_for_new_commands, default_key_bindings, default_mouse_bindings,
@@ -372,10 +372,6 @@ pub struct AppSettings {
     pub renderer_mode: RendererMode,
     #[serde(default)]
     pub wgpu_upscale_method: WgpuUpscaleMethod,
-    /// Idle-scheduled heavy "refine" (정련) upscaler; `Off` by default. Renders
-    /// once per page while idle into the realtime-SR stage cache.
-    #[serde(default)]
-    pub refine_upscaler: RefineUpscaler,
     /// Debanding strength for the WGPU display path; `Off` by default.
     #[serde(default)]
     pub deband: DebandStrength,
@@ -444,10 +440,6 @@ impl AppSettings {
     pub fn normalize_product_choices(&mut self) {
         if !self.wgpu_upscale_method.user_selectable() {
             self.wgpu_upscale_method = WgpuUpscaleMethod::Auto;
-        }
-
-        if !self.refine_upscaler.selectable() {
-            self.refine_upscaler = RefineUpscaler::Off;
         }
 
         self.fixed_2x_sr_min_scale_pct = self
@@ -553,7 +545,6 @@ impl Default for AppSettings {
             gpu_effect_mode: GpuEffectMode::Auto,
             renderer_mode: RendererMode::LowMemoryGlow,
             wgpu_upscale_method: WgpuUpscaleMethod::None,
-            refine_upscaler: RefineUpscaler::Off,
             deband: DebandStrength::Off,
             linear_light_downscale: false,
             fixed_2x_sr_min_scale_pct: default_fixed_2x_sr_min_scale_pct(),

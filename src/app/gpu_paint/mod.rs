@@ -6,8 +6,7 @@ use crate::core::gpu_effect::output_size_for_effects;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
 use crate::core::state::{
-    FitMode, GpuEffectMode, RendererMode, WgpuDownscaleMethod, WgpuScaleDirection, WgpuScalePlan,
-    WgpuUpscaleMethod,
+    FitMode, GpuEffectMode, RendererMode, WgpuDownscaleMethod, WgpuUpscaleMethod,
 };
 use crate::core::worker::PagePixels;
 use egui::{self, PaintCallbackInfo, Rect};
@@ -23,7 +22,6 @@ use std::time::Instant;
 mod deband;
 mod passes;
 mod pools;
-mod refine;
 
 // Re-exported into the coordination module solely so the `tests` submodule can reach the
 // pool/pass helpers through its `use super::*` glob after the split.
@@ -96,14 +94,6 @@ pub(super) struct GpuPaintRequest {
     /// path so a continuous zoom does not re-render the quality downscale at a new
     /// content key every frame.
     pub(super) zoom_in_motion: bool,
-    /// The heavy idle-refine (정련) upscaler to try for this page, or `None` when
-    /// refine is off / not applicable. Already gated app-side to a WGPU upscale
-    /// path whose scale actually enlarges.
-    pub(super) refine_method: Option<WgpuUpscaleMethod>,
-    /// True only on an idle frame: the render side may pay the one-time refine
-    /// render cost this frame. When false, an already-cached refine result is
-    /// still used, but no new refine render is started.
-    pub(super) allow_refine_render: bool,
 }
 
 /// GPU pool budgets (bytes) carried from the app/settings thread into the render thread. The
@@ -159,43 +149,6 @@ impl SuiSuiViewApp {
         self.settings.deband
     }
 
-    /// The idle-refine (정련) upscaler to attempt for a page of `image_size`
-    /// drawn to `target_size`, or `None` when refine is off / not applicable.
-    /// Gated exactly like the display upscaler and deband (WGPU live, GPU effects
-    /// available, WGSL not opted out, non-inspection fit), and additionally only
-    /// when the page actually upscales through a realtime-SR method.
-    pub(super) fn active_refine_method(
-        &self,
-        image_size: [usize; 2],
-        target_size: [u32; 2],
-        effects: ViewEffects,
-        wgpu_downscale_method: WgpuDownscaleMethod,
-        fixed_2x_sr_min_scale: f32,
-    ) -> Option<WgpuUpscaleMethod> {
-        let method = self.settings.refine_upscaler.method()?;
-        if !fit_mode_allows_display_upscale(self.fit_mode)
-            || !self.gpu_effects_available
-            || self.gpu_target_format.is_none()
-            || matches!(self.settings.gpu_effect_mode, GpuEffectMode::CpuOnly)
-            || !matches!(self.settings.renderer_mode, RendererMode::Wgpu)
-            || !RealtimeSrResources::is_supported(method)
-        {
-            return None;
-        }
-        // Only when the page upscales and the refine method is not substituted out
-        // (a below-min-scale substitution would leave the realtime-SR family).
-        let output_size = output_size_for_effects(image_size, effects);
-        let plan = WgpuScalePlan::resolve(
-            output_size,
-            target_size,
-            method,
-            wgpu_downscale_method,
-            fixed_2x_sr_min_scale,
-        );
-        (plan.direction == WgpuScaleDirection::Upscale && plan.effective_upscale_method == method)
-            .then_some(method)
-    }
-
     /// WGSL painting is governed by `gpu_effect_mode` (`CpuOnly` is the explicit
     /// opt-out) plus a usable `gpu_target_format`. The display downscaler is now a
     /// fixed pyramid Lanczos3 (`WGPU_DOWNSCALE_METHOD`), so the WGSL path is always
@@ -239,8 +192,6 @@ impl SuiSuiViewApp {
             opacity: request.opacity.clamp(0.0, 1.0),
             deband: request.deband,
             zoom_in_motion: request.zoom_in_motion,
-            refine_method: request.refine_method,
-            allow_refine_render: request.allow_refine_render,
             pool_budgets,
             rect: request.rect,
             target_format,
@@ -387,8 +338,6 @@ struct GpuEffectCallback {
     opacity: f32,
     deband: DebandStrength,
     zoom_in_motion: bool,
-    refine_method: Option<WgpuUpscaleMethod>,
-    allow_refine_render: bool,
     pool_budgets: GpuPoolBudgets,
     rect: Rect,
     target_format: wgpu::TextureFormat,
@@ -490,8 +439,6 @@ impl CallbackTrait for GpuEffectCallback {
                 self.opacity,
                 self.zoom_in_motion,
                 self.deband,
-                self.refine_method,
-                self.allow_refine_render,
                 &self.ctx,
             );
             resources.insert_draw_state(self.draw_id, draw_state);
@@ -575,9 +522,6 @@ struct GpuPaintResources {
     pub(super) current_pass: u64,
     deferred_realtime_sr_first_frames: LruCache<u64, ()>,
     realtime_sr: RealtimeSrResources,
-    /// Last emitted `[refine]` log signature `(page_id, method, kind)`, so the
-    /// diagnostic dedups a steady state to one line instead of per-frame spam.
-    last_refine_log: Option<(u32, WgpuUpscaleMethod, u8)>,
     /// Test-only tally of params uniform buffers freshly allocated by
     /// `create_params_pair` (a slot miss). The V15 recycle test asserts a second
     /// prepare at the same slot does NOT bump this. Absent from product builds.

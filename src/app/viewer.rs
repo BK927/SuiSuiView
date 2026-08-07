@@ -752,19 +752,6 @@ impl SuiSuiViewApp {
                         fixed_2x_sr_min_scale,
                         deband,
                     );
-                let refine_method = if force_texture_fallback {
-                    None
-                } else {
-                    self.active_refine_method(
-                        image_size,
-                        target_size,
-                        effects,
-                        wgpu_downscale_method,
-                        fixed_2x_sr_min_scale,
-                    )
-                };
-                let allow_refine_render =
-                    refine_method.is_some() && self.refine_render_allowed(ctx, settled);
                 let target_intent =
                     self.prepared_target_intent_for_target(render_info.target_long_edge);
                 let gpu_view_state = CurrentViewState::from_gpu(
@@ -778,7 +765,6 @@ impl SuiSuiViewApp {
                     fixed_2x_sr_min_scale,
                     active_wgsl,
                     deband,
-                    refine_method,
                     target_intent,
                 );
                 self.record_current_view_state(gpu_view_state, settled);
@@ -798,8 +784,6 @@ impl SuiSuiViewApp {
                         opacity: alpha,
                         deband,
                         zoom_in_motion: self.zoom_in_motion(),
-                        refine_method,
-                        allow_refine_render,
                     },
                     force_texture_fallback,
                     tint,
@@ -914,26 +898,5 @@ impl SuiSuiViewApp {
         if index == self.current_page {
             self.current_view_state = None;
         }
-    }
-
-    /// Whether the viewer is idle enough to pay the one-time refine (정련) render
-    /// this frame: no transition, no pending/queued page turn, no strip scroll
-    /// debt, no zoom in motion, and no active pointer drag. The heavy refine
-    /// render must never land on an interaction frame.
-    /// `settled` stands in for "no transition": this is called from inside the
-    /// paint, where `show_viewer` has taken `self.transition` out by value, so
-    /// reading the field here would report no transition on exactly the animating
-    /// frames the idle gate exists to exclude — and a page turn clears
-    /// `pending_page_turn` before the animation starts, so nothing else covers
-    /// them.
-    fn refine_render_allowed(&self, ctx: &egui::Context, settled: bool) -> bool {
-        let drag_active = ctx.input(|input| input.pointer.is_decidedly_dragging());
-        model::refine_render_idle(
-            !settled,
-            self.pending_page_turn.is_some() || self.queued_page_turns.is_some(),
-            self.strip_scroll_pending_px != 0.0 || self.strip_flick_pending_px != 0.0,
-            self.zoom_in_motion(),
-            drag_active,
-        )
     }
 }

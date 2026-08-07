@@ -275,10 +275,9 @@ fn realtime_sr_stage_texture_keys_separate_stack_stages() {
 }
 
 #[test]
-fn refine_method_produces_distinct_stage_key_from_normal_method() {
-    // The refine chain reuses `realtime_sr_stage_texture_key` with the refine
-    // upscaler; a distinct method must yield a distinct stage key so a refine
-    // result is never confused with (or served from) the normal upscaler's cache.
+fn each_upscale_method_gets_its_own_realtime_sr_stage_key() {
+    // The method is part of the stage key, so one upscaler's cached SR stage can
+    // never be served to another — the whole realtime-SR cache rests on this.
     let source_key = GpuPaintSourceKey {
         book: 3,
         page: PageCacheKey {
@@ -296,16 +295,16 @@ fn refine_method_produces_distinct_stage_key_from_normal_method() {
         1,
         DebandStrength::Off,
     );
-    let refine = realtime_sr_stage_texture_key(
+    let other = realtime_sr_stage_texture_key(
         source_key,
         [800, 1200],
-        WgpuUpscaleMethod::Cunny4x32Soft,
+        WgpuUpscaleMethod::Cunny8x32Nvl,
         0,
         [800, 1200],
         1,
         DebandStrength::Off,
     );
-    assert_ne!(normal, refine);
+    assert_ne!(normal, other);
 }
 
 #[test]
@@ -740,8 +739,6 @@ pub(super) fn capture_gpu_frame(
         1.0,
         false,
         DebandStrength::Off,
-        None,
-        false,
         &egui::Context::default(),
     );
     let output_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -1210,8 +1207,6 @@ fn prepare_insert_slot(
         opacity,
         false,
         DebandStrength::Off,
-        None,
-        false,
         &egui::Context::default(),
     );
     // Flush any recorded work (empty for this single-pass native path) so a pending

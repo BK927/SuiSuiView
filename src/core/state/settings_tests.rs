@@ -2,8 +2,8 @@ use super::{
     default_key_bindings, default_top_bar_cpu_scale_filters, default_top_bar_wgpu_upscale_methods,
     AppSettings, CacheMemoryMode, CommandId, CpuScaleFilter, DecodeMode, DecoderPreferences,
     EdgePageAction, GpuEffectMode, KeyBinding, KeyCode, KeyShortcut, PageTransitionStyle,
-    PersistedState, RefineUpscaler, RendererMode, TopBarItems, WgpuUpscaleMethod, WheelMode,
-    WindowPlacement, DEFAULT_MANUAL_CACHE_MB,
+    PersistedState, RendererMode, TopBarItems, WgpuUpscaleMethod, WheelMode, WindowPlacement,
+    DEFAULT_MANUAL_CACHE_MB,
 };
 use crate::core::i18n::Language;
 
@@ -491,51 +491,6 @@ fn wgpu_upscale_method_settings_normalize_only_unselectable_methods_to_auto() {
 }
 
 #[test]
-fn refine_upscaler_default_is_off_with_no_method() {
-    assert_eq!(RefineUpscaler::default(), RefineUpscaler::Off);
-    assert_eq!(RefineUpscaler::Off.method(), None);
-}
-
-#[test]
-fn refine_upscaler_maps_each_tier_to_its_cunny_method() {
-    assert_eq!(
-        RefineUpscaler::Cunny4x32Soft.method(),
-        Some(WgpuUpscaleMethod::Cunny4x32Soft)
-    );
-    assert_eq!(
-        RefineUpscaler::Cunny4x32Ds.method(),
-        Some(WgpuUpscaleMethod::Cunny4x32Ds)
-    );
-    assert_eq!(
-        RefineUpscaler::Cunny8x32Nvl.method(),
-        Some(WgpuUpscaleMethod::Cunny8x32Nvl)
-    );
-    assert_eq!(
-        RefineUpscaler::Cunny8x32Ds.method(),
-        Some(WgpuUpscaleMethod::Cunny8x32Ds)
-    );
-}
-
-#[test]
-fn old_settings_without_refine_upscaler_load_off() {
-    // Legacy state.json predating the key must deserialize to Off, not error.
-    let state: PersistedState =
-        serde_json::from_str(r#"{"version":4,"settings":{},"books":{}}"#).unwrap();
-    assert_eq!(state.settings.refine_upscaler, RefineUpscaler::Off);
-}
-
-#[test]
-fn refine_upscaler_round_trips_through_serde() {
-    let settings = AppSettings {
-        refine_upscaler: RefineUpscaler::Cunny8x32Ds,
-        ..AppSettings::default()
-    };
-    let json = serde_json::to_string(&settings).unwrap();
-    let round_trip: AppSettings = serde_json::from_str(&json).unwrap();
-    assert_eq!(round_trip.refine_upscaler, RefineUpscaler::Cunny8x32Ds);
-}
-
-#[test]
 fn withdrawn_upscalers_are_not_offered_but_stay_measurable() {
     // Measured below plain bilinear on two content types at two scales: offering
     // them lets a user make the page worse than doing nothing.
@@ -564,23 +519,6 @@ fn withdrawn_upscalers_are_not_offered_but_stay_measurable() {
     // The healthy 32-feature ports are untouched.
     assert!(WgpuUpscaleMethod::Cunny4x32Nvl.user_selectable());
     assert!(WgpuUpscaleMethod::Cunny8x32Nvl.user_selectable());
-}
-
-#[test]
-fn saved_settings_naming_a_withdrawn_refine_tier_fall_back_to_off() {
-    let mut settings = AppSettings {
-        refine_upscaler: RefineUpscaler::Cunny4x32Soft,
-        ..AppSettings::default()
-    };
-    settings.normalize_product_choices();
-    assert_eq!(settings.refine_upscaler, RefineUpscaler::Off);
-
-    let mut kept = AppSettings {
-        refine_upscaler: RefineUpscaler::Cunny8x32Nvl,
-        ..AppSettings::default()
-    };
-    kept.normalize_product_choices();
-    assert_eq!(kept.refine_upscaler, RefineUpscaler::Cunny8x32Nvl);
 }
 
 #[test]

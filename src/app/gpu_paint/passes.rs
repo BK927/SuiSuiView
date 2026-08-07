@@ -47,8 +47,6 @@ impl GpuPaintResources {
         opacity: f32,
         zoom_in_motion: bool,
         deband: DebandStrength,
-        refine_method: Option<WgpuUpscaleMethod>,
-        allow_refine_render: bool,
         ctx: &egui::Context,
     ) -> GpuDrawState {
         let (source_bind_group, deband_pin) = self.ensure_debanded_source(
@@ -76,8 +74,6 @@ impl GpuPaintResources {
             opacity,
             zoom_in_motion,
             deband,
-            refine_method,
-            allow_refine_render,
             deband_pin.as_ref(),
             ctx,
         );
@@ -106,8 +102,6 @@ impl GpuPaintResources {
         opacity: f32,
         zoom_in_motion: bool,
         deband: DebandStrength,
-        refine_method: Option<WgpuUpscaleMethod>,
-        allow_refine_render: bool,
         debanded: Option<&Arc<GpuIntermediateTexture>>,
         ctx: &egui::Context,
     ) -> GpuDrawState {
@@ -128,26 +122,9 @@ impl GpuPaintResources {
         let effective_downscaler = scale_plan.effective_downscale_method;
         let source_content_key =
             source_texture_content_key(source_key, source_size, output_size, effects, deband);
-        // V11 정련: when a refine upscaler is configured and the page is
-        // upscaling, route the SR draw through the heavier refine chain — reusing
-        // an already-cached refine result for free, or (only on an idle frame)
-        // paying the one-time refine render. Everything downstream (post-SR
-        // downscale, pins, keys) is unchanged; only the upscaler differs.
-        let sr_upscaler = self.resolve_refine_route(
-            refine_method,
-            allow_refine_render,
-            scale_plan,
-            source_key,
-            source_size,
-            output_size,
-            wgpu_downscale_method,
-            fixed_2x_sr_min_scale,
-            display_rect,
-            deband,
-            effective_upscaler,
-        );
-        self.realtime_sr.cancel_inactive_pending_work(sr_upscaler);
-        if RealtimeSrResources::is_supported(sr_upscaler) {
+        self.realtime_sr
+            .cancel_inactive_pending_work(effective_upscaler);
+        if RealtimeSrResources::is_supported(effective_upscaler) {
             if let Some(draw_state) = self.prepare_realtime_sr_draw_state(
                 device,
                 queue,
@@ -157,7 +134,7 @@ impl GpuPaintResources {
                 source_size,
                 output_size,
                 effects,
-                sr_upscaler,
+                effective_upscaler,
                 wgpu_downscale_method,
                 display_rect,
                 opacity,

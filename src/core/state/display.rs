@@ -61,57 +61,6 @@ pub enum WgpuUpscaleMethod {
     Cunny8x32Ds,
 }
 
-/// Idle-scheduled "refine" (정련) upscaler: a heavy CuNNy tier rendered once per
-/// page while the viewer is idle, replacing the displayed page with the higher
-/// quality result at zero per-frame cost. `Off` by default; these ports are
-/// experimental quality (see the settings help text).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RefineUpscaler {
-    #[default]
-    Off,
-    Cunny4x32Soft,
-    Cunny4x32Ds,
-    Cunny8x32Nvl,
-    Cunny8x32Ds,
-}
-
-impl RefineUpscaler {
-    /// Offerable tiers. `Cunny4x32Soft`, `Cunny4x32Ds` and `Cunny8x32Ds` are
-    /// deliberately absent: measured against a Lanczos3 reference they score
-    /// *below* plain bilinear on both line art and illustration, at two scales —
-    /// picking one made the page worse than doing nothing. The variants stay in
-    /// the enum so a persisted setting still deserializes (and so the CLI bench
-    /// can re-check them), but nothing offers them until the port is fixed.
-    /// See `selectable()` for the migration of an already-saved choice.
-    pub const ALL: [Self; 2] = [Self::Off, Self::Cunny8x32Nvl];
-
-    /// Whether this tier may be offered or kept. A saved setting naming a
-    /// withdrawn tier falls back to `Off` rather than silently degrading pages.
-    pub fn selectable(self) -> bool {
-        Self::ALL.contains(&self)
-    }
-
-    /// The concrete WGSL upscaler this refine tier maps to, or `None` when off.
-    pub fn method(self) -> Option<WgpuUpscaleMethod> {
-        match self {
-            Self::Off => None,
-            Self::Cunny4x32Soft => Some(WgpuUpscaleMethod::Cunny4x32Soft),
-            Self::Cunny4x32Ds => Some(WgpuUpscaleMethod::Cunny4x32Ds),
-            Self::Cunny8x32Nvl => Some(WgpuUpscaleMethod::Cunny8x32Nvl),
-            Self::Cunny8x32Ds => Some(WgpuUpscaleMethod::Cunny8x32Ds),
-        }
-    }
-
-    /// Combo label: `Off` is localized; the concrete tiers keep their technical
-    /// English names (e.g. `CuNNy 4x32 SOFT`).
-    pub fn label_i18n(self, i18n: I18n) -> String {
-        match self.method() {
-            None => i18n.text("state.off"),
-            Some(method) => method.label().to_owned(),
-        }
-    }
-}
-
 mod upscaler_choices;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

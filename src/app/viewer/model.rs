@@ -375,10 +375,6 @@ pub(in crate::app) struct CurrentViewState {
     /// Debanding strength active for this page (WGPU display path only); `Off`
     /// for CPU/Glow pages and inspection views. Surfaced in the scaler tooltip.
     pub(in crate::app) deband: DebandStrength,
-    /// True when the idle-refine (정련) upscaler drives this page's display; the
-    /// scaler chip then names the refine method and the tooltip adds a
-    /// provenance line.
-    pub(in crate::app) refine_active: bool,
     pub(in crate::app) target_intent: PreparedTargetIntent,
 }
 
@@ -394,7 +390,6 @@ impl CurrentViewState {
             wgpu_scale: WgpuScaleState::Inactive,
             glow_kernel: None,
             deband: DebandStrength::Off,
-            refine_active: false,
             target_intent,
         }
     }
@@ -412,22 +407,13 @@ impl CurrentViewState {
         fixed_2x_sr_min_scale: f32,
         active: bool,
         deband: DebandStrength,
-        refine_method: Option<WgpuUpscaleMethod>,
         target_intent: PreparedTargetIntent,
     ) -> Self {
         let output_size = output_size_for_effects(image_size, effects);
-        // When refine drives the page, the chip names the heavier method (a
-        // deliberate user choice, so `User` origin) instead of the normal one.
-        let effective_method = refine_method.unwrap_or(wgpu_upscale_method);
-        let effective_origin = if refine_method.is_some() {
-            UpscaleDecisionOrigin::User
-        } else {
-            wgpu_upscale_origin
-        };
         let scale_plan = WgpuScalePlan::resolve(
             output_size,
             target_size,
-            effective_method,
+            wgpu_upscale_method,
             wgpu_downscale_method,
             fixed_2x_sr_min_scale,
         );
@@ -438,12 +424,11 @@ impl CurrentViewState {
             wgpu_scale: WgpuScaleState::from_plan(
                 active,
                 scale_plan,
-                effective_origin,
+                wgpu_upscale_origin,
                 fixed_2x_sr_min_scale,
             ),
             glow_kernel: None,
             deband,
-            refine_active: refine_method.is_some(),
             target_intent,
         }
     }
@@ -483,29 +468,11 @@ pub(in crate::app) fn page_visual_size(visual: &PageVisual) -> Vec2 {
     }
 }
 
-/// Pure idle gate for scheduling a refine (정련) render, called by
-/// `SuiSuiViewApp::refine_render_allowed`. Idle means every motion/pending
-/// signal is false — the heavy refine render must never land on an interaction
-/// frame. Kept as a free function so the boolean logic is unit-testable.
-pub(super) fn refine_render_idle(
-    transition_active: bool,
-    page_turn_pending: bool,
-    strip_scroll_in_motion: bool,
-    zoom_in_motion: bool,
-    drag_active: bool,
-) -> bool {
-    !(transition_active
-        || page_turn_pending
-        || strip_scroll_in_motion
-        || zoom_in_motion
-        || drag_active)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        refine_render_idle, smart_spread_anchor, smart_spread_indices_for_metrics,
-        worker_center_page_for_mode, PageMetrics, ViewMode,
+        smart_spread_anchor, smart_spread_indices_for_metrics, worker_center_page_for_mode,
+        PageMetrics, ViewMode,
     };
     use crate::core::state::ReadingDirection;
 
@@ -563,20 +530,6 @@ mod tests {
         assert_eq!(smart_spread_anchor(1, 1), 1);
         assert_eq!(smart_spread_anchor(2, 1), 1);
         assert_eq!(smart_spread_anchor(4, 1), 3);
-    }
-
-    #[test]
-    fn refine_is_idle_only_when_every_signal_is_clear() {
-        assert!(refine_render_idle(false, false, false, false, false));
-    }
-
-    #[test]
-    fn any_motion_or_pending_signal_blocks_refine() {
-        assert!(!refine_render_idle(true, false, false, false, false));
-        assert!(!refine_render_idle(false, true, false, false, false));
-        assert!(!refine_render_idle(false, false, true, false, false));
-        assert!(!refine_render_idle(false, false, false, true, false));
-        assert!(!refine_render_idle(false, false, false, false, true));
     }
 
     #[test]

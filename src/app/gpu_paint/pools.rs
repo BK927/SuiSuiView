@@ -207,7 +207,6 @@ impl GpuPaintResources {
                 NonZeroUsize::new(GPU_REALTIME_SR_DEFER_CACHE_LIMIT).unwrap(),
             ),
             realtime_sr: RealtimeSrResources::new(),
-            last_refine_log: None,
             #[cfg(test)]
             params_buffer_creations: AtomicUsize::new(0),
         };
