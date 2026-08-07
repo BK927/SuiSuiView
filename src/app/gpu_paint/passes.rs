@@ -1134,7 +1134,12 @@ fn create_effect_pipeline(
 }
 
 pub(super) fn defer_initial_realtime_sr_frame(method: WgpuUpscaleMethod) -> bool {
-    method.is_artcnn() || matches!(method, WgpuUpscaleMethod::WgslSrLabSpanX2)
+    // CuNNy belongs here for the same reason ArtCNN and SPAN do: its first use
+    // compiles the whole pipeline set inline on the paint thread — 28 pipelines
+    // from a 4.4 MB WGSL module for the 8x32 tiers — which stalls the frame that
+    // first shows the page. Deferring costs one extra frame and moves the compile
+    // off the first paint.
+    method.is_artcnn() || method.is_cunny() || matches!(method, WgpuUpscaleMethod::WgslSrLabSpanX2)
 }
 
 pub(super) fn post_realtime_sr_downscale_method(
