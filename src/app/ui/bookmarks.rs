@@ -11,10 +11,15 @@ use egui::{
 };
 
 const POPOVER_WIDTH: f32 = 430.0;
-const POPOVER_HEIGHT: f32 = 386.0;
 const THUMBNAIL_SIZE: egui::Vec2 = egui::vec2(64.0, 54.0);
 const BOOKMARK_ROW_HEIGHT: f32 = 82.0;
-const BOOKMARK_ROWS_MAX_HEIGHT: f32 = 154.0;
+/// Title, search row, separators and the filter tabs. Fixed, so the popover
+/// grows only by its list.
+const POPOVER_CHROME_HEIGHT: f32 = 232.0;
+/// The height the list always had. Kept as the floor so a short list looks
+/// exactly as it did before; only longer lists change.
+const BOOKMARK_ROWS_MIN_HEIGHT: f32 = 154.0;
+const POPOVER_SCREEN_MARGIN: f32 = 8.0;
 const ROW_ACTION_WIDTH: f32 = 48.0;
 
 impl SuiSuiViewApp {
@@ -29,7 +34,8 @@ impl SuiSuiViewApp {
 
         let screen = ctx.screen_rect();
         let width = POPOVER_WIDTH;
-        let height = POPOVER_HEIGHT;
+        let rows_height = self.bookmark_rows_height(ctx);
+        let height = POPOVER_CHROME_HEIGHT + rows_height;
         let pos = egui::pos2(
             self.bookmark_popover_pos
                 .x
@@ -52,20 +58,38 @@ impl SuiSuiViewApp {
                             .stroke(theme::subtle_stroke())
                             .corner_radius(CornerRadius::same(7))
                             .inner_margin(Margin::same(14));
-                        dialog::show_sized_frame(
-                            ui,
-                            egui::vec2(width, POPOVER_HEIGHT),
-                            frame,
-                            |ui| {
-                                self.show_bookmark_popover_contents(ui);
-                            },
-                        );
+                        dialog::show_sized_frame(ui, egui::vec2(width, height), frame, |ui| {
+                            self.show_bookmark_popover_contents(ui, rows_height);
+                        });
                     },
                 );
             });
         let popover_rect = area_response.response.rect;
         self.show_bookmark_delete_dialog(ctx, popover_rect);
         self.close_bookmark_popover_on_outside_click(ctx, popover_rect);
+    }
+
+    /// How tall the bookmark list wants to be: enough for every row, capped by
+    /// what the screen leaves after the fixed chrome. The list used to be pinned
+    /// at a height that showed under two rows no matter how many bookmarks
+    /// existed, which made a long list read as if it had been truncated.
+    fn bookmark_rows_height(&mut self, ctx: &egui::Context) -> f32 {
+        let room = ctx.screen_rect().height() - POPOVER_CHROME_HEIGHT - POPOVER_SCREEN_MARGIN * 2.0;
+        let max_height = room.max(BOOKMARK_ROWS_MIN_HEIGHT);
+        if self.bookmark_filter == BookmarkFilter::ThisBook && self.book_id.is_none() {
+            return BOOKMARK_ROWS_MIN_HEIGHT;
+        }
+        self.refresh_bookmark_rows_if_needed();
+        let rows = self.bookmark_rows.len() as f32;
+        if rows == 0.0 {
+            return BOOKMARK_ROWS_MIN_HEIGHT;
+        }
+        // `ScrollArea::show_rows` pitches rows by height + item spacing, with no
+        // spacing after the last one. Match it, or the list is always one
+        // scrollbar short of showing what it has room for.
+        let spacing = ctx.style().spacing.item_spacing.y;
+        let wanted = rows * (BOOKMARK_ROW_HEIGHT + spacing) - spacing;
+        wanted.clamp(BOOKMARK_ROWS_MIN_HEIGHT, max_height)
     }
 
     pub(in crate::app) fn toggle_bookmark_popover_below(&mut self, anchor: Rect) {
@@ -172,7 +196,7 @@ impl SuiSuiViewApp {
         Some(self.current_bookmark_path(source.as_ref()).to_path_buf())
     }
 
-    fn show_bookmark_popover_contents(&mut self, ui: &mut egui::Ui) {
+    fn show_bookmark_popover_contents(&mut self, ui: &mut egui::Ui, rows_height: f32) {
         let i18n = self.i18n();
         ui.horizontal(|ui| {
             ui.heading(RichText::new(i18n.text("bookmark.title")).color(theme::TEXT_PRIMARY));
@@ -204,7 +228,7 @@ impl SuiSuiViewApp {
         ui.add_space(4.0);
         self.show_bookmark_filter_tabs(ui);
         ui.add_space(12.0);
-        self.show_bookmark_rows(ui);
+        self.show_bookmark_rows(ui, rows_height);
     }
 
     fn show_bookmark_clear_button(&mut self, ui: &mut egui::Ui, bookmark_count: usize) {
@@ -400,8 +424,7 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn show_bookmark_rows(&mut self, ui: &mut egui::Ui) {
-        let rows_height = ui.available_height().clamp(96.0, BOOKMARK_ROWS_MAX_HEIGHT);
+    fn show_bookmark_rows(&mut self, ui: &mut egui::Ui, rows_height: f32) {
         if self.bookmark_filter == BookmarkFilter::ThisBook && self.book_id.is_none() {
             empty_bookmark_message(
                 ui,
