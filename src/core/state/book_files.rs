@@ -13,8 +13,21 @@ impl StateStore {
                 return Some(pending.clone());
             }
         }
+        if let Some(record) = self.books.borrow().records.get(book_id) {
+            return Some(record.clone());
+        }
+        // A completed scan means every record is already here, so a miss is a
+        // book that does not exist rather than one not read yet.
+        if self.books.borrow().all_loaded {
+            return None;
+        }
         let text = fs::read_to_string(book_file_path(&self.books_dir, book_id)).ok()?;
-        serde_json::from_str::<BookRecord>(&text).ok()
+        let record = serde_json::from_str::<BookRecord>(&text).ok()?;
+        self.books
+            .borrow_mut()
+            .records
+            .insert(record.book_id.clone(), record.clone());
+        Some(record)
     }
 
     pub(super) fn write_state_file(&mut self) -> std::io::Result<()> {
@@ -44,29 +57,43 @@ impl StateStore {
             self.pending_book = None;
         }
         let text = serde_json::to_string_pretty(record)?;
-        write_atomic(&book_file_path(&self.books_dir, &record.book_id), &text)
+        let result = write_atomic(&book_file_path(&self.books_dir, &record.book_id), &text);
+        let mut books = self.books.borrow_mut();
+        if result.is_ok() {
+            books.records.insert(record.book_id.clone(), record.clone());
+        } else {
+            // The file and the cache would disagree, and the file is the truth.
+            books.records.remove(&record.book_id);
+            books.all_loaded = false;
+        }
+        result
     }
 
     pub(super) fn remove_book_record_file(&self, book_id: &str) {
         let _ = fs::remove_file(book_file_path(&self.books_dir, book_id));
+        self.books.borrow_mut().records.remove(book_id);
     }
 
     pub(super) fn load_all_book_records(&self) -> Vec<BookRecord> {
-        let mut records: Vec<BookRecord> = Vec::new();
-        if let Ok(entries) = fs::read_dir(&self.books_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                    continue;
-                }
-                let Ok(text) = fs::read_to_string(&path) else {
-                    continue;
-                };
-                if let Ok(record) = serde_json::from_str::<BookRecord>(&text) {
-                    records.push(record);
+        if !self.books.borrow().all_loaded {
+            let mut books = self.books.borrow_mut();
+            if let Ok(entries) = fs::read_dir(&self.books_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                        continue;
+                    }
+                    let Ok(text) = fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    if let Ok(record) = serde_json::from_str::<BookRecord>(&text) {
+                        books.records.insert(record.book_id.clone(), record);
+                    }
                 }
             }
+            books.all_loaded = true;
         }
+        let mut records: Vec<BookRecord> = self.books.borrow().records.values().cloned().collect();
         if let Some(pending) = &self.pending_book {
             match records
                 .iter_mut()

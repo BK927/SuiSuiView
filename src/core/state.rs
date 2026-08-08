@@ -1,5 +1,6 @@
 use crate::core::i18n::I18n;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -611,6 +612,30 @@ pub struct StateStore {
     state: PersistedState,
     pending_book: Option<BookRecord>,
     state_dirty: bool,
+    /// Book records this process has already parsed.
+    ///
+    /// One record is one small JSON file, and the bookmark popover asks about
+    /// every book on every frame it is open. That was a `read_dir` plus a read
+    /// and parse per book each time — around half a second for a thousand books
+    /// with the OS cache warm, and far worse off a spinning disk. This store is
+    /// the only writer, so it can keep what it has read.
+    ///
+    /// `RefCell` because the query methods are `&self` and shared widely; the
+    /// store is single-threaded (it lives in the app struct, never in an `Arc`).
+    ///
+    /// The cache is correct only because this process owns these files. With
+    /// single-instance turned off, a second instance's edit to a book this one
+    /// has already read is not seen until this one writes that record.
+    books: RefCell<BookRecordCache>,
+}
+
+/// Records already parsed. `all_loaded` means the directory scan has happened
+/// and `records` is the complete set, so whole-library queries can be answered
+/// without touching the disk again.
+#[derive(Debug, Default, Clone)]
+struct BookRecordCache {
+    records: BTreeMap<String, BookRecord>,
+    all_loaded: bool,
 }
 
 fn now_unix_seconds() -> u64 {

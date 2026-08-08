@@ -33,6 +33,7 @@ impl StateStore {
             state,
             pending_book: None,
             state_dirty: false,
+            books: Default::default(),
         };
         store.import_legacy_bookmarks();
         store

@@ -299,6 +299,7 @@ fn page_bookmarks_without_source_path_are_hidden() {
         state,
         pending_book: None,
         state_dirty: false,
+        books: Default::default(),
     };
     store.import_legacy_bookmarks();
 
@@ -356,6 +357,59 @@ fn book_records_persist_across_store_instances() {
         .expect("record persisted to its own file");
     assert_eq!(position.last_page, 5);
     assert_eq!(position.last_page_name.as_deref(), Some("006.webp"));
+}
+
+#[test]
+fn cached_book_records_still_reflect_writes_and_deletions() {
+    // The store keeps parsed records in memory so the bookmark popover does not
+    // re-read every book file each frame. The cache must never answer with what
+    // the file no longer says.
+    let base = unique_base("record-cache");
+    let mut store = store_at(&base);
+    for (book_id, path) in [
+        ("book-1", "C:/books/book-1.zip"),
+        ("book-2", "C:/books/book-2.cbz"),
+    ] {
+        store.upsert_book_record(BookRecordInput {
+            book_id,
+            title: book_id,
+            last_page: 0,
+            last_page_name: None,
+            total_pages: 20,
+            path: Path::new(path),
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: None,
+            view_mode: None,
+            strip_offset_frac: None,
+            smart_spread_phase: 0,
+        });
+    }
+    store.upsert_page_bookmark(
+        "book-1",
+        Path::new("C:/books/book-1.zip"),
+        0,
+        "Cover",
+        Some("cover.png".to_owned()),
+    );
+    // Populate the whole-library cache, then keep mutating behind it.
+    assert_eq!(store.all_page_bookmarks().len(), 1);
+
+    store.upsert_page_bookmark("book-2", Path::new("C:/books/book-2.cbz"), 7, "Later", None);
+    assert_eq!(
+        store.all_page_bookmarks().len(),
+        2,
+        "a book written after the scan must still show up"
+    );
+    assert!(store.has_page_bookmark("book-2", Path::new("C:/books/book-2.cbz"), 7));
+
+    store.remove_page_bookmark("book-1", Path::new("C:/books/book-1.zip"), 0);
+    assert_eq!(store.all_page_bookmarks().len(), 1);
+    assert!(!store.has_page_bookmark("book-1", Path::new("C:/books/book-1.zip"), 0));
+
+    // The cache is not a substitute for the file: a fresh store sees the same.
+    let reopened = store_at(&base);
+    assert_eq!(reopened.all_page_bookmarks().len(), 1);
 }
 
 #[test]
@@ -444,6 +498,7 @@ fn legacy_import_keeps_bookmarks_and_drops_resume() {
         state,
         pending_book: None,
         state_dirty: false,
+        books: Default::default(),
     };
     store.import_legacy_bookmarks();
 
@@ -605,6 +660,7 @@ fn store_at(base: &Path) -> StateStore {
         state: PersistedState::default(),
         pending_book: None,
         state_dirty: false,
+        books: Default::default(),
     }
 }
 
