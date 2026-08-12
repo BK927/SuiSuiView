@@ -57,12 +57,18 @@ impl StripDimScanWorker {
                     if job.generation != worker_generation.load(Ordering::Acquire) {
                         continue;
                     }
+                    let Some(source) = validated_scan_source(
+                        &job.source,
+                        job.source.reopen_for_independent_reads(),
+                    ) else {
+                        continue;
+                    };
                     let mut batch: Vec<(PageId, [u32; 2])> = Vec::with_capacity(STRIP_DIM_BATCH);
                     for (index, &page_id) in job.page_ids.iter().enumerate() {
                         if job.generation != worker_generation.load(Ordering::Acquire) {
                             break;
                         }
-                        if let Some(dims) = scan_page_dimensions(job.source.as_ref(), index) {
+                        if let Some(dims) = scan_page_dimensions(source.as_ref(), index) {
                             batch.push((page_id, dims));
                         }
                         if batch.len() >= STRIP_DIM_BATCH
@@ -110,6 +116,25 @@ impl StripDimScanWorker {
 
     pub(in crate::app) fn try_recv(&self) -> Option<StripDimBatch> {
         self.rx.try_recv().ok()
+    }
+}
+
+/// Prefer a separately opened reader for serialized sources. The reopened
+/// snapshot must still describe the exact page sequence represented by the
+/// job's page ids; otherwise the best-effort scan is abandoned.
+fn validated_scan_source(
+    original: &SharedSource,
+    reopened: Result<Option<SharedSource>, crate::core::source::SourceError>,
+) -> Option<SharedSource> {
+    match reopened {
+        Ok(Some(source))
+            if source.book_id() == original.book_id()
+                && source.page_count() == original.page_count() =>
+        {
+            Some(source)
+        }
+        Ok(Some(_)) | Err(_) => None,
+        Ok(None) => Some(original.clone()),
     }
 }
 
@@ -219,5 +244,87 @@ impl SuiSuiViewApp {
         if inserted {
             self.note_strip_dims_changed();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validated_scan_source;
+    use crate::core::source::{BookSource, SharedSource, SourceError};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    struct StaticSource {
+        path: PathBuf,
+        book_id: &'static str,
+        page_count: usize,
+    }
+
+    impl BookSource for StaticSource {
+        fn title(&self) -> &str {
+            "static"
+        }
+
+        fn source_path(&self) -> &Path {
+            &self.path
+        }
+
+        fn book_id(&self) -> &str {
+            self.book_id
+        }
+
+        fn page_count(&self) -> usize {
+            self.page_count
+        }
+
+        fn page_name(&self, index: usize) -> Option<&str> {
+            (index < self.page_count).then_some("page.png")
+        }
+
+        fn read_page(&self, index: usize) -> Result<Vec<u8>, SourceError> {
+            if index < self.page_count {
+                Ok(vec![index as u8])
+            } else {
+                Err(SourceError::InvalidPage {
+                    index,
+                    page_count: self.page_count,
+                })
+            }
+        }
+    }
+
+    fn source(book_id: &'static str, page_count: usize) -> SharedSource {
+        Arc::new(StaticSource {
+            path: PathBuf::from(book_id),
+            book_id,
+            page_count,
+        })
+    }
+
+    #[test]
+    fn independent_scan_reader_must_match_the_original_snapshot() {
+        let original = source("book", 2);
+
+        assert!(validated_scan_source(&original, Ok(Some(source("other", 2)))).is_none());
+        assert!(validated_scan_source(&original, Ok(Some(source("book", 3)))).is_none());
+    }
+
+    #[test]
+    fn independent_scan_reader_failures_skip_only_the_background_scan() {
+        let original = source("book", 2);
+
+        assert!(validated_scan_source(
+            &original,
+            Err(SourceError::Unsupported("synthetic failure".to_owned()))
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn concurrent_sources_keep_using_the_original_scan_reader() {
+        let original = source("book", 2);
+        let selected = validated_scan_source(&original, Ok(None)).unwrap();
+
+        assert!(Arc::ptr_eq(&selected, &original));
     }
 }

@@ -53,6 +53,16 @@ pub trait BookSource: Send + Sync {
             .map(|name| format!("{}::{name}", self.source_path().display()))
     }
     fn read_page(&self, index: usize) -> Result<Vec<u8>, SourceError>;
+    /// Whether foreground reads may safely overlap speculative reads on clones
+    /// of this source. Sources backed by one serialized reader should opt out.
+    fn supports_concurrent_page_reads(&self) -> bool {
+        true
+    }
+    /// Open an independent reader for long-running background work when clones
+    /// of this source would otherwise contend with foreground page reads.
+    fn reopen_for_independent_reads(&self) -> Result<Option<SharedSource>, SourceError> {
+        Ok(None)
+    }
     /// Stable identity of the page at `index` in this snapshot.
     fn page_id(&self, index: usize) -> Option<PageId> {
         (index < self.page_count()).then_some(PageId(index as u32))
@@ -712,6 +722,14 @@ impl BookSource for ZipCbzSource {
             .take(max_bytes as u64)
             .read_to_end(&mut bytes)?;
         Ok(bytes)
+    }
+
+    fn supports_concurrent_page_reads(&self) -> bool {
+        false
+    }
+
+    fn reopen_for_independent_reads(&self) -> Result<Option<SharedSource>, SourceError> {
+        ZipCbzSource::open(&self.path).map(|source| Some(Arc::new(source) as SharedSource))
     }
 
     fn source_instance_id(&self) -> u64 {

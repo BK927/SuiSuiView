@@ -315,6 +315,33 @@ fn zip_page_read_hint_reports_compression_and_sizes() {
     assert_eq!(deflated_hint.uncompressed_size, Some(26));
 }
 
+#[test]
+fn zip_background_reader_is_independent_and_snapshot_compatible() {
+    let dir = temp_test_dir("zip-independent-reader");
+    let archive = dir.join("book.cbz");
+    write_test_zip(&archive);
+    let source = ZipCbzSource::open(&archive).unwrap();
+
+    assert!(!source.supports_concurrent_page_reads());
+    let reopened = source
+        .reopen_for_independent_reads()
+        .unwrap()
+        .expect("ZIP sources provide a separate reader");
+    assert_eq!(reopened.book_id(), source.book_id());
+    assert_eq!(reopened.page_count(), source.page_count());
+    assert_eq!(reopened.read_page(0).unwrap(), source.read_page(0).unwrap());
+}
+
+#[test]
+fn folder_sources_allow_concurrent_page_reads() {
+    let dir = temp_test_dir("folder-concurrent-reader");
+    fs::write(dir.join("page.jpg"), b"synthetic image contents").unwrap();
+    let source = FolderSource::open(&dir).unwrap();
+
+    assert!(source.supports_concurrent_page_reads());
+    assert!(source.reopen_for_independent_reads().unwrap().is_none());
+}
+
 fn write_test_zip(path: &Path) {
     let file = File::create(path).unwrap();
     let mut zip = zip::ZipWriter::new(file);

@@ -194,6 +194,10 @@ pub(super) fn maybe_start_decode(
     measure_prepare_timing: bool,
 ) -> bool {
     discard_finished_decode(decode_ahead, "discard_finished");
+    if !source.supports_concurrent_page_reads() {
+        clear_pending_decode(decode_ahead, "serialized_source");
+        return false;
+    }
     if decode_ahead.is_some() {
         return true;
     }
@@ -423,6 +427,7 @@ mod tests {
             path: PathBuf::from("thread-recording-source"),
             bytes: vec![1, 2, 3, 4],
             read_log: read_log.clone(),
+            supports_concurrent_reads: true,
         });
         let options = WorkerOptions {
             progressive_preview_enabled: false,
@@ -468,6 +473,47 @@ mod tests {
         assert!(read_log.iter().any(|(index, thread_name)| {
             *index == 1 && thread_name.as_deref() == Some("suisuiview-page-decode-ahead")
         }));
+    }
+
+    #[test]
+    fn serialized_source_does_not_start_speculative_decode() {
+        let (_command_tx, command_rx) = unbounded::<WorkerCommand>();
+        let read_log = Arc::new(Mutex::new(Vec::new()));
+        let source: SharedSource = Arc::new(ThreadRecordingSource {
+            path: PathBuf::from("serialized-source"),
+            bytes: vec![1, 2, 3, 4],
+            read_log: read_log.clone(),
+            supports_concurrent_reads: false,
+        });
+        let options = WorkerOptions::default();
+        let cache = LruCache::new(NonZeroUsize::new(4).unwrap());
+        let hints = PublishedAppCacheHints::new();
+        let jobs = [PageJob {
+            index: 1,
+            target_long_edge: 2048,
+        }];
+        let mut pending = None;
+
+        let reserved = maybe_start_decode(
+            &mut pending,
+            &command_rx,
+            &source,
+            "book",
+            7,
+            &jobs,
+            0,
+            0,
+            1,
+            &options,
+            &cache,
+            &hints,
+            DecodeAheadCandidate::Any,
+            false,
+        );
+
+        assert!(!reserved);
+        assert!(pending.is_none());
+        assert!(read_log.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -820,6 +866,7 @@ mod tests {
         path: PathBuf,
         bytes: Vec<u8>,
         read_log: ReadLog,
+        supports_concurrent_reads: bool,
     }
 
     struct NamedSource {
@@ -851,6 +898,10 @@ mod tests {
                 1 => Some("page-0001.png"),
                 _ => None,
             }
+        }
+
+        fn supports_concurrent_page_reads(&self) -> bool {
+            self.supports_concurrent_reads
         }
 
         fn read_page(&self, index: usize) -> Result<Vec<u8>, SourceError> {
