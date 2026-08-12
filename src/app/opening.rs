@@ -300,6 +300,11 @@ impl SuiSuiViewApp {
         let source_kind = classify_path(&path);
         match source_kind {
             SourceKind::Folder | SourceKind::ZipCbz | SourceKind::SingleImage => {
+                // An explicit open request supersedes a destructive decision
+                // about the currently visible source. Cancel immediately,
+                // rather than leaving a window where the old target can be
+                // confirmed while the replacement is still loading.
+                self.pending_delete_dialog = None;
                 let origin = match source_kind {
                     SourceKind::Folder => OpenOrigin::Folder,
                     SourceKind::ZipCbz => OpenOrigin::ZipCbz,

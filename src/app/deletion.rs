@@ -79,6 +79,10 @@ impl DeleteOpenPlan {
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn delete_current_file(&mut self, mode: DeleteMode) {
+        if !can_begin_delete(self.loader_pending) {
+            self.notify("Another book is still opening, so deletion was cancelled.");
+            return;
+        }
         let Some(plan) = self.current_delete_after_plan() else {
             self.notify("No current file to delete.");
             return;
@@ -157,6 +161,10 @@ impl SuiSuiViewApp {
         );
         true
     }
+}
+
+fn can_begin_delete(loader_pending: bool) -> bool {
+    !loader_pending
 }
 
 pub(in crate::app) fn delete_target_for(
@@ -354,8 +362,8 @@ fn delete_result_message(mode: DeleteMode, target: &Path, result: &Result<(), St
 mod tests {
     use super::{
         adjacent_book_after_delete, adjacent_entry_after_delete, adjacent_image_after_delete,
-        delete_after_plan_for, delete_target_for, same_delete_subject, should_confirm_delete,
-        DeleteOpenPlan,
+        can_begin_delete, delete_after_plan_for, delete_target_for, same_delete_subject,
+        should_confirm_delete, DeleteOpenPlan,
     };
     use crate::app::{commands::DeleteMode, OpenOrigin};
     use crate::core::source::{BookSource, SourceError};
@@ -596,6 +604,12 @@ mod tests {
 
         assert!(same_delete_subject(&confirmed, &live));
         assert_ne!(confirmed.success, live.success);
+    }
+
+    #[test]
+    fn delete_confirmation_is_not_started_while_another_book_is_loading() {
+        assert!(!can_begin_delete(true));
+        assert!(can_begin_delete(false));
     }
 
     struct FakeSource {
