@@ -25,7 +25,7 @@ allowed_bad_module_paths = []
 [[files]]
 path = "src/app.rs"
 kind = "legacy-large"
-baseline_lines = 2309
+baseline_lines = 2192
 growth_warn_lines = 100
 growth_fail_lines = 200
 purpose = "Application shell, durable SuiSuiViewApp state, and top-level egui update orchestration."
