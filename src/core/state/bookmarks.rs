@@ -168,6 +168,16 @@ pub(super) fn path_key(path: &Path) -> String {
 impl StateStore {
     pub fn recent_books(&self, limit: usize) -> Vec<BookRecord> {
         let mut records = self.load_all_book_records();
+        // Automatic resume records continue to exist while recent locations
+        // are disabled, but they are not recent-menu entries. Filter them
+        // before applying the limit so pathless records cannot crowd out older
+        // locations the user deliberately kept.
+        records.retain(|record| {
+            record
+                .known_paths
+                .last()
+                .is_some_and(|path| !path.is_empty())
+        });
         records.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         records.truncate(limit);
         records

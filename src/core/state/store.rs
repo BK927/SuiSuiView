@@ -489,13 +489,18 @@ fn looks_like_maximized_rect_artifact(placement: &WindowPlacement) -> bool {
 }
 
 fn looks_like_archive_book(record: &BookRecord) -> bool {
-    record.known_paths.iter().any(|path| {
-        Path::new(path)
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| matches!(extension.to_ascii_lowercase().as_str(), "zip" | "cbz"))
-            .unwrap_or(false)
-    })
+    record
+        .known_paths
+        .iter()
+        .chain(record.path_positions.keys())
+        .any(|path| path_looks_like_archive(path))
+}
+
+fn path_looks_like_archive(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "zip" | "cbz"))
 }
 
 #[cfg(test)]

@@ -505,6 +505,95 @@ fn immediate_write_keeps_another_books_deferred_update_pending() {
 }
 
 #[test]
+fn recent_books_filters_pathless_resume_records_before_applying_the_limit() {
+    let base = unique_base("recent-pathless-limit");
+    let mut store = store_at(&base);
+    for index in 0..2 {
+        let book_id = format!("kept-{index}");
+        let path = format!("C:/books/kept-{index}.cbz");
+        store
+            .upsert_book_record(BookRecordInput {
+                book_id: &book_id,
+                title: "Kept recent location",
+                last_page: 0,
+                last_page_name: None,
+                total_pages: 1,
+                path: Path::new(&path),
+                reading_direction: ReadingDirection::RightToLeft,
+                fit_mode: FitMode::FitPage,
+                manual_zoom: None,
+                view_mode: None,
+                strip_offset_frac: None,
+                smart_spread_phase: 0,
+            })
+            .unwrap();
+    }
+
+    store.state.settings.remember_recent_locations = false;
+    for index in 0..10 {
+        let book_id = format!("resume-only-{index}");
+        let path = format!("C:/books/resume-only-{index}.cbz");
+        store
+            .upsert_book_record(BookRecordInput {
+                book_id: &book_id,
+                title: "Automatic resume only",
+                last_page: 1,
+                last_page_name: Some("002.jpg"),
+                total_pages: 2,
+                path: Path::new(&path),
+                reading_direction: ReadingDirection::RightToLeft,
+                fit_mode: FitMode::FitPage,
+                manual_zoom: None,
+                view_mode: None,
+                strip_offset_frac: None,
+                smart_spread_phase: 0,
+            })
+            .unwrap();
+    }
+
+    let recent = store.recent_books(8);
+    assert_eq!(recent.len(), 2);
+    assert!(recent
+        .iter()
+        .all(|record| record.book_id.starts_with("kept-") && !record.known_paths.is_empty()));
+}
+
+#[test]
+fn archive_page_name_cleanup_finds_resume_paths_when_recent_locations_are_disabled() {
+    let base = unique_base("archive-name-cleanup-path-position");
+    let mut store = store_at(&base);
+    store.state.settings.remember_recent_locations = false;
+    store
+        .upsert_book_record(BookRecordInput {
+            book_id: "archive-resume-only",
+            title: "Archive resume only",
+            last_page: 2,
+            last_page_name: Some("003.jpg"),
+            total_pages: 4,
+            path: Path::new("C:/books/resume-only.cbz"),
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: None,
+            view_mode: None,
+            strip_offset_frac: None,
+            smart_spread_phase: 0,
+        })
+        .unwrap();
+
+    let before = store.book_record("archive-resume-only").unwrap();
+    assert!(before.known_paths.is_empty());
+    assert_eq!(store.clear_archive_page_names().unwrap(), 2);
+
+    let after = store.book_record("archive-resume-only").unwrap();
+    assert_eq!(after.last_page, 2);
+    assert!(after.last_page_name.is_none());
+    assert!(after
+        .path_positions
+        .values()
+        .all(|position| position.last_page_name.is_none()));
+}
+
+#[test]
 fn legacy_import_keeps_bookmarks_and_drops_resume() {
     let json = r#"{
         "version": 4,
