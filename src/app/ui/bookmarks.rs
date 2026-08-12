@@ -697,17 +697,27 @@ impl SuiSuiViewApp {
                 .is_some_and(|row_path| row_path == path.to_string_lossy().as_ref())
         });
         if self.book_id.as_deref() == Some(row.book_id.as_str()) && current_bookmark_path {
-            let direction = if row.bookmark.page >= self.current_page {
+            let target = self
+                .source
+                .as_ref()
+                .and_then(|source| {
+                    row.bookmark.page_name.as_deref().and_then(|page_name| {
+                        super::super::opening::page_index_for_name(source.as_ref(), page_name)
+                    })
+                })
+                .unwrap_or(row.bookmark.page);
+            let direction = if target >= self.current_page {
                 super::super::NavigationDirection::Forward
             } else {
                 super::super::NavigationDirection::Backward
             };
-            self.set_page(row.bookmark.page, direction);
+            self.set_page(target, direction);
         } else if let Some(path) = row.known_path {
             self.open_path_for_bookmark(
                 std::path::PathBuf::from(path),
                 row.book_id,
                 row.bookmark.page,
+                row.bookmark.page_name,
             );
         } else {
             self.notify(self.i18n().text("bookmark.no_path"));

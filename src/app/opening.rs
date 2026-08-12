@@ -231,6 +231,7 @@ impl SuiSuiViewApp {
         path: PathBuf,
         book_id: String,
         page: usize,
+        page_name: Option<String>,
     ) {
         self.sibling_open_retry = None;
         self.clear_pending_sibling_book_turns();
@@ -238,6 +239,7 @@ impl SuiSuiViewApp {
             book_id,
             path: path.clone(),
             page,
+            page_name,
         });
         self.clear_adjacent_seed_cache();
         self.open_path_inner(
@@ -338,10 +340,9 @@ impl SuiSuiViewApp {
                                 &load_path,
                                 resume_by_file_identity,
                             );
-                            let pending_page = pending_bookmark_jump
-                                .as_ref()
-                                .filter(|pending| pending.book_id == source.book_id())
-                                .map(|pending| pending.page);
+                            let pending_page = pending_bookmark_jump.as_ref().and_then(|pending| {
+                                pending_bookmark_page(source.as_ref(), pending)
+                            });
                             let page_index = selected_open_page(
                                 source.as_ref(),
                                 explicit_page,
@@ -592,8 +593,7 @@ impl SuiSuiViewApp {
         let pending_page = self
             .pending_bookmark_jump
             .as_ref()
-            .filter(|pending| pending.book_id == book_id)
-            .map(|pending| pending.page);
+            .and_then(|pending| pending_bookmark_page(source.as_ref(), pending));
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let forced_page = forced_page.or_else(perf::forced_start_page_index);
         self.current_page = selected_open_page(
@@ -845,6 +845,22 @@ pub(in crate::app) fn page_index_for_name(
     page_name: &str,
 ) -> Option<usize> {
     (0..source.page_count()).find(|index| source.page_name(*index) == Some(page_name))
+}
+
+/// Resolve an explicit manual-bookmark jump independently from automatic
+/// resume. If an edited archive has a new content id, a surviving page name is
+/// strong enough to follow; a legacy numeric-only bookmark is accepted only
+/// while the book id still matches.
+fn pending_bookmark_page(source: &dyn BookSource, pending: &PendingBookmarkJump) -> Option<usize> {
+    let named_page = pending
+        .page_name
+        .as_deref()
+        .and_then(|page_name| page_index_for_name(source, page_name));
+    if pending.book_id == source.book_id() {
+        named_page.or(Some(pending.page))
+    } else {
+        named_page
+    }
 }
 
 fn resolve_open_view(

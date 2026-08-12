@@ -1,8 +1,9 @@
 use super::{
-    open_seed_target_long_edge, page_index_for_name, rebase_archive_page_bookmarks_on_open,
-    remap_page_bookmarks_on_open, resolve_open_view, selected_open_page,
-    startup_seed_target_long_edge, OpenOrigin, OpenViewFallback, ViewMode,
+    open_seed_target_long_edge, page_index_for_name, pending_bookmark_page,
+    rebase_archive_page_bookmarks_on_open, remap_page_bookmarks_on_open, resolve_open_view,
+    selected_open_page, startup_seed_target_long_edge, OpenOrigin, OpenViewFallback, ViewMode,
 };
+use crate::app::PendingBookmarkJump;
 use crate::core::source::{BookSource, SourceError};
 use crate::core::state::{FitMode, ReadingDirection, ReadingPosition, WindowPlacement};
 use crate::core::worker::{DEFAULT_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE};
@@ -217,6 +218,45 @@ fn automatic_resume_follows_its_saved_page_name_after_reordering() {
         selected_open_page(&edited, None, None, Some(&saved), None),
         2
     );
+}
+
+#[test]
+fn manual_bookmark_jump_follows_page_name_across_an_archive_identity_change() {
+    let edited = TestSource::with_names(vec!["003.jpg", "001.jpg", "004.jpg"]);
+    let pending = PendingBookmarkJump {
+        book_id: "old-archive-id".to_owned(),
+        path: PathBuf::from("book.cbz"),
+        page: 2,
+        page_name: Some("003.jpg".to_owned()),
+    };
+
+    assert_eq!(pending_bookmark_page(&edited, &pending), Some(0));
+}
+
+#[test]
+fn manual_bookmark_jump_does_not_apply_a_stale_number_to_another_identity() {
+    let edited = TestSource::with_names(vec!["001.jpg", "004.jpg"]);
+    let pending = PendingBookmarkJump {
+        book_id: "old-archive-id".to_owned(),
+        path: PathBuf::from("book.cbz"),
+        page: 1,
+        page_name: Some("vanished.jpg".to_owned()),
+    };
+
+    assert_eq!(pending_bookmark_page(&edited, &pending), None);
+}
+
+#[test]
+fn legacy_manual_bookmark_number_remains_valid_for_the_same_identity() {
+    let source = TestSource::new(3);
+    let pending = PendingBookmarkJump {
+        book_id: source.book_id().to_owned(),
+        path: PathBuf::from("book.cbz"),
+        page: 2,
+        page_name: None,
+    };
+
+    assert_eq!(pending_bookmark_page(&source, &pending), Some(2));
 }
 
 #[test]

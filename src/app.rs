@@ -124,6 +124,7 @@ struct PendingBookmarkJump {
     book_id: String,
     path: PathBuf,
     page: usize,
+    page_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
