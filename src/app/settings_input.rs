@@ -4,8 +4,8 @@ use super::ui::{dialog, icons, theme};
 use super::SuiSuiViewApp;
 use crate::core::i18n::I18n;
 use crate::core::state::{
-    default_key_bindings, default_mouse_bindings, AppSettings, CommandId, KeyBinding, KeyCode,
-    KeyShortcut, MouseBinding, MouseGesture,
+    default_key_bindings, default_mouse_bindings, AppSettings, CommandId, KeyBinding, KeyShortcut,
+    MouseBinding, MouseGesture,
 };
 use egui::{self, RichText};
 
@@ -211,7 +211,8 @@ impl SuiSuiViewApp {
         let Some(capture) = self.shortcut_capture else {
             return;
         };
-        let events = ctx.input(|input| input.events.clone());
+        let (events, current_modifiers) =
+            ctx.input(|input| (input.events.clone(), input.modifiers));
         for event in events {
             if let egui::Event::Key {
                 key,
@@ -236,29 +237,15 @@ impl SuiSuiViewApp {
                     self.shortcut_capture = None;
                     return;
                 }
-                let key_event = egui::Event::Key {
-                    key,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers,
-                };
-                let Some(shortcut) = shortcut_from_input_event(&key_event, modifiers) else {
+                let Some(shortcut) = shortcut_from_input_event(&event, modifiers) else {
                     continue;
                 };
                 self.capture_shortcut(draft, changed, capture, shortcut);
                 return;
             }
-            if let egui::Event::Text(text) = event {
-                if text == "*" {
-                    self.capture_shortcut(
-                        draft,
-                        changed,
-                        capture,
-                        KeyShortcut::new(KeyCode::Asterisk),
-                    );
-                    return;
-                }
+            if let Some(shortcut) = shortcut_from_input_event(&event, current_modifiers) {
+                self.capture_shortcut(draft, changed, capture, shortcut);
+                return;
             }
         }
     }

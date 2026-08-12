@@ -73,6 +73,7 @@ pub(super) fn collect_keyboard_actions(
     settings: &AppSettings,
 ) -> Vec<KeyboardAction> {
     let mut actions = Vec::new();
+    let mut shifted_asterisk_key = false;
     for event in &input.events {
         match event {
             egui::Event::Key {
@@ -81,36 +82,38 @@ pub(super) fn collect_keyboard_actions(
                 modifiers,
                 ..
             } => {
-                let Some(key) = key_code_from_egui(*key) else {
+                shifted_asterisk_key = false;
+                let Some(shortcut) = shortcut_from_input_event(event, *modifiers) else {
                     continue;
                 };
-                collect_shortcut_commands(
-                    shortcut_from_parts(key, *modifiers),
-                    settings,
-                    &mut actions,
-                );
+                shifted_asterisk_key = is_shifted_asterisk_key(*key, *modifiers);
+                collect_shortcut_commands(shortcut, settings, &mut actions);
             }
             egui::Event::Key {
                 key,
                 pressed: false,
                 ..
             } => {
+                shifted_asterisk_key = false;
                 let Some(key) = key_code_from_egui(*key) else {
                     continue;
                 };
                 collect_release_actions(key, settings, &mut actions);
             }
-            egui::Event::Text(text)
-                if text == "*"
-                    && modifiers_match(input.modifiers, KeyShortcut::new(KeyCode::Asterisk)) =>
-            {
-                collect_shortcut_commands(
-                    KeyShortcut::new(KeyCode::Asterisk),
-                    settings,
-                    &mut actions,
-                );
+            egui::Event::Text(text) if text == "*" => {
+                // egui emits both Shift+8 and Text("*") for the main keyboard,
+                // but only Text("*") for numpad multiply. The key event already
+                // dispatched the canonical asterisk shortcut, so suppress exactly
+                // its immediately-following text event without suppressing the
+                // numpad's text-only input.
+                if std::mem::take(&mut shifted_asterisk_key) {
+                    continue;
+                }
+                if let Some(shortcut) = shortcut_from_input_event(event, input.modifiers) {
+                    collect_shortcut_commands(shortcut, settings, &mut actions);
+                }
             }
-            _ => {}
+            _ => shifted_asterisk_key = false,
         }
     }
     actions
@@ -269,10 +272,7 @@ pub(super) fn shortcut_from_input_event(
         egui::Event::Key {
             key, pressed: true, ..
         } => key_code_from_egui(*key).map(|key| shortcut_from_parts(key, modifiers)),
-        egui::Event::Text(text) if text == "*" => Some(shortcut_from_parts(
-            KeyCode::Asterisk,
-            egui::Modifiers::default(),
-        )),
+        egui::Event::Text(text) if text == "*" => Some(asterisk_shortcut(modifiers)),
         _ => None,
     }
 }
@@ -343,6 +343,9 @@ pub(super) fn key_code_from_egui(key: Key) -> Option<KeyCode> {
 }
 
 fn shortcut_from_parts(key: KeyCode, modifiers: egui::Modifiers) -> KeyShortcut {
+    if key == KeyCode::Num8 && modifiers.shift {
+        return asterisk_shortcut(modifiers);
+    }
     KeyShortcut {
         key,
         ctrl: modifiers.ctrl,
@@ -351,10 +354,19 @@ fn shortcut_from_parts(key: KeyCode, modifiers: egui::Modifiers) -> KeyShortcut 
     }
 }
 
-fn modifiers_match(modifiers: egui::Modifiers, shortcut: KeyShortcut) -> bool {
-    modifiers.ctrl == shortcut.ctrl
-        && modifiers.alt == shortcut.alt
-        && modifiers.shift == shortcut.shift
+fn asterisk_shortcut(modifiers: egui::Modifiers) -> KeyShortcut {
+    KeyShortcut {
+        key: KeyCode::Asterisk,
+        ctrl: modifiers.ctrl,
+        alt: modifiers.alt,
+        // Shift produces the `*` character on the main keyboard; it is not a
+        // separate modifier in the persisted logical shortcut.
+        shift: false,
+    }
+}
+
+fn is_shifted_asterisk_key(key: Key, modifiers: egui::Modifiers) -> bool {
+    key == Key::Num8 && modifiers.shift
 }
 
 #[cfg(test)]
@@ -499,9 +511,116 @@ mod tests {
         assert!(collect_keyboard_actions(&input, &settings).is_empty());
     }
 
+    #[test]
+    fn shift_8_key_and_text_pair_dispatches_asterisk_once() {
+        let settings = settings_with_binding(KeyShortcut::new(KeyCode::Asterisk));
+        let shift = modifiers(false, false, true);
+        let input = input_with_events_and_modifiers(
+            vec![
+                key_event(Key::Num8, true, false, shift),
+                egui::Event::Text("*".to_owned()),
+            ],
+            shift,
+        );
+
+        assert_eq!(
+            collect_keyboard_actions(&input, &settings),
+            vec![KeyboardAction::Command(AppCommand::SetFitMode(
+                FitMode::Original
+            ))]
+        );
+    }
+
+    #[test]
+    fn text_only_numpad_multiply_dispatches_asterisk() {
+        let settings = settings_with_binding(KeyShortcut::new(KeyCode::Asterisk));
+        let input = input_with_events(vec![egui::Event::Text("*".to_owned())]);
+
+        assert_eq!(
+            collect_keyboard_actions(&input, &settings),
+            vec![KeyboardAction::Command(AppCommand::SetFitMode(
+                FitMode::Original
+            ))]
+        );
+    }
+
+    #[test]
+    fn shifted_asterisk_keeps_ctrl_and_alt_but_not_character_shift() {
+        let ctrl_alt_shift = modifiers(true, true, true);
+        let key = key_event(Key::Num8, true, false, ctrl_alt_shift);
+        let text = egui::Event::Text("*".to_owned());
+        let expected = KeyShortcut::ctrl_alt(KeyCode::Asterisk);
+
+        assert_eq!(
+            shortcut_from_input_event(&key, ctrl_alt_shift),
+            Some(expected)
+        );
+        assert_eq!(
+            shortcut_from_input_event(&text, ctrl_alt_shift),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn ctrl_and_alt_non_asterisk_shortcuts_stay_unchanged() {
+        let ctrl = modifiers(true, false, false);
+        let alt = modifiers(false, true, false);
+
+        assert_eq!(
+            shortcut_from_input_event(&key_event(Key::B, true, false, ctrl), ctrl),
+            Some(KeyShortcut::ctrl(KeyCode::B))
+        );
+        assert_eq!(
+            shortcut_from_input_event(&key_event(Key::Num8, true, false, alt), alt),
+            Some(KeyShortcut::alt(KeyCode::Num8))
+        );
+    }
+
+    #[test]
+    fn ctrl_asterisk_key_event_works_without_a_text_event() {
+        let settings = settings_with_binding(KeyShortcut::ctrl(KeyCode::Asterisk));
+        let ctrl_shift = modifiers(true, false, true);
+        // egui-winit intentionally omits Text events while Ctrl is held.
+        let input = input_with_events(vec![key_event(Key::Num8, true, false, ctrl_shift)]);
+
+        assert_eq!(
+            collect_keyboard_actions(&input, &settings),
+            vec![KeyboardAction::Command(AppCommand::SetFitMode(
+                FitMode::Original
+            ))]
+        );
+    }
+
+    fn settings_with_binding(shortcut: KeyShortcut) -> AppSettings {
+        AppSettings {
+            key_bindings: vec![KeyBinding {
+                command: CommandId::FitOriginal,
+                shortcut,
+            }],
+            ..AppSettings::default()
+        }
+    }
+
+    fn modifiers(ctrl: bool, alt: bool, shift: bool) -> egui::Modifiers {
+        egui::Modifiers {
+            ctrl,
+            alt,
+            shift,
+            ..egui::Modifiers::default()
+        }
+    }
+
     fn input_with_events(events: Vec<egui::Event>) -> egui::InputState {
+        input_with_events_and_modifiers(events, egui::Modifiers::default())
+    }
+
+    fn input_with_events_and_modifiers(
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+    ) -> egui::InputState {
         let mut input = egui::InputState::default();
         input.events = events;
+        input.modifiers = modifiers;
         input
     }
 
