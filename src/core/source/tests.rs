@@ -24,6 +24,49 @@ fn zip_book_id_survives_path_and_filename_changes() {
 }
 
 #[test]
+fn folder_book_id_uses_bounded_content_identity_not_only_name_and_size() {
+    let first = temp_test_dir("folder-content-id-first");
+    let second = temp_test_dir("folder-content-id-second");
+    fs::write(first.join("page.jpg"), b"same-length-A").unwrap();
+    fs::write(second.join("page.jpg"), b"same-length-B").unwrap();
+
+    let first_source = FolderSource::open(&first).unwrap();
+    let second_source = FolderSource::open(&second).unwrap();
+
+    assert_ne!(first_source.book_id(), second_source.book_id());
+}
+
+#[test]
+fn folder_book_id_survives_copying_the_same_contents() {
+    let first = temp_test_dir("folder-copy-id-first");
+    let second = temp_test_dir("folder-copy-id-second");
+    fs::write(first.join("page.jpg"), b"synthetic image contents").unwrap();
+    fs::copy(first.join("page.jpg"), second.join("page.jpg")).unwrap();
+
+    let first_source = FolderSource::open(&first).unwrap();
+    let second_source = FolderSource::open(&second).unwrap();
+
+    assert_eq!(first_source.book_id(), second_source.book_id());
+}
+
+#[test]
+fn folder_book_id_samples_the_middle_of_large_same_size_pages() {
+    let first = temp_test_dir("folder-large-id-first");
+    let second = temp_test_dir("folder-large-id-second");
+    let mut first_bytes = vec![b'x'; 20 * 1024];
+    let mut second_bytes = first_bytes.clone();
+    first_bytes[10 * 1024] = b'A';
+    second_bytes[10 * 1024] = b'B';
+    fs::write(first.join("page.jpg"), first_bytes).unwrap();
+    fs::write(second.join("page.jpg"), second_bytes).unwrap();
+
+    let first_source = FolderSource::open(&first).unwrap();
+    let second_source = FolderSource::open(&second).unwrap();
+
+    assert_ne!(first_source.book_id(), second_source.book_id());
+}
+
+#[test]
 fn zip_source_filters_metadata_and_non_images() {
     let dir = temp_test_dir("zip-filter");
     let archive = dir.join("book.cbz");

@@ -6,7 +6,7 @@ use blake3::Hasher;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -18,6 +18,7 @@ pub use page_identity::{PageId, PageIdInterner};
 
 pub type SharedSource = Arc<dyn BookSource>;
 const MAX_SOURCE_PAGE_BYTES: u64 = 256 * 1024 * 1024;
+const FOLDER_ID_SAMPLE_BYTES: usize = 4 * 1024;
 
 pub trait BookSource: Send + Sync {
     fn title(&self) -> &str;
@@ -358,6 +359,7 @@ struct FolderPage {
     relative_name: String,
     path: PathBuf,
     byte_size: u64,
+    content_sample: Option<[u8; 32]>,
 }
 
 impl FolderSource {
@@ -733,10 +735,12 @@ fn collect_folder_pages(
             let relative = path.strip_prefix(root).unwrap_or(&path);
             let relative_name = normalize_path_text(relative);
             let byte_size = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+            let content_sample = folder_page_content_sample(&path, byte_size);
             pages.push(FolderPage {
                 relative_name,
                 path,
                 byte_size,
+                content_sample,
             });
         }
     }
@@ -762,10 +766,12 @@ fn collect_direct_folder_pages(
         }
 
         let byte_size = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        let content_sample = folder_page_content_sample(&path, byte_size);
         pages.push(FolderPage {
             relative_name: file_name.into_owned(),
             path,
             byte_size,
+            content_sample,
         });
     }
 
@@ -774,15 +780,55 @@ fn collect_direct_folder_pages(
 
 fn folder_book_id(pages: &[FolderPage]) -> String {
     let mut hasher = Hasher::new();
-    hasher.update(b"suisuiview:folder-v1\0");
+    hasher.update(b"suisuiview:folder-v2\0");
     hasher.update(&(pages.len() as u64).to_le_bytes());
     for page in pages {
         hasher.update(page.relative_name.as_bytes());
         hasher.update(&[0]);
         hasher.update(&page.byte_size.to_le_bytes());
+        match page.content_sample {
+            Some(sample) => {
+                hasher.update(&[1]);
+                hasher.update(&sample);
+            }
+            None => {
+                // Preserve the old name+size fallback for a temporarily
+                // unreadable page. The page will report its own read error if
+                // selected, without making the entire folder impossible to open.
+                hasher.update(&[0]);
+            }
+        }
         hasher.update(&[0]);
     }
     format!("folder:{}", hasher.finalize().to_hex())
+}
+
+/// Bounded content identity for folder pages. Reading every byte of a large
+/// image collection would put full-book I/O on the open path; three 4 KiB
+/// regions catch ordinary same-size replacements while keeping the scan bounded
+/// to 12 KiB per page. Small files are hashed in full.
+fn folder_page_content_sample(path: &Path, byte_size: u64) -> Option<[u8; 32]> {
+    let mut file = File::open(path).ok()?;
+    let sample_size = FOLDER_ID_SAMPLE_BYTES as u64;
+    let mut hasher = Hasher::new();
+    hasher.update(b"suisuiview:folder-page-sample-v1\0");
+    hasher.update(&byte_size.to_le_bytes());
+
+    if byte_size <= sample_size * 3 {
+        let mut bytes = Vec::with_capacity(byte_size as usize);
+        file.take(byte_size).read_to_end(&mut bytes).ok()?;
+        hasher.update(&bytes);
+    } else {
+        let offsets = [0, (byte_size - sample_size) / 2, byte_size - sample_size];
+        let mut bytes = vec![0_u8; FOLDER_ID_SAMPLE_BYTES];
+        for offset in offsets {
+            file.seek(SeekFrom::Start(offset)).ok()?;
+            file.read_exact(&mut bytes).ok()?;
+            hasher.update(&offset.to_le_bytes());
+            hasher.update(&bytes);
+        }
+    }
+    Some(*hasher.finalize().as_bytes())
 }
 
 fn zip_book_id(pages: &[ZipPage]) -> String {
