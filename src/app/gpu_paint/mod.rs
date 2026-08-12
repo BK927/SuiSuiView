@@ -5,6 +5,8 @@ use crate::core::effects::ViewEffects;
 use crate::core::gpu_effect::output_size_for_effects;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use crate::core::state::WgpuScalePlan;
 use crate::core::state::{
     FitMode, GpuEffectMode, RendererMode, WgpuDownscaleMethod, WgpuUpscaleMethod,
 };

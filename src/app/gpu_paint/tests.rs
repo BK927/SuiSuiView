@@ -4,6 +4,8 @@ use crate::core::deband::DebandStrength;
 use crate::core::source::PageId;
 use crate::core::worker::DecodeOptions;
 use egui::{pos2, vec2};
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use std::time::Duration;
 
 #[test]
 fn draw_id_separates_same_page_in_different_panes() {
