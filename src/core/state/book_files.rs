@@ -1,8 +1,12 @@
 use super::{BookRecord, StateStore};
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use crate::core::perf_trace::{self, PerfField};
 use directories::ProjectDirs;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+use std::time::Instant;
 
 impl StateStore {
     pub(super) fn read_book_record(&self, book_id: &str) -> Option<BookRecord> {
@@ -32,7 +36,11 @@ impl StateStore {
 
     pub(super) fn load_all_book_records(&self) -> Vec<BookRecord> {
         if !self.books.borrow().all_loaded {
+            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+            let started = Instant::now();
             let mut books = self.books.borrow_mut();
+            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+            let mut scanned = 0usize;
             if let Ok(entries) = fs::read_dir(&self.books_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
@@ -47,10 +55,22 @@ impl StateStore {
                             continue;
                         }
                         books.records.insert(record.book_id.clone(), record);
+                        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+                        {
+                            scanned += 1;
+                        }
                     }
                 }
             }
             books.all_loaded = true;
+            // Once per run, but it is the whole library off disk and it blocks
+            // whichever frame first asks a question about every book.
+            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
+            perf_trace::record_duration(
+                "book_records_scan",
+                started.elapsed(),
+                &[PerfField::Usize("records", scanned)],
+            );
         }
         let mut records: Vec<BookRecord> = self
             .books
@@ -192,4 +212,102 @@ pub(super) fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     let tmp = path.with_file_name(format!("{file_name}.{}.tmp", std::process::id()));
     fs::write(&tmp, text)?;
     fs::rename(&tmp, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::state::{FitMode, PersistedState, ReadingDirection};
+    use std::hint::black_box;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+    const SYNTHETIC_RECORDS: usize = 1_000;
+    const BENCHMARK_SAMPLES: usize = 21;
+
+    #[test]
+    #[ignore = "release-only synthetic performance probe; run explicitly with --ignored"]
+    fn synthetic_book_record_catalog_benchmark() {
+        let base = unique_benchmark_base();
+        let books_dir = base.join("books");
+        fs::create_dir_all(&books_dir).expect("create synthetic books directory");
+
+        for index in 0..SYNTHETIC_RECORDS {
+            let record = synthetic_record(index);
+            let text = serde_json::to_string(&record).expect("serialize synthetic book record");
+            fs::write(book_file_path(&books_dir, &record.book_id), text)
+                .expect("write synthetic book record");
+        }
+
+        let mut samples_us = Vec::with_capacity(BENCHMARK_SAMPLES);
+        for _ in 0..BENCHMARK_SAMPLES {
+            let store = benchmark_store(&base);
+            let started = Instant::now();
+            let records = black_box(store.load_all_book_records());
+            samples_us.push(started.elapsed().as_micros());
+            assert_eq!(records.len(), SYNTHETIC_RECORDS);
+        }
+        samples_us.sort_unstable();
+
+        let median_us = samples_us[samples_us.len() / 2];
+        let p95_index = (samples_us.len() * 95 / 100).min(samples_us.len() - 1);
+        println!(
+            "{}",
+            serde_json::json!({
+                "benchmark": "synthetic_book_record_catalog",
+                "records": SYNTHETIC_RECORDS,
+                "samples": BENCHMARK_SAMPLES,
+                "median_us": median_us,
+                "p95_us": samples_us[p95_index],
+                "max_us": samples_us[samples_us.len() - 1],
+            })
+        );
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    fn benchmark_store(base: &Path) -> StateStore {
+        StateStore {
+            path: base.join("state.json"),
+            books_dir: base.join("books"),
+            state: PersistedState::default(),
+            pending_books: Default::default(),
+            state_dirty: false,
+            books: Default::default(),
+        }
+    }
+
+    fn synthetic_record(index: usize) -> BookRecord {
+        BookRecord {
+            book_id: format!("synthetic:{index:08x}"),
+            title: format!("Synthetic Book {index}"),
+            last_page: index % 200,
+            last_page_name: None,
+            total_pages: 200,
+            known_paths: vec![format!("C:/synthetic/books/{index:08x}.cbz")],
+            reading_direction: ReadingDirection::RightToLeft,
+            fit_mode: FitMode::FitPage,
+            manual_zoom: None,
+            view_mode: None,
+            strip_offset_frac: None,
+            smart_spread_phase: 0,
+            path_positions: BTreeMap::new(),
+            page_bookmarks: Vec::new(),
+            upscale_probe: None,
+            updated_at: index as u64,
+        }
+    }
+
+    fn unique_benchmark_base() -> PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_nanos();
+        let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join("suisuiview-tests").join(format!(
+            "book-catalog-bench-{stamp}-{}-{sequence}",
+            std::process::id()
+        ))
+    }
 }
