@@ -174,6 +174,7 @@ enum KeyboardRoute {
     Block,
     DelegateToOverlay,
     DismissOverlay,
+    PassToBookmarkPopover,
     PassToViewer,
 }
 
@@ -984,12 +985,13 @@ impl SuiSuiViewApp {
         let layer = self.keyboard_layer();
         let escape_pressed = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let enter_pressed = ctx.input(|input| input.key_pressed(egui::Key::Enter));
-        match keyboard_route_for(
+        let route = keyboard_route_for(
             layer,
             escape_pressed,
             enter_pressed,
             ctx.wants_keyboard_input(),
-        ) {
+        );
+        match route {
             KeyboardRoute::Block | KeyboardRoute::DelegateToOverlay => return,
             KeyboardRoute::DismissOverlay => match layer {
                 KeyboardLayer::FastStartFailure => {
@@ -1009,14 +1011,25 @@ impl SuiSuiViewApp {
                 }
                 KeyboardLayer::FileDeleteConfirmation | KeyboardLayer::Viewer => unreachable!(),
             },
-            KeyboardRoute::PassToViewer => {
+            KeyboardRoute::PassToBookmarkPopover | KeyboardRoute::PassToViewer => {
                 let actions = ctx.input(|input| collect_keyboard_actions(input, &self.settings));
                 for action in actions {
+                    if route == KeyboardRoute::PassToBookmarkPopover
+                        && !focused_bookmark_popover_allows_action(action)
+                    {
+                        continue;
+                    }
                     match action {
                         KeyboardAction::Command(command) => self.apply_command(ctx, command),
                         KeyboardAction::Release(release) => {
                             self.apply_navigation_key_release(release)
                         }
+                    }
+                    // A command can open or close an overlay. Once keyboard
+                    // ownership changes, later events from this frame belong to
+                    // the new layer rather than the old one.
+                    if self.keyboard_layer() != layer {
+                        break;
                     }
                 }
             }
@@ -1527,13 +1540,22 @@ fn keyboard_route_for(
             if escape_pressed {
                 KeyboardRoute::DismissOverlay
             } else if wants_keyboard_input {
-                KeyboardRoute::Block
+                KeyboardRoute::PassToBookmarkPopover
             } else {
                 KeyboardRoute::PassToViewer
             }
         }
         KeyboardLayer::Viewer => KeyboardRoute::PassToViewer,
     }
+}
+
+fn focused_bookmark_popover_allows_action(action: KeyboardAction) -> bool {
+    matches!(
+        action,
+        KeyboardAction::Command(AppCommand::ToggleBookmarkPopover)
+            | KeyboardAction::Release(NavigationRelease::PageTurn)
+            | KeyboardAction::Release(NavigationRelease::SiblingBook)
+    )
 }
 
 #[cfg(test)]
@@ -2771,7 +2793,10 @@ mod tests {
 
     #[test]
     fn keyboard_overlays_preempt_viewer_shortcuts_in_modal_order() {
-        use super::{keyboard_layer_for, keyboard_route_for, KeyboardLayer, KeyboardRoute};
+        use super::{
+            focused_bookmark_popover_allows_action, keyboard_layer_for, keyboard_route_for,
+            AppCommand, KeyboardAction, KeyboardLayer, KeyboardRoute, NavigationRelease,
+        };
 
         assert_eq!(
             keyboard_layer_for(true, true, true, true, true, true),
@@ -2834,7 +2859,7 @@ mod tests {
         );
         assert_eq!(
             keyboard_route_for(KeyboardLayer::BookmarkPopover, false, false, true),
-            KeyboardRoute::Block
+            KeyboardRoute::PassToBookmarkPopover
         );
         assert_eq!(
             keyboard_route_for(KeyboardLayer::BookmarkPopover, false, false, false),
@@ -2844,6 +2869,19 @@ mod tests {
             keyboard_route_for(KeyboardLayer::Viewer, true, false, false),
             KeyboardRoute::PassToViewer
         );
+
+        assert!(focused_bookmark_popover_allows_action(
+            KeyboardAction::Command(AppCommand::ToggleBookmarkPopover)
+        ));
+        assert!(focused_bookmark_popover_allows_action(
+            KeyboardAction::Release(NavigationRelease::PageTurn)
+        ));
+        assert!(focused_bookmark_popover_allows_action(
+            KeyboardAction::Release(NavigationRelease::SiblingBook)
+        ));
+        assert!(!focused_bookmark_popover_allows_action(
+            KeyboardAction::Command(AppCommand::ToggleCurrentPageBookmark)
+        ));
     }
 
     fn dummy_page(target_long_edge: u32) -> Arc<PreparedPage> {

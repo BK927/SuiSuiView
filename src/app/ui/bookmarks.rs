@@ -93,26 +93,32 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn toggle_bookmark_popover_below(&mut self, anchor: Rect) {
-        self.bookmark_popover_open = !self.bookmark_popover_open;
         if self.bookmark_popover_open {
+            self.close_bookmark_popover();
+        } else {
+            self.open_bookmark_popover();
             self.bookmark_popover_pos =
                 egui::pos2(anchor.right() - POPOVER_WIDTH, anchor.bottom() + 8.0);
             self.bookmark_popover_anchor = Some(anchor);
-        } else {
-            self.close_bookmark_popover();
         }
     }
 
     pub(in crate::app) fn toggle_bookmark_popover(&mut self, ctx: &egui::Context) {
-        self.bookmark_popover_open = !self.bookmark_popover_open;
         if self.bookmark_popover_open {
+            self.close_bookmark_popover();
+        } else {
+            self.open_bookmark_popover();
             let screen = ctx.screen_rect();
             self.bookmark_popover_pos =
                 egui::pos2(screen.right() - POPOVER_WIDTH - 28.0, screen.top() + 54.0);
             self.bookmark_popover_anchor = None;
-        } else {
-            self.close_bookmark_popover();
         }
+    }
+
+    fn open_bookmark_popover(&mut self) {
+        self.clear_pending_page_turns();
+        self.clear_pending_sibling_book_turns();
+        self.bookmark_popover_open = true;
     }
 
     pub(in crate::app) fn close_bookmark_popover(&mut self) {
