@@ -159,28 +159,6 @@ pub(super) fn path_key(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
-pub(super) fn stored_path_matches(left: &str, right: &str) -> bool {
-    if left == right {
-        return true;
-    }
-    let (Ok(left), Ok(right)) = (fs::canonicalize(left), fs::canonicalize(right)) else {
-        return false;
-    };
-    normalized_canonical_path(&left) == normalized_canonical_path(&right)
-}
-
-fn normalized_canonical_path(path: &Path) -> String {
-    let text = path.to_string_lossy();
-    #[cfg(windows)]
-    {
-        text.to_lowercase()
-    }
-    #[cfg(not(windows))]
-    {
-        text.into_owned()
-    }
-}
-
 impl StateStore {
     /// Ensure non-reading metadata (manual bookmarks or an upscaler probe) has
     /// a record to attach to without inventing an automatic resume position.

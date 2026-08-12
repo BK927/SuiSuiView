@@ -721,6 +721,7 @@ impl SuiSuiViewApp {
                     navigation_direction_for_sibling(direction),
                     self.open_view_fallback(),
                     None,
+                    super::opening::OpenFailureAction::KeepCurrent,
                 );
                 return;
             }

@@ -5,38 +5,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 impl StateStore {
-    pub(super) fn read_book_record_checked(
-        &self,
-        book_id: &str,
-    ) -> std::io::Result<Option<BookRecord>> {
-        if book_redirect_exists(&self.books_dir, book_id) {
-            return Ok(None);
-        }
-        let path = book_file_path(&self.books_dir, book_id);
-        let text = match fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error),
-        };
-        let record = serde_json::from_str::<BookRecord>(&text).map_err(|error| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("invalid book record JSON: {error}"),
-            )
-        })?;
-        if record.book_id != book_id {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "book record identity does not match its file name",
-            ));
-        }
-        self.books
-            .borrow_mut()
-            .records
-            .insert(book_id.to_owned(), record.clone());
-        Ok(Some(record))
-    }
-
     pub(super) fn read_book_record(&self, book_id: &str) -> Option<BookRecord> {
         if book_redirect_exists(&self.books_dir, book_id) {
             self.books.borrow_mut().records.remove(book_id);

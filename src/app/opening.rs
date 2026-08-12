@@ -11,8 +11,9 @@ use crate::core::source::{
     classify_path, open_source_from_path, BookSource, SharedSource, SourceKind,
 };
 use crate::core::state::{
-    AppSettings, DecodeMode, DecoderPreferences, FitMode, PageBookmarkPathRebase, ReadingDirection,
-    ReadingPosition, StateStore, WindowPlacement,
+    AppSettings, BookRecordAdoption, DecodeMode, DecoderPreferences, FitMode,
+    PageBookmarkPathRebase, PreparedBookState, ReadingDirection, ReadingPosition, StateStore,
+    WindowPlacement,
 };
 use crate::core::worker::{
     clamp_navigation_target_long_edge, DecodeOptions, DecodeStrategy, NavigationDirection,
@@ -23,6 +24,11 @@ use egui::Vec2;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Instant;
+
+mod state_prepare;
+
+use self::state_prepare::PreparedSourceContext;
+pub(in crate::app) use self::state_prepare::{prepare_source_open, PreparedSourceOpen};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) enum OpenOrigin {
@@ -49,8 +55,23 @@ pub(in crate::app) struct LoaderEvent {
     pub(in crate::app) view_fallback: Option<OpenViewFallback>,
     pub(in crate::app) explicit_page: Option<usize>,
     pub(in crate::app) failure_action: OpenFailureAction,
-    pub(in crate::app) result: Result<(SharedSource, Option<usize>), String>,
+    pub(in crate::app) result: Result<PreparedSourceOpen, LoaderFailure>,
     pub(in crate::app) seeded_page: Option<SeededPreparedPage>,
+    pub(in crate::app) seeded_followup_page: Option<SeededPreparedPage>,
+    pub(in crate::app) discovery_attempt: u8,
+}
+
+pub(in crate::app) enum LoaderFailure {
+    Source(String),
+    State(String),
+}
+
+impl LoaderFailure {
+    fn message(&self) -> &str {
+        match self {
+            Self::Source(message) | Self::State(message) => message,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,9 +139,9 @@ pub(crate) fn start_startup_open_loader(path: PathBuf, store: &StateStore) -> Op
     let generation = 1;
     let started_at = Instant::now();
     let load_path = path.clone();
-    let store = store.clone();
     let settings = store.settings().clone();
     let target_long_edge = startup_seed_target_long_edge(store.window_placement());
+    let store = store.fork_for_background();
     let decode = startup_decode_options(&settings);
     let resume_by_file_identity = settings.resume_by_file_identity;
     perf::record_startup_open_preload(origin.perf_label());
@@ -128,26 +149,31 @@ pub(crate) fn start_startup_open_loader(path: PathBuf, store: &StateStore) -> Op
         .name("suisuiview-startup-source-loader".to_owned())
         .spawn(move || {
             let started = Instant::now();
-            let result = open_source_from_path(&load_path).map_err(|error| error.to_string());
-            perf::record_open_source(started, origin.perf_label(), result.is_ok());
-            let seeded_page = result.as_ref().ok().and_then(|(source, forced_page)| {
-                let reading_position = reading_position_for_open(
+            let source_result = open_source_from_path(&load_path);
+            perf::record_open_source(started, origin.perf_label(), source_result.is_ok());
+            let result = match source_result {
+                Ok((source, forced_page)) => prepare_source_open(
                     &store,
-                    source.as_ref(),
+                    source,
+                    forced_page,
                     origin,
                     &load_path,
                     resume_by_file_identity,
-                );
+                )
+                .map_err(|error| LoaderFailure::State(error.to_string())),
+                Err(error) => Err(LoaderFailure::Source(error.to_string())),
+            };
+            let seeded_page = result.as_ref().ok().and_then(|prepared| {
                 let page_index = selected_open_page(
-                    source.as_ref(),
+                    prepared.source.as_ref(),
                     None,
-                    *forced_page,
-                    reading_position.as_ref(),
+                    prepared.forced_page,
+                    prepared.speculative_reading_position.as_ref(),
                     None,
                 );
                 let started = Instant::now();
                 let seeded = prepare_seeded_first_page(
-                    source.as_ref(),
+                    prepared.source.as_ref(),
                     page_index,
                     target_long_edge,
                     decode,
@@ -173,6 +199,8 @@ pub(crate) fn start_startup_open_loader(path: PathBuf, store: &StateStore) -> Op
                 failure_action: OpenFailureAction::KeepCurrent,
                 result,
                 seeded_page,
+                seeded_followup_page: None,
+                discovery_attempt: 1,
             });
         })
         .ok()?;
@@ -321,7 +349,7 @@ impl SuiSuiViewApp {
                 let tx = self.loader_tx.clone();
                 let ctx = self.egui_ctx.clone();
                 let load_path = path.clone();
-                let store = self.store.clone();
+                let store = self.store.fork_for_background();
                 let settings = self.settings.clone();
                 let seed_target_long_edge = open_seed_target_long_edge(self.target_long_edge);
                 let seed_target_view = self.seed_target_view_for_open(view_fallback);
@@ -334,30 +362,38 @@ impl SuiSuiViewApp {
                     .name("suisuiview-source-loader".to_owned())
                     .spawn(move || {
                         let started = Instant::now();
-                        let result =
-                            open_source_from_path(&load_path).map_err(|error| error.to_string());
-                        perf::record_open_source(started, origin.perf_label(), result.is_ok());
-                        let seeded_page = result.as_ref().ok().and_then(|(source, forced_page)| {
-                            let reading_position = reading_position_for_open(
+                        let source_result = open_source_from_path(&load_path);
+                        perf::record_open_source(
+                            started,
+                            origin.perf_label(),
+                            source_result.is_ok(),
+                        );
+                        let result = match source_result {
+                            Ok((source, forced_page)) => prepare_source_open(
                                 &store,
-                                source.as_ref(),
+                                source,
+                                forced_page,
                                 origin,
                                 &load_path,
                                 resume_by_file_identity,
-                            );
+                            )
+                            .map_err(|error| LoaderFailure::State(error.to_string())),
+                            Err(error) => Err(LoaderFailure::Source(error.to_string())),
+                        };
+                        let seeded_page = result.as_ref().ok().and_then(|prepared| {
                             let pending_page = pending_bookmark_jump.as_ref().and_then(|pending| {
-                                pending_bookmark_page(source.as_ref(), pending)
+                                pending_bookmark_page(prepared.source.as_ref(), pending)
                             });
                             let page_index = selected_open_page(
-                                source.as_ref(),
+                                prepared.source.as_ref(),
                                 explicit_page,
-                                *forced_page,
-                                reading_position.as_ref(),
+                                prepared.forced_page,
+                                prepared.speculative_reading_position.as_ref(),
                                 pending_page,
                             );
                             let started = Instant::now();
                             let seeded = prepare_seeded_first_page(
-                                source.as_ref(),
+                                prepared.source.as_ref(),
                                 page_index,
                                 seed_target_long_edge,
                                 decode,
@@ -383,6 +419,8 @@ impl SuiSuiViewApp {
                             failure_action,
                             result,
                             seeded_page,
+                            seeded_followup_page: None,
+                            discovery_attempt: 1,
                         });
                         ctx.request_repaint();
                     });
@@ -433,48 +471,59 @@ impl SuiSuiViewApp {
             self.loader_pending = false;
 
             match event.result {
-                Ok((source, forced_page)) => self.install_source(
-                    source,
-                    forced_page,
-                    event.origin,
-                    event.path,
-                    event.seeded_page,
-                    event.initial_direction,
-                    event.view_fallback,
-                    event.explicit_page,
-                ),
-                Err(message) => {
-                    if let Some(retry) = self.sibling_open_retry.take() {
-                        if retry.attempts_left > 0 {
-                            if let Some(next) = sibling_book_path(&event.path, retry.direction) {
-                                let full_circle = retry
-                                    .origin_book
-                                    .as_ref()
-                                    .is_some_and(|origin| same_path(&next, origin));
-                                if !full_circle {
-                                    let skipped = event
-                                        .path
-                                        .file_name()
-                                        .map(|name| name.to_string_lossy().into_owned())
-                                        .unwrap_or_default();
-                                    self.set_status(self.i18n().with_vars(
-                                        "status.sibling_book_skipped",
-                                        &[("name", skipped)],
-                                    ));
-                                    self.sibling_open_retry = Some(SiblingOpenRetry {
-                                        attempts_left: retry.attempts_left - 1,
-                                        ..retry
-                                    });
-                                    self.open_sibling_path_with_initial_direction(
-                                        next,
-                                        event.initial_direction,
-                                    );
-                                    continue;
+                Ok(prepared) => {
+                    self.finish_prepared_source_open(
+                        prepared,
+                        PreparedSourceContext {
+                            path: event.path,
+                            origin: event.origin,
+                            initial_direction: event.initial_direction,
+                            view_fallback: event.view_fallback,
+                            explicit_page: event.explicit_page,
+                            failure_action: event.failure_action,
+                            seeded_page: event.seeded_page,
+                            seeded_followup_page: event.seeded_followup_page,
+                            discovery_attempt: event.discovery_attempt,
+                        },
+                    );
+                }
+                Err(failure) => {
+                    if matches!(&failure, LoaderFailure::Source(_)) {
+                        if let Some(retry) = self.sibling_open_retry.take() {
+                            if retry.attempts_left > 0 {
+                                if let Some(next) = sibling_book_path(&event.path, retry.direction)
+                                {
+                                    let full_circle = retry
+                                        .origin_book
+                                        .as_ref()
+                                        .is_some_and(|origin| same_path(&next, origin));
+                                    if !full_circle {
+                                        let skipped = event
+                                            .path
+                                            .file_name()
+                                            .map(|name| name.to_string_lossy().into_owned())
+                                            .unwrap_or_default();
+                                        self.set_status(self.i18n().with_vars(
+                                            "status.sibling_book_skipped",
+                                            &[("name", skipped)],
+                                        ));
+                                        self.sibling_open_retry = Some(SiblingOpenRetry {
+                                            attempts_left: retry.attempts_left - 1,
+                                            ..retry
+                                        });
+                                        self.open_sibling_path_with_initial_direction(
+                                            next,
+                                            event.initial_direction,
+                                        );
+                                        continue;
+                                    }
                                 }
                             }
+                            // exhausted / no candidate / full circle: state stays cleared
+                            // (take()) and control falls through to the failure handling below.
                         }
-                        // exhausted / no candidate / full circle: state stays cleared
-                        // (take()) and control falls through to the failure handling below.
+                    } else {
+                        self.sibling_open_retry = None;
                     }
                     if self
                         .pending_bookmark_jump
@@ -490,7 +539,11 @@ impl SuiSuiViewApp {
                     self.sibling_book_visual_pending = false;
                     self.clear_pending_sibling_book_turns();
                     self.handle_open_failure(
-                        format!("Could not open {}: {message}", event.path.display()),
+                        format!(
+                            "Could not open {}: {}",
+                            event.path.display(),
+                            failure.message()
+                        ),
                         event.failure_action,
                     );
                 }
@@ -498,7 +551,11 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn handle_open_failure(&mut self, message: String, failure_action: OpenFailureAction) {
+    pub(in crate::app) fn handle_open_failure(
+        &mut self,
+        message: String,
+        failure_action: OpenFailureAction,
+    ) {
         match failure_action {
             OpenFailureAction::KeepCurrent => self.notify(message),
             OpenFailureAction::ClearCurrent => self.clear_local_book_state(message),
@@ -511,6 +568,7 @@ impl SuiSuiViewApp {
         &mut self,
         source: SharedSource,
         forced_page: Option<usize>,
+        prepared_book_state: PreparedBookState,
         origin: OpenOrigin,
         opened_path: PathBuf,
         seeded_page: Option<SeededPreparedPage>,
@@ -524,21 +582,14 @@ impl SuiSuiViewApp {
         // before the new book can appear behind it.
         self.pending_delete_dialog = None;
         let book_id = source.book_id().to_owned();
-        let legacy_book_id = source.legacy_book_id();
         let page_count = source.page_count();
         let bookmark_path =
             bookmark_path_for_open(origin, &opened_path, source.as_ref()).to_path_buf();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::arm_open_to_first_visible(&mut self.open_to_first_visible_trace, &book_id);
-        // Editing a folder's images (including this app deleting a page) changes
-        // its content fingerprint, so the record saved under the old id would go
-        // unreachable. Re-key it onto the new id first, then read as usual.
-        if let Err(error) =
-            self.store
-                .adopt_record_for_path(&book_id, legacy_book_id.as_deref(), &bookmark_path)
-        {
-            self.notify_state_save_failed(&error);
-            return;
+        let reading_position = prepared_book_state.reading_position.clone();
+        if prepared_book_state.adoption == BookRecordAdoption::Adopted {
+            self.bookmark_rows.clear();
         }
         if rebase_archive_page_bookmarks_on_open(origin) {
             match self
@@ -570,11 +621,6 @@ impl SuiSuiViewApp {
                 Err(error) => self.notify_state_save_failed(&error),
             }
         }
-        let reading_position = self.store.reading_position(
-            &book_id,
-            &bookmark_path,
-            self.settings.resume_by_file_identity,
-        );
         let resolved_view = resolve_open_view(
             reading_position.as_ref(),
             view_fallback,
@@ -769,6 +815,13 @@ fn rebase_archive_page_bookmarks_on_open(origin: OpenOrigin) -> bool {
 
 fn remap_page_bookmarks_on_open(origin: OpenOrigin) -> bool {
     matches!(origin, OpenOrigin::Folder | OpenOrigin::ZipCbz)
+}
+
+fn followup_seed_matches_installed_page(
+    first_seed_index: Option<usize>,
+    installed_page: usize,
+) -> bool {
+    first_seed_index == Some(installed_page)
 }
 
 fn startup_seed_target_long_edge(placement: &WindowPlacement) -> u32 {

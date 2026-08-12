@@ -54,6 +54,7 @@ impl DeleteOpenPlan {
                     self.direction,
                     view_fallback,
                     self.explicit_page,
+                    super::opening::OpenFailureAction::ClearCurrent,
                 );
                 return;
             }

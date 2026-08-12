@@ -1,8 +1,8 @@
 use super::{
     adjacent_sibling_book_paths_ordered, image_header,
     opening::{
-        open_origin_for_source_kind, reading_position_for_open, selected_open_page,
-        OpenViewFallback,
+        open_origin_for_source_kind, prepare_source_open, reading_position_for_open,
+        selected_open_page, LoaderEvent, LoaderFailure, OpenFailureAction, OpenViewFallback,
     },
     perf,
     viewer::{target_long_edge_for_view, OriginalPageSize},
@@ -193,7 +193,7 @@ impl SuiSuiViewApp {
             .store(self.adjacent_seed_generation, Ordering::Relaxed);
         let generation = self.adjacent_seed_generation;
         let generation_token = self.adjacent_seed_generation_token.clone();
-        let store = self.store.clone();
+        let store = self.store.fork_for_background();
         let resume_by_file_identity = self.settings.resume_by_file_identity;
         let large_source_guard = perf::adjacent_seed_memory_guard_enabled();
         let seed_target_view = self.seed_target_view_for_open(None);
@@ -325,8 +325,10 @@ impl SuiSuiViewApp {
         initial_direction: NavigationDirection,
         view_fallback: OpenViewFallback,
         explicit_page: Option<usize>,
+        failure_action: OpenFailureAction,
     ) {
         let target_long_edge = cache.target_long_edge;
+        let decode = cache.decode;
         let origin = cache.origin;
         let source = cache.source;
         let forced_page = cache.forced_page;
@@ -337,23 +339,85 @@ impl SuiSuiViewApp {
         perf::record_adjacent_seed_prefetch_hit(true, target_long_edge);
         self.pending_bookmark_jump = None;
         self.loader_generation = self.loader_generation.wrapping_add(1);
+        let generation = self.loader_generation;
         self.clear_adjacent_seed_cache();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         {
             self.open_to_first_visible_trace =
                 Some(perf::OpenToFirstVisibleTrace::new(origin.perf_label()));
         }
-        self.install_source(
-            source,
-            forced_page,
-            origin,
-            path,
-            Some(seeded_page),
-            initial_direction,
-            Some(view_fallback),
-            explicit_page,
-        );
-        self.insert_seeded_page_if_matching_target(seeded_followup_page);
+        let store = self.store.fork_for_background();
+        let resume_by_file_identity = self.settings.resume_by_file_identity;
+        let seed_target_view = self.seed_target_view_for_open(Some(view_fallback));
+        let tx = self.loader_tx.clone();
+        let ctx = self.egui_ctx.clone();
+        let event_path = path.clone();
+        self.set_status(self.i18n().text("status.opening"));
+        let spawn_result = thread::Builder::new()
+            .name("suisuiview-adjacent-state-loader".to_owned())
+            .spawn(move || {
+                let result = prepare_source_open(
+                    &store,
+                    source,
+                    forced_page,
+                    origin,
+                    &event_path,
+                    resume_by_file_identity,
+                )
+                .map_err(|error| LoaderFailure::State(error.to_string()));
+                let (seeded_page, seeded_followup_page) = match result.as_ref() {
+                    Ok(prepared) => {
+                        let page_index = selected_open_page(
+                            prepared.source.as_ref(),
+                            explicit_page,
+                            prepared.forced_page,
+                            prepared.speculative_reading_position.as_ref(),
+                            None,
+                        );
+                        if page_index == seeded_page.index {
+                            (Some(seeded_page), seeded_followup_page)
+                        } else {
+                            (
+                                prepare_seeded_first_page(
+                                    prepared.source.as_ref(),
+                                    page_index,
+                                    target_long_edge,
+                                    decode,
+                                    false,
+                                    seed_target_view,
+                                ),
+                                None,
+                            )
+                        }
+                    }
+                    Err(_) => (None, None),
+                };
+                let _ = tx.send(LoaderEvent {
+                    generation,
+                    path: event_path,
+                    origin,
+                    initial_direction,
+                    view_fallback: Some(view_fallback),
+                    explicit_page,
+                    failure_action,
+                    result,
+                    seeded_page,
+                    seeded_followup_page,
+                    discovery_attempt: 1,
+                });
+                ctx.request_repaint();
+            });
+        match spawn_result {
+            Ok(_) => self.loader_pending = true,
+            Err(error) => {
+                self.sibling_book_visual_pending = false;
+                self.clear_pending_sibling_book_turns();
+                self.handle_open_failure(
+                    format!("Could not start source state loader: {error}"),
+                    failure_action,
+                );
+            }
+        }
     }
 
     fn take_adjacent_seed_matching(

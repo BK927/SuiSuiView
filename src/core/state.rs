@@ -11,6 +11,7 @@ mod decoders;
 mod display;
 mod fast_start;
 mod input;
+mod open_prepare;
 mod persistence;
 mod rendering;
 #[cfg(test)]
@@ -33,12 +34,12 @@ pub use input::{
     adopt_default_bindings_for_new_commands, default_key_bindings, default_mouse_bindings,
     CommandId, KeyBinding, KeyCode, KeyShortcut, MouseBinding, MouseGesture,
 };
+pub use open_prepare::{BookRecordAdoptionHint, PrepareBookForOpenError, PreparedBookState};
 pub use rendering::RendererMode;
 pub use scalers::{
     CpuScaleFilter, ResizeFilter, WgpuDownscaleMethod, WgpuScaleDirection, WgpuScalePlan,
     CPU_DOWNSCALE_FILTER, WGPU_DOWNSCALE_METHOD,
 };
-
 pub const DEFAULT_TOP_BAR_CPU_SCALE_FILTERS: [CpuScaleFilter; 5] = [
     CpuScaleFilter::Nearest,
     CpuScaleFilter::Bilinear,

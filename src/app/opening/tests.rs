@@ -1,7 +1,8 @@
 use super::{
-    open_seed_target_long_edge, page_index_for_name, pending_bookmark_page,
-    rebase_archive_page_bookmarks_on_open, remap_page_bookmarks_on_open, resolve_open_view,
-    selected_open_page, startup_seed_target_long_edge, OpenOrigin, OpenViewFallback, ViewMode,
+    followup_seed_matches_installed_page, open_seed_target_long_edge, page_index_for_name,
+    pending_bookmark_page, rebase_archive_page_bookmarks_on_open, remap_page_bookmarks_on_open,
+    resolve_open_view, selected_open_page, startup_seed_target_long_edge, OpenOrigin,
+    OpenViewFallback, ViewMode,
 };
 use crate::app::PendingBookmarkJump;
 use crate::core::source::{BookSource, SourceError};
@@ -32,6 +33,13 @@ fn manual_bookmark_name_remap_resolves_reordered_pages_and_rejects_vanished_name
     assert_eq!(page_index_for_name(&edited, "003.jpg"), Some(0));
     assert_eq!(page_index_for_name(&edited, "004.jpg"), Some(2));
     assert_eq!(page_index_for_name(&edited, "002.jpg"), None);
+}
+
+#[test]
+fn speculative_followup_seed_requires_the_finalized_first_page() {
+    assert!(followup_seed_matches_installed_page(Some(4), 4));
+    assert!(!followup_seed_matches_installed_page(Some(4), 7));
+    assert!(!followup_seed_matches_installed_page(None, 4));
 }
 
 #[test]
