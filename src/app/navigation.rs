@@ -612,32 +612,10 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn toggle_double_mode(&mut self) {
         self.clear_pending_page_turns();
-        let leaving_strip = self.view_mode == ViewMode::VerticalStrip;
-        self.view_mode = match self.view_mode {
-            // From strip, toggling leaves into the double mode for the current
-            // reading direction (same as toggling up from Single).
-            ViewMode::Single | ViewMode::VerticalStrip => match self.reading_direction {
-                ReadingDirection::LeftToRight => ViewMode::DoubleLeftToRight,
-                ReadingDirection::RightToLeft => ViewMode::DoubleRightToLeft,
-            },
-            ViewMode::DoubleLeftToRight
-            | ViewMode::DoubleRightToLeft
-            | ViewMode::SmartDoubleLeftToRight
-            | ViewMode::SmartDoubleRightToLeft => ViewMode::Single,
-        };
-        if leaving_strip {
-            self.restore_paged_fit_after_strip();
-        }
-        if let Some(direction) = self.view_mode.reading_direction() {
-            self.reading_direction = direction;
-        }
-        self.worker.set_page(
-            self.worker_center_page(),
-            self.last_nav_direction,
-            self.target_long_edge,
-            self.visible_page_count(),
-            self.worker_options(),
-        );
+        let mode = toggled_double_mode(self.view_mode, self.reading_direction);
+        // Use the same transition path as an explicit view-mode selection so the
+        // per-book mode is saved immediately for automatic resume.
+        self.set_view_mode(mode);
     }
 
     pub(in crate::app) fn update_effects(&mut self, update: impl FnOnce(&mut ViewEffects)) {
@@ -788,6 +766,21 @@ impl SuiSuiViewApp {
 fn plain_forward_step(page: usize, step: usize, max_page: usize) -> Option<usize> {
     let next = page.saturating_add(step);
     (next <= max_page).then_some(next)
+}
+
+fn toggled_double_mode(current: ViewMode, reading_direction: ReadingDirection) -> ViewMode {
+    match current {
+        // From strip, toggling leaves into the double mode for the current
+        // reading direction (same as toggling up from Single).
+        ViewMode::Single | ViewMode::VerticalStrip => match reading_direction {
+            ReadingDirection::LeftToRight => ViewMode::DoubleLeftToRight,
+            ReadingDirection::RightToLeft => ViewMode::DoubleRightToLeft,
+        },
+        ViewMode::DoubleLeftToRight
+        | ViewMode::DoubleRightToLeft
+        | ViewMode::SmartDoubleLeftToRight
+        | ViewMode::SmartDoubleRightToLeft => ViewMode::Single,
+    }
 }
 
 /// Whether a zoom gesture recorded at `last` is still in motion at `now`

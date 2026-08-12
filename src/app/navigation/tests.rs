@@ -2,9 +2,11 @@ use super::super::QueuedPageTurns;
 use super::{
     normalize_sibling_book_direction, plain_forward_step, push_queued_page_turn,
     push_queued_sibling_book_turn, should_open_edge_prompt, skip_missing_target,
-    zoom_motion_active, EdgePrompt, MAX_QUEUED_PAGE_TURNS, MAX_QUEUED_SIBLING_BOOK_TURNS,
-    ZOOM_SETTLE_MS,
+    toggled_double_mode, zoom_motion_active, EdgePrompt, MAX_QUEUED_PAGE_TURNS,
+    MAX_QUEUED_SIBLING_BOOK_TURNS, ZOOM_SETTLE_MS,
 };
+use crate::app::ViewMode;
+use crate::core::state::ReadingDirection;
 use crate::core::worker::NavigationDirection;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -47,6 +49,35 @@ fn plain_forward_step_is_unchanged_for_single_page_mode() {
     assert_eq!(plain_forward_step(0, 1, 2), Some(1));
     assert_eq!(plain_forward_step(1, 1, 2), Some(2));
     assert_eq!(plain_forward_step(2, 1, 2), None);
+}
+
+#[test]
+fn toggle_double_uses_reading_direction_when_entering_double_mode() {
+    for current in [ViewMode::Single, ViewMode::VerticalStrip] {
+        assert_eq!(
+            toggled_double_mode(current, ReadingDirection::LeftToRight),
+            ViewMode::DoubleLeftToRight
+        );
+        assert_eq!(
+            toggled_double_mode(current, ReadingDirection::RightToLeft),
+            ViewMode::DoubleRightToLeft
+        );
+    }
+}
+
+#[test]
+fn toggle_double_returns_every_double_mode_to_single() {
+    for current in [
+        ViewMode::DoubleLeftToRight,
+        ViewMode::DoubleRightToLeft,
+        ViewMode::SmartDoubleLeftToRight,
+        ViewMode::SmartDoubleRightToLeft,
+    ] {
+        assert_eq!(
+            toggled_double_mode(current, ReadingDirection::LeftToRight),
+            ViewMode::Single
+        );
+    }
 }
 
 #[test]
