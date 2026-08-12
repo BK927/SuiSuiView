@@ -4,12 +4,13 @@ use super::SuiSuiViewApp;
 use crate::core::i18n::I18n;
 use crate::core::source::{classify_path, SourceKind};
 use crate::core::state::FastStartFailureNotice;
-use crate::core::state::{RendererMode, StateStore};
+use crate::core::state::StateStore;
 use egui::{self, RichText};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,7 +23,7 @@ pub(crate) fn disable_gpu_after_handoff_failure(
     mut store: StateStore,
     failure: &super::winit_host::HostFailure,
     startup_open_path: Option<&Path>,
-) -> StateStore {
+) -> std::io::Result<StateStore> {
     let timestamp = UtcTimestamp::now();
     let diagnostic_path = write_diagnostic(&store, failure, startup_open_path, &timestamp)
         .map_err(|error| {
@@ -31,6 +32,7 @@ pub(crate) fn disable_gpu_after_handoff_failure(
         })
         .ok();
     let notice = FastStartFailureNotice {
+        id: timestamp.id.clone(),
         generated_at: timestamp.display,
         stage: failure.stage.key().to_owned(),
         error: failure.error.clone(),
@@ -41,11 +43,8 @@ pub(crate) fn disable_gpu_after_handoff_failure(
         shown: false,
     };
 
-    let mut settings = store.settings().clone();
-    settings.renderer_mode = RendererMode::LowMemoryGlow;
-    store.update_settings(settings);
-    store.record_fast_start_failure(notice);
-    store
+    store.record_fast_start_failure_and_disable_gpu(notice)?;
+    Ok(store)
 }
 
 pub(in crate::app) fn show_settings_status(
@@ -240,7 +239,9 @@ impl SuiSuiViewApp {
         if let Some(notice) = self.fast_start_failure_notice.as_mut() {
             notice.shown = true;
         }
-        self.store.mark_fast_start_failure_notice_shown();
+        if let Err(error) = self.store.mark_fast_start_failure_notice_shown() {
+            self.notify_state_save_failed(&error);
+        }
     }
 }
 
@@ -402,20 +403,30 @@ fn diagnostics_dir(store: &StateStore) -> PathBuf {
 }
 
 struct UtcTimestamp {
+    id: String,
     display: String,
     filename: String,
 }
 
 impl UtcTimestamp {
     fn now() -> Self {
-        let seconds = SystemTime::now()
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let duration = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_secs() as i64)
             .unwrap_or_default();
+        let seconds = duration.as_secs() as i64;
+        let nanos = duration.subsec_nanos();
+        let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let (year, month, day, hour, minute, second) = utc_parts(seconds);
+        let suffix = format!("{nanos:09}-{}-{sequence}", std::process::id());
+        let filename =
+            format!("{year:04}{month:02}{day:02}-{hour:02}{minute:02}{second:02}-{suffix}");
         Self {
-            display: format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"),
-            filename: format!("{year:04}{month:02}{day:02}-{hour:02}{minute:02}{second:02}"),
+            id: format!("fast-start-{filename}"),
+            display: format!(
+                "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{nanos:09}Z"
+            ),
+            filename,
         }
     }
 }

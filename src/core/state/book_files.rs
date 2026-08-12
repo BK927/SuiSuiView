@@ -1,10 +1,8 @@
 use super::{BookRecord, StateStore};
-use crate::core::perf_trace::{self, PerfField};
 use directories::ProjectDirs;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 impl StateStore {
     pub(super) fn read_book_record(&self, book_id: &str) -> Option<BookRecord> {
@@ -26,24 +24,6 @@ impl StateStore {
             .records
             .insert(record.book_id.clone(), record.clone());
         Some(record)
-    }
-
-    pub(super) fn write_state_file(&mut self) -> std::io::Result<()> {
-        let started = Instant::now();
-        let result = (|| {
-            let text = serde_json::to_string_pretty(&self.state)?;
-            write_atomic(&self.path, &text)
-        })();
-        if result.is_ok() {
-            self.state_dirty = false;
-        }
-        perf_trace::record_duration_if_at_least(
-            "state_save",
-            started.elapsed(),
-            Duration::from_millis(20),
-            &[PerfField::Bool("success", result.is_ok())],
-        );
-        result
     }
 
     pub(super) fn load_all_book_records(&self) -> Vec<BookRecord> {
@@ -110,14 +90,13 @@ impl StateStore {
             return;
         }
         let book_ids: Vec<_> = self.state.books.keys().cloned().collect();
-        let mut state_changed = false;
+        let mut removable = Vec::new();
         for book_id in book_ids {
             let Some(record) = self.state.books.get(&book_id).cloned() else {
                 continue;
             };
             if record.page_bookmarks.is_empty() {
-                self.state.books.remove(&book_id);
-                state_changed = true;
+                removable.push(book_id);
                 continue;
             }
             let rescued = BookRecord {
@@ -139,14 +118,12 @@ impl StateStore {
                 updated_at: record.updated_at,
             };
             if self.merge_legacy_bookmark_record(&rescued).is_ok() {
-                self.state.books.remove(&book_id);
-                state_changed = true;
+                removable.push(book_id);
             }
         }
-        if state_changed {
-            self.state_dirty = true;
-            let _ = self.write_state_file();
-        }
+        // The split records are already durable. If cleanup fails, retain the
+        // monolithic copies in memory and on disk so a later launch can retry.
+        let _ = self.remove_legacy_book_records(&removable);
     }
 }
 
@@ -181,7 +158,7 @@ fn sanitize_book_id(book_id: &str) -> String {
         .collect()
 }
 
-fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+pub(super) fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }

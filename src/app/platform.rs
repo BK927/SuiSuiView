@@ -24,6 +24,7 @@ use windows_sys::Win32::System::Registry::{
 use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
 
 const RESTART_BYPASS_SINGLE_INSTANCE_ENV: &str = "SUISUIVIEW_RESTART_BYPASS_SINGLE_INSTANCE";
+const GPU_DEMOTION_GLOW_RESTART_ENV: &str = "SUISUIVIEW_GPU_DEMOTION_GLOW_RESTART";
 
 pub(in crate::app) fn install_app_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
@@ -150,11 +151,26 @@ pub(in crate::app) fn reveal_in_file_manager(path: &Path) -> Result<(), String> 
 }
 
 pub(in crate::app) fn restart_current_process() -> Result<(), String> {
+    restart_current_process_with_env(false)
+}
+
+pub(in crate::app) fn restart_current_process_into_glow() -> Result<(), String> {
+    restart_current_process_with_env(true)
+}
+
+fn restart_current_process_with_env(force_glow_once: bool) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|error| error.to_string())?;
     let args = std::env::args_os().skip(1);
-    Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .args(args)
-        .env(RESTART_BYPASS_SINGLE_INSTANCE_ENV, "1")
+        .env(RESTART_BYPASS_SINGLE_INSTANCE_ENV, "1");
+    if force_glow_once {
+        command.env(GPU_DEMOTION_GLOW_RESTART_ENV, "1");
+    } else {
+        command.env_remove(GPU_DEMOTION_GLOW_RESTART_ENV);
+    }
+    command
         .spawn()
         .map(|_| ())
         .map_err(|error| error.to_string())

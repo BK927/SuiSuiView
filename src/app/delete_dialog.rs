@@ -231,8 +231,12 @@ impl SuiSuiViewApp {
 
         if delete_clicked {
             if pending.skip_recycle_confirmation && pending.mode == DeleteMode::Recycle {
+                let previous_confirm_delete = self.settings.confirm_delete;
                 self.settings.confirm_delete = false;
-                self.store.update_settings(self.settings.clone());
+                if let Err(error) = self.store.update_confirm_delete(false) {
+                    self.settings.confirm_delete = previous_confirm_delete;
+                    self.notify_state_save_failed(&error);
+                }
             }
             self.execute_delete_plan(pending.mode, pending.plan);
         } else if cancel_clicked {

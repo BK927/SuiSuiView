@@ -140,8 +140,11 @@ impl SuiSuiViewApp {
             .on_hover_text(tooltip)
             .clicked()
         {
-            self.settings.top_bar_pinned = !self.settings.top_bar_pinned;
-            self.store.update_settings(self.settings.clone());
+            let pinned = !self.settings.top_bar_pinned;
+            match self.store.update_top_bar_pinned(pinned) {
+                Ok(()) => self.settings.top_bar_pinned = pinned,
+                Err(error) => self.notify_state_save_failed(&error),
+            }
         }
     }
 

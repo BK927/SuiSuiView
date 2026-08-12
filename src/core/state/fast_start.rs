@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct FastStartFailureNotice {
     #[serde(default)]
+    pub id: String,
+    #[serde(default)]
     pub generated_at: String,
     #[serde(default)]
     pub stage: String,

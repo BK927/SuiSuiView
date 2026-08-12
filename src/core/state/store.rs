@@ -8,7 +8,7 @@ use super::bookmarks::path_key;
 use super::now_unix_nanos;
 use super::{
     AppSettings, BookRecord, BookRecordInput, FastStartFailureNotice, PersistedState,
-    ReadingPosition, StateStore, WindowPlacement,
+    ReadingPosition, RendererMode, StateStore, WindowPlacement,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -105,36 +105,133 @@ impl StateStore {
         self.state.fast_start_failure.as_ref()
     }
 
-    pub fn update_settings(&mut self, mut settings: AppSettings) {
+    pub fn update_settings(&mut self, mut settings: AppSettings) -> std::io::Result<AppSettings> {
         settings.normalize_product_choices();
-        self.state.settings = settings;
+        let base = self.state.settings.clone();
+        let outcome = self.mutate_state_file(|state| {
+            match merge_settings(&base, &settings, &state.settings) {
+                Ok(merged) => {
+                    let changed = state.settings != merged;
+                    state.settings = merged.clone();
+                    (Ok(merged), changed)
+                }
+                Err(error) => (Err((error, state.settings.clone())), false),
+            }
+        })?;
+        let merged = match outcome {
+            Ok(merged) => merged,
+            Err((error, latest)) => {
+                self.state.settings = latest;
+                return Err(error);
+            }
+        };
+        self.state.settings = merged.clone();
         self.state.version = 4;
-        let _ = self.save();
+        Ok(merged)
     }
 
-    pub fn record_fast_start_failure(&mut self, notice: FastStartFailureNotice) {
+    pub fn update_top_bar_pinned(&mut self, pinned: bool) -> std::io::Result<()> {
+        self.mutate_state_file(|state| {
+            let changed = state.settings.top_bar_pinned != pinned;
+            state.settings.top_bar_pinned = pinned;
+            ((), changed)
+        })?;
+        self.state.settings.top_bar_pinned = pinned;
+        self.state.version = 4;
+        Ok(())
+    }
+
+    pub fn update_confirm_delete(&mut self, confirm_delete: bool) -> std::io::Result<()> {
+        self.mutate_state_file(|state| {
+            let changed = state.settings.confirm_delete != confirm_delete;
+            state.settings.confirm_delete = confirm_delete;
+            ((), changed)
+        })?;
+        self.state.settings.confirm_delete = confirm_delete;
+        self.state.version = 4;
+        Ok(())
+    }
+
+    pub fn record_fast_start_failure(
+        &mut self,
+        notice: FastStartFailureNotice,
+    ) -> std::io::Result<()> {
+        self.mutate_state_file(|state| {
+            let changed = state.fast_start_failure.as_ref() != Some(&notice);
+            state.fast_start_failure = Some(notice.clone());
+            ((), changed)
+        })?;
         self.state.fast_start_failure = Some(notice);
         self.state.version = 4;
-        let _ = self.save();
+        Ok(())
     }
 
-    pub fn mark_fast_start_failure_notice_shown(&mut self) {
-        let Some(notice) = self.state.fast_start_failure.as_mut() else {
-            return;
+    pub fn record_fast_start_failure_and_disable_gpu(
+        &mut self,
+        notice: FastStartFailureNotice,
+    ) -> std::io::Result<()> {
+        self.mutate_state_file(|state| {
+            let changed = state.settings.renderer_mode != RendererMode::LowMemoryGlow
+                || state.fast_start_failure.as_ref() != Some(&notice);
+            state.settings.renderer_mode = RendererMode::LowMemoryGlow;
+            state.fast_start_failure = Some(notice.clone());
+            ((), changed)
+        })?;
+        self.state.settings.renderer_mode = RendererMode::LowMemoryGlow;
+        self.state.fast_start_failure = Some(notice);
+        self.state.version = 4;
+        Ok(())
+    }
+
+    pub fn mark_fast_start_failure_notice_shown(&mut self) -> std::io::Result<bool> {
+        let Some(notice) = self.state.fast_start_failure.clone() else {
+            return Ok(false);
         };
         if notice.shown {
-            return;
+            return Ok(false);
         }
-        notice.shown = true;
+        let changed = self.mutate_state_file(|state| {
+            let Some(latest) = state.fast_start_failure.as_mut() else {
+                return (false, false);
+            };
+            if !same_fast_start_notice(latest, &notice) || latest.shown {
+                return (false, false);
+            }
+            latest.shown = true;
+            (true, true)
+        })?;
+        if changed {
+            if let Some(local) = self.state.fast_start_failure.as_mut() {
+                local.shown = true;
+            }
+        }
         self.state.version = 4;
-        let _ = self.save();
+        Ok(changed)
     }
 
-    pub fn clear_fast_start_failure_notice(&mut self) {
-        if self.state.fast_start_failure.take().is_some() {
+    pub fn clear_fast_start_failure_notice(&mut self) -> std::io::Result<bool> {
+        let Some(notice) = self.state.fast_start_failure.clone() else {
+            return Ok(false);
+        };
+        let changed = self.mutate_state_file(|state| {
+            let matches = state
+                .fast_start_failure
+                .as_ref()
+                .is_some_and(|latest| same_fast_start_notice(latest, &notice));
+            if matches {
+                state.fast_start_failure = None;
+            }
+            (matches, matches)
+        })?;
+        if changed {
+            self.state.fast_start_failure = None;
             self.state.version = 4;
-            let _ = self.save();
         }
+        Ok(changed)
+    }
+
+    pub fn hide_fast_start_failure_notice_for_session(&mut self) {
+        self.state.fast_start_failure = None;
     }
 
     pub fn window_placement(&self) -> &WindowPlacement {
@@ -270,14 +367,17 @@ impl StateStore {
         (record, changed || touch)
     }
 
-    pub fn save(&mut self) -> std::io::Result<()> {
-        self.write_state_file()
-    }
-
     pub fn flush(&mut self) -> std::io::Result<()> {
         let mut result = self.flush_pending_books();
         if self.state_dirty {
-            let state_result = self.write_state_file();
+            let placement = self.state.window.clone();
+            let state_result = self
+                .mutate_state_file(|state| {
+                    let changed = state.window != placement;
+                    state.window = placement;
+                    ((), changed)
+                })
+                .map(|()| self.state_dirty = false);
             if result.is_ok() {
                 result = state_result;
             }
@@ -288,6 +388,71 @@ impl StateStore {
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+fn same_fast_start_notice(left: &FastStartFailureNotice, right: &FastStartFailureNotice) -> bool {
+    if !left.id.is_empty() || !right.id.is_empty() {
+        return left.id == right.id;
+    }
+    left.generated_at == right.generated_at
+        && left.stage == right.stage
+        && left.error == right.error
+        && left.gpu_name == right.gpu_name
+        && left.backend == right.backend
+        && left.device_type == right.device_type
+        && left.diagnostic_path == right.diagnostic_path
+}
+
+fn merge_settings(
+    base: &AppSettings,
+    proposed: &AppSettings,
+    latest: &AppSettings,
+) -> std::io::Result<AppSettings> {
+    let base = serde_json::to_value(base)?;
+    let proposed = serde_json::to_value(proposed)?;
+    let latest = serde_json::to_value(latest)?;
+    let merged = merge_setting_values(&base, &proposed, &latest, "settings")?;
+    serde_json::from_value(merged).map_err(Into::into)
+}
+
+fn merge_setting_values(
+    base: &serde_json::Value,
+    proposed: &serde_json::Value,
+    latest: &serde_json::Value,
+    path: &str,
+) -> std::io::Result<serde_json::Value> {
+    if proposed == base {
+        return Ok(latest.clone());
+    }
+    if latest == base || latest == proposed {
+        return Ok(proposed.clone());
+    }
+    if let (
+        serde_json::Value::Object(base),
+        serde_json::Value::Object(proposed),
+        serde_json::Value::Object(latest),
+    ) = (base, proposed, latest)
+    {
+        let mut merged = serde_json::Map::new();
+        for (key, base_value) in base {
+            let proposed_value = proposed.get(key).unwrap_or(base_value);
+            let latest_value = latest.get(key).unwrap_or(base_value);
+            merged.insert(
+                key.clone(),
+                merge_setting_values(
+                    base_value,
+                    proposed_value,
+                    latest_value,
+                    &format!("{path}.{key}"),
+                )?,
+            );
+        }
+        return Ok(serde_json::Value::Object(merged));
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::WouldBlock,
+        format!("{path} changed in another app window"),
+    ))
 }
 
 /// One-time heal for window placement corrupted by the pre-fix maximize bug,

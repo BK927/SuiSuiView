@@ -16,6 +16,7 @@ const MIN_WINDOW_SIZE: [f32; 2] = [860.0, 560.0];
 const GUI_CLI_REDIRECT_MESSAGE: &str =
     "CLI 명령은 suisuiview-cli를 사용하세요.\n예: suisuiview-cli --perf-scan <path>";
 const RESTART_BYPASS_SINGLE_INSTANCE_ENV: &str = "SUISUIVIEW_RESTART_BYPASS_SINGLE_INSTANCE";
+const GPU_DEMOTION_GLOW_RESTART_ENV: &str = "SUISUIVIEW_GPU_DEMOTION_GLOW_RESTART";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(first_arg) = std::env::args_os().nth(1) {
@@ -51,12 +52,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // WGPU fast-start handoff; LowMemoryGlow runs the Glow-only host; a handoff
     // failure persists the demotion and relaunches into the Glow-only host
     // (winit forbids a second event loop in one process).
-    let wants_wgpu = !app::winit_host::glow_forced()
-        && (app::winit_host::requested()
-            || app::winit_host::enabled_for_settings(store.settings()));
+    let wants_wgpu = wants_wgpu_for_startup(
+        std::env::var_os(GPU_DEMOTION_GLOW_RESTART_ENV).is_some(),
+        app::winit_host::glow_forced(),
+        app::winit_host::requested(),
+        app::winit_host::enabled_for_settings(store.settings()),
+    );
     if wants_wgpu {
         let mut handoff_store = store.clone();
-        handoff_store.clear_fast_start_failure_notice();
+        if let Err(error) = handoff_store.clear_fast_start_failure_notice() {
+            eprintln!("SuiSuiView could not clear the previous fast-start notice: {error}");
+        }
+        // A successful WGPU attempt must never show an old "GPU disabled"
+        // notice in this process, even if the best-effort disk cleanup raced or
+        // temporarily failed. A new failure writes its own notice before restart.
+        handoff_store.hide_fast_start_failure_notice_for_session();
         match run_host(
             handoff_store,
             true,
@@ -73,13 +83,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Persist LowMemoryGlow + the failure notice (to disk), then
                 // relaunch: a fresh process reads the demoted setting and runs
                 // the Glow-only host.
-                let _ = app::fast_start::disable_gpu_after_handoff_failure(
+                let demotion = app::fast_start::disable_gpu_after_handoff_failure(
                     StateStore::load(),
                     &failure,
                     startup_open_path.as_deref(),
                 );
-                if let Err(error) = app::restart_current_process() {
+                if let Err(error) = demotion {
+                    eprintln!(
+                        "SuiSuiView could not persist the Glow fallback; restart cancelled: {error}"
+                    );
+                    show_gpu_fallback_error(format!(
+                        "GPU 가속 실패 후 안전 설정을 저장하지 못해 자동 재시작을 중단했습니다.\n\n\
+                         설정 파일을 쓸 수 있는지 확인한 뒤 앱을 다시 실행해 주세요.\n\n{error}"
+                    ));
+                    return Ok(());
+                }
+                if let Err(error) = app::restart_current_process_into_glow() {
                     eprintln!("SuiSuiView restart into Glow host failed: {error}");
+                    show_gpu_fallback_error(format!(
+                        "GPU 가속을 안전 모드로 전환했지만 앱을 다시 시작하지 못했습니다.\n\n\
+                         앱을 직접 다시 실행해 주세요.\n\n{error}"
+                    ));
                 }
                 Ok(())
             }
@@ -133,6 +157,30 @@ fn show_cli_redirect_message() {
             .set_buttons(rfd::MessageButtons::Ok)
             .show();
     }
+}
+
+fn wants_wgpu_for_startup(
+    demotion_glow_restart: bool,
+    glow_forced: bool,
+    wgpu_forced: bool,
+    wgpu_setting: bool,
+) -> bool {
+    !demotion_glow_restart && !glow_forced && (wgpu_forced || wgpu_setting)
+}
+
+fn show_gpu_fallback_error(description: String) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = rfd::MessageDialog::new()
+            .set_title("SuiSuiView")
+            .set_description(description)
+            .set_level(rfd::MessageLevel::Error)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    let _ = description;
 }
 
 fn is_gui_cli_redirect_arg(arg: &std::ffi::OsString) -> bool {
@@ -196,7 +244,7 @@ fn window_icon() -> egui::IconData {
 
 #[cfg(test)]
 mod tests {
-    use super::{startup_window_guard_mode_for, window_icon};
+    use super::{startup_window_guard_mode_for, wants_wgpu_for_startup, window_icon};
     use crate::core::state::{RendererMode, WindowPlacement};
     use crate::startup_window::StartupWindowGuardMode;
 
@@ -212,6 +260,14 @@ mod tests {
             icon.rgba.len(),
             icon.width as usize * icon.height as usize * 4
         );
+    }
+
+    #[test]
+    fn demotion_restart_overrides_forced_wgpu_for_one_launch() {
+        assert!(!wants_wgpu_for_startup(true, false, true, true));
+        assert!(wants_wgpu_for_startup(false, false, true, false));
+        assert!(wants_wgpu_for_startup(false, false, false, true));
+        assert!(!wants_wgpu_for_startup(false, true, true, true));
     }
 
     #[test]

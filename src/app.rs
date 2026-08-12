@@ -87,10 +87,8 @@ pub(in crate::app) use glow_scale::{GlowScaleState, KernelChoice};
 pub(crate) use opening::{start_startup_open_loader, StartupOpen};
 pub(in crate::app) use opening::{LoaderEvent, OpenOrigin};
 
-/// Spawn a fresh copy of this process (winit forbids creating a second event
-/// loop in-process, so degrading renderers requires a relaunch).
-pub(crate) fn restart_current_process() -> Result<(), String> {
-    platform::restart_current_process()
+pub(crate) fn restart_current_process_into_glow() -> Result<(), String> {
+    platform::restart_current_process_into_glow()
 }
 pub(in crate::app) use navigation::SiblingOpenRetry;
 pub(in crate::app) use refresh::{RefreshOutcome, RefreshTicket};

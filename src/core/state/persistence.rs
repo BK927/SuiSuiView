@@ -6,8 +6,10 @@
 //! change only the domain they own. Serializing a cached whole record would
 //! silently erase another app instance's newer fields.
 
+use super::book_files;
 use super::bookmarks::page_bookmark_order;
-use super::{BookRecord, ReadingPosition, StateStore};
+use super::{BookRecord, PersistedState, ReadingPosition, StateStore};
+use crate::core::perf_trace::{self, PerfField};
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -56,6 +58,48 @@ impl Drop for ExclusiveFileLock {
 }
 
 impl StateStore {
+    pub(super) fn mutate_state_file<R>(
+        &self,
+        mutate: impl FnOnce(&mut PersistedState) -> (R, bool),
+    ) -> io::Result<R> {
+        let started = Instant::now();
+        let result = (|| {
+            let _lock = ExclusiveFileLock::acquire(&state_lock_path(&self.path))?;
+            let mut latest = read_state_fresh(&self.path)?.unwrap_or_default();
+            latest.settings.normalize_product_choices();
+            let (value, changed) = mutate(&mut latest);
+            if changed {
+                latest.version = 4;
+                let text = serde_json::to_string_pretty(&latest)?;
+                book_files::write_atomic(&self.path, &text)?;
+            }
+            Ok(value)
+        })();
+        perf_trace::record_duration_if_at_least(
+            "state_save",
+            started.elapsed(),
+            Duration::from_millis(20),
+            &[PerfField::Bool("success", result.is_ok())],
+        );
+        result
+    }
+
+    pub(super) fn remove_legacy_book_records(&mut self, book_ids: &[String]) -> io::Result<()> {
+        if book_ids.is_empty() {
+            return Ok(());
+        }
+        self.mutate_state_file(|state| {
+            for book_id in book_ids {
+                state.books.remove(book_id);
+            }
+            ((), true)
+        })?;
+        for book_id in book_ids {
+            self.state.books.remove(book_id);
+        }
+        Ok(())
+    }
+
     /// Persist an automatic-reading-position snapshot without replacing manual
     /// bookmarks or the upscaler probe written by another app instance.
     pub(super) fn persist_reading_record(&mut self, update: &BookRecord) -> io::Result<()> {
@@ -309,6 +353,14 @@ fn books_lock_path(books_dir: &Path) -> PathBuf {
     books_dir.join(".write.lock")
 }
 
+fn state_lock_path(state_path: &Path) -> PathBuf {
+    let file_name = state_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("state.json");
+    state_path.with_file_name(format!("{file_name}.write.lock"))
+}
+
 fn book_record_path(books_dir: &Path, book_id: &str) -> PathBuf {
     let portable_id: String = book_id
         .chars()
@@ -337,13 +389,32 @@ fn write_book_record_atomic(path: &Path, record: &BookRecord) -> io::Result<()> 
     fs::rename(temporary, path)
 }
 
+fn read_state_fresh(path: &Path) -> io::Result<Option<PersistedState>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    serde_json::from_str(&text).map(Some).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid state JSON: {error}"),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{merge_legacy_bookmark_record, merge_reading_record};
+    use super::{merge_legacy_bookmark_record, merge_reading_record, state_lock_path};
     use crate::core::state::{
-        BookRecord, FitMode, PageBookmark, ReadingDirection, ReadingPosition,
+        AppSettings, BookRecord, FastStartFailureNotice, FitMode, PageBookmark, PersistedState,
+        ReadingDirection, ReadingPosition, RendererMode, StateStore, WindowPlacement,
     };
     use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn reading_merge_keeps_manual_bookmarks_and_uses_newest_position() {
@@ -424,6 +495,204 @@ mod tests {
             .page_bookmarks
             .iter()
             .any(|bookmark| bookmark.title == "Legacy only"));
+    }
+
+    #[test]
+    fn stale_window_flush_preserves_settings_written_by_another_store() {
+        let base = unique_base("state-window-settings");
+        let mut window_store = store_at(&base);
+        let mut settings_store = store_at(&base);
+        let placement = WindowPlacement {
+            inner_size: Some([1111.0, 777.0]),
+            outer_position: Some([20.0, 30.0]),
+            outer_position_px: Some([20, 30]),
+            normal_rect_px: Some([20, 30, 1131, 807]),
+            maximized: false,
+        };
+        assert!(window_store.update_window_placement_deferred(placement.clone()));
+        let mut settings = settings_store.settings().clone();
+        settings.show_status_bar = true;
+        settings_store.update_settings(settings).unwrap();
+
+        window_store.flush().unwrap();
+
+        let reopened = store_at(&base);
+        assert!(reopened.settings().show_status_bar);
+        assert_eq!(reopened.window_placement(), &placement);
+    }
+
+    #[test]
+    fn settings_three_way_merge_preserves_independent_changes_and_rejects_conflicts() {
+        let base = unique_base("state-settings-merge");
+        let mut first = store_at(&base);
+        first.update_settings(AppSettings::default()).unwrap();
+        let mut second = store_at(&base);
+
+        let mut first_settings = first.settings().clone();
+        first_settings.show_status_bar = true;
+        first.update_settings(first_settings).unwrap();
+
+        let mut second_settings = second.settings().clone();
+        second_settings.show_filename_overlay = true;
+        let merged = second.update_settings(second_settings).unwrap();
+        assert!(merged.show_status_bar);
+        assert!(merged.show_filename_overlay);
+
+        let mut third = store_at(&base);
+        let mut fourth = store_at(&base);
+        let mut third_settings = third.settings().clone();
+        third_settings.pixel_grid_min_zoom_pct = 900;
+        third.update_settings(third_settings).unwrap();
+        let mut fourth_settings = fourth.settings().clone();
+        fourth_settings.pixel_grid_min_zoom_pct = 1000;
+        let error = fourth
+            .update_settings(fourth_settings)
+            .expect_err("the same setting changed differently");
+        assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(fourth.settings().pixel_grid_min_zoom_pct, 900);
+        assert_eq!(store_at(&base).settings().pixel_grid_min_zoom_pct, 900);
+    }
+
+    #[test]
+    fn stale_notice_dismiss_does_not_hide_a_new_failure() {
+        let base = unique_base("state-notice-identity");
+        let mut first = store_at(&base);
+        first
+            .record_fast_start_failure(notice("first", false))
+            .unwrap();
+        let mut stale = store_at(&base);
+        first
+            .record_fast_start_failure(notice("second", false))
+            .unwrap();
+
+        assert!(!stale.mark_fast_start_failure_notice_shown().unwrap());
+
+        let reopened = store_at(&base);
+        let latest = reopened.fast_start_failure_notice().unwrap();
+        assert_eq!(latest.stage, "second");
+        assert!(!latest.shown);
+    }
+
+    #[test]
+    fn single_setting_update_preserves_notice_and_legacy_books() {
+        let base = unique_base("state-domain-preservation");
+        let mut state = PersistedState::default();
+        state.fast_start_failure = Some(notice("existing", false));
+        state.books.insert("zip:legacy".into(), record_at(3, 10));
+        fs::create_dir_all(&base).unwrap();
+        fs::write(
+            base.join("state.json"),
+            serde_json::to_string_pretty(&state).unwrap(),
+        )
+        .unwrap();
+        let mut store = store_at(&base);
+
+        store.update_top_bar_pinned(false).unwrap();
+
+        let persisted: PersistedState =
+            serde_json::from_str(&fs::read_to_string(base.join("state.json")).unwrap()).unwrap();
+        assert!(!persisted.settings.top_bar_pinned);
+        assert_eq!(persisted.fast_start_failure.unwrap().stage, "existing");
+        assert!(persisted.books.contains_key("zip:legacy"));
+    }
+
+    #[test]
+    fn corrupt_state_is_not_overwritten_by_a_settings_update() {
+        let base = unique_base("state-corrupt");
+        fs::create_dir_all(&base).unwrap();
+        let state_path = base.join("state.json");
+        let original = b"{ corrupt state";
+        fs::write(&state_path, original).unwrap();
+        let mut store = store_at_with_state(&base, PersistedState::default());
+
+        let error = store
+            .update_top_bar_pinned(false)
+            .expect_err("malformed state must not be replaced");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(fs::read(state_path).unwrap(), original);
+    }
+
+    #[test]
+    fn gpu_demotion_commits_renderer_and_notice_together_or_not_at_all() {
+        let base = unique_base("state-gpu-demotion");
+        let mut store = store_at(&base);
+        let mut settings = store.settings().clone();
+        settings.renderer_mode = RendererMode::Wgpu;
+        store.update_settings(settings).unwrap();
+        let before = fs::read(base.join("state.json")).unwrap();
+        let lock_path = state_lock_path(&base.join("state.json"));
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)
+            .unwrap();
+        lock.lock().unwrap();
+
+        let error = store
+            .record_fast_start_failure_and_disable_gpu(notice("wgpu_prewarm", false))
+            .expect_err("held state lock must reject the whole transaction");
+        assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(fs::read(base.join("state.json")).unwrap(), before);
+
+        lock.unlock().unwrap();
+        drop(lock);
+        store
+            .record_fast_start_failure_and_disable_gpu(notice("wgpu_prewarm", false))
+            .unwrap();
+        let reopened = store_at(&base);
+        assert_eq!(
+            reopened.settings().renderer_mode,
+            RendererMode::LowMemoryGlow
+        );
+        assert_eq!(
+            reopened.fast_start_failure_notice().unwrap().stage,
+            "wgpu_prewarm"
+        );
+    }
+
+    fn notice(stage: &str, shown: bool) -> FastStartFailureNotice {
+        FastStartFailureNotice {
+            id: format!("id-{stage}"),
+            generated_at: format!("time-{stage}"),
+            stage: stage.to_owned(),
+            error: format!("error-{stage}"),
+            shown,
+            ..Default::default()
+        }
+    }
+
+    fn store_at(base: &Path) -> StateStore {
+        let state = fs::read_to_string(base.join("state.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        store_at_with_state(base, state)
+    }
+
+    fn store_at_with_state(base: &Path, state: PersistedState) -> StateStore {
+        StateStore {
+            path: base.join("state.json"),
+            books_dir: base.join("books"),
+            state,
+            pending_books: BTreeMap::new(),
+            state_dirty: false,
+            books: Default::default(),
+        }
+    }
+
+    fn unique_base(label: &str) -> PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join("suisuiview-tests").join(format!(
+            "{label}-{stamp}-{}",
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ))
     }
 
     fn record_at(page: usize, updated_at: u64) -> BookRecord {

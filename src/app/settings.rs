@@ -384,6 +384,22 @@ impl SuiSuiViewApp {
     }
 
     pub(super) fn apply_settings(&mut self, ctx: &egui::Context, settings: AppSettings) {
+        match self.store.update_settings(settings) {
+            Ok(settings) => self.install_persisted_settings(ctx, settings, true),
+            Err(error) => {
+                let latest = self.store.settings().clone();
+                self.install_persisted_settings(ctx, latest, false);
+                self.notify_state_save_failed(&error);
+            }
+        }
+    }
+
+    fn install_persisted_settings(
+        &mut self,
+        ctx: &egui::Context,
+        settings: AppSettings,
+        show_saved_status: bool,
+    ) {
         let previous_decode = self.decode_options();
         let previous_preview = self.settings.progressive_preview_enabled;
         let previous_prefetch = self.settings.prefetch_enabled;
@@ -397,7 +413,6 @@ impl SuiSuiViewApp {
         if !self.settings.top_bar_items.compare && self.debug_compare.enabled {
             self.set_debug_compare_enabled(false);
         }
-        self.store.update_settings(self.settings.clone());
         self.refresh_single_instance_listener();
         // `update_settings` writes `state.json` itself, but a book record may still
         // be buffered behind the shared debounce timer; flush rather than discard.
@@ -463,7 +478,9 @@ impl SuiSuiViewApp {
         if textures_invalidated {
             self.request_original_texture_only_decode_if_needed();
         }
-        self.set_status(self.i18n().text("status.settings_saved"));
+        if show_saved_status {
+            self.set_status(self.i18n().text("status.settings_saved"));
+        }
     }
 }
 
