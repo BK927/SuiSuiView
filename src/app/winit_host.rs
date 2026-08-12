@@ -2,7 +2,6 @@
 
 use super::{StartupOpen, SuiSuiViewApp};
 use crate::core::state::{AppSettings, RendererMode, StateStore};
-use crossbeam_channel::Receiver;
 use egui::{self};
 use egui_wgpu::winit::Painter;
 use egui_winit::winit;
@@ -34,7 +33,7 @@ const FAIL_STAGE_ENV: &str = "SUISUIVIEW_HANDOFF_FAIL_STAGE";
 
 pub(crate) struct WinitHostOptions {
     pub(crate) store: StateStore,
-    pub(crate) ipc_rx: Option<Receiver<Option<PathBuf>>>,
+    pub(crate) ipc_listener: Option<crate::single_instance::IpcListener>,
     pub(crate) startup_open_path: Option<PathBuf>,
     pub(crate) startup_open: Option<StartupOpen>,
     pub(crate) icon: egui::IconData,

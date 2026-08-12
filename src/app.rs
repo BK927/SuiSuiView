@@ -210,7 +210,7 @@ pub struct SuiSuiViewApp {
     adjacent_seed_generation_token: Arc<AtomicU64>,
     adjacent_seed_cache: Vec<AdjacentSeedCache>,
     pending_adjacent_seed_prefetch_at: Option<Instant>,
-    ipc_rx: Option<Receiver<Option<PathBuf>>>,
+    ipc_listener: Option<crate::single_instance::IpcListener>,
     loader_generation: u64,
     source: Option<SharedSource>,
     book_id: Option<String>,
@@ -347,11 +347,19 @@ pub struct SuiSuiViewApp {
     edge_prompt: Option<EdgePrompt>,
 }
 
+fn install_ipc_wake_callback(
+    listener: &crate::single_instance::IpcListener,
+    egui_ctx: &egui::Context,
+) {
+    let egui_ctx = egui_ctx.clone();
+    listener.set_wake_callback(move || egui_ctx.request_repaint());
+}
+
 impl SuiSuiViewApp {
     pub(crate) fn new(
         runtime: runtime::AppRuntime,
         store: StateStore,
-        ipc_rx: Option<Receiver<Option<PathBuf>>>,
+        ipc_listener: Option<crate::single_instance::IpcListener>,
         startup_open_path: Option<PathBuf>,
         startup_open: Option<StartupOpen>,
     ) -> Self {
@@ -382,6 +390,9 @@ impl SuiSuiViewApp {
         let fast_start_failure_notice = store.fast_start_failure_notice().cloned();
         let initial_window_size = store.window_placement().inner_size;
         platform::apply_window_level(&egui_ctx, settings.always_on_top);
+        if let Some(listener) = ipc_listener.as_ref() {
+            install_ipc_wake_callback(listener, &egui_ctx);
+        }
         let mut app = Self {
             egui_ctx: egui_ctx.clone(),
             store,
@@ -414,7 +425,7 @@ impl SuiSuiViewApp {
             adjacent_seed_generation_token: Arc::new(AtomicU64::new(0)),
             adjacent_seed_cache: Vec::new(),
             pending_adjacent_seed_prefetch_at: None,
-            ipc_rx,
+            ipc_listener,
             loader_generation,
             source: None,
             book_id: None,
@@ -1325,7 +1336,14 @@ impl Drop for SuiSuiViewApp {
 
 impl SuiSuiViewApp {
     fn drain_ipc_open_requests(&mut self, ctx: &egui::Context) {
-        let Some(request) = self.ipc_rx.as_ref().and_then(|rx| rx.try_iter().last()) else {
+        // Consume exactly one request per frame. This preserves FIFO order and
+        // prevents a later focus-only request (`None`) from erasing a file open.
+        // The repaint below advances any requests still queued behind it.
+        let Some(request) = self
+            .ipc_listener
+            .as_ref()
+            .and_then(|listener| listener.try_recv().ok())
+        else {
             return;
         };
         if let Some(path) = request {
@@ -1342,13 +1360,15 @@ impl SuiSuiViewApp {
 
     fn refresh_single_instance_listener(&mut self) {
         if !self.settings.single_instance {
-            self.ipc_rx = None;
+            self.ipc_listener = None;
             return;
         }
-        if self.ipc_rx.is_none() {
+        if self.ipc_listener.is_none() {
             let pipe_name =
                 crate::single_instance::pipe_name_for_key(&self.store.path().display().to_string());
-            self.ipc_rx = Some(crate::single_instance::start_listener(pipe_name));
+            let listener = crate::single_instance::start_listener(pipe_name);
+            install_ipc_wake_callback(&listener, &self.egui_ctx);
+            self.ipc_listener = Some(listener);
         }
     }
 

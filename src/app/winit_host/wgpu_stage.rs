@@ -90,7 +90,7 @@ impl WinitHostApp {
         let mut app = SuiSuiViewApp::new(
             AppRuntime::new(egui_ctx, StartupReveal::HostManaged),
             options.store,
-            options.ipc_rx,
+            options.ipc_listener,
             options.startup_open_path,
             options.startup_open,
         );

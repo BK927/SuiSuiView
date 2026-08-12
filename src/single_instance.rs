@@ -1,7 +1,89 @@
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Weak};
 
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use serde::{Deserialize, Serialize};
+
+type WakeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
+
+#[derive(Default)]
+struct ListenerWake {
+    callback: Mutex<Option<WakeCallback>>,
+}
+
+impl ListenerWake {
+    fn set_callback(&self, callback: WakeCallback) {
+        *self.callback.lock().unwrap() = Some(callback);
+    }
+
+    fn notify(&self) {
+        let callback = self.callback.lock().unwrap().clone();
+        if let Some(callback) = callback {
+            callback();
+        }
+    }
+}
+
+pub(crate) struct IpcListener {
+    receiver: Receiver<Option<PathBuf>>,
+    wake: Arc<ListenerWake>,
+    #[cfg(target_os = "windows")]
+    stop: Option<ListenerStop>,
+}
+
+#[cfg(target_os = "windows")]
+struct ListenerStop {
+    pipe_name: String,
+    running: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl IpcListener {
+    fn channel() -> (Self, Sender<Option<PathBuf>>, Weak<ListenerWake>) {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let wake = Arc::new(ListenerWake::default());
+        let weak_wake = Arc::downgrade(&wake);
+        (
+            Self {
+                receiver,
+                wake,
+                #[cfg(target_os = "windows")]
+                stop: None,
+            },
+            sender,
+            weak_wake,
+        )
+    }
+
+    /// Attach the UI wake-up after winit/egui has created its event loop.
+    /// Requests can arrive before that point; if one is already queued, wake
+    /// immediately after installing the callback so it is not left idle.
+    pub(crate) fn set_wake_callback(&self, callback: impl Fn() + Send + Sync + 'static) {
+        let callback: WakeCallback = Arc::new(callback);
+        self.wake.set_callback(callback.clone());
+        if !self.receiver.is_empty() {
+            callback();
+        }
+    }
+
+    pub(crate) fn try_recv(&self) -> Result<Option<PathBuf>, TryRecvError> {
+        self.receiver.try_recv()
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for IpcListener {
+    fn drop(&mut self) {
+        let Some(stop) = &self.stop else {
+            return;
+        };
+        use std::sync::atomic::Ordering;
+        stop.running.store(false, Ordering::Release);
+        // Connect once to release a listener blocked in ConnectNamedPipe/ReadFile.
+        // The byte is deliberately not valid JSON and is never delivered to the
+        // app; the loop observes `running == false` before decoding it.
+        let _ = windows_pipe::send(&stop.pipe_name, b"\0");
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct IpcRequest {
@@ -25,19 +107,26 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Option<IpcRequest> {
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn start_listener(pipe_name: String) -> Receiver<Option<PathBuf>> {
-    let (tx, rx) = crossbeam_channel::unbounded::<Option<PathBuf>>();
+pub(crate) fn start_listener(pipe_name: String) -> IpcListener {
+    use std::sync::atomic::AtomicBool;
+
+    let (mut listener, sender, wake) = IpcListener::channel();
+    let running = Arc::new(AtomicBool::new(true));
+    listener.stop = Some(ListenerStop {
+        pipe_name: pipe_name.clone(),
+        running: running.clone(),
+    });
     std::thread::Builder::new()
         .name("suisuiview-ipc".to_owned())
-        .spawn(move || ipc_listener_loop(pipe_name, tx))
+        .spawn(move || ipc_listener_loop(pipe_name, sender, wake, running))
         .ok();
-    rx
+    listener
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(crate) fn start_listener(_pipe_name: String) -> Receiver<Option<PathBuf>> {
-    let (_tx, rx) = crossbeam_channel::unbounded();
-    rx
+pub(crate) fn start_listener(_pipe_name: String) -> IpcListener {
+    let (listener, _sender, _wake) = IpcListener::channel();
+    listener
 }
 
 #[cfg(target_os = "windows")]
@@ -51,17 +140,46 @@ pub(crate) fn send_open_request(_pipe_name: &str, _path: Option<&Path>) -> bool 
 }
 
 #[cfg(target_os = "windows")]
-fn ipc_listener_loop(pipe_name: String, tx: crossbeam_channel::Sender<Option<PathBuf>>) {
-    loop {
+fn ipc_listener_loop(
+    pipe_name: String,
+    sender: Sender<Option<PathBuf>>,
+    wake: Weak<ListenerWake>,
+    running: Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::sync::atomic::Ordering;
+
+    while running.load(Ordering::Acquire) {
         let Some(bytes) = windows_pipe::read_one_message(&pipe_name) else {
+            if !running.load(Ordering::Acquire) {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(250));
             continue;
         };
+        if !running.load(Ordering::Acquire) {
+            break;
+        }
         let Some(request) = decode_request(&bytes) else {
             continue;
         };
-        let _ = tx.send(request.path.map(PathBuf::from));
+        if !enqueue_request(&sender, &wake, request.path.map(PathBuf::from)) {
+            break;
+        }
     }
+}
+
+fn enqueue_request(
+    sender: &Sender<Option<PathBuf>>,
+    wake: &Weak<ListenerWake>,
+    request: Option<PathBuf>,
+) -> bool {
+    if sender.send(request).is_err() {
+        return false;
+    }
+    if let Some(wake) = wake.upgrade() {
+        wake.notify();
+    }
+    true
 }
 
 #[cfg(target_os = "windows")]
@@ -213,8 +331,10 @@ mod windows_pipe {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_request, encode_request, pipe_name_for_key};
-    use std::path::Path;
+    use super::{decode_request, encode_request, enqueue_request, pipe_name_for_key, IpcListener};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     #[test]
     fn ipc_request_round_trips_path() {
@@ -232,5 +352,40 @@ mod tests {
         assert_eq!(first, second);
         assert!(first.starts_with(r"\\.\pipe\SuiSuiView-"));
         assert_ne!(first, pipe_name_for_key("other"));
+    }
+
+    #[test]
+    fn queued_request_wakes_when_callback_is_attached_late() {
+        let (listener, sender, wake) = IpcListener::channel();
+        assert!(enqueue_request(
+            &sender,
+            &wake,
+            Some(PathBuf::from("first.cbz"))
+        ));
+
+        let wake_count = Arc::new(AtomicUsize::new(0));
+        let callback_count = wake_count.clone();
+        listener.set_wake_callback(move || {
+            callback_count.fetch_add(1, Ordering::Relaxed);
+        });
+        assert_eq!(wake_count.load(Ordering::Relaxed), 1);
+
+        assert!(enqueue_request(&sender, &wake, None));
+        assert_eq!(wake_count.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn no_path_request_does_not_discard_neighboring_file_requests() {
+        let (listener, sender, wake) = IpcListener::channel();
+        let first = PathBuf::from("first.cbz");
+        let second = PathBuf::from("second.cbz");
+        assert!(enqueue_request(&sender, &wake, Some(first.clone())));
+        assert!(enqueue_request(&sender, &wake, None));
+        assert!(enqueue_request(&sender, &wake, Some(second.clone())));
+
+        assert_eq!(listener.try_recv().unwrap(), Some(first));
+        assert_eq!(listener.try_recv().unwrap(), None);
+        assert_eq!(listener.try_recv().unwrap(), Some(second));
+        assert!(listener.try_recv().is_err());
     }
 }

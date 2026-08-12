@@ -8,7 +8,6 @@ mod startup_window;
 
 use crate::core::source::{classify_path, SourceKind};
 use crate::core::state::{RendererMode, StateStore, WindowPlacement};
-use crossbeam_channel::Receiver;
 use std::path::PathBuf;
 
 const DEFAULT_WINDOW_SIZE: [f32; 2] = [1280.0, 820.0];
@@ -32,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let restart_bypasses_single_instance =
         std::env::var_os(RESTART_BYPASS_SINGLE_INSTANCE_ENV).is_some();
-    let ipc_rx = if store.settings().single_instance {
+    let ipc_listener = if store.settings().single_instance {
         let pipe_name = single_instance::pipe_name_for_key(&store.path().display().to_string());
         // A self-restart (GPU toggle, WGPU demotion) must not hand its path back to
         // the instance it is replacing — but it still has to listen, or the setting
@@ -67,12 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // notice in this process, even if the best-effort disk cleanup raced or
         // temporarily failed. A new failure writes its own notice before restart.
         handoff_store.hide_fast_start_failure_notice_for_session();
-        match run_host(
-            handoff_store,
-            true,
-            ipc_rx.clone(),
-            startup_open_path.clone(),
-        ) {
+        match run_host(handoff_store, true, ipc_listener, startup_open_path.clone()) {
             Ok(()) => Ok(()),
             Err(failure) => {
                 eprintln!(
@@ -110,7 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     } else {
         // renderer_mode = LowMemoryGlow: the Glow-only host is the runtime.
-        if let Err(failure) = run_host(store, false, ipc_rx, startup_open_path) {
+        if let Err(failure) = run_host(store, false, ipc_listener, startup_open_path) {
             eprintln!(
                 "SuiSuiView Glow host failed at {}: {}",
                 failure.stage.key(),
@@ -125,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn run_host(
     store: StateStore,
     handoff_enabled: bool,
-    ipc_rx: Option<Receiver<Option<PathBuf>>>,
+    ipc_listener: Option<single_instance::IpcListener>,
     startup_open_path: Option<PathBuf>,
 ) -> Result<(), app::winit_host::HostFailure> {
     let startup_open = startup_open_path
@@ -134,7 +128,7 @@ fn run_host(
     app::winit_host::run(
         app::winit_host::WinitHostOptions {
             store,
-            ipc_rx,
+            ipc_listener,
             startup_open_path,
             startup_open,
             icon: window_icon(),
