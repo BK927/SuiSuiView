@@ -1,6 +1,6 @@
 use super::{
     classify_path, open_source_from_path, BookSource, FolderSource, PageReadCompression,
-    PageReadSourceKind, SourceKind, ZipCbzSource,
+    PageReadSourceKind, SourceError, SourceKind, ZipCbzSource,
 };
 use std::fs::{self, File};
 use std::io::Write;
@@ -110,6 +110,60 @@ fn opening_single_image_indexes_only_direct_siblings() {
     assert_eq!(source.page_name(0), Some("page-001.jpg"));
     assert_eq!(source.page_name(1), Some("page-002.png"));
     assert_eq!(forced_page, Some(1));
+}
+
+#[test]
+fn opening_missing_single_image_does_not_fall_back_to_a_sibling() {
+    let dir = temp_test_dir("missing-single-image");
+    fs::write(dir.join("page-001.jpg"), b"image-placeholder").unwrap();
+    let missing = dir.join("page-002.jpg");
+
+    let result = open_source_from_path(&missing);
+
+    assert!(matches!(
+        result,
+        Err(SourceError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
+    ));
+}
+
+#[test]
+fn opening_an_image_excluded_from_the_folder_index_returns_an_error() {
+    let dir = temp_test_dir("unindexed-single-image");
+    fs::write(dir.join("page-001.jpg"), b"image-placeholder").unwrap();
+    let excluded = dir.join(".hidden-page.jpg");
+    fs::write(&excluded, b"image-placeholder").unwrap();
+
+    let result = open_source_from_path(&excluded);
+
+    assert!(matches!(
+        result,
+        Err(SourceError::Unsupported(message))
+            if message.contains("not an indexed page") && message.contains(".hidden-page.jpg")
+    ));
+}
+
+#[test]
+fn page_path_lookup_does_not_match_the_same_name_in_another_folder() {
+    let first = temp_test_dir("same-name-first");
+    let second = temp_test_dir("same-name-second");
+    fs::write(first.join("page.jpg"), b"first").unwrap();
+    fs::write(second.join("page.jpg"), b"second").unwrap();
+    let source = FolderSource::open_direct(&first).unwrap();
+
+    assert_eq!(source.page_index_for_path(&second.join("page.jpg")), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn opening_single_image_accepts_windows_path_case_differences() {
+    let dir = temp_test_dir("single-image-path-case");
+    fs::write(dir.join("Page-001.PNG"), b"image-placeholder").unwrap();
+
+    let (source, forced_page) = open_source_from_path(&dir.join("page-001.png")).unwrap();
+
+    assert_eq!(source.page_count(), 1);
+    assert_eq!(source.page_name(0), Some("Page-001.PNG"));
+    assert_eq!(forced_page, Some(0));
 }
 
 #[test]

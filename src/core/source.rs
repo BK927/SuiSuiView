@@ -292,14 +292,26 @@ pub fn open_source_from_path(path: &Path) -> Result<(SharedSource, Option<usize>
             ZipCbzSource::open(path).map(|source| (Arc::new(source) as SharedSource, None))
         }
         SourceKind::SingleImage => {
+            let metadata = fs::metadata(path)?;
+            if !metadata.is_file() {
+                return Err(SourceError::Unsupported(format!(
+                    "Image path is not a file: {}",
+                    path.display()
+                )));
+            }
             let Some(parent) = path.parent() else {
                 return Err(SourceError::Unsupported(
                     "Image file has no parent folder".to_owned(),
                 ));
             };
             let source = FolderSource::open_direct(parent)?;
-            let page = source.page_index_for_path(path);
-            Ok((Arc::new(source), page))
+            let page = source.page_index_for_path(path).ok_or_else(|| {
+                SourceError::Unsupported(format!(
+                    "Image file is not an indexed page in its parent folder: {}",
+                    path.display()
+                ))
+            })?;
+            Ok((Arc::new(source), Some(page)))
         }
         SourceKind::UnsupportedRar => {
             let extension = path
@@ -428,12 +440,9 @@ impl FolderSource {
             .iter()
             .position(|page| page.path == path)
             .or_else(|| {
-                let wanted = path.file_name()?.to_string_lossy();
+                let wanted = fs::canonicalize(path).ok()?;
                 self.pages.iter().position(|page| {
-                    Path::new(&page.relative_name)
-                        .file_name()
-                        .map(|name| name.to_string_lossy() == wanted)
-                        .unwrap_or(false)
+                    fs::canonicalize(&page.path).is_ok_and(|candidate| candidate == wanted)
                 })
             })
     }
