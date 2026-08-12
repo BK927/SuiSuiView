@@ -69,7 +69,8 @@ that book does not already have a saved reading position.
 
 Some recognized formats are preview-only or available only in optional builds.
 PSD and PDF-compatible `.ai` files show flattened previews only. Unsupported
-formats show a clear message instead of opening.
+formats show a clear message instead of opening. Animated APNG, GIF, and WebP
+files open as still previews; animation playback is not currently supported.
 
 ## Decoder Settings
 
