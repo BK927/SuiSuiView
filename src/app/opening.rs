@@ -513,6 +513,10 @@ impl SuiSuiViewApp {
         explicit_page: Option<usize>,
     ) {
         self.sibling_open_retry = None;
+        // A confirmation is bound to the source that produced its delete plan.
+        // Installing any new source makes that plan stale, so remove the dialog
+        // before the new book can appear behind it.
+        self.pending_delete_dialog = None;
         let book_id = source.book_id().to_owned();
         let page_count = source.page_count();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]

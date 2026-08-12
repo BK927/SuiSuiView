@@ -11,8 +11,16 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::app) struct DeleteAfterPlan {
     pub(in crate::app) target: PathBuf,
+    subject: DeleteSubject,
     success: Option<DeleteOpenPlan>,
     restore: DeleteOpenPlan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DeleteSubject {
+    origin: OpenOrigin,
+    book_id: String,
+    source_instance_id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +87,8 @@ impl SuiSuiViewApp {
         if should_confirm_delete(mode, self.settings.confirm_delete) {
             self.edge_prompt = None;
             self.close_bookmark_popover();
+            self.clear_pending_page_turns();
+            self.clear_pending_sibling_book_turns();
             self.pending_delete_dialog = Some(PendingDeleteDialog::new(mode, plan));
             return;
         }
@@ -87,6 +97,19 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn execute_delete_plan(&mut self, mode: DeleteMode, plan: DeleteAfterPlan) {
+        let Some(live_plan) = self.current_delete_after_plan() else {
+            self.notify("The delete target changed, so deletion was cancelled.");
+            return;
+        };
+        if !same_delete_subject(&plan, &live_plan) {
+            self.notify("The delete target changed, so deletion was cancelled.");
+            return;
+        }
+        // The target is unchanged, but sibling/successor state may have changed
+        // while the confirmation dialog was open. Execute the freshly rebuilt
+        // plan so recovery never follows stale navigation data.
+        let plan = live_plan;
+
         if !self.worker.clear_book_blocking() {
             self.notify(
                 "Background decode is still finishing; deletion was not attempted. Try again soon.",
@@ -160,10 +183,22 @@ fn delete_after_plan_for(
         OpenOrigin::SingleImage => adjacent_image_after_delete(&target),
     };
     Some(DeleteAfterPlan {
+        subject: DeleteSubject {
+            origin,
+            book_id: source.book_id().to_owned(),
+            source_instance_id: source.source_instance_id(),
+        },
         target,
         success,
         restore,
     })
+}
+
+fn same_delete_subject(confirmed: &DeleteAfterPlan, live: &DeleteAfterPlan) -> bool {
+    confirmed.subject.origin == live.subject.origin
+        && confirmed.subject.book_id == live.subject.book_id
+        && confirmed.subject.source_instance_id == live.subject.source_instance_id
+        && same_path(&confirmed.target, &live.target)
 }
 
 fn restore_plan_for(
@@ -319,7 +354,8 @@ fn delete_result_message(mode: DeleteMode, target: &Path, result: &Result<(), St
 mod tests {
     use super::{
         adjacent_book_after_delete, adjacent_entry_after_delete, adjacent_image_after_delete,
-        delete_after_plan_for, delete_target_for, should_confirm_delete, DeleteOpenPlan,
+        delete_after_plan_for, delete_target_for, same_delete_subject, should_confirm_delete,
+        DeleteOpenPlan,
     };
     use crate::app::{commands::DeleteMode, OpenOrigin};
     use crate::core::source::{BookSource, SourceError};
@@ -530,6 +566,36 @@ mod tests {
             delete_target_for(OpenOrigin::SingleImage, &source, 0),
             Some(path("page-001.jpg"))
         );
+    }
+
+    #[test]
+    fn delete_confirmation_subject_rejects_a_changed_page_or_source() {
+        let source = FakeSource {
+            source_path: path("folder"),
+            page_files: vec![path("001.jpg"), path("002.jpg")],
+        };
+        let confirmed = delete_after_plan_for(OpenOrigin::Folder, &source, 0).unwrap();
+        let changed_page = delete_after_plan_for(OpenOrigin::Folder, &source, 1).unwrap();
+        let mut changed_source = confirmed.clone();
+        changed_source.subject.source_instance_id = 99;
+
+        assert!(same_delete_subject(&confirmed, &confirmed));
+        assert!(!same_delete_subject(&confirmed, &changed_page));
+        assert!(!same_delete_subject(&confirmed, &changed_source));
+    }
+
+    #[test]
+    fn delete_confirmation_can_refresh_successor_navigation() {
+        let source = FakeSource {
+            source_path: path("folder"),
+            page_files: vec![path("001.jpg"), path("002.jpg")],
+        };
+        let confirmed = delete_after_plan_for(OpenOrigin::Folder, &source, 0).unwrap();
+        let mut live = confirmed.clone();
+        live.success = None;
+
+        assert!(same_delete_subject(&confirmed, &live));
+        assert_ne!(confirmed.success, live.success);
     }
 
     struct FakeSource {
