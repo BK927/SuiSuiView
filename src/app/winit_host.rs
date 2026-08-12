@@ -19,7 +19,7 @@ mod wgpu_stage;
 
 use dpi_guard::DpiSizeGuard;
 use glow_window::GlutinWindowContext;
-use prewarm::{run_wgpu_prewarm, PrewarmReport, PrewarmedWgpu};
+use prewarm::{recv_prewarm_report, run_wgpu_prewarm, PrewarmReport, PrewarmedWgpu};
 
 // The "handoff" naming in these external-facing strings (CLI arg + env vars) is
 // kept for external compatibility even though the module was renamed to winit_host.
@@ -30,6 +30,7 @@ const REQUEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_APP_HANDOFF";
 /// user's state.json (mirror of `REQUEST_ENV`, which forces WGPU).
 const FORCE_GLOW_ENV: &str = "SUISUIVIEW_FORCE_GLOW";
 const FAIL_STAGE_ENV: &str = "SUISUIVIEW_HANDOFF_FAIL_STAGE";
+const WGPU_PREWARM_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) struct WinitHostOptions {
     pub(crate) store: StateStore,
@@ -99,6 +100,17 @@ impl HostFailure {
             error,
             metrics,
         }
+    }
+}
+
+struct HostStartFailure {
+    stage: HostFailureStage,
+    error: String,
+}
+
+impl HostStartFailure {
+    fn new(stage: HostFailureStage, error: String) -> Self {
+        Self { stage, error }
     }
 }
 
@@ -258,20 +270,30 @@ impl WinitHostApp {
         });
     }
 
-    fn start_prewarm(&mut self) {
+    fn start_prewarm(&mut self) -> Result<(), String> {
         if self.prewarm_rx.is_some() || self.prewarmed_wgpu.is_some() {
-            return;
+            return Ok(());
+        }
+        if self.metrics.prewarm_started_ms.is_some() {
+            return Err(self.metrics.prewarm_error.clone().unwrap_or_else(|| {
+                "WGPU prewarm was already attempted without producing a usable device".to_owned()
+            }));
         }
         self.metrics.prewarm_started_ms = Some(elapsed_ms(self.started_at.elapsed()));
         let started_at = self.started_at;
         let (sender, receiver) = mpsc::channel();
-        std::thread::Builder::new()
+        if let Err(error) = std::thread::Builder::new()
             .name("suisuiview-app-handoff-prewarm-wgpu".to_owned())
             .spawn(move || {
                 let _ = sender.send(run_wgpu_prewarm(started_at));
             })
-            .expect("failed to spawn WGPU prewarm thread");
+        {
+            let error = format!("failed to spawn WGPU prewarm thread: {error}");
+            self.metrics.prewarm_error = Some(error.clone());
+            return Err(error);
+        }
         self.prewarm_rx = Some(receiver);
+        Ok(())
     }
 
     fn apply_prewarm_report(&mut self, report: PrewarmReport) {
@@ -309,19 +331,37 @@ impl WinitHostApp {
         }
     }
 
-    /// Block until the WGPU prewarm thread finishes (used by the WGPU-direct
-    /// path, which spawns prewarm concurrently with window creation and then
-    /// needs the prewarmed device to build the painter).
-    fn wait_for_prewarm(&mut self) {
+    /// Wait a bounded amount of time for WGPU prewarm. On any failure the
+    /// WGPU-direct startup must return to `main`, which performs the existing
+    /// persisted Glow demotion + process restart. Retrying device creation in
+    /// this hidden-window process can repeat the same driver hang indefinitely.
+    fn wait_for_prewarm(&mut self) -> Result<(), String> {
+        if self.prewarmed_wgpu.is_some() {
+            return Ok(());
+        }
         let Some(receiver) = self.prewarm_rx.take() else {
-            return;
+            let error = self.metrics.prewarm_error.clone().unwrap_or_else(|| {
+                "WGPU prewarm receiver was unavailable before startup completed".to_owned()
+            });
+            self.metrics.prewarm_error = Some(error.clone());
+            return Err(error);
         };
-        match receiver.recv() {
+        match recv_prewarm_report(&receiver, WGPU_PREWARM_TIMEOUT) {
             Ok(report) => self.apply_prewarm_report(report),
-            Err(_) => {
-                self.metrics.prewarm_error = Some("prewarm thread disconnected".to_owned());
+            Err(error) => {
+                self.metrics.prewarm_error = Some(error.clone());
+                return Err(error);
             }
         }
+        if let Some(error) = self.metrics.prewarm_error.clone() {
+            return Err(error);
+        }
+        if self.prewarmed_wgpu.is_none() {
+            let error = "WGPU prewarm completed without producing a usable device".to_owned();
+            self.metrics.prewarm_error = Some(error.clone());
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn fail(
@@ -376,12 +416,11 @@ impl winit::application::ApplicationHandler<()> for WinitHostApp {
         }
         // renderer_mode Wgpu builds the window + attaches a WGPU surface
         // directly; LowMemoryGlow runs the Glow-only host.
-        let result = if self.wgpu_direct {
-            self.start_wgpu_direct(event_loop)
-        } else {
-            self.start_glow(event_loop)
-        };
-        if let Err(error) = result {
+        if self.wgpu_direct {
+            if let Err(failure) = self.start_wgpu_direct(event_loop) {
+                self.fail(event_loop, failure.stage, failure.error);
+            }
+        } else if let Err(error) = self.start_glow(event_loop) {
             self.fail(event_loop, HostFailureStage::GlCreate, error);
         }
     }

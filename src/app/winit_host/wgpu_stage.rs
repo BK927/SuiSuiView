@@ -1,7 +1,9 @@
 use super::glow_window::{create_plain_window, reveal_main_window, startup_placement};
 use super::title_sync::{schedule_process_visible_window_title, sync_visible_window_title};
 use super::SuiSuiViewApp;
-use super::{elapsed_ms, injected_failure, HostFailureStage, Stage, WinitHostApp};
+use super::{
+    elapsed_ms, injected_failure, HostFailureStage, HostStartFailure, Stage, WinitHostApp,
+};
 use crate::app::runtime::{AppRuntime, StartupReveal};
 use egui::ViewportId;
 use egui_wgpu::winit::Painter;
@@ -18,40 +20,57 @@ impl WinitHostApp {
     pub(super) fn start_wgpu_direct(
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
-    ) -> Result<(), String> {
+    ) -> Result<(), HostStartFailure> {
         let options = self
             .options
             .take()
-            .ok_or_else(|| "handoff preview options were already consumed".to_owned())?;
+            .ok_or_else(|| {
+                HostStartFailure::new(
+                    HostFailureStage::GlCreate,
+                    "handoff preview options were already consumed".to_owned(),
+                )
+            })?;
 
         // Build the WGPU device on a worker thread while we create the window.
-        self.start_prewarm();
+        self.start_prewarm().map_err(|error| {
+            HostStartFailure::new(HostFailureStage::WgpuPrewarm, error)
+        })?;
         let window = create_plain_window(
             event_loop,
             &options.store,
             options.icon,
             options.default_window_size,
             options.min_window_size,
-        )?;
+        )
+        .map_err(|error| HostStartFailure::new(HostFailureStage::GlCreate, error))?;
         self.startup_placement = startup_placement(&options.store);
-        self.wait_for_prewarm();
+        self.wait_for_prewarm().map_err(|error| {
+            HostStartFailure::new(HostFailureStage::WgpuPrewarm, error)
+        })?;
 
         self.dpi_size_guard.seed_initial(&window);
 
         let egui_ctx = egui::Context::default();
         self.install_repaint_callback(&egui_ctx);
 
+        // `wait_for_prewarm` guarantees this is present. Do not fall back to
+        // WgpuSetup::CreateNew here: a second init can repeat the same driver
+        // failure or hang while the main window remains hidden.
+        let prewarmed = self.prewarmed_wgpu.take().ok_or_else(|| {
+            HostStartFailure::new(
+                HostFailureStage::WgpuPrewarm,
+                "WGPU prewarm device disappeared before painter setup".to_owned(),
+            )
+        })?;
         let mut config = tuned_wgpu_configuration();
-        if let Some(prewarmed) = self.prewarmed_wgpu.take() {
-            config.wgpu_setup = WgpuSetupExisting {
-                instance: prewarmed.instance,
-                adapter: prewarmed.adapter,
-                device: prewarmed.device,
-                queue: prewarmed.queue,
-            }
-            .into();
-            self.metrics.used_prewarmed_wgpu = true;
+        config.wgpu_setup = WgpuSetupExisting {
+            instance: prewarmed.instance,
+            adapter: prewarmed.adapter,
+            device: prewarmed.device,
+            queue: prewarmed.queue,
         }
+        .into();
+        self.metrics.used_prewarmed_wgpu = true;
 
         let painter_started = Instant::now();
         let mut painter =
@@ -63,14 +82,22 @@ impl WinitHostApp {
             pollster::block_on(painter.set_window_unsafe(ViewportId::ROOT, Some(&window)))
         };
         if let Err(error) = set_window_result {
-            return Err(format!("failed to attach WGPU surface: {error}"));
+            return Err(HostStartFailure::new(
+                HostFailureStage::GlCreate,
+                format!("failed to attach WGPU surface: {error}"),
+            ));
         }
         self.metrics.wgpu_set_window_ms = Some(elapsed_ms(set_window_started.elapsed()));
 
         let target_format = painter
             .render_state()
             .map(|state| state.target_format)
-            .ok_or_else(|| "WGPU render state was not initialized".to_owned())?;
+            .ok_or_else(|| {
+                HostStartFailure::new(
+                    HostFailureStage::GlCreate,
+                    "WGPU render state was not initialized".to_owned(),
+                )
+            })?;
 
         let mut egui_state = egui_winit::State::new(
             egui_ctx.clone(),

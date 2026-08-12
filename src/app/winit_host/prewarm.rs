@@ -1,4 +1,5 @@
-use std::time::Instant;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use egui_wgpu::wgpu;
 
@@ -22,6 +23,22 @@ pub(super) struct PrewarmReport {
 
 pub(super) fn run_wgpu_prewarm(started_at: Instant) -> PrewarmReport {
     pollster::block_on(run_wgpu_prewarm_async(started_at))
+}
+
+pub(super) fn recv_prewarm_report(
+    receiver: &mpsc::Receiver<PrewarmReport>,
+    timeout: Duration,
+) -> Result<PrewarmReport, String> {
+    match receiver.recv_timeout(timeout) {
+        Ok(report) => Ok(report),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "WGPU prewarm timed out after {:.1} seconds",
+            timeout.as_secs_f64()
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("WGPU prewarm thread disconnected before reporting a result".to_owned())
+        }
+    }
 }
 
 async fn run_wgpu_prewarm_async(started_at: Instant) -> PrewarmReport {
@@ -101,5 +118,52 @@ fn device_type_label(device_type: wgpu::DeviceType) -> &'static str {
         wgpu::DeviceType::DiscreteGpu => "discrete",
         wgpu::DeviceType::VirtualGpu => "virtual",
         wgpu::DeviceType::Cpu => "cpu",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{recv_prewarm_report, PrewarmReport};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn wait_for_report_has_a_bounded_timeout() {
+        let (_sender, receiver) = mpsc::channel();
+        let Err(error) = recv_prewarm_report(&receiver, Duration::ZERO) else {
+            panic!("an empty channel must time out");
+        };
+        assert!(error.contains("timed out"));
+    }
+
+    #[test]
+    fn wait_for_report_distinguishes_worker_disconnect() {
+        let (sender, receiver) = mpsc::channel::<PrewarmReport>();
+        drop(sender);
+        let Err(error) = recv_prewarm_report(&receiver, Duration::from_secs(1)) else {
+            panic!("a disconnected channel must report an error");
+        };
+        assert!(error.contains("disconnected"));
+    }
+
+    #[test]
+    fn worker_failure_report_is_delivered_for_explicit_fallback() {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(PrewarmReport {
+                ready_ms: 1.0,
+                init_ms: 1.0,
+                adapter_name: None,
+                backend: None,
+                device_type: None,
+                result: Err("synthetic adapter failure".to_owned()),
+            })
+            .unwrap();
+
+        let report = recv_prewarm_report(&receiver, Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            report.result,
+            Err(ref error) if error == "synthetic adapter failure"
+        ));
     }
 }
