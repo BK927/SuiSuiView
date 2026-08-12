@@ -256,7 +256,20 @@ impl SuiSuiViewApp {
     }
 
     pub(super) fn handle_viewer_pointer(&mut self, ui: &egui::Ui, response: &egui::Response) {
+        self.sync_wheel_view_mode(ui);
         if self.view_mode == ViewMode::VerticalStrip {
+            if response.hovered() {
+                let (scroll_y, ctrl, zoom_delta) = ui.input(|input| {
+                    (
+                        input.raw_scroll_delta.y,
+                        input.modifiers.ctrl,
+                        input.zoom_delta(),
+                    )
+                });
+                if !ctrl && (zoom_delta - 1.0).abs() < WHEEL_ZOOM_DELTA_EPSILON && scroll_y != 0.0 {
+                    self.begin_wheel_behavior(ui, WheelBehavior::DirectScroll);
+                }
+            }
             self.handle_strip_pointer(ui, response);
             return;
         }
@@ -299,24 +312,70 @@ impl SuiSuiViewApp {
         } else if (zoom_delta - 1.0).abs() >= WHEEL_ZOOM_DELTA_EPSILON {
             // Trackpad pinch arrives as a zoom factor without the ctrl modifier.
             self.apply_wheel_gesture_steps(ui, 0.0, zoom_delta);
-        } else if scroll_y.abs() < 1.0 {
-            // Swallow sub-pixel scroll noise.
-        } else if self.settings.wheel_mode == WheelMode::ScrollWhenZoomed
-            && self.fit_mode == FitMode::Manual
-            && self.manual_zoom > 1.01
-        {
-            self.pan.y += scroll_y;
-        } else if scroll_y < -30.0 {
-            if let Some(command) =
-                command_for_mouse_gesture(MouseGesture::WheelDown, &self.settings)
-            {
-                self.apply_command(ui.ctx(), command);
+        } else {
+            let direct_scroll = self.settings.wheel_mode == WheelMode::ScrollWhenZoomed
+                && self.fit_mode == FitMode::Manual
+                && self.manual_zoom > 1.01;
+            match route_wheel_scroll(scroll_y, direct_scroll) {
+                WheelScrollRoute::Ignore => {}
+                WheelScrollRoute::DirectScroll(points) => {
+                    self.begin_wheel_behavior(ui, WheelBehavior::DirectScroll);
+                    if points.abs() >= 1.0 {
+                        self.pan.y += points;
+                    }
+                }
+                WheelScrollRoute::PageTurn(points) => {
+                    self.apply_page_turn_wheel_steps(ui, points);
+                }
             }
-        } else if scroll_y > 30.0 {
-            if let Some(command) = command_for_mouse_gesture(MouseGesture::WheelUp, &self.settings)
-            {
-                self.apply_command(ui.ctx(), command);
-            }
+        }
+    }
+
+    fn sync_wheel_view_mode(&mut self, ui: &egui::Ui) {
+        let reset_zoom = ui.ctx().data_mut(|data| {
+            data.get_temp_mut_or_default::<WheelInteractionState>(wheel_interaction_state_id())
+                .set_view_mode(self.view_mode)
+        });
+        if reset_zoom {
+            self.reset_zoom_wheel_accumulator();
+        }
+    }
+
+    fn begin_wheel_behavior(&mut self, ui: &egui::Ui, behavior: WheelBehavior) {
+        let reset_zoom = ui.ctx().data_mut(|data| {
+            data.get_temp_mut_or_default::<WheelInteractionState>(wheel_interaction_state_id())
+                .begin_behavior(behavior)
+        });
+        if reset_zoom {
+            self.reset_zoom_wheel_accumulator();
+        }
+    }
+
+    fn reset_zoom_wheel_accumulator(&mut self) {
+        self.wheel_gesture_accum = 0.0;
+        self.wheel_gesture_last = None;
+    }
+
+    fn apply_page_turn_wheel_steps(&mut self, ui: &egui::Ui, scroll_points: f32) {
+        self.begin_wheel_behavior(ui, WheelBehavior::PageTurn);
+        let now = Instant::now();
+        let steps = ui.ctx().data_mut(|data| {
+            data.get_temp_mut_or_default::<WheelInteractionState>(wheel_interaction_state_id())
+                .page_turn_steps(scroll_points, now)
+        });
+        if steps == 0 {
+            return;
+        }
+        let gesture = if steps > 0 {
+            MouseGesture::WheelUp
+        } else {
+            MouseGesture::WheelDown
+        };
+        let Some(command) = command_for_mouse_gesture(gesture, &self.settings) else {
+            return;
+        };
+        for _ in 0..steps.unsigned_abs() {
+            self.apply_command(ui.ctx(), command);
         }
     }
 
@@ -329,19 +388,15 @@ impl SuiSuiViewApp {
         scroll_points: f32,
         zoom_delta: f32,
     ) {
+        self.begin_wheel_behavior(ui, WheelBehavior::Zoom);
         let now = Instant::now();
-        if self
-            .wheel_gesture_last
-            .is_some_and(|last| now.duration_since(last) > WHEEL_ACCUM_TIMEOUT)
-        {
-            self.wheel_gesture_accum = 0.0;
-        }
-        if scroll_points.abs() >= f32::EPSILON
-            || (zoom_delta - 1.0).abs() >= WHEEL_ZOOM_DELTA_EPSILON
-        {
-            self.wheel_gesture_last = Some(now);
-        }
-        let steps = wheel_gesture_steps(&mut self.wheel_gesture_accum, scroll_points, zoom_delta);
+        let steps = timed_wheel_gesture_steps(
+            &mut self.wheel_gesture_accum,
+            &mut self.wheel_gesture_last,
+            scroll_points,
+            zoom_delta,
+            now,
+        );
         if steps == 0 {
             return;
         }
@@ -401,6 +456,99 @@ pub(in crate::app) const WHEEL_ZOOM_DELTA_EPSILON: f32 = 1e-4;
 const WHEEL_ACCUM_TIMEOUT: Duration = Duration::from_millis(300);
 /// Upper bound on gesture steps applied from a single frame's input.
 const WHEEL_MAX_STEPS_PER_FRAME: i32 = 8;
+/// Tolerance used only when an accumulated gesture is effectively an integer.
+const WHEEL_STEP_BOUNDARY_EPSILON: f32 = 1e-5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WheelBehavior {
+    PageTurn,
+    Zoom,
+    DirectScroll,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum WheelScrollRoute {
+    Ignore,
+    DirectScroll(f32),
+    PageTurn(f32),
+}
+
+fn route_wheel_scroll(scroll_points: f32, direct_scroll: bool) -> WheelScrollRoute {
+    if scroll_points.abs() < f32::EPSILON {
+        return WheelScrollRoute::Ignore;
+    }
+    if direct_scroll {
+        // The handler preserves the old noise threshold for pixel panning, but
+        // still observes this behavior change so a page-turn remainder cannot
+        // leak across modes.
+        return WheelScrollRoute::DirectScroll(scroll_points);
+    }
+    WheelScrollRoute::PageTurn(scroll_points)
+}
+
+#[derive(Debug, Clone, Default)]
+struct WheelInteractionState {
+    view_mode: Option<ViewMode>,
+    behavior: Option<WheelBehavior>,
+    page_turn_accum: f32,
+    page_turn_last: Option<Instant>,
+}
+
+impl WheelInteractionState {
+    fn set_view_mode(&mut self, view_mode: ViewMode) -> bool {
+        if self.view_mode == Some(view_mode) {
+            return false;
+        }
+        self.view_mode = Some(view_mode);
+        self.behavior = None;
+        self.reset_page_turn();
+        true
+    }
+
+    fn begin_behavior(&mut self, behavior: WheelBehavior) -> bool {
+        if self.behavior == Some(behavior) {
+            return false;
+        }
+        self.behavior = Some(behavior);
+        self.reset_page_turn();
+        true
+    }
+
+    fn reset_page_turn(&mut self) {
+        self.page_turn_accum = 0.0;
+        self.page_turn_last = None;
+    }
+
+    fn page_turn_steps(&mut self, scroll_points: f32, now: Instant) -> i32 {
+        timed_wheel_gesture_steps(
+            &mut self.page_turn_accum,
+            &mut self.page_turn_last,
+            scroll_points,
+            1.0,
+            now,
+        )
+    }
+}
+
+fn wheel_interaction_state_id() -> egui::Id {
+    egui::Id::new("viewer_wheel_interaction_state")
+}
+
+fn timed_wheel_gesture_steps(
+    accum: &mut f32,
+    last: &mut Option<Instant>,
+    scroll_points: f32,
+    zoom_delta: f32,
+    now: Instant,
+) -> i32 {
+    if last.is_some_and(|previous| now.duration_since(previous) > WHEEL_ACCUM_TIMEOUT) {
+        *accum = 0.0;
+    }
+    if scroll_points.abs() >= f32::EPSILON || (zoom_delta - 1.0).abs() >= WHEEL_ZOOM_DELTA_EPSILON {
+        *last = Some(now);
+    }
+    wheel_gesture_steps(accum, scroll_points, zoom_delta)
+}
 
 /// Convert one frame's analog wheel/pinch input into whole gesture steps,
 /// carrying the fractional remainder in `accum`. High-resolution wheels and
@@ -416,7 +564,17 @@ fn wheel_gesture_steps(accum: &mut f32, scroll_points: f32, zoom_delta: f32) -> 
     } else {
         0.0
     };
+    if *accum != 0.0 && notches != 0.0 && accum.is_sign_positive() != notches.is_sign_positive() {
+        *accum = 0.0;
+    }
     *accum += notches;
+    // Repeated fractional input can land microscopically below an exact
+    // notch. Snap only values at the floating-point boundary so a physical
+    // 40-point notch is not delayed by another frame.
+    let nearest_step = accum.round();
+    if (*accum - nearest_step).abs() <= WHEEL_STEP_BOUNDARY_EPSILON {
+        *accum = nearest_step;
+    }
     let steps = *accum as i32;
     if steps.abs() >= WHEEL_MAX_STEPS_PER_FRAME {
         *accum = 0.0;
@@ -584,12 +742,14 @@ impl OriginalPageSize {
 #[cfg(test)]
 mod tests {
     use super::{
-        target_long_edge_for_view, view_target_settle_wait, wheel_gesture_steps, OriginalPageSize,
-        ViewTargetSignature, VIEW_TARGET_SETTLE_DELAY, WHEEL_MAX_STEPS_PER_FRAME,
+        route_wheel_scroll, target_long_edge_for_view, view_target_settle_wait,
+        wheel_gesture_steps, OriginalPageSize, ViewTargetSignature, WheelBehavior,
+        WheelInteractionState, WheelScrollRoute, VIEW_TARGET_SETTLE_DELAY,
+        WHEEL_MAX_STEPS_PER_FRAME,
     };
     use super::{FitMode, ViewMode};
     use egui::Vec2;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn fit_modes_can_request_viewport_native_targets_above_navigation_cap() {
@@ -848,6 +1008,86 @@ mod tests {
             steps += wheel_gesture_steps(&mut accum, 2.7, 1.0);
         }
         assert_eq!(steps, 1);
+    }
+
+    #[test]
+    fn fragmented_page_turn_flick_sums_to_one_step() {
+        let mut state = WheelInteractionState::default();
+        assert!(state.set_view_mode(ViewMode::Single));
+        assert!(state.begin_behavior(WheelBehavior::PageTurn));
+        let started = Instant::now();
+        let mut steps = 0;
+        for frame in 0..15 {
+            steps += state.page_turn_steps(2.7, started + Duration::from_millis(frame * 10));
+        }
+        assert_eq!(steps, 1);
+    }
+
+    #[test]
+    fn sub_point_page_turn_fragments_reach_the_accumulator() {
+        let mut state = WheelInteractionState::default();
+        state.set_view_mode(ViewMode::Single);
+        state.begin_behavior(WheelBehavior::PageTurn);
+        let started = Instant::now();
+        let mut steps = 0;
+        for frame in 0..80 {
+            let WheelScrollRoute::PageTurn(points) = route_wheel_scroll(0.5, false) else {
+                panic!("page-turn routing must preserve sub-point input");
+            };
+            steps += state.page_turn_steps(points, started + Duration::from_millis(frame * 3));
+        }
+        assert_eq!(steps, 1);
+        assert_eq!(state.page_turn_accum, 0.0);
+        assert_eq!(
+            route_wheel_scroll(0.5, true),
+            WheelScrollRoute::DirectScroll(0.5)
+        );
+    }
+
+    #[test]
+    fn page_turn_and_zoom_remainders_are_independent() {
+        let mut page_turn_accum = 0.0;
+        let mut zoom_accum = 0.0;
+
+        assert_eq!(wheel_gesture_steps(&mut page_turn_accum, 20.0, 1.0), 0);
+        assert_eq!(wheel_gesture_steps(&mut zoom_accum, 20.0, 1.0), 0);
+        assert_eq!(wheel_gesture_steps(&mut page_turn_accum, 20.0, 1.0), 1);
+        assert_eq!(zoom_accum, 0.5);
+    }
+
+    #[test]
+    fn changing_wheel_behavior_drops_page_turn_remainder() {
+        let mut state = WheelInteractionState::default();
+        state.set_view_mode(ViewMode::Single);
+        state.begin_behavior(WheelBehavior::PageTurn);
+        assert_eq!(state.page_turn_steps(20.0, Instant::now()), 0);
+        assert_eq!(state.page_turn_accum, 0.5);
+
+        assert!(state.begin_behavior(WheelBehavior::Zoom));
+        assert_eq!(state.page_turn_accum, 0.0);
+        assert!(state.begin_behavior(WheelBehavior::PageTurn));
+        assert_eq!(state.page_turn_steps(20.0, Instant::now()), 0);
+    }
+
+    #[test]
+    fn changing_view_mode_drops_page_turn_remainder() {
+        let mut state = WheelInteractionState::default();
+        state.set_view_mode(ViewMode::Single);
+        state.begin_behavior(WheelBehavior::PageTurn);
+        assert_eq!(state.page_turn_steps(20.0, Instant::now()), 0);
+
+        assert!(state.set_view_mode(ViewMode::DoubleRightToLeft));
+        assert_eq!(state.page_turn_accum, 0.0);
+        assert_eq!(state.behavior, None);
+    }
+
+    #[test]
+    fn reversing_wheel_direction_drops_the_opposite_remainder() {
+        let mut accum = 0.0;
+        assert_eq!(wheel_gesture_steps(&mut accum, 20.0, 1.0), 0);
+        assert_eq!(accum, 0.5);
+        assert_eq!(wheel_gesture_steps(&mut accum, -40.0, 1.0), -1);
+        assert_eq!(accum, 0.0);
     }
 
     #[test]
