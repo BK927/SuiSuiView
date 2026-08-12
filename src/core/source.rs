@@ -61,6 +61,13 @@ pub trait BookSource: Send + Sync {
     fn source_instance_id(&self) -> u64 {
         0
     }
+    /// Stable namespace for prepared/source-byte caches during one logical open.
+    /// A refreshed snapshot keeps this id so unchanged pages stay warm, while a
+    /// separately opened source gets a fresh id even when its content fingerprint
+    /// happens to collide with another source.
+    fn source_cache_id(&self) -> u64 {
+        self.source_instance_id()
+    }
     /// Folder sources rebuild a fresh snapshot of the same book (shared interner,
     /// frozen book_id, new instance id). None = source kind cannot refresh.
     fn refresh_snapshot(&self) -> Option<Result<SharedSource, SourceError>> {
@@ -331,6 +338,7 @@ pub struct FolderSource {
     index_by_id: HashMap<PageId, usize>,
     interner: Arc<PageIdInterner>,
     instance_id: u64,
+    cache_id: u64,
     recursive: bool,
 }
 
@@ -345,14 +353,28 @@ impl FolderSource {
         let root = path.as_ref().to_path_buf();
         let mut pages = Vec::new();
         collect_folder_pages(&root, &root, &mut pages)?;
-        Self::from_pages_with(root, pages, Arc::new(PageIdInterner::new()), None, true)
+        Self::from_pages_with(
+            root,
+            pages,
+            Arc::new(PageIdInterner::new()),
+            None,
+            None,
+            true,
+        )
     }
 
     pub fn open_direct(path: impl AsRef<Path>) -> Result<Self, SourceError> {
         let root = path.as_ref().to_path_buf();
         let mut pages = Vec::new();
         collect_direct_folder_pages(&root, &mut pages)?;
-        Self::from_pages_with(root, pages, Arc::new(PageIdInterner::new()), None, false)
+        Self::from_pages_with(
+            root,
+            pages,
+            Arc::new(PageIdInterner::new()),
+            None,
+            None,
+            false,
+        )
     }
 
     fn from_pages_with(
@@ -360,6 +382,7 @@ impl FolderSource {
         mut pages: Vec<FolderPage>,
         interner: Arc<PageIdInterner>,
         frozen_book_id: Option<String>,
+        frozen_cache_id: Option<u64>,
         recursive: bool,
     ) -> Result<Self, SourceError> {
         pages.sort_by(|a, b| cmp_natural(&a.relative_name, &b.relative_name));
@@ -384,6 +407,7 @@ impl FolderSource {
             .map(|(index, &id)| (id, index))
             .collect();
         let instance_id = next_source_instance_id();
+        let cache_id = frozen_cache_id.unwrap_or(instance_id);
 
         Ok(Self {
             root,
@@ -394,6 +418,7 @@ impl FolderSource {
             index_by_id,
             interner,
             instance_id,
+            cache_id,
             recursive,
         })
     }
@@ -485,6 +510,10 @@ impl BookSource for FolderSource {
         self.instance_id
     }
 
+    fn source_cache_id(&self) -> u64 {
+        self.cache_id
+    }
+
     fn refresh_snapshot(&self) -> Option<Result<SharedSource, SourceError>> {
         let root = self.root.clone();
         let mut pages = Vec::new();
@@ -505,6 +534,7 @@ impl BookSource for FolderSource {
                 pages,
                 self.interner.clone(),
                 Some(self.book_id.clone()),
+                Some(self.cache_id),
                 self.recursive,
             )
             .map(|source| Arc::new(source) as SharedSource),

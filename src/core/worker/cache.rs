@@ -14,12 +14,13 @@ pub(super) type PublishedAppCacheHints = VecDeque<CachedPageKey>;
 
 pub(super) fn page_cache_key(
     book_id: &str,
+    source_cache_id: u64,
     page_id: PageId,
     target_long_edge: u32,
     decode: DecodeOptions,
 ) -> String {
     format!(
-        "{book_id}:{}:{}:{}",
+        "{book_id}:{source_cache_id}:{}:{}:{}",
         page_id.0,
         clamp_target_long_edge(target_long_edge),
         decode.cache_token()
@@ -45,16 +46,21 @@ pub(super) fn insert_worker_cache_with_budget(
     true
 }
 
-pub(super) fn clear_cache_on_book_or_decode_change(
+pub(super) fn clear_cache_on_source_or_decode_change(
     source: &Option<SharedSource>,
     previous_book_id: Option<&str>,
+    previous_source_cache_id: Option<u64>,
     previous_decode: DecodeOptions,
     current_decode: DecodeOptions,
     cache: &mut LruCache<String, Arc<PreparedPage>>,
     cache_bytes: &mut usize,
 ) {
     let current_book_id = source.as_ref().map(|source| source.book_id());
-    if previous_book_id != current_book_id || previous_decode != current_decode {
+    let current_source_cache_id = source.as_ref().map(|source| source.source_cache_id());
+    if previous_book_id != current_book_id
+        || previous_source_cache_id != current_source_cache_id
+        || previous_decode != current_decode
+    {
         cache.clear();
         *cache_bytes = 0;
     }
@@ -63,6 +69,7 @@ pub(super) fn clear_cache_on_book_or_decode_change(
 pub(super) fn clear_published_app_cache_hints_on_context_change(
     source: &Option<SharedSource>,
     previous_book_id: Option<&str>,
+    previous_source_cache_id: Option<u64>,
     previous_decode: DecodeOptions,
     previous_target_long_edge: u32,
     current_decode: DecodeOptions,
@@ -70,7 +77,9 @@ pub(super) fn clear_published_app_cache_hints_on_context_change(
     hints: &mut PublishedAppCacheHints,
 ) {
     let current_book_id = source.as_ref().map(|source| source.book_id());
+    let current_source_cache_id = source.as_ref().map(|source| source.source_cache_id());
     if previous_book_id != current_book_id
+        || previous_source_cache_id != current_source_cache_id
         || previous_decode != current_decode
         || clamp_target_long_edge(previous_target_long_edge)
             != clamp_target_long_edge(current_target_long_edge)
@@ -181,9 +190,10 @@ mod tests {
 
     #[test]
     fn worker_cache_key_tracks_decode_options() {
-        let normal = page_cache_key("book", PageId(1), 2048, DecodeOptions::default());
+        let normal = page_cache_key("book", 7, PageId(1), 2048, DecodeOptions::default());
         let exif = page_cache_key(
             "book",
+            7,
             PageId(1),
             2048,
             DecodeOptions {
@@ -193,6 +203,7 @@ mod tests {
         );
         let icc = page_cache_key(
             "book",
+            7,
             PageId(1),
             2048,
             DecodeOptions {
@@ -202,6 +213,7 @@ mod tests {
         );
         let lanczos = page_cache_key(
             "book",
+            7,
             PageId(1),
             2048,
             DecodeOptions {
@@ -211,6 +223,7 @@ mod tests {
         );
         let upscaled = page_cache_key(
             "book",
+            7,
             PageId(1),
             2048,
             DecodeOptions {
@@ -220,6 +233,7 @@ mod tests {
         );
         let conservative_prepare = page_cache_key(
             "book",
+            7,
             PageId(1),
             2048,
             DecodeOptions {
@@ -236,6 +250,7 @@ mod tests {
 
         let zune_jpeg = page_cache_key(
             "book",
+            7,
             PageId(1),
             2048,
             DecodeOptions {
@@ -254,8 +269,8 @@ mod tests {
         let mut cache = LruCache::new(NonZeroUsize::new(4).unwrap());
         let mut cache_bytes = 0usize;
         let decode = DecodeOptions::default();
-        let small_key = page_cache_key("book", PageId(1), 2048, decode);
-        let huge_key = page_cache_key("book", PageId(1), MAX_TARGET_LONG_EDGE + 1, decode);
+        let small_key = page_cache_key("book", 7, PageId(1), 2048, decode);
+        let huge_key = page_cache_key("book", 7, PageId(1), MAX_TARGET_LONG_EDGE + 1, decode);
 
         assert!(insert_worker_cache_with_budget(
             &mut cache,
@@ -338,11 +353,13 @@ mod tests {
         let before: SharedSource = Arc::new(RemapSource {
             book_id: "same-book".to_owned(),
             instance_id: 1,
+            cache_id: 7,
             index_to_id: vec![0, 1],
         });
         let after: SharedSource = Arc::new(RemapSource {
             book_id: "same-book".to_owned(),
             instance_id: 2,
+            cache_id: 7,
             index_to_id: vec![2, 0, 1],
         });
         let decode = DecodeOptions::default();
@@ -354,9 +371,25 @@ mod tests {
         let after_id = after.page_id(after_index).unwrap();
         assert_eq!(before_id, after_id);
 
-        let before_key = page_cache_key(before.book_id(), before_id, 2048, decode);
-        let after_key = page_cache_key(after.book_id(), after_id, 2048, decode);
+        let before_key = page_cache_key(
+            before.book_id(),
+            before.source_cache_id(),
+            before_id,
+            2048,
+            decode,
+        );
+        let after_key = page_cache_key(
+            after.book_id(),
+            after.source_cache_id(),
+            after_id,
+            2048,
+            decode,
+        );
         assert_eq!(before_key, after_key);
+        assert_ne!(
+            before_key,
+            page_cache_key(before.book_id(), 8, before_id, 2048, decode)
+        );
     }
 
     #[test]
@@ -365,6 +398,7 @@ mod tests {
             Arc::new(RemapSource {
                 book_id: book_id.to_owned(),
                 instance_id,
+                cache_id: instance_id,
                 index_to_id: vec![0],
             })
         };
@@ -391,6 +425,7 @@ mod tests {
     struct RemapSource {
         book_id: String,
         instance_id: u64,
+        cache_id: u64,
         index_to_id: Vec<u32>,
     }
 
@@ -436,6 +471,10 @@ mod tests {
 
         fn source_instance_id(&self) -> u64 {
             self.instance_id
+        }
+
+        fn source_cache_id(&self) -> u64 {
+            self.cache_id
         }
     }
 

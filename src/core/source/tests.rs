@@ -135,6 +135,22 @@ fn page_display_path_uses_real_files_for_folders_and_virtual_paths_for_archives(
 }
 
 #[test]
+fn folder_refresh_keeps_its_cache_session_but_a_new_open_does_not() {
+    let dir = temp_test_dir("folder-cache-session");
+    fs::write(dir.join("page-001.jpg"), b"image-placeholder").unwrap();
+
+    let source = FolderSource::open(&dir).unwrap();
+    let initial_instance = source.source_instance_id();
+    let initial_cache = source.source_cache_id();
+    let refreshed = source.refresh_snapshot().unwrap().unwrap();
+    let reopened = FolderSource::open(&dir).unwrap();
+
+    assert_ne!(refreshed.source_instance_id(), initial_instance);
+    assert_eq!(refreshed.source_cache_id(), initial_cache);
+    assert_ne!(reopened.source_cache_id(), initial_cache);
+}
+
+#[test]
 fn zip_page_read_hint_reports_compression_and_sizes() {
     let dir = temp_test_dir("zip-read-hint");
     let archive = dir.join("book.cbz");

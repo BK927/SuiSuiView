@@ -60,11 +60,12 @@ impl SourceBytesCache {
     fn get(
         &mut self,
         book_id: &str,
+        source_cache_id: u64,
         page_id: PageId,
         index: usize,
         book_epoch: usize,
     ) -> Option<Arc<[u8]>> {
-        let key = source_bytes_key(book_id, page_id);
+        let key = source_bytes_key(book_id, source_cache_id, page_id);
         let hit = self.entries.get(&key).cloned();
         record_source_bytes_cache(
             if hit.is_some() { "hit" } else { "miss" },
@@ -81,6 +82,7 @@ impl SourceBytesCache {
     fn insert(
         &mut self,
         book_id: &str,
+        source_cache_id: u64,
         page_id: PageId,
         index: usize,
         book_epoch: usize,
@@ -101,7 +103,7 @@ impl SourceBytesCache {
         }
 
         let shared = Arc::<[u8]>::from(bytes);
-        let key = source_bytes_key(book_id, page_id);
+        let key = source_bytes_key(book_id, source_cache_id, page_id);
         if let Some((_evicted_key, evicted_bytes)) = self.entries.push(key, shared.clone()) {
             self.bytes = self.bytes.saturating_sub(evicted_bytes.len());
         }
@@ -139,8 +141,9 @@ pub(super) fn read_source_bytes(
     page_id: PageId,
     index: usize,
 ) -> Result<SourcePageBytes, String> {
+    let source_cache_id = source.source_cache_id();
     if let Some(cache) = cache {
-        if let Some(bytes) = cache.get(book_id, page_id, index, book_epoch) {
+        if let Some(bytes) = cache.get(book_id, source_cache_id, page_id, index, book_epoch) {
             clear_matching_read_ahead(
                 read_ahead,
                 book_id,
@@ -152,7 +155,7 @@ pub(super) fn read_source_bytes(
         }
         let bytes =
             read_uncached_source_bytes(read_ahead, source, book_id, book_epoch, page_id, index)?;
-        return Ok(cache.insert(book_id, page_id, index, book_epoch, bytes));
+        return Ok(cache.insert(book_id, source_cache_id, page_id, index, book_epoch, bytes));
     }
 
     read_uncached_source_bytes(read_ahead, source, book_id, book_epoch, page_id, index)
@@ -215,8 +218,8 @@ fn enabled_value(value: &str) -> bool {
     )
 }
 
-fn source_bytes_key(book_id: &str, page_id: PageId) -> String {
-    format!("{book_id}:{}", page_id.0)
+fn source_bytes_key(book_id: &str, source_cache_id: u64, page_id: PageId) -> String {
+    format!("{book_id}:{source_cache_id}:{}", page_id.0)
 }
 
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -308,25 +311,25 @@ mod tests {
     #[test]
     fn source_bytes_cache_reuses_inserted_page_bytes() {
         let mut cache = SourceBytesCache::new(32);
-        let bytes = cache.insert("book", PageId(3), 3, 1, vec![1, 2, 3, 4]);
+        let bytes = cache.insert("book", 7, PageId(3), 3, 1, vec![1, 2, 3, 4]);
 
         assert_eq!(
-            cache.get("book", PageId(3), 3, 1).as_deref(),
+            cache.get("book", 7, PageId(3), 3, 1).as_deref(),
             Some(&[1, 2, 3, 4][..])
         );
-        assert_eq!(cache.get("book", PageId(4), 4, 1), None);
+        assert_eq!(cache.get("book", 7, PageId(4), 4, 1), None);
         assert_eq!(bytes.as_ref(), &[1, 2, 3, 4]);
     }
 
     #[test]
     fn source_bytes_cache_prunes_to_budget() {
         let mut cache = SourceBytesCache::new(6);
-        cache.insert("book", PageId(1), 1, 1, vec![1, 1, 1, 1]);
-        cache.insert("book", PageId(2), 2, 1, vec![2, 2, 2, 2]);
+        cache.insert("book", 7, PageId(1), 1, 1, vec![1, 1, 1, 1]);
+        cache.insert("book", 7, PageId(2), 2, 1, vec![2, 2, 2, 2]);
 
-        assert_eq!(cache.get("book", PageId(1), 1, 1), None);
+        assert_eq!(cache.get("book", 7, PageId(1), 1, 1), None);
         assert_eq!(
-            cache.get("book", PageId(2), 2, 1).as_deref(),
+            cache.get("book", 7, PageId(2), 2, 1).as_deref(),
             Some(&[2, 2, 2, 2][..])
         );
     }
@@ -334,10 +337,10 @@ mod tests {
     #[test]
     fn source_bytes_cache_skips_oversize_pages() {
         let mut cache = SourceBytesCache::new(3);
-        let bytes = cache.insert("book", PageId(1), 1, 1, vec![1, 2, 3, 4]);
+        let bytes = cache.insert("book", 7, PageId(1), 1, 1, vec![1, 2, 3, 4]);
 
         assert_eq!(bytes.as_ref(), &[1, 2, 3, 4]);
-        assert_eq!(cache.get("book", PageId(1), 1, 1), None);
+        assert_eq!(cache.get("book", 7, PageId(1), 1, 1), None);
     }
 
     #[test]
@@ -385,10 +388,11 @@ mod tests {
         assert_ne!(before_index, after_index);
         let page_id = PageId(0);
 
-        let before_key = source_bytes_key("same-book", page_id);
-        let after_key = source_bytes_key("same-book", page_id);
+        let before_key = source_bytes_key("same-book", 7, page_id);
+        let after_key = source_bytes_key("same-book", 7, page_id);
         assert_eq!(before_key, after_key);
-        assert_eq!(before_key, "same-book:0");
+        assert_eq!(before_key, "same-book:7:0");
+        assert_ne!(before_key, source_bytes_key("same-book", 8, page_id));
     }
 
     #[test]

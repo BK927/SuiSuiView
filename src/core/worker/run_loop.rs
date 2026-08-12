@@ -5,7 +5,7 @@ use super::api::{
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use super::cache::record_worker_cache_snapshot;
 use super::cache::{
-    clear_cache_on_book_or_decode_change, clear_published_app_cache_hints_on_context_change,
+    clear_cache_on_source_or_decode_change, clear_published_app_cache_hints_on_context_change,
     insert_worker_cache_with_budget, page_cache_key, prune_worker_cache,
     remember_published_app_cache_hint, should_skip_published_app_cache_hint, update_book_epoch,
     PublishedAppCacheHints,
@@ -68,6 +68,7 @@ pub(in crate::core::worker) fn run_worker(
         clear_pending_read_ahead(&mut read_ahead, "command");
         let previous_book_id = source.as_ref().map(|source| source.book_id().to_owned());
         let previous_instance_id = source.as_ref().map(|source| source.source_instance_id());
+        let previous_source_cache_id = source.as_ref().map(|source| source.source_cache_id());
         let previous_decode = options.decode;
         let previous_target_long_edge = target_long_edge;
         if !apply_command(
@@ -90,30 +91,34 @@ pub(in crate::core::worker) fn run_worker(
         clear_published_app_cache_hints_on_context_change(
             &source,
             previous_book_id.as_deref(),
+            previous_source_cache_id,
             previous_decode,
             previous_target_long_edge,
             options.decode,
             target_long_edge,
             &mut published_app_cache_hints,
         );
-        clear_cache_on_book_or_decode_change(
+        clear_cache_on_source_or_decode_change(
             &source,
             previous_book_id.as_deref(),
+            previous_source_cache_id,
             previous_decode,
             options.decode,
             &mut cache,
             &mut cache_bytes,
         );
-        clear_source_bytes_cache_on_book_change(
+        clear_source_bytes_cache_on_source_change(
             &mut source_bytes_cache,
             &source,
             previous_book_id.as_deref(),
+            previous_source_cache_id,
         );
         prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
         reset_decode_ahead_policy_if_context_changed(
             &mut decode_ahead_policy,
             &source,
             previous_book_id.as_deref(),
+            previous_source_cache_id,
             previous_decode,
             previous_target_long_edge,
             options.decode,
@@ -180,6 +185,8 @@ pub(in crate::core::worker) fn run_worker(
                         source.as_ref().map(|source| source.book_id().to_owned());
                     let previous_instance_id =
                         source.as_ref().map(|source| source.source_instance_id());
+                    let previous_source_cache_id =
+                        source.as_ref().map(|source| source.source_cache_id());
                     let previous_decode = options.decode;
                     let previous_target_long_edge = target_long_edge;
                     if !apply_command(
@@ -202,30 +209,34 @@ pub(in crate::core::worker) fn run_worker(
                     clear_published_app_cache_hints_on_context_change(
                         &source,
                         previous_book_id.as_deref(),
+                        previous_source_cache_id,
                         previous_decode,
                         previous_target_long_edge,
                         options.decode,
                         target_long_edge,
                         &mut published_app_cache_hints,
                     );
-                    clear_cache_on_book_or_decode_change(
+                    clear_cache_on_source_or_decode_change(
                         &source,
                         previous_book_id.as_deref(),
+                        previous_source_cache_id,
                         previous_decode,
                         options.decode,
                         &mut cache,
                         &mut cache_bytes,
                     );
-                    clear_source_bytes_cache_on_book_change(
+                    clear_source_bytes_cache_on_source_change(
                         &mut source_bytes_cache,
                         &source,
                         previous_book_id.as_deref(),
+                        previous_source_cache_id,
                     );
                     prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
                     reset_decode_ahead_policy_if_context_changed(
                         &mut decode_ahead_policy,
                         &source,
                         previous_book_id.as_deref(),
+                        previous_source_cache_id,
                         previous_decode,
                         previous_target_long_edge,
                         options.decode,
@@ -241,7 +252,13 @@ pub(in crate::core::worker) fn run_worker(
                     continue 'work;
                 }
 
-                let key = page_cache_key(&book_id, page_id, job.target_long_edge, options.decode);
+                let key = page_cache_key(
+                    &book_id,
+                    active_source.source_cache_id(),
+                    page_id,
+                    job.target_long_edge,
+                    options.decode,
+                );
                 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
                 perf_trace::record_duration(
                     "page_worker_job_start",
@@ -255,6 +272,7 @@ pub(in crate::core::worker) fn run_worker(
                 if let Some(page) = cache.get(&key).cloned() {
                     let _ = event_tx.send(WorkerEvent::PageReady {
                         book_id: book_id.clone(),
+                        source_instance_id: active_source.source_instance_id(),
                         page_id,
                         decode: options.decode,
                         page,
@@ -406,6 +424,7 @@ pub(in crate::core::worker) fn run_worker(
                         }
                         let _ = event_tx.send(WorkerEvent::PageReady {
                             book_id: book_id.clone(),
+                            source_instance_id: active_source.source_instance_id(),
                             page_id,
                             decode: options.decode,
                             page: page.clone(),
@@ -457,6 +476,8 @@ pub(in crate::core::worker) fn run_worker(
                                 source.as_ref().map(|source| source.book_id().to_owned());
                             let previous_instance_id =
                                 source.as_ref().map(|source| source.source_instance_id());
+                            let previous_source_cache_id =
+                                source.as_ref().map(|source| source.source_cache_id());
                             let previous_decode = options.decode;
                             let previous_target_long_edge = target_long_edge;
                             if !apply_command(
@@ -479,30 +500,34 @@ pub(in crate::core::worker) fn run_worker(
                             clear_published_app_cache_hints_on_context_change(
                                 &source,
                                 previous_book_id.as_deref(),
+                                previous_source_cache_id,
                                 previous_decode,
                                 previous_target_long_edge,
                                 options.decode,
                                 target_long_edge,
                                 &mut published_app_cache_hints,
                             );
-                            clear_cache_on_book_or_decode_change(
+                            clear_cache_on_source_or_decode_change(
                                 &source,
                                 previous_book_id.as_deref(),
+                                previous_source_cache_id,
                                 previous_decode,
                                 options.decode,
                                 &mut cache,
                                 &mut cache_bytes,
                             );
-                            clear_source_bytes_cache_on_book_change(
+                            clear_source_bytes_cache_on_source_change(
                                 &mut source_bytes_cache,
                                 &source,
                                 previous_book_id.as_deref(),
+                                previous_source_cache_id,
                             );
                             prune_worker_cache(&mut cache, &mut cache_bytes, options.cache_bytes);
                             reset_decode_ahead_policy_if_context_changed(
                                 &mut decode_ahead_policy,
                                 &source,
                                 previous_book_id.as_deref(),
+                                previous_source_cache_id,
                                 previous_decode,
                                 previous_target_long_edge,
                                 options.decode,
@@ -521,6 +546,7 @@ pub(in crate::core::worker) fn run_worker(
                     Err(message) => {
                         let _ = event_tx.send(WorkerEvent::PageFailed {
                             book_id: book_id.clone(),
+                            source_instance_id: active_source.source_instance_id(),
                             page_id,
                             target_long_edge: job.target_long_edge,
                             decode: options.decode,
@@ -557,13 +583,16 @@ fn reset_decode_ahead_policy_if_context_changed(
     policy: &mut DecodeAheadPolicy,
     source: &Option<SharedSource>,
     previous_book_id: Option<&str>,
+    previous_source_cache_id: Option<u64>,
     previous_decode: DecodeOptions,
     previous_target_long_edge: u32,
     current_decode: DecodeOptions,
     current_target_long_edge: u32,
 ) {
     let current_book_id = source.as_ref().map(|source| source.book_id());
+    let current_source_cache_id = source.as_ref().map(|source| source.source_cache_id());
     if previous_book_id != current_book_id
+        || previous_source_cache_id != current_source_cache_id
         || previous_decode != current_decode
         || previous_target_long_edge != current_target_long_edge
     {
@@ -571,13 +600,15 @@ fn reset_decode_ahead_policy_if_context_changed(
     }
 }
 
-fn clear_source_bytes_cache_on_book_change(
+fn clear_source_bytes_cache_on_source_change(
     cache: &mut Option<SourceBytesCache>,
     source: &Option<SharedSource>,
     previous_book_id: Option<&str>,
+    previous_source_cache_id: Option<u64>,
 ) {
     let current_book_id = source.as_ref().map(|source| source.book_id());
-    if previous_book_id != current_book_id {
+    let current_source_cache_id = source.as_ref().map(|source| source.source_cache_id());
+    if previous_book_id != current_book_id || previous_source_cache_id != current_source_cache_id {
         if let Some(cache) = cache {
             cache.clear();
         }

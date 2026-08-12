@@ -177,7 +177,13 @@ pub(super) fn next_job(
         let Some(page_id) = source.page_id(job.index) else {
             return false;
         };
-        let key = page_cache_key(book_id, page_id, job.target_long_edge, options.decode);
+        let key = page_cache_key(
+            book_id,
+            source.source_cache_id(),
+            page_id,
+            job.target_long_edge,
+            options.decode,
+        );
         if cache.peek(&key).is_some() {
             return false;
         }

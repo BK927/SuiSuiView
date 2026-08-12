@@ -719,24 +719,34 @@ impl SuiSuiViewApp {
         match event {
             WorkerEvent::PageReady {
                 book_id,
+                source_instance_id,
                 page_id,
                 decode,
                 page,
             } => {
-                self.book_id.as_deref() == Some(book_id.as_str())
-                    && *decode == self.decode_options()
+                worker_event_source_is_current(
+                    self.book_id.as_deref(),
+                    self.source.as_deref(),
+                    book_id,
+                    *source_instance_id,
+                ) && *decode == self.decode_options()
                     && self.target_is_relevant(page.target_long_edge)
                     && self.event_page_id_in_current_spread(*page_id)
             }
             WorkerEvent::PageFailed {
                 book_id,
+                source_instance_id,
                 page_id,
                 target_long_edge,
                 decode,
                 ..
             } => {
-                self.book_id.as_deref() == Some(book_id.as_str())
-                    && *decode == self.decode_options()
+                worker_event_source_is_current(
+                    self.book_id.as_deref(),
+                    self.source.as_deref(),
+                    book_id,
+                    *source_instance_id,
+                ) && *decode == self.decode_options()
                     && self.target_is_relevant(*target_long_edge)
                     && self.event_page_id_in_current_spread(*page_id)
             }
@@ -760,11 +770,16 @@ impl SuiSuiViewApp {
         match event {
             WorkerEvent::PageReady {
                 book_id,
+                source_instance_id,
                 page_id,
                 decode,
                 page,
-            } if self.book_id.as_deref() == Some(book_id.as_str())
-                && decode == self.decode_options()
+            } if worker_event_source_is_current(
+                self.book_id.as_deref(),
+                self.source.as_deref(),
+                &book_id,
+                source_instance_id,
+            ) && decode == self.decode_options()
                 && self.target_is_relevant(page.target_long_edge) =>
             {
                 // Drop events for pages that vanished from the current snapshot
@@ -798,12 +813,17 @@ impl SuiSuiViewApp {
             }
             WorkerEvent::PageFailed {
                 book_id,
+                source_instance_id,
                 page_id,
                 target_long_edge,
                 decode,
                 message,
-            } if self.book_id.as_deref() == Some(book_id.as_str())
-                && decode == self.decode_options()
+            } if worker_event_source_is_current(
+                self.book_id.as_deref(),
+                self.source.as_deref(),
+                &book_id,
+                source_instance_id,
+            ) && decode == self.decode_options()
                 && self.target_is_relevant(target_long_edge) =>
             {
                 let Some(index) = resolve_worker_event_index(self.source.as_deref(), page_id)
@@ -1341,6 +1361,16 @@ fn resolve_worker_event_index(
     page_id: crate::core::source::PageId,
 ) -> Option<usize> {
     source?.page_index_for_id(page_id)
+}
+
+fn worker_event_source_is_current(
+    current_book_id: Option<&str>,
+    source: Option<&dyn BookSource>,
+    event_book_id: &str,
+    event_source_instance_id: u64,
+) -> bool {
+    current_book_id == Some(event_book_id)
+        && source.is_some_and(|source| source.source_instance_id() == event_source_instance_id)
 }
 
 #[cfg(test)]
@@ -2468,6 +2498,57 @@ mod tests {
         );
         assert_eq!(resolve_worker_event_index(Some(&source), PageId(5)), None);
         assert_eq!(resolve_worker_event_index(None, PageId(0)), None);
+    }
+
+    #[test]
+    fn worker_event_must_match_the_current_source_instance() {
+        use super::worker_event_source_is_current;
+        use crate::core::source::{BookSource, SourceError};
+
+        struct InstanceSource;
+        impl BookSource for InstanceSource {
+            fn title(&self) -> &str {
+                "current"
+            }
+            fn source_path(&self) -> &Path {
+                Path::new("current")
+            }
+            fn book_id(&self) -> &str {
+                "colliding-book"
+            }
+            fn page_count(&self) -> usize {
+                1
+            }
+            fn page_name(&self, _index: usize) -> Option<&str> {
+                Some("page.png")
+            }
+            fn read_page(&self, _index: usize) -> Result<Vec<u8>, SourceError> {
+                Ok(Vec::new())
+            }
+            fn source_instance_id(&self) -> u64 {
+                22
+            }
+        }
+
+        let source = InstanceSource;
+        assert!(worker_event_source_is_current(
+            Some("colliding-book"),
+            Some(&source),
+            "colliding-book",
+            22,
+        ));
+        assert!(!worker_event_source_is_current(
+            Some("colliding-book"),
+            Some(&source),
+            "colliding-book",
+            21,
+        ));
+        assert!(!worker_event_source_is_current(
+            Some("different-book"),
+            Some(&source),
+            "colliding-book",
+            22,
+        ));
     }
 
     fn dummy_page(target_long_edge: u32) -> Arc<PreparedPage> {

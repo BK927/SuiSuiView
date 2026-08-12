@@ -441,12 +441,14 @@ impl WorkerOptions {
 pub enum WorkerEvent {
     PageReady {
         book_id: String,
+        source_instance_id: u64,
         page_id: PageId,
         decode: DecodeOptions,
         page: Arc<PreparedPage>,
     },
     PageFailed {
         book_id: String,
+        source_instance_id: u64,
         page_id: PageId,
         target_long_edge: u32,
         decode: DecodeOptions,
