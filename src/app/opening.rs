@@ -524,6 +524,7 @@ impl SuiSuiViewApp {
         // before the new book can appear behind it.
         self.pending_delete_dialog = None;
         let book_id = source.book_id().to_owned();
+        let legacy_book_id = source.legacy_book_id();
         let page_count = source.page_count();
         let bookmark_path =
             bookmark_path_for_open(origin, &opened_path, source.as_ref()).to_path_buf();
@@ -532,7 +533,10 @@ impl SuiSuiViewApp {
         // Editing a folder's images (including this app deleting a page) changes
         // its content fingerprint, so the record saved under the old id would go
         // unreachable. Re-key it onto the new id first, then read as usual.
-        if let Err(error) = self.store.adopt_record_for_path(&book_id, &bookmark_path) {
+        if let Err(error) =
+            self.store
+                .adopt_record_for_path(&book_id, legacy_book_id.as_deref(), &bookmark_path)
+        {
             self.notify_state_save_failed(&error);
             return;
         }

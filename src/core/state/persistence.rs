@@ -7,9 +7,13 @@
 //! silently erase another app instance's newer fields.
 
 use super::book_files;
-use super::bookmarks::page_bookmark_order;
-use super::{BookRecord, PersistedState, ReadingPosition, StateStore};
+use super::bookmarks::{page_bookmark_order, stored_path_matches};
+use super::{
+    BookRecord, BookRecordAdoption, FitMode, PageBookmark, PersistedState, ReadingDirection,
+    ReadingPosition, StateStore,
+};
 use crate::core::perf_trace::{self, PerfField};
+use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -58,6 +62,15 @@ impl Drop for ExclusiveFileLock {
 }
 
 impl StateStore {
+    pub(super) fn recover_book_record_migration(&mut self) -> io::Result<()> {
+        let _lock = ExclusiveFileLock::acquire(&books_lock_path(&self.books_dir))?;
+        recover_book_record_migration(&self.books_dir)?;
+        let mut books = self.books.borrow_mut();
+        books.records.clear();
+        books.all_loaded = false;
+        Ok(())
+    }
+
     pub(super) fn mutate_state_file<R>(
         &self,
         mutate: impl FnOnce(&mut PersistedState) -> (R, bool),
@@ -104,6 +117,15 @@ impl StateStore {
     /// bookmarks or the upscaler probe written by another app instance.
     pub(super) fn persist_reading_record(&mut self, update: &BookRecord) -> io::Result<()> {
         let _lock = ExclusiveFileLock::acquire(&books_lock_path(&self.books_dir))?;
+        recover_book_record_migration(&self.books_dir)?;
+        if read_book_redirect(&self.books_dir, &update.book_id)?.is_some() {
+            // Another instance migrated this identity while this process still
+            // had an automatic resume write buffered. Dropping the stale write
+            // is safer than recreating the retired record or applying an index
+            // from an obsolete source snapshot to the replacement identity.
+            self.books.borrow_mut().records.remove(&update.book_id);
+            return Ok(());
+        }
         let path = book_record_path(&self.books_dir, &update.book_id);
         let latest = read_book_record_fresh(&path, &update.book_id)?;
         let merged = merge_reading_record(latest, update);
@@ -124,6 +146,14 @@ impl StateStore {
         mutate: impl FnOnce(&mut BookRecord) -> (R, bool),
     ) -> io::Result<Option<R>> {
         let _lock = ExclusiveFileLock::acquire(&books_lock_path(&self.books_dir))?;
+        recover_book_record_migration(&self.books_dir)?;
+        if read_book_redirect(&self.books_dir, book_id)?.is_some() {
+            // Manual actions from a stale window must not resurrect the old id.
+            // Returning None surfaces the existing "record no longer exists"
+            // result to actions that require a record.
+            self.books.borrow_mut().records.remove(book_id);
+            return Ok(None);
+        }
         let path = book_record_path(&self.books_dir, book_id);
         let latest = read_book_record_fresh(&path, book_id)?;
         let pending = self.pending_books.get(book_id).cloned();
@@ -155,6 +185,10 @@ impl StateStore {
     /// Re-running this after a failed `state.json` cleanup is idempotent.
     pub(super) fn merge_legacy_bookmark_record(&mut self, legacy: &BookRecord) -> io::Result<()> {
         let _lock = ExclusiveFileLock::acquire(&books_lock_path(&self.books_dir))?;
+        recover_book_record_migration(&self.books_dir)?;
+        if read_book_redirect(&self.books_dir, &legacy.book_id)?.is_some() {
+            return Ok(());
+        }
         let path = book_record_path(&self.books_dir, &legacy.book_id);
         let latest = read_book_record_fresh(&path, &legacy.book_id)?;
         let (merged, changed) = merge_legacy_bookmark_record(latest, legacy);
@@ -168,44 +202,133 @@ impl StateStore {
         Ok(())
     }
 
-    /// Re-key an edited folder record without opening a gap between reading the
-    /// old record and deleting it. The destination must still be absent after
-    /// the global books lock is acquired.
+    /// Re-key a path-proven, single-scope record without opening a gap between
+    /// reading the source and committing the destination. Automatic resume and
+    /// manual bookmarks are copied through separate helpers so neither domain
+    /// can overwrite the other.
     pub(super) fn rekey_book_record_for_path(
         &mut self,
         old_book_id: &str,
         new_book_id: &str,
         expected_path: &str,
-    ) -> io::Result<bool> {
+    ) -> io::Result<BookRecordAdoption> {
+        if old_book_id == new_book_id {
+            return Ok(BookRecordAdoption::NotNeeded);
+        }
         let _lock = ExclusiveFileLock::acquire(&books_lock_path(&self.books_dir))?;
+        recover_book_record_migration(&self.books_dir)?;
+        if read_book_redirect(&self.books_dir, old_book_id)?.is_some() {
+            return Ok(BookRecordAdoption::NotNeeded);
+        }
         let old_path = book_record_path(&self.books_dir, old_book_id);
         let new_path = book_record_path(&self.books_dir, new_book_id);
-        let Some(mut source) = read_book_record_fresh(&old_path, old_book_id)? else {
-            return Ok(false);
-        };
+        let new_redirect_path = book_redirect_path(&self.books_dir, new_book_id);
+        let mut source = read_book_record_fresh(&old_path, old_book_id)?;
         if let Some(pending) = self.pending_books.get(old_book_id) {
-            source = merge_reading_record(Some(source), pending);
+            source = Some(merge_reading_record(source, pending));
         }
-        if !source.known_paths.iter().any(|path| path == expected_path)
-            && !source.path_positions.contains_key(expected_path)
-        {
-            return Ok(false);
+        let Some(source) = source else {
+            return Ok(BookRecordAdoption::NotNeeded);
+        };
+        if !record_references_expected_path(&source, expected_path) {
+            return Ok(BookRecordAdoption::NotNeeded);
         }
-        if read_book_record_fresh(&new_path, new_book_id)?.is_some() {
-            return Ok(false);
+        // A single content identity can have several copies. Moving the entire
+        // record after proving only one path would steal the other copies'
+        // automatic positions and manual bookmarks, so fail closed here.
+        if record_has_other_path_scope(&source, expected_path) {
+            return Ok(BookRecordAdoption::Conflict);
         }
 
-        source.book_id = new_book_id.to_owned();
-        write_book_record_atomic(&new_path, &source)?;
+        let mut destination = read_book_record_fresh(&new_path, new_book_id)?;
+        let destination_before = destination.clone();
+        if let Some(pending) = self.pending_books.get(new_book_id) {
+            destination = Some(merge_reading_record(destination, pending));
+        }
+        let destination_had_scope = destination
+            .as_ref()
+            .is_some_and(|record| record_references_expected_path(record, expected_path));
+        if destination_had_scope
+            && !manual_scope_already_present(
+                destination.as_ref().expect("scope requires a record"),
+                &source,
+                expected_path,
+            )
+        {
+            return Ok(BookRecordAdoption::Conflict);
+        }
+
+        let mut destination = destination.unwrap_or_else(|| {
+            let mut record = source.clone();
+            record.book_id = new_book_id.to_owned();
+            record.known_paths.clear();
+            record.path_positions.clear();
+            record.page_bookmarks.clear();
+            record.upscale_probe = None;
+            reset_global_reading_position(&mut record);
+            record
+        });
+        migrate_automatic_scope(
+            &source,
+            &mut destination,
+            expected_path,
+            destination_had_scope,
+        );
+        if !destination_had_scope {
+            migrate_manual_scope(&source, &mut destination, expected_path);
+        }
+        destination.updated_at = destination.updated_at.max(source.updated_at);
+        let journal = BookMigrationJournal {
+            old_book_id: old_book_id.to_owned(),
+            new_book_id: new_book_id.to_owned(),
+            destination: destination.clone(),
+        };
+        write_book_migration_journal(&self.books_dir, &journal)?;
+        write_book_record_atomic(&new_path, &destination)?;
+        let destination_redirect = match fs::read_to_string(&new_redirect_path) {
+            Ok(target) => Some(target),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => {
+                let _ = restore_book_record(&new_path, destination_before.as_ref());
+                return Err(error);
+            }
+        };
+        if destination_redirect.is_some() {
+            if let Err(error) = fs::remove_file(&new_redirect_path) {
+                let _ = restore_book_record(&new_path, destination_before.as_ref());
+                return Err(error);
+            }
+        }
+
+        // A process that opened the old identity before this transaction can
+        // still hold a deferred automatic position or accept a manual bookmark.
+        // Leave a durable redirect marker before removing the JSON so those
+        // stale writers drop their update instead of recreating the old record.
+        if let Err(error) = write_book_redirect(&self.books_dir, old_book_id, new_book_id) {
+            let rollback = restore_book_record(&new_path, destination_before.as_ref());
+            if let Some(target) = destination_redirect.as_deref() {
+                let _ = book_files::write_atomic(&new_redirect_path, target);
+            }
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(io::Error::new(
+                    error.kind(),
+                    format!(
+                        "could not retire old book identity ({error}); destination rollback also failed ({rollback_error})"
+                    ),
+                )),
+            };
+        }
 
         // The destination write is the commit point. From here on the app must
         // resolve the new identity even if antivirus software or a transient
         // handle prevents the obsolete source file from being removed.
         let mut books = self.books.borrow_mut();
         books.records.remove(old_book_id);
-        books.records.insert(new_book_id.to_owned(), source);
+        books.records.insert(new_book_id.to_owned(), destination);
         drop(books);
         self.pending_books.remove(old_book_id);
+        self.pending_books.remove(new_book_id);
         if fs::remove_file(&old_path).is_err() {
             let quarantine =
                 old_path.with_extension(format!("stale-rekey-{}.tmp", std::process::id()));
@@ -213,8 +336,145 @@ impl StateStore {
                 let _ = fs::remove_file(quarantine);
             }
         }
-        Ok(true)
+        remove_book_migration_journal(&self.books_dir)?;
+        Ok(BookRecordAdoption::Adopted)
     }
+}
+
+fn record_references_expected_path(record: &BookRecord, expected_path: &str) -> bool {
+    record
+        .known_paths
+        .iter()
+        .any(|path| stored_path_matches(path, expected_path))
+        || record
+            .path_positions
+            .keys()
+            .any(|path| stored_path_matches(path, expected_path))
+        || record.page_bookmarks.iter().any(|bookmark| {
+            !bookmark.source_path.is_empty()
+                && stored_path_matches(&bookmark.source_path, expected_path)
+        })
+}
+
+fn record_has_other_path_scope(record: &BookRecord, expected_path: &str) -> bool {
+    record
+        .known_paths
+        .iter()
+        .any(|path| !stored_path_matches(path, expected_path))
+        || record
+            .path_positions
+            .keys()
+            .any(|path| !stored_path_matches(path, expected_path))
+        || record.page_bookmarks.iter().any(|bookmark| {
+            bookmark.source_path.is_empty()
+                || !stored_path_matches(&bookmark.source_path, expected_path)
+        })
+}
+
+fn migrate_automatic_scope(
+    source: &BookRecord,
+    destination: &mut BookRecord,
+    expected_path: &str,
+    destination_had_scope: bool,
+) {
+    let source_position = source
+        .path_positions
+        .iter()
+        .filter(|(path, _)| stored_path_matches(path, expected_path))
+        .map(|(_, position)| position)
+        .max_by_key(|position| position.updated_at)
+        .cloned();
+    let destination_position = destination
+        .path_positions
+        .iter()
+        .filter(|(path, _)| stored_path_matches(path, expected_path))
+        .map(|(_, position)| position)
+        .max_by_key(|position| position.updated_at)
+        .cloned();
+    let selected = match (source_position, destination_position) {
+        (Some(source), Some(destination)) if destination.updated_at > source.updated_at => {
+            Some(destination)
+        }
+        (Some(source), _) => Some(source),
+        (None, destination) => destination,
+    };
+
+    destination
+        .path_positions
+        .retain(|path, _| !stored_path_matches(path, expected_path));
+    if let Some(position) = selected {
+        destination
+            .path_positions
+            .insert(expected_path.to_owned(), position);
+    }
+
+    let source_was_recent = source
+        .known_paths
+        .iter()
+        .any(|path| stored_path_matches(path, expected_path));
+    if source_was_recent && !destination_had_scope {
+        destination.known_paths.push(expected_path.to_owned());
+        if destination.known_paths.len() > 8 {
+            let extra = destination.known_paths.len() - 8;
+            destination.known_paths.drain(0..extra);
+        }
+    }
+    if let Some(position) = newest_position(destination) {
+        apply_global_reading_position(destination, &position);
+    }
+}
+
+fn reset_global_reading_position(record: &mut BookRecord) {
+    record.last_page = 0;
+    record.last_page_name = None;
+    record.reading_direction = ReadingDirection::default();
+    record.fit_mode = FitMode::default();
+    record.manual_zoom = None;
+    record.view_mode = None;
+    record.strip_offset_frac = None;
+    record.smart_spread_phase = 0;
+}
+
+fn migrate_manual_scope(source: &BookRecord, destination: &mut BookRecord, expected_path: &str) {
+    destination
+        .page_bookmarks
+        .extend(source.page_bookmarks.iter().filter_map(|bookmark| {
+            stored_path_matches(&bookmark.source_path, expected_path).then(|| {
+                let mut bookmark = bookmark.clone();
+                bookmark.source_path = expected_path.to_owned();
+                bookmark
+            })
+        }));
+    destination.page_bookmarks.sort_by(page_bookmark_order);
+}
+
+fn manual_scope_already_present(
+    destination: &BookRecord,
+    source: &BookRecord,
+    expected_path: &str,
+) -> bool {
+    source
+        .page_bookmarks
+        .iter()
+        .filter(|bookmark| stored_path_matches(&bookmark.source_path, expected_path))
+        .all(|source_bookmark| {
+            destination
+                .page_bookmarks
+                .iter()
+                .any(|destination_bookmark| {
+                    stored_path_matches(&destination_bookmark.source_path, expected_path)
+                        && same_manual_bookmark_except_path(destination_bookmark, source_bookmark)
+                })
+        })
+}
+
+fn same_manual_bookmark_except_path(left: &PageBookmark, right: &PageBookmark) -> bool {
+    left.page == right.page
+        && left.title == right.title
+        && left.page_name == right.page_name
+        && left.pinned == right.pinned
+        && left.created_at == right.created_at
+        && left.updated_at == right.updated_at
 }
 
 fn merge_legacy_bookmark_record(
@@ -351,6 +611,105 @@ fn read_book_record_fresh(path: &Path, expected_book_id: &str) -> io::Result<Opt
 
 fn books_lock_path(books_dir: &Path) -> PathBuf {
     books_dir.join(".write.lock")
+}
+
+fn book_redirect_path(books_dir: &Path, book_id: &str) -> PathBuf {
+    book_record_path(books_dir, book_id).with_extension("redirect")
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BookMigrationJournal {
+    old_book_id: String,
+    new_book_id: String,
+    destination: BookRecord,
+}
+
+fn book_migration_journal_path(books_dir: &Path) -> PathBuf {
+    books_dir.join(".identity-migration.json")
+}
+
+fn write_book_migration_journal(
+    books_dir: &Path,
+    journal: &BookMigrationJournal,
+) -> io::Result<()> {
+    let text = serde_json::to_string(journal)?;
+    book_files::write_atomic(&book_migration_journal_path(books_dir), &text)
+}
+
+fn remove_book_migration_journal(books_dir: &Path) -> io::Result<()> {
+    match fs::remove_file(book_migration_journal_path(books_dir)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn recover_book_record_migration(books_dir: &Path) -> io::Result<()> {
+    let journal_path = book_migration_journal_path(books_dir);
+    let text = match fs::read_to_string(&journal_path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let journal: BookMigrationJournal = serde_json::from_str(&text).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid book identity migration journal: {error}"),
+        )
+    })?;
+    if journal.destination.book_id != journal.new_book_id {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "book identity migration journal destination does not match its target",
+        ));
+    }
+    let destination = book_record_path(books_dir, &journal.new_book_id);
+    write_book_record_atomic(&destination, &journal.destination)?;
+    let destination_redirect = book_redirect_path(books_dir, &journal.new_book_id);
+    match fs::remove_file(destination_redirect) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    write_book_redirect(books_dir, &journal.old_book_id, &journal.new_book_id)?;
+    let source = book_record_path(books_dir, &journal.old_book_id);
+    match fs::remove_file(source) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => {
+            // The redirect already makes a leftover JSON invisible and blocks
+            // stale writers. A later recovery pass can retry cleanup.
+        }
+    }
+    remove_book_migration_journal(books_dir)
+}
+
+fn read_book_redirect(books_dir: &Path, book_id: &str) -> io::Result<Option<String>> {
+    let path = book_redirect_path(books_dir, book_id);
+    match fs::read_to_string(path) {
+        Ok(target) if !target.trim().is_empty() => Ok(Some(target)),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "book identity redirect is empty",
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn write_book_redirect(books_dir: &Path, old_book_id: &str, new_book_id: &str) -> io::Result<()> {
+    book_files::write_atomic(&book_redirect_path(books_dir, old_book_id), new_book_id)
+}
+
+fn restore_book_record(path: &Path, record: Option<&BookRecord>) -> io::Result<()> {
+    match record {
+        Some(record) => write_book_record_atomic(path, record),
+        None => match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        },
+    }
 }
 
 fn state_lock_path(state_path: &Path) -> PathBuf {

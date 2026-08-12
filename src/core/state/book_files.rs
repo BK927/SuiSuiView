@@ -5,7 +5,43 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 impl StateStore {
+    pub(super) fn read_book_record_checked(
+        &self,
+        book_id: &str,
+    ) -> std::io::Result<Option<BookRecord>> {
+        if book_redirect_exists(&self.books_dir, book_id) {
+            return Ok(None);
+        }
+        let path = book_file_path(&self.books_dir, book_id);
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let record = serde_json::from_str::<BookRecord>(&text).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid book record JSON: {error}"),
+            )
+        })?;
+        if record.book_id != book_id {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "book record identity does not match its file name",
+            ));
+        }
+        self.books
+            .borrow_mut()
+            .records
+            .insert(book_id.to_owned(), record.clone());
+        Ok(Some(record))
+    }
+
     pub(super) fn read_book_record(&self, book_id: &str) -> Option<BookRecord> {
+        if book_redirect_exists(&self.books_dir, book_id) {
+            self.books.borrow_mut().records.remove(book_id);
+            return None;
+        }
         if let Some(pending) = self.pending_books.get(book_id) {
             return Some(pending.clone());
         }
@@ -39,14 +75,27 @@ impl StateStore {
                         continue;
                     };
                     if let Ok(record) = serde_json::from_str::<BookRecord>(&text) {
+                        if book_redirect_exists(&self.books_dir, &record.book_id) {
+                            continue;
+                        }
                         books.records.insert(record.book_id.clone(), record);
                     }
                 }
             }
             books.all_loaded = true;
         }
-        let mut records: Vec<BookRecord> = self.books.borrow().records.values().cloned().collect();
+        let mut records: Vec<BookRecord> = self
+            .books
+            .borrow()
+            .records
+            .values()
+            .filter(|record| !book_redirect_exists(&self.books_dir, &record.book_id))
+            .cloned()
+            .collect();
         for pending in self.pending_books.values() {
+            if book_redirect_exists(&self.books_dir, &pending.book_id) {
+                continue;
+            }
             match records
                 .iter_mut()
                 .find(|record| record.book_id == pending.book_id)
@@ -141,6 +190,12 @@ pub(super) fn books_dir_path() -> PathBuf {
 
 fn book_file_path(books_dir: &Path, book_id: &str) -> PathBuf {
     books_dir.join(format!("{}.json", sanitize_book_id(book_id)))
+}
+
+fn book_redirect_exists(books_dir: &Path, book_id: &str) -> bool {
+    book_file_path(books_dir, book_id)
+        .with_extension("redirect")
+        .is_file()
 }
 
 // book_id is always "<kind>:<hex>"; ':' is invalid in Windows file names, so map

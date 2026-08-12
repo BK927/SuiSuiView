@@ -4,11 +4,11 @@
 //! `impl StateStore` blocks are `book_files.rs` (file I/O) and `bookmarks.rs`.
 
 use super::book_files;
-use super::bookmarks::path_key;
+use super::bookmarks::{path_key, stored_path_matches};
 use super::now_unix_nanos;
 use super::{
-    AppSettings, BookRecord, BookRecordInput, FastStartFailureNotice, PersistedState,
-    ReadingPosition, RendererMode, StateStore, WindowPlacement,
+    AppSettings, BookRecord, BookRecordAdoption, BookRecordInput, FastStartFailureNotice,
+    PersistedState, ReadingPosition, RendererMode, StateStore, WindowPlacement,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -43,8 +43,8 @@ impl StateStore {
         self.read_book_record(book_id)
     }
 
-    /// Re-key an existing record onto `book_id` when this exact path is one it
-    /// already knows. Returns whether anything was adopted.
+    /// Move a single-path record onto `book_id` when the current filesystem
+    /// location proves which record owns it.
     ///
     /// A book's identity is its content fingerprint, which survives moving and
     /// renaming — but not editing. Adding, removing, or re-saving a single image
@@ -53,35 +53,61 @@ impl StateStore {
     /// this itself: deleting one page from a folder book re-opens the same folder
     /// with a fresh fingerprint.
     ///
-    /// The path is the second identity axis, so it covers exactly the case the
-    /// fingerprint cannot. Adoption requires an exact path match, so the only way
-    /// to inherit the wrong record is to replace a book with a different one at
-    /// the same path — rarer, and milder, than losing the record outright.
-    pub fn adopt_record_for_path(&mut self, book_id: &str, path: &Path) -> std::io::Result<bool> {
-        if self.read_book_record(book_id).is_some() {
-            return Ok(false);
-        }
+    /// `preferred_old_book_id` is the legacy fingerprint of the just-opened
+    /// source. Looking it up first makes the common v1-to-v2 upgrade O(1), but
+    /// the path must still match; a weak legacy fingerprint alone never proves
+    /// that a moved folder is the same book.
+    pub fn adopt_record_for_path(
+        &mut self,
+        book_id: &str,
+        preferred_old_book_id: Option<&str>,
+        path: &Path,
+    ) -> std::io::Result<BookRecordAdoption> {
+        self.recover_book_record_migration()?;
         let wanted = path_key(path);
-        // `known_paths` follows the recent-locations setting, but `path_positions`
-        // is always written for per-path resume, so the fallback keeps working
-        // with the recent list turned off.
-        let Some(record) = self
-            .load_all_book_records()
-            .into_iter()
-            .filter(|record| {
-                record.known_paths.iter().any(|known| known == &wanted)
-                    || record.path_positions.contains_key(&wanted)
-            })
-            .max_by_key(|record| record.updated_at)
-        else {
-            return Ok(false);
+        let destination_has_exact_path = self
+            .read_book_record(book_id)
+            .is_some_and(|record| record_references_exact_path(&record, &wanted));
+        let preferred = if let Some(old_book_id) =
+            preferred_old_book_id.filter(|old_book_id| *old_book_id != book_id)
+        {
+            self.read_book_record_checked(old_book_id)?
+                .filter(|record| record_references_path(record, &wanted))
+        } else {
+            None
         };
 
-        let previous_book_id = record.book_id;
-        if previous_book_id == book_id {
-            return Ok(false);
+        let candidates = if let Some(preferred) = preferred {
+            vec![preferred]
+        } else if destination_has_exact_path {
+            return Ok(BookRecordAdoption::NotNeeded);
+        } else {
+            let records = self.load_all_book_records();
+            let exact = records
+                .iter()
+                .filter(|record| {
+                    record.book_id != book_id && record_references_exact_path(record, &wanted)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if exact.is_empty() {
+                records
+                    .into_iter()
+                    .filter(|record| {
+                        record.book_id != book_id && record_references_path(record, &wanted)
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                exact
+            }
+        };
+        if candidates.len() > 1 {
+            return Ok(BookRecordAdoption::Ambiguous);
         }
-        self.rekey_book_record_for_path(&previous_book_id, book_id, &wanted)
+        let Some(record) = candidates.into_iter().next() else {
+            return Ok(BookRecordAdoption::NotNeeded);
+        };
+        self.rekey_book_record_for_path(&record.book_id, book_id, &wanted)
     }
 
     pub fn reading_position(
@@ -92,7 +118,11 @@ impl StateStore {
     ) -> Option<ReadingPosition> {
         let record = self.read_book_record(book_id)?;
         if allow_identity_match {
-            return Some(ReadingPosition::from_record(&record));
+            return record
+                .path_positions
+                .values()
+                .max_by_key(|position| position.updated_at)
+                .cloned();
         }
         record.path_positions.get(path_key(path).as_str()).cloned()
     }
@@ -388,6 +418,29 @@ impl StateStore {
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+fn record_references_path(record: &BookRecord, wanted: &str) -> bool {
+    record
+        .known_paths
+        .iter()
+        .any(|path| stored_path_matches(path, wanted))
+        || record
+            .path_positions
+            .keys()
+            .any(|path| stored_path_matches(path, wanted))
+        || record.page_bookmarks.iter().any(|bookmark| {
+            !bookmark.source_path.is_empty() && stored_path_matches(&bookmark.source_path, wanted)
+        })
+}
+
+fn record_references_exact_path(record: &BookRecord, wanted: &str) -> bool {
+    record.known_paths.iter().any(|path| path == wanted)
+        || record.path_positions.contains_key(wanted)
+        || record
+            .page_bookmarks
+            .iter()
+            .any(|bookmark| bookmark.source_path == wanted)
 }
 
 fn same_fast_start_notice(left: &FastStartFailureNotice, right: &FastStartFailureNotice) -> bool {

@@ -24,6 +24,11 @@ pub trait BookSource: Send + Sync {
     fn title(&self) -> &str;
     fn source_path(&self) -> &Path;
     fn book_id(&self) -> &str;
+    /// Previous identity generation for a source that can be migrated safely
+    /// only after the store also verifies its persisted path.
+    fn legacy_book_id(&self) -> Option<String> {
+        None
+    }
     fn page_count(&self) -> usize;
     fn page_name(&self, index: usize) -> Option<&str>;
     fn page_file_path(&self, _index: usize) -> Option<PathBuf> {
@@ -346,6 +351,7 @@ pub struct FolderSource {
     root: PathBuf,
     title: String,
     book_id: String,
+    legacy_book_id: String,
     pages: Vec<FolderPage>,
     page_ids: Vec<PageId>,
     index_by_id: HashMap<PageId, usize>,
@@ -410,6 +416,7 @@ impl FolderSource {
             .unwrap_or("Folder")
             .to_owned();
         let book_id = frozen_book_id.unwrap_or_else(|| folder_book_id(&pages));
+        let legacy_book_id = legacy_folder_book_id(&pages);
 
         let page_ids: Vec<PageId> = pages
             .iter()
@@ -427,6 +434,7 @@ impl FolderSource {
             root,
             title,
             book_id,
+            legacy_book_id,
             pages,
             page_ids,
             index_by_id,
@@ -486,14 +494,7 @@ impl BookSource for FolderSource {
             index,
             page_count: self.pages.len(),
         })?;
-        if page.byte_size > MAX_SOURCE_PAGE_BYTES {
-            return Err(SourceError::Unsupported(format!(
-                "Page {} is too large to read safely: {:.1} MB",
-                index + 1,
-                page.byte_size as f32 / (1024.0 * 1024.0)
-            )));
-        }
-        fs::read(&page.path).map_err(SourceError::Io)
+        read_file_bounded(&page.path, index, MAX_SOURCE_PAGE_BYTES)
     }
 
     fn read_page_prefix(&self, index: usize, max_bytes: usize) -> Result<Vec<u8>, SourceError> {
@@ -519,6 +520,10 @@ impl BookSource for FolderSource {
 
     fn source_instance_id(&self) -> u64 {
         self.instance_id
+    }
+
+    fn legacy_book_id(&self) -> Option<String> {
+        Some(self.legacy_book_id.clone())
     }
 
     fn source_cache_id(&self) -> u64 {
@@ -800,6 +805,19 @@ fn folder_book_id(pages: &[FolderPage]) -> String {
         }
         hasher.update(&[0]);
     }
+    format!("folder-v2:{}", hasher.finalize().to_hex())
+}
+
+fn legacy_folder_book_id(pages: &[FolderPage]) -> String {
+    let mut hasher = Hasher::new();
+    hasher.update(b"suisuiview:folder-v1\0");
+    hasher.update(&(pages.len() as u64).to_le_bytes());
+    for page in pages {
+        hasher.update(page.relative_name.as_bytes());
+        hasher.update(&[0]);
+        hasher.update(&page.byte_size.to_le_bytes());
+        hasher.update(&[0]);
+    }
     format!("folder:{}", hasher.finalize().to_hex())
 }
 
@@ -829,6 +847,29 @@ fn folder_page_content_sample(path: &Path, byte_size: u64) -> Option<[u8; 32]> {
         }
     }
     Some(*hasher.finalize().as_bytes())
+}
+
+fn read_file_bounded(path: &Path, index: usize, limit: u64) -> Result<Vec<u8>, SourceError> {
+    let mut file = File::open(path)?;
+    let current_size = file.metadata()?.len();
+    if current_size > limit {
+        return Err(page_too_large(index, current_size, limit));
+    }
+    let mut bytes = Vec::with_capacity(current_size.min(limit) as usize);
+    file.by_ref().take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(page_too_large(index, bytes.len() as u64, limit));
+    }
+    Ok(bytes)
+}
+
+fn page_too_large(index: usize, actual_size: u64, limit: u64) -> SourceError {
+    SourceError::Unsupported(format!(
+        "Page {} is too large to read safely: {:.1} MB (limit {:.1} MB)",
+        index + 1,
+        actual_size as f32 / (1024.0 * 1024.0),
+        limit as f32 / (1024.0 * 1024.0)
+    ))
 }
 
 fn zip_book_id(pages: &[ZipPage]) -> String {

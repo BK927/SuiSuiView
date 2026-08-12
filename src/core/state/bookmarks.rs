@@ -85,20 +85,6 @@ impl ReadingPosition {
         }
     }
 
-    pub(super) fn from_record(record: &BookRecord) -> Self {
-        Self {
-            last_page: record.last_page,
-            last_page_name: record.last_page_name.clone(),
-            reading_direction: record.reading_direction,
-            fit_mode: record.fit_mode,
-            manual_zoom: record.manual_zoom,
-            view_mode: record.view_mode.clone(),
-            strip_offset_frac: record.strip_offset_frac,
-            smart_spread_phase: record.smart_spread_phase,
-            updated_at: record.updated_at,
-        }
-    }
-
     pub(super) fn matches_input(&self, input: &BookRecordInput<'_>) -> bool {
         self.last_page == input.last_page.min(input.total_pages.saturating_sub(1))
             && self.last_page_name.as_deref() == input.last_page_name
@@ -161,8 +147,38 @@ pub enum PageBookmarkPathRebase {
     Conflict,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BookRecordAdoption {
+    Adopted,
+    NotNeeded,
+    Ambiguous,
+    Conflict,
+}
+
 pub(super) fn path_key(path: &Path) -> String {
     path.to_string_lossy().to_string()
+}
+
+pub(super) fn stored_path_matches(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    let (Ok(left), Ok(right)) = (fs::canonicalize(left), fs::canonicalize(right)) else {
+        return false;
+    };
+    normalized_canonical_path(&left) == normalized_canonical_path(&right)
+}
+
+fn normalized_canonical_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        text.to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        text.into_owned()
+    }
 }
 
 impl StateStore {

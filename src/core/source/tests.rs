@@ -1,6 +1,6 @@
 use super::{
-    classify_path, open_source_from_path, BookSource, FolderSource, PageReadCompression,
-    PageReadSourceKind, SourceError, SourceKind, ZipCbzSource,
+    classify_path, open_source_from_path, read_file_bounded, BookSource, FolderSource,
+    PageReadCompression, PageReadSourceKind, SourceError, SourceKind, ZipCbzSource,
 };
 use std::fs::{self, File};
 use std::io::Write;
@@ -34,6 +34,40 @@ fn folder_book_id_uses_bounded_content_identity_not_only_name_and_size() {
     let second_source = FolderSource::open(&second).unwrap();
 
     assert_ne!(first_source.book_id(), second_source.book_id());
+}
+
+#[test]
+fn folder_identity_exposes_legacy_id_for_path_verified_migration() {
+    let dir = temp_test_dir("folder-legacy-id");
+    fs::write(dir.join("page.jpg"), b"synthetic image contents").unwrap();
+
+    let source = FolderSource::open(&dir).unwrap();
+
+    assert!(source.book_id().starts_with("folder-v2:"));
+    assert!(source.legacy_book_id().unwrap().starts_with("folder:"));
+}
+
+#[test]
+fn bounded_file_read_rechecks_size_after_the_folder_scan() {
+    let dir = temp_test_dir("folder-read-growth");
+    let path = dir.join("page.jpg");
+    fs::write(&path, b"four").unwrap();
+    let source = FolderSource::open(&dir).unwrap();
+    fs::write(&path, b"ninebytes").unwrap();
+
+    let error = read_file_bounded(&path, 0, 8).unwrap_err();
+
+    assert!(matches!(error, SourceError::Unsupported(_)));
+    assert_eq!(source.page_byte_size(0), Some(4));
+}
+
+#[test]
+fn bounded_file_read_accepts_the_exact_limit() {
+    let dir = temp_test_dir("folder-read-limit");
+    let path = dir.join("page.jpg");
+    fs::write(&path, b"12345678").unwrap();
+
+    assert_eq!(read_file_bounded(&path, 0, 8).unwrap(), b"12345678");
 }
 
 #[test]
