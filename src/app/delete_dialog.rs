@@ -60,12 +60,6 @@ enum DeleteDialogKeyboardAction {
 }
 
 impl SuiSuiViewApp {
-    pub(in crate::app) fn cancel_delete_confirmation(&mut self) {
-        if self.pending_delete_dialog.take().is_some() {
-            self.set_status("Delete cancelled.");
-        }
-    }
-
     pub(in crate::app) fn show_delete_confirmation_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut pending) = self.pending_delete_dialog.take() else {
             return;

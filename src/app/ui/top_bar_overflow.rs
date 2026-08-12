@@ -64,7 +64,7 @@ impl SuiSuiViewApp {
             TopBarGroup::View => self.show_view_group(ctx, ui),
             TopBarGroup::Adjust => self.show_correction_group(ctx, ui),
             TopBarGroup::Compare => self.show_debug_compare_group(ui),
-            TopBarGroup::Bookmarks => self.show_bookmark_group(ctx, ui),
+            TopBarGroup::Bookmarks => self.show_bookmark_group(ui),
         }
     }
 

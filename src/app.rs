@@ -159,6 +159,25 @@ struct QueuedPageTurns {
     remaining: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyboardLayer {
+    FastStartFailure,
+    FileDeleteConfirmation,
+    GpuConfirmation,
+    BookmarkDeleteConfirmation,
+    EdgePrompt,
+    BookmarkPopover,
+    Viewer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyboardRoute {
+    Block,
+    DelegateToOverlay,
+    DismissOverlay,
+    PassToViewer,
+}
+
 pub struct SuiSuiViewApp {
     egui_ctx: egui::Context,
     store: StateStore,
@@ -927,39 +946,59 @@ impl SuiSuiViewApp {
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
-        // The fast-start failure report blocks the pointer, so it must block the
-        // keyboard too: Escape used to fall through to the Quit binding and take
-        // the app down, and because the notice was never marked shown the same
-        // dialog greeted the user again on the next launch.
-        if self
-            .fast_start_failure_notice
-            .as_ref()
-            .is_some_and(|notice| !notice.shown)
-        {
-            if ctx.input(|input| {
-                input.key_pressed(egui::Key::Escape) || input.key_pressed(egui::Key::Enter)
-            }) {
-                self.dismiss_fast_start_failure_notice();
+        let layer = self.keyboard_layer();
+        let escape_pressed = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+        let enter_pressed = ctx.input(|input| input.key_pressed(egui::Key::Enter));
+        match keyboard_route_for(
+            layer,
+            escape_pressed,
+            enter_pressed,
+            ctx.wants_keyboard_input(),
+        ) {
+            KeyboardRoute::Block | KeyboardRoute::DelegateToOverlay => return,
+            KeyboardRoute::DismissOverlay => match layer {
+                KeyboardLayer::FastStartFailure => {
+                    self.dismiss_fast_start_failure_notice();
+                }
+                KeyboardLayer::GpuConfirmation => {
+                    self.pending_gpu_acceleration = None;
+                }
+                KeyboardLayer::BookmarkDeleteConfirmation => {
+                    self.bookmark_delete_dialog = None;
+                }
+                KeyboardLayer::EdgePrompt => {
+                    self.edge_prompt = None;
+                }
+                KeyboardLayer::BookmarkPopover => {
+                    self.close_bookmark_popover();
+                }
+                KeyboardLayer::FileDeleteConfirmation | KeyboardLayer::Viewer => unreachable!(),
+            },
+            KeyboardRoute::PassToViewer => {
+                let actions = ctx.input(|input| collect_keyboard_actions(input, &self.settings));
+                for action in actions {
+                    match action {
+                        KeyboardAction::Command(command) => self.apply_command(ctx, command),
+                        KeyboardAction::Release(release) => {
+                            self.apply_navigation_key_release(release)
+                        }
+                    }
+                }
             }
-            return;
         }
-        if self.pending_delete_dialog.is_some() {
-            if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-                self.cancel_delete_confirmation();
-            }
-            return;
-        }
-        if self.edge_prompt.is_some() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-            self.edge_prompt = None;
-            return;
-        }
-        let actions = ctx.input(|input| collect_keyboard_actions(input, &self.settings));
-        for action in actions {
-            match action {
-                KeyboardAction::Command(command) => self.apply_command(ctx, command),
-                KeyboardAction::Release(release) => self.apply_navigation_key_release(release),
-            }
-        }
+    }
+
+    fn keyboard_layer(&self) -> KeyboardLayer {
+        keyboard_layer_for(
+            self.fast_start_failure_notice
+                .as_ref()
+                .is_some_and(|notice| !notice.shown),
+            self.pending_delete_dialog.is_some(),
+            self.pending_gpu_acceleration.is_some(),
+            self.bookmark_delete_dialog.is_some(),
+            self.edge_prompt.is_some(),
+            self.bookmark_popover_open,
+        )
     }
 
     fn apply_navigation_key_release(&mut self, release: NavigationRelease) {
@@ -1371,6 +1410,70 @@ fn worker_event_source_is_current(
 ) -> bool {
     current_book_id == Some(event_book_id)
         && source.is_some_and(|source| source.source_instance_id() == event_source_instance_id)
+}
+
+fn keyboard_layer_for(
+    fast_start_failure: bool,
+    file_delete_confirmation: bool,
+    gpu_confirmation: bool,
+    bookmark_delete_confirmation: bool,
+    edge_prompt: bool,
+    bookmark_popover: bool,
+) -> KeyboardLayer {
+    if fast_start_failure {
+        KeyboardLayer::FastStartFailure
+    } else if file_delete_confirmation {
+        KeyboardLayer::FileDeleteConfirmation
+    } else if gpu_confirmation {
+        KeyboardLayer::GpuConfirmation
+    } else if bookmark_delete_confirmation {
+        KeyboardLayer::BookmarkDeleteConfirmation
+    } else if edge_prompt {
+        KeyboardLayer::EdgePrompt
+    } else if bookmark_popover {
+        KeyboardLayer::BookmarkPopover
+    } else {
+        KeyboardLayer::Viewer
+    }
+}
+
+fn keyboard_route_for(
+    layer: KeyboardLayer,
+    escape_pressed: bool,
+    enter_pressed: bool,
+    wants_keyboard_input: bool,
+) -> KeyboardRoute {
+    match layer {
+        KeyboardLayer::FastStartFailure => {
+            if escape_pressed || enter_pressed {
+                KeyboardRoute::DismissOverlay
+            } else {
+                KeyboardRoute::Block
+            }
+        }
+        // The file-delete dialog reads the same egui frame later and owns its
+        // Escape, arrows, Tab, and Enter handling. Global shortcuts stop here.
+        KeyboardLayer::FileDeleteConfirmation => KeyboardRoute::DelegateToOverlay,
+        KeyboardLayer::GpuConfirmation
+        | KeyboardLayer::BookmarkDeleteConfirmation
+        | KeyboardLayer::EdgePrompt => {
+            if escape_pressed {
+                KeyboardRoute::DismissOverlay
+            } else {
+                KeyboardRoute::Block
+            }
+        }
+        KeyboardLayer::BookmarkPopover => {
+            if escape_pressed {
+                KeyboardRoute::DismissOverlay
+            } else if wants_keyboard_input {
+                KeyboardRoute::Block
+            } else {
+                KeyboardRoute::PassToViewer
+            }
+        }
+        KeyboardLayer::Viewer => KeyboardRoute::PassToViewer,
+    }
 }
 
 #[cfg(test)]
@@ -2549,6 +2652,83 @@ mod tests {
             "colliding-book",
             22,
         ));
+    }
+
+    #[test]
+    fn keyboard_overlays_preempt_viewer_shortcuts_in_modal_order() {
+        use super::{keyboard_layer_for, keyboard_route_for, KeyboardLayer, KeyboardRoute};
+
+        assert_eq!(
+            keyboard_layer_for(true, true, true, true, true, true),
+            KeyboardLayer::FastStartFailure
+        );
+        assert_eq!(
+            keyboard_layer_for(false, true, true, true, true, true),
+            KeyboardLayer::FileDeleteConfirmation
+        );
+        assert_eq!(
+            keyboard_layer_for(false, false, true, true, true, true),
+            KeyboardLayer::GpuConfirmation
+        );
+        assert_eq!(
+            keyboard_layer_for(false, false, false, true, true, true),
+            KeyboardLayer::BookmarkDeleteConfirmation
+        );
+        assert_eq!(
+            keyboard_layer_for(false, false, false, false, true, true),
+            KeyboardLayer::EdgePrompt
+        );
+        assert_eq!(
+            keyboard_layer_for(false, false, false, false, false, true),
+            KeyboardLayer::BookmarkPopover
+        );
+        assert_eq!(
+            keyboard_layer_for(false, false, false, false, false, false),
+            KeyboardLayer::Viewer
+        );
+
+        assert_eq!(
+            keyboard_route_for(
+                KeyboardLayer::BookmarkDeleteConfirmation,
+                false,
+                false,
+                false,
+            ),
+            KeyboardRoute::Block
+        );
+        assert_eq!(
+            keyboard_route_for(
+                KeyboardLayer::BookmarkDeleteConfirmation,
+                true,
+                false,
+                false,
+            ),
+            KeyboardRoute::DismissOverlay
+        );
+        assert_eq!(
+            keyboard_route_for(KeyboardLayer::GpuConfirmation, true, false, false),
+            KeyboardRoute::DismissOverlay
+        );
+        assert_eq!(
+            keyboard_route_for(KeyboardLayer::FileDeleteConfirmation, false, false, false,),
+            KeyboardRoute::DelegateToOverlay
+        );
+        assert_eq!(
+            keyboard_route_for(KeyboardLayer::BookmarkPopover, true, false, true),
+            KeyboardRoute::DismissOverlay
+        );
+        assert_eq!(
+            keyboard_route_for(KeyboardLayer::BookmarkPopover, false, false, true),
+            KeyboardRoute::Block
+        );
+        assert_eq!(
+            keyboard_route_for(KeyboardLayer::BookmarkPopover, false, false, false),
+            KeyboardRoute::PassToViewer
+        );
+        assert_eq!(
+            keyboard_route_for(KeyboardLayer::Viewer, true, false, false),
+            KeyboardRoute::PassToViewer
+        );
     }
 
     fn dummy_page(target_long_edge: u32) -> Arc<PreparedPage> {

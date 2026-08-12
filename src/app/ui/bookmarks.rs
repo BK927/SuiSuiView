@@ -255,6 +255,8 @@ impl SuiSuiViewApp {
             })
             .clicked()
         {
+            self.clear_pending_page_turns();
+            self.clear_pending_sibling_book_turns();
             self.bookmark_delete_dialog = Some(super::super::BookmarkDeleteDialog {
                 scope: self.bookmark_filter,
                 count: bookmark_count,

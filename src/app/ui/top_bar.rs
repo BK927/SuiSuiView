@@ -379,11 +379,7 @@ impl SuiSuiViewApp {
         }
     }
 
-    pub(in crate::app::ui) fn show_bookmark_group(
-        &mut self,
-        ctx: &egui::Context,
-        ui: &mut egui::Ui,
-    ) {
+    pub(in crate::app::ui) fn show_bookmark_group(&mut self, ui: &mut egui::Ui) {
         let bookmarked = self.current_page_is_bookmarked();
         let response = bookmark_toolbar_button(
             ui,
@@ -396,9 +392,6 @@ impl SuiSuiViewApp {
         }
         if response.menu_clicked {
             self.toggle_bookmark_popover_below(response.rect);
-        }
-        if self.bookmark_popover_open && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-            self.close_bookmark_popover();
         }
     }
 
