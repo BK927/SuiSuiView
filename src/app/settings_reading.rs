@@ -240,11 +240,13 @@ impl SuiSuiViewApp {
                     .button(i18n.text("settings.bookmarks.clear_archive"))
                     .clicked()
                 {
-                    let cleared = self.store.clear_archive_page_names();
-                    self.set_status(i18n.with_vars(
-                        "settings.bookmarks.clear_archive.status",
-                        &[("count", cleared.to_string())],
-                    ));
+                    match self.store.clear_archive_page_names() {
+                        Ok(cleared) => self.set_status(i18n.with_vars(
+                            "settings.bookmarks.clear_archive.status",
+                            &[("count", cleared.to_string())],
+                        )),
+                        Err(error) => self.notify_state_save_failed(&error),
+                    }
                 }
             },
         );

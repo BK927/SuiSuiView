@@ -1,4 +1,4 @@
-use super::{now_unix_seconds, FitMode, ReadingDirection, StateStore};
+use super::{now_unix_nanos, FitMode, ReadingDirection, StateStore};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -146,6 +146,12 @@ pub struct PageBookmarkEntry {
     pub bookmark: PageBookmark,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageBookmarkChange {
+    Added,
+    Removed,
+}
+
 pub(super) fn path_key(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
@@ -211,36 +217,71 @@ impl StateStore {
         page: usize,
         title: impl Into<String>,
         page_name: Option<String>,
-    ) {
-        let now = now_unix_seconds();
+    ) -> std::io::Result<()> {
+        let now = now_unix_nanos();
         let title = title.into();
         let source_path = path_key(source_path);
-        let Some(mut record) = self.read_book_record(book_id) else {
-            return;
-        };
+        let result = self.mutate_book_record(book_id, move |record| {
+            if let Some(existing) = record
+                .page_bookmarks
+                .iter_mut()
+                .find(|bookmark| bookmark.source_path == source_path && bookmark.page == page)
+            {
+                existing.title = title;
+                existing.page_name = page_name;
+                existing.updated_at = now;
+            } else {
+                record.page_bookmarks.push(PageBookmark {
+                    page,
+                    source_path,
+                    title,
+                    page_name,
+                    pinned: false,
+                    created_at: now,
+                    updated_at: now,
+                });
+            }
+            record.page_bookmarks.sort_by(page_bookmark_order);
+            record.updated_at = now;
+            ((), true)
+        })?;
+        result.ok_or_else(missing_book_record_error)
+    }
 
-        if let Some(existing) = record
-            .page_bookmarks
-            .iter_mut()
-            .find(|bookmark| bookmark.source_path == source_path && bookmark.page == page)
-        {
-            existing.title = title;
-            existing.page_name = page_name;
-            existing.updated_at = now;
-        } else {
-            record.page_bookmarks.push(PageBookmark {
-                page,
-                source_path,
-                title,
-                page_name,
-                pinned: false,
-                created_at: now,
-                updated_at: now,
-            });
-        }
-        record.page_bookmarks.sort_by(page_bookmark_order);
-        record.updated_at = now;
-        let _ = self.write_book_record(&record);
+    pub fn toggle_page_bookmark(
+        &mut self,
+        book_id: &str,
+        source_path: &Path,
+        page: usize,
+        title: impl Into<String>,
+        page_name: Option<String>,
+    ) -> std::io::Result<PageBookmarkChange> {
+        let now = now_unix_nanos();
+        let title = title.into();
+        let source_path = path_key(source_path);
+        let result =
+            self.mutate_book_record(book_id, move |record| {
+                if let Some(index) = record.page_bookmarks.iter().position(|bookmark| {
+                    bookmark.source_path == source_path && bookmark.page == page
+                }) {
+                    record.page_bookmarks.remove(index);
+                    record.updated_at = now;
+                    return (PageBookmarkChange::Removed, true);
+                }
+                record.page_bookmarks.push(PageBookmark {
+                    page,
+                    source_path,
+                    title,
+                    page_name,
+                    pinned: false,
+                    created_at: now,
+                    updated_at: now,
+                });
+                record.page_bookmarks.sort_by(page_bookmark_order);
+                record.updated_at = now;
+                (PageBookmarkChange::Added, true)
+            })?;
+        result.ok_or_else(missing_book_record_error)
     }
 
     /// Re-point this book's bookmarks at their pages after the page set changed
@@ -259,110 +300,128 @@ impl StateStore {
         book_id: &str,
         source_path: &Path,
         resolve: impl Fn(&str) -> Option<usize>,
-    ) {
+    ) -> std::io::Result<bool> {
         let source_path = path_key(source_path);
-        let Some(mut record) = self.read_book_record(book_id) else {
-            return;
-        };
-
-        let mut changed = false;
-        record.page_bookmarks.retain_mut(|bookmark| {
-            if bookmark.source_path != source_path {
-                return true;
-            }
-            let Some(page_name) = bookmark.page_name.as_deref() else {
-                return true;
-            };
-            match resolve(page_name) {
-                Some(page) => {
-                    if bookmark.page != page {
-                        bookmark.page = page;
-                        changed = true;
+        let result = self.mutate_book_record(book_id, move |record| {
+            let mut changed = false;
+            record.page_bookmarks.retain_mut(|bookmark| {
+                if bookmark.source_path != source_path {
+                    return true;
+                }
+                let Some(page_name) = bookmark.page_name.as_deref() else {
+                    return true;
+                };
+                match resolve(page_name) {
+                    Some(page) => {
+                        if bookmark.page != page {
+                            bookmark.page = page;
+                            changed = true;
+                        }
+                        true
                     }
-                    true
+                    None => {
+                        changed = true;
+                        false
+                    }
                 }
-                None => {
-                    changed = true;
-                    false
-                }
+            });
+            if changed {
+                record.page_bookmarks.sort_by(page_bookmark_order);
+                record.updated_at = now_unix_nanos();
             }
-        });
-        if !changed {
-            return;
-        }
-        record.page_bookmarks.sort_by(page_bookmark_order);
-        record.updated_at = now_unix_seconds();
-        let _ = self.write_book_record(&record);
+            (changed, changed)
+        })?;
+        Ok(result.unwrap_or(false))
     }
 
     /// Attach the AUTO upscaler probe outcome to an existing book record. Mirrors the
     /// bookmark read-modify-write path so a buffered pending record stays consistent; a
     /// no-op if the record does not exist yet (callers persist it first) or is unchanged.
-    pub fn set_book_upscale_probe(&mut self, book_id: &str, probe: UpscaleProbeRecord) {
-        let Some(mut record) = self.read_book_record(book_id) else {
-            return;
-        };
-        if record.upscale_probe.as_ref() == Some(&probe) {
-            return;
-        }
-        record.upscale_probe = Some(probe);
-        record.updated_at = now_unix_seconds();
-        let _ = self.write_book_record(&record);
+    pub fn set_book_upscale_probe(
+        &mut self,
+        book_id: &str,
+        probe: UpscaleProbeRecord,
+    ) -> std::io::Result<bool> {
+        let result = self.mutate_book_record(book_id, move |record| {
+            if record.upscale_probe.as_ref() == Some(&probe) {
+                return (false, false);
+            }
+            record.upscale_probe = Some(probe);
+            record.updated_at = now_unix_nanos();
+            (true, true)
+        })?;
+        Ok(result.unwrap_or(false))
     }
 
-    pub fn remove_page_bookmark(&mut self, book_id: &str, source_path: &Path, page: usize) {
-        let Some(mut record) = self.read_book_record(book_id) else {
-            return;
-        };
+    pub fn remove_page_bookmark(
+        &mut self,
+        book_id: &str,
+        source_path: &Path,
+        page: usize,
+    ) -> std::io::Result<bool> {
         let source_path = path_key(source_path);
-        let previous_len = record.page_bookmarks.len();
-        record.page_bookmarks.retain(|page_bookmark| {
-            page_bookmark.source_path != source_path || page_bookmark.page != page
-        });
-        if record.page_bookmarks.len() == previous_len {
-            return;
-        }
-        record.updated_at = now_unix_seconds();
-        let _ = self.write_book_record(&record);
+        let result = self.mutate_book_record(book_id, move |record| {
+            let previous_len = record.page_bookmarks.len();
+            record.page_bookmarks.retain(|page_bookmark| {
+                page_bookmark.source_path != source_path || page_bookmark.page != page
+            });
+            let changed = record.page_bookmarks.len() != previous_len;
+            if changed {
+                record.updated_at = now_unix_nanos();
+            }
+            (changed, changed)
+        })?;
+        Ok(result.unwrap_or(false))
     }
 
-    pub fn clear_page_bookmarks(&mut self, book_id: &str, source_path: &Path) -> usize {
-        let Some(mut record) = self.read_book_record(book_id) else {
-            return 0;
-        };
+    pub fn clear_page_bookmarks(
+        &mut self,
+        book_id: &str,
+        source_path: &Path,
+    ) -> std::io::Result<usize> {
         let source_path = path_key(source_path);
-        let previous_len = record.page_bookmarks.len();
-        record
-            .page_bookmarks
-            .retain(|page_bookmark| page_bookmark.source_path != source_path);
-        let removed = previous_len - record.page_bookmarks.len();
-        if removed == 0 {
-            return 0;
-        }
-        record.updated_at = now_unix_seconds();
-        let _ = self.write_book_record(&record);
-        removed
-    }
-
-    pub fn clear_all_page_bookmarks(&mut self) -> usize {
-        self.flush_pending_book();
-        let mut removed = 0;
-        let now = now_unix_seconds();
-        for mut record in self.load_all_book_records() {
+        let result = self.mutate_book_record(book_id, move |record| {
             let previous_len = record.page_bookmarks.len();
             record
                 .page_bookmarks
-                .retain(|page_bookmark| page_bookmark.source_path.is_empty());
-            let count = previous_len - record.page_bookmarks.len();
-            if count == 0 {
-                continue;
+                .retain(|page_bookmark| page_bookmark.source_path != source_path);
+            let removed = previous_len - record.page_bookmarks.len();
+            if removed > 0 {
+                record.updated_at = now_unix_nanos();
             }
-            removed += count;
-            record.updated_at = now;
-            let _ = self.write_book_record(&record);
-        }
-        removed
+            (removed, removed > 0)
+        })?;
+        Ok(result.unwrap_or(0))
     }
+
+    pub fn clear_all_page_bookmarks(&mut self) -> std::io::Result<usize> {
+        self.flush_pending_books()?;
+        let mut removed = 0;
+        let now = now_unix_nanos();
+        for record in self.load_all_book_records() {
+            if let Some(count) = self.mutate_book_record(&record.book_id, |record| {
+                let previous_len = record.page_bookmarks.len();
+                record
+                    .page_bookmarks
+                    .retain(|page_bookmark| page_bookmark.source_path.is_empty());
+                let count = previous_len - record.page_bookmarks.len();
+                if count > 0 {
+                    record.updated_at = now;
+                }
+                (count, count > 0)
+            })? {
+                removed += count;
+            }
+        }
+        Ok(removed)
+    }
+}
+
+fn missing_book_record_error() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "book record does not exist yet",
+    )
 }
 
 fn page_bookmark_entries_for_book(book: &BookRecord) -> Vec<PageBookmarkEntry> {
@@ -391,7 +450,7 @@ fn page_bookmark_entries_for_path(book: &BookRecord, source_path: &str) -> Vec<P
         .collect()
 }
 
-fn page_bookmark_order(left: &PageBookmark, right: &PageBookmark) -> std::cmp::Ordering {
+pub(super) fn page_bookmark_order(left: &PageBookmark, right: &PageBookmark) -> std::cmp::Ordering {
     right
         .pinned
         .cmp(&left.pinned)

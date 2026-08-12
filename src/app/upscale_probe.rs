@@ -463,8 +463,13 @@ impl SuiSuiViewApp {
             version: UPSCALE_PROBE_VERSION,
         };
         // Ensure the record exists (mirrors the bookmark write path), then attach the probe.
-        self.write_current_book_record();
-        self.store.set_book_upscale_probe(&book_id, record);
+        if let Err(error) = self.write_current_book_record() {
+            self.notify_state_save_failed(&error);
+            return;
+        }
+        if let Err(error) = self.store.set_book_upscale_probe(&book_id, record) {
+            self.notify_state_save_failed(&error);
+        }
     }
 
     pub(in crate::app) fn book_aware_wgpu_upscale_method(

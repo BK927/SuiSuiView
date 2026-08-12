@@ -4,7 +4,7 @@ use super::bookmark_text::{allocate_bookmark_title, paint_bookmark_title};
 use super::bookmark_thumbnails::{thumbnail_tint_for_state, BookmarkThumbnailState};
 use super::{dialog, icons, theme};
 use crate::core::i18n::I18n;
-use crate::core::state::PageBookmarkEntry;
+use crate::core::state::{PageBookmarkChange, PageBookmarkEntry};
 use egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Rect, RichText, Sense, Stroke,
     StrokeKind,
@@ -159,15 +159,6 @@ impl SuiSuiViewApp {
             return;
         };
         let page = self.current_page;
-        if self.store.has_page_bookmark(&book_id, &source_path, page) {
-            self.store
-                .remove_page_bookmark(&book_id, &source_path, page);
-            self.bookmark_rows.clear();
-            self.notify(i18n.with_vars("bookmark.removed", &[("page", (page + 1).to_string())]));
-            return;
-        }
-
-        self.write_current_book_record();
         let title = self.default_page_bookmark_title(page);
         let page_name = self
             .source
@@ -177,18 +168,39 @@ impl SuiSuiViewApp {
         let prewarm_source = self.source.clone();
         let prewarm_path = source_path.to_string_lossy().to_string();
         let decode = self.decode_options();
-        self.store
-            .upsert_page_bookmark(&book_id, &source_path, page, title, page_name.clone());
-        self.ensure_bookmark_thumbnails().prewarm(
-            prewarm_source,
+        if let Err(error) = self.write_current_book_record() {
+            self.notify_state_save_failed(&error);
+            return;
+        }
+        let change = match self.store.toggle_page_bookmark(
             &book_id,
-            Some(prewarm_path.as_str()),
+            &source_path,
             page,
-            page_name.as_deref(),
-            decode,
-        );
+            title,
+            page_name.clone(),
+        ) {
+            Ok(change) => change,
+            Err(error) => {
+                self.notify_state_save_failed(&error);
+                return;
+            }
+        };
+        if change == PageBookmarkChange::Added {
+            self.ensure_bookmark_thumbnails().prewarm(
+                prewarm_source,
+                &book_id,
+                Some(prewarm_path.as_str()),
+                page,
+                page_name.as_deref(),
+                decode,
+            );
+        }
         self.bookmark_rows.clear();
-        self.notify(i18n.with_vars("bookmark.added", &[("page", (page + 1).to_string())]));
+        let message = match change {
+            PageBookmarkChange::Added => "bookmark.added",
+            PageBookmarkChange::Removed => "bookmark.removed",
+        };
+        self.notify(i18n.with_vars(message, &[("page", (page + 1).to_string())]));
     }
 
     fn current_bookmark_source_path(&self) -> Option<std::path::PathBuf> {
@@ -542,11 +554,14 @@ impl SuiSuiViewApp {
         if remove_bookmark {
             self.bookmark_delete_dialog = None;
             if let Some(path) = row.known_path.as_deref() {
-                self.store.remove_page_bookmark(
+                if let Err(error) = self.store.remove_page_bookmark(
                     &row.book_id,
                     std::path::Path::new(path),
                     row.bookmark.page,
-                );
+                ) {
+                    self.notify_state_save_failed(&error);
+                    return;
+                }
             }
             self.bookmark_rows.clear();
         } else if jump_to_page {
@@ -570,6 +585,15 @@ impl SuiSuiViewApp {
                     return;
                 };
                 self.store.clear_page_bookmarks(&book_id, &source_path)
+            }
+        };
+        let removed = match removed {
+            Ok(removed) => removed,
+            Err(error) => {
+                self.bookmark_delete_dialog = None;
+                self.bookmark_rows.clear();
+                self.notify_state_save_failed(&error);
+                return;
             }
         };
         self.bookmark_delete_dialog = None;

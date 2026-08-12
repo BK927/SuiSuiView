@@ -196,10 +196,14 @@ impl SuiSuiViewApp {
         // no longer exists means the file itself is gone.
         if let Some(book_id) = self.book_id.clone() {
             let source_path = old_source.source_path().to_path_buf();
-            self.store
-                .remap_page_bookmarks(&book_id, &source_path, |page_name| {
-                    opening::page_index_for_name(new_source.as_ref(), page_name)
-                });
+            if let Err(error) =
+                self.store
+                    .remap_page_bookmarks(&book_id, &source_path, |page_name| {
+                        opening::page_index_for_name(new_source.as_ref(), page_name)
+                    })
+            {
+                self.notify_state_save_failed(&error);
+            }
             self.bookmark_rows.clear();
         }
 

@@ -8,10 +8,8 @@ use std::time::{Duration, Instant};
 
 impl StateStore {
     pub(super) fn read_book_record(&self, book_id: &str) -> Option<BookRecord> {
-        if let Some(pending) = &self.pending_book {
-            if pending.book_id == book_id {
-                return Some(pending.clone());
-            }
+        if let Some(pending) = self.pending_books.get(book_id) {
+            return Some(pending.clone());
         }
         if let Some(record) = self.books.borrow().records.get(book_id) {
             return Some(record.clone());
@@ -48,32 +46,6 @@ impl StateStore {
         result
     }
 
-    pub(super) fn write_book_record(&mut self, record: &BookRecord) -> std::io::Result<()> {
-        if self
-            .pending_book
-            .as_ref()
-            .is_some_and(|pending| pending.book_id == record.book_id)
-        {
-            self.pending_book = None;
-        }
-        let text = serde_json::to_string_pretty(record)?;
-        let result = write_atomic(&book_file_path(&self.books_dir, &record.book_id), &text);
-        let mut books = self.books.borrow_mut();
-        if result.is_ok() {
-            books.records.insert(record.book_id.clone(), record.clone());
-        } else {
-            // The file and the cache would disagree, and the file is the truth.
-            books.records.remove(&record.book_id);
-            books.all_loaded = false;
-        }
-        result
-    }
-
-    pub(super) fn remove_book_record_file(&self, book_id: &str) {
-        let _ = fs::remove_file(book_file_path(&self.books_dir, book_id));
-        self.books.borrow_mut().records.remove(book_id);
-    }
-
     pub(super) fn load_all_book_records(&self) -> Vec<BookRecord> {
         if !self.books.borrow().all_loaded {
             let mut books = self.books.borrow_mut();
@@ -94,7 +66,7 @@ impl StateStore {
             books.all_loaded = true;
         }
         let mut records: Vec<BookRecord> = self.books.borrow().records.values().cloned().collect();
-        if let Some(pending) = &self.pending_book {
+        for pending in self.pending_books.values() {
             match records
                 .iter_mut()
                 .find(|record| record.book_id == pending.book_id)
@@ -106,22 +78,28 @@ impl StateStore {
         records
     }
 
-    pub(super) fn flush_pending_book(&mut self) {
-        if let Some(record) = self.pending_book.take() {
-            let _ = self.write_book_record(&record);
+    pub(super) fn flush_pending_books(&mut self) -> std::io::Result<()> {
+        let mut first_error = None;
+        let pending: Vec<_> = self.pending_books.values().cloned().collect();
+        for record in pending {
+            match self.persist_reading_record(&record) {
+                Ok(()) => {
+                    self.pending_books.remove(&record.book_id);
+                }
+                Err(error) if first_error.is_none() => first_error = Some(error),
+                Err(_) => {}
+            }
         }
+        first_error.map_or(Ok(()), Err)
     }
 
-    // The single pending buffer only ever holds the current book; if a write for
-    // a different book arrives, persist the buffered one first so it is not lost.
-    pub(super) fn flush_pending_book_if_other(&mut self, book_id: &str) {
-        if self
-            .pending_book
-            .as_ref()
-            .is_some_and(|pending| pending.book_id != book_id)
-        {
-            self.flush_pending_book();
-        }
+    pub(super) fn flush_pending_book(&mut self, book_id: &str) -> std::io::Result<()> {
+        let Some(record) = self.pending_books.get(book_id).cloned() else {
+            return Ok(());
+        };
+        self.persist_reading_record(&record)?;
+        self.pending_books.remove(book_id);
+        Ok(())
     }
 
     // One-time import from the old monolithic state.json. During beta the resume
@@ -131,9 +109,15 @@ impl StateStore {
         if self.state.books.is_empty() {
             return;
         }
-        let books = std::mem::take(&mut self.state.books);
-        for record in books.into_values() {
+        let book_ids: Vec<_> = self.state.books.keys().cloned().collect();
+        let mut state_changed = false;
+        for book_id in book_ids {
+            let Some(record) = self.state.books.get(&book_id).cloned() else {
+                continue;
+            };
             if record.page_bookmarks.is_empty() {
+                self.state.books.remove(&book_id);
+                state_changed = true;
                 continue;
             }
             let rescued = BookRecord {
@@ -154,9 +138,15 @@ impl StateStore {
                 upscale_probe: record.upscale_probe,
                 updated_at: record.updated_at,
             };
-            let _ = self.write_book_record(&rescued);
+            if self.merge_legacy_bookmark_record(&rescued).is_ok() {
+                self.state.books.remove(&book_id);
+                state_changed = true;
+            }
         }
-        let _ = self.write_state_file();
+        if state_changed {
+            self.state_dirty = true;
+            let _ = self.write_state_file();
+        }
     }
 }
 

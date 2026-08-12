@@ -5,7 +5,7 @@
 
 use super::book_files;
 use super::bookmarks::path_key;
-use super::now_unix_seconds;
+use super::now_unix_nanos;
 use super::{
     AppSettings, BookRecord, BookRecordInput, FastStartFailureNotice, PersistedState,
     ReadingPosition, StateStore, WindowPlacement,
@@ -31,7 +31,7 @@ impl StateStore {
             path,
             books_dir,
             state,
-            pending_book: None,
+            pending_books: BTreeMap::new(),
             state_dirty: false,
             books: Default::default(),
         };
@@ -57,15 +57,15 @@ impl StateStore {
     /// fingerprint cannot. Adoption requires an exact path match, so the only way
     /// to inherit the wrong record is to replace a book with a different one at
     /// the same path — rarer, and milder, than losing the record outright.
-    pub fn adopt_record_for_path(&mut self, book_id: &str, path: &Path) -> bool {
+    pub fn adopt_record_for_path(&mut self, book_id: &str, path: &Path) -> std::io::Result<bool> {
         if self.read_book_record(book_id).is_some() {
-            return false;
+            return Ok(false);
         }
         let wanted = path_key(path);
         // `known_paths` follows the recent-locations setting, but `path_positions`
         // is always written for per-path resume, so the fallback keeps working
         // with the recent list turned off.
-        let Some(mut record) = self
+        let Some(record) = self
             .load_all_book_records()
             .into_iter()
             .filter(|record| {
@@ -74,19 +74,14 @@ impl StateStore {
             })
             .max_by_key(|record| record.updated_at)
         else {
-            return false;
+            return Ok(false);
         };
 
-        let previous_book_id = std::mem::replace(&mut record.book_id, book_id.to_owned());
+        let previous_book_id = record.book_id;
         if previous_book_id == book_id {
-            return false;
+            return Ok(false);
         }
-        if self.write_book_record(&record).is_err() {
-            return false;
-        }
-        // Only once the new file is on disk, so a failed write cannot lose it.
-        self.remove_book_record_file(&previous_book_id);
-        true
+        self.rekey_book_record_for_path(&previous_book_id, book_id, &wanted)
     }
 
     pub fn reading_position(
@@ -156,50 +151,47 @@ impl StateStore {
         true
     }
 
-    pub fn upsert_book_record(&mut self, input: BookRecordInput<'_>) {
-        self.flush_pending_book_if_other(input.book_id);
+    pub fn upsert_book_record(&mut self, input: BookRecordInput<'_>) -> std::io::Result<()> {
         let (record, _changed) = self.compute_record_update(input, true);
-        let _ = self.write_book_record(&record);
+        let book_id = record.book_id.clone();
+        self.pending_books.insert(book_id.clone(), record);
+        self.flush_pending_book(&book_id)
     }
 
     pub fn upsert_book_record_deferred(&mut self, input: BookRecordInput<'_>) -> bool {
-        self.flush_pending_book_if_other(input.book_id);
         let (record, changed) = self.compute_record_update(input, false);
         if changed {
-            self.pending_book = Some(record);
+            self.pending_books.insert(record.book_id.clone(), record);
         }
         changed
     }
 
-    pub fn clear_archive_page_names(&mut self) -> usize {
-        self.flush_pending_book();
+    pub fn clear_archive_page_names(&mut self) -> std::io::Result<usize> {
+        self.flush_pending_books()?;
         let mut cleared = 0;
-        for mut record in self.load_all_book_records() {
+        for record in self.load_all_book_records() {
             if !looks_like_archive_book(&record) {
                 continue;
             }
-            let mut record_cleared = false;
-            if record.last_page_name.take().is_some() {
-                record_cleared = true;
-                cleared += 1;
-            }
-            for position in record.path_positions.values_mut() {
-                if position.last_page_name.take().is_some() {
-                    record_cleared = true;
-                    cleared += 1;
+            if let Some(count) = self.mutate_book_record(&record.book_id, |record| {
+                let mut count = usize::from(record.last_page_name.take().is_some());
+                for position in record.path_positions.values_mut() {
+                    count += usize::from(position.last_page_name.take().is_some());
                 }
-            }
-            if record_cleared {
-                record.updated_at = now_unix_seconds();
-                let _ = self.write_book_record(&record);
+                if count > 0 {
+                    record.updated_at = now_unix_nanos();
+                }
+                (count, count > 0)
+            })? {
+                cleared += count;
             }
         }
-        cleared
+        Ok(cleared)
     }
 
     fn compute_record_update(&self, input: BookRecordInput<'_>, touch: bool) -> (BookRecord, bool) {
         let path_text = input.path.to_string_lossy().to_string();
-        let now = now_unix_seconds();
+        let now = now_unix_nanos();
         let existing = self.read_book_record(input.book_id);
         let is_new = existing.is_none();
         let mut record = existing.unwrap_or_else(|| BookRecord {
@@ -283,10 +275,7 @@ impl StateStore {
     }
 
     pub fn flush(&mut self) -> std::io::Result<()> {
-        let mut result = Ok(());
-        if let Some(record) = self.pending_book.take() {
-            result = self.write_book_record(&record);
-        }
+        let mut result = self.flush_pending_books();
         if self.state_dirty {
             let state_result = self.write_state_file();
             if result.is_ok() {

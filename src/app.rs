@@ -568,24 +568,33 @@ impl SuiSuiViewApp {
         }
     }
 
+    fn notify_state_save_failed(&mut self, error: &std::io::Error) {
+        let message = self
+            .i18n()
+            .with_vars("status.state_save_failed", &[("error", error.to_string())]);
+        self.notify(message);
+    }
+
     fn persist_reading_position(&mut self) {
         if !self.settings.auto_save_reading_position {
             return;
         }
-        self.write_current_book_record();
+        if let Err(error) = self.write_current_book_record() {
+            self.notify_state_save_failed(&error);
+        }
     }
 
     /// Writes the current book's record unconditionally. Automatic reading-position
     /// saves go through `persist_reading_position`, which honors the
     /// auto-save-reading-position setting; explicit actions (adding a bookmark) call
     /// this directly so the book is always persisted regardless of that setting.
-    fn write_current_book_record(&mut self) {
+    fn write_current_book_record(&mut self) -> std::io::Result<()> {
         let Some(source) = self.source.as_ref() else {
-            return;
+            return Ok(());
         };
         let path = self.current_bookmark_path(source.as_ref()).to_path_buf();
         let (last_page, strip_offset_frac) = self.persisted_position(source.as_ref());
-        self.store.upsert_book_record(BookRecordInput {
+        let result = self.store.upsert_book_record(BookRecordInput {
             book_id: source.book_id(),
             title: source.title(),
             last_page,
@@ -599,12 +608,18 @@ impl SuiSuiViewApp {
             strip_offset_frac,
             smart_spread_phase: self.smart_spread_phase,
         });
+        if let Err(error) = result {
+            self.pending_state_save_at = Some(Instant::now() + STATE_SAVE_DEBOUNCE);
+            self.egui_ctx.request_repaint_after(STATE_SAVE_DEBOUNCE);
+            return Err(error);
+        }
         self.bookmark_rows.clear();
         // The debounce timer covers the pending book record *and* a dirty
         // `state.json` (window geometry). Writing the record here settles only the
         // first half, so blanking the timer used to drop a window move/resize made
         // in the same debounce window. Flushing settles both and clears it.
         self.flush_deferred_state_save();
+        Ok(())
     }
 
     fn persist_reading_position_deferred(&mut self) {
@@ -693,8 +708,16 @@ impl SuiSuiViewApp {
     }
 
     fn flush_deferred_state_save(&mut self) {
-        if self.pending_state_save_at.take().is_some() {
-            let _ = self.store.flush();
+        if self.pending_state_save_at.is_none() {
+            return;
+        }
+        match self.store.flush() {
+            Ok(()) => self.pending_state_save_at = None,
+            Err(error) => {
+                self.pending_state_save_at = Some(Instant::now() + STATE_SAVE_DEBOUNCE);
+                self.egui_ctx.request_repaint_after(STATE_SAVE_DEBOUNCE);
+                self.notify_state_save_failed(&error);
+            }
         }
     }
 

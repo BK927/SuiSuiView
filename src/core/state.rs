@@ -11,6 +11,7 @@ mod decoders;
 mod display;
 mod fast_start;
 mod input;
+mod persistence;
 mod rendering;
 #[cfg(test)]
 mod scale_plan_tests;
@@ -21,8 +22,8 @@ mod store;
 pub use crate::core::deband::DebandStrength;
 pub use crate::core::i18n::Language;
 pub use bookmarks::{
-    BookRecord, BookRecordInput, PageBookmark, PageBookmarkEntry, ReadingPosition,
-    UpscaleProbeRecord, UPSCALE_PROBE_VERSION,
+    BookRecord, BookRecordInput, PageBookmark, PageBookmarkChange, PageBookmarkEntry,
+    ReadingPosition, UpscaleProbeRecord, UPSCALE_PROBE_VERSION,
 };
 pub use decoders::{DecodeMode, DecoderPreference, DecoderPreferences};
 pub use display::{GpuEffectMode, WgpuUpscaleMethod};
@@ -610,22 +611,24 @@ pub struct StateStore {
     path: PathBuf,
     books_dir: PathBuf,
     state: PersistedState,
-    pending_book: Option<BookRecord>,
+    pending_books: BTreeMap<String, BookRecord>,
     state_dirty: bool,
     /// Book records this process has already parsed.
     ///
     /// One record is one small JSON file, and the bookmark popover asks about
     /// every book on every frame it is open. That was a `read_dir` plus a read
     /// and parse per book each time — around half a second for a thousand books
-    /// with the OS cache warm, and far worse off a spinning disk. This store is
-    /// the only writer, so it can keep what it has read.
+    /// with the OS cache warm, and far worse off a spinning disk. Writes always
+    /// re-read the affected file under a cross-process lock before updating this
+    /// display cache, so cached data is never used as the write source of truth.
     ///
     /// `RefCell` because the query methods are `&self` and shared widely; the
     /// store is single-threaded (it lives in the app struct, never in an `Arc`).
     ///
-    /// The cache is correct only because this process owns these files. With
-    /// single-instance turned off, a second instance's edit to a book this one
-    /// has already read is not seen until this one writes that record.
+    /// With single-instance turned off, a second instance's edit to a book this
+    /// one has already read becomes visible after the next local mutation or
+    /// reopen; whole-library read-only views can otherwise remain temporarily
+    /// stale for the lifetime of this store.
     books: RefCell<BookRecordCache>,
 }
 
@@ -638,10 +641,10 @@ struct BookRecordCache {
     all_loaded: bool,
 }
 
-fn now_unix_seconds() -> u64 {
+fn now_unix_nanos() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
+        .map(|duration| duration.as_nanos().min(u64::MAX as u128) as u64)
         .unwrap_or_default()
 }
 
