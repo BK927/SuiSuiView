@@ -118,6 +118,54 @@ const STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
 pub(in crate::app) const TEXTURE_PRESENT_REPAINT_DELAY: Duration = Duration::from_millis(16);
 pub(in crate::app) const SIBLING_BOOK_TURN_REPAINT_DELAY: Duration = Duration::from_millis(16);
 const WORKER_EVENT_DRAIN_BUDGET: Duration = Duration::from_millis(4);
+const MAX_WORKER_EVENTS_RECEIVED_PER_FRAME: usize = 128;
+const MAX_DEFERRED_WORKER_EVENTS_PER_FRAME: usize = 128;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkerEventRoute {
+    DropStale,
+    PaintCritical,
+    Background,
+}
+
+fn worker_event_receive_allowed(received: usize, elapsed: Duration) -> bool {
+    received < MAX_WORKER_EVENTS_RECEIVED_PER_FRAME
+        && (received == 0 || elapsed < WORKER_EVENT_DRAIN_BUDGET)
+}
+
+fn deferred_worker_event_allowed(processed: usize, elapsed: Duration) -> bool {
+    processed < MAX_DEFERRED_WORKER_EVENTS_PER_FRAME
+        && (processed == 0 || elapsed < WORKER_EVENT_DRAIN_BUDGET)
+}
+
+fn worker_event_route_for(
+    source_is_current: bool,
+    decode_matches: bool,
+    target_is_relevant: bool,
+    page_index: Option<usize>,
+    paint_critical: bool,
+) -> WorkerEventRoute {
+    if !source_is_current || !decode_matches || !target_is_relevant || page_index.is_none() {
+        WorkerEventRoute::DropStale
+    } else if paint_critical {
+        WorkerEventRoute::PaintCritical
+    } else {
+        WorkerEventRoute::Background
+    }
+}
+
+fn worker_event_page_is_paint_critical_for(
+    index: usize,
+    current_page: usize,
+    visible_indices: &[usize],
+    pending_indices: &[usize],
+    transition_indices: &[usize],
+) -> bool {
+    index == current_page
+        || visible_indices.contains(&index)
+        || pending_indices.contains(&index)
+        || transition_indices.contains(&index)
+}
 
 #[derive(Debug, Clone)]
 struct PendingBookmarkJump {
@@ -736,33 +784,42 @@ impl SuiSuiViewApp {
 
     fn drain_worker_events(&mut self) {
         let started = Instant::now();
-        let mut pending = std::mem::take(&mut self.deferred_worker_events);
-        while let Some(event) = self.worker.try_recv() {
-            pending.push_back(event);
-        }
-        if pending.is_empty() {
-            return;
-        }
-
         let mut decoded_cache_changed = false;
-        let mut remaining = VecDeque::with_capacity(pending.len());
-        while let Some(event) = pending.pop_front() {
-            if self.worker_event_targets_current_spread(&event) {
-                decoded_cache_changed |= self.handle_worker_event(event);
-            } else {
-                remaining.push_back(event);
+        let mut received = 0;
+        let receive_limit_hit = loop {
+            if !worker_event_receive_allowed(received, started.elapsed()) {
+                break true;
+            }
+            let Some(event) = self.worker.try_recv() else {
+                break false;
+            };
+            received += 1;
+            match self.worker_event_route(&event) {
+                WorkerEventRoute::DropStale => {}
+                WorkerEventRoute::PaintCritical => {
+                    decoded_cache_changed |= self.handle_worker_event(event);
+                }
+                WorkerEventRoute::Background => self.deferred_worker_events.push_back(event),
+            }
+        };
+
+        let mut deferred_processed = 0;
+        while deferred_worker_event_allowed(deferred_processed, started.elapsed()) {
+            let Some(event) = self.deferred_worker_events.pop_front() else {
+                break;
+            };
+            deferred_processed += 1;
+            match self.worker_event_route(&event) {
+                WorkerEventRoute::DropStale => {}
+                WorkerEventRoute::PaintCritical | WorkerEventRoute::Background => {
+                    decoded_cache_changed |= self.handle_worker_event(event);
+                }
             }
         }
 
-        while let Some(event) = remaining.pop_front() {
-            if started.elapsed() >= WORKER_EVENT_DRAIN_BUDGET {
-                self.deferred_worker_events.push_back(event);
-                self.deferred_worker_events.extend(remaining);
-                self.egui_ctx
-                    .request_repaint_after(TEXTURE_PRESENT_REPAINT_DELAY);
-                break;
-            }
-            decoded_cache_changed |= self.handle_worker_event(event);
+        if receive_limit_hit || !self.deferred_worker_events.is_empty() {
+            self.egui_ctx
+                .request_repaint_after(TEXTURE_PRESENT_REPAINT_DELAY);
         }
 
         if decoded_cache_changed && !self.original_inspection_cache_cleanup_pending() {
@@ -770,24 +827,21 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn worker_event_targets_current_spread(&self, event: &WorkerEvent) -> bool {
-        match event {
+    fn worker_event_route(&self, event: &WorkerEvent) -> WorkerEventRoute {
+        let (book_id, source_instance_id, page_id, target_long_edge, decode) = match event {
             WorkerEvent::PageReady {
                 book_id,
                 source_instance_id,
                 page_id,
                 decode,
                 page,
-            } => {
-                worker_event_source_is_current(
-                    self.book_id.as_deref(),
-                    self.source.as_deref(),
-                    book_id,
-                    *source_instance_id,
-                ) && *decode == self.decode_options()
-                    && self.target_is_relevant(page.target_long_edge)
-                    && self.event_page_id_in_current_spread(*page_id)
-            }
+            } => (
+                book_id,
+                *source_instance_id,
+                *page_id,
+                page.target_long_edge,
+                *decode,
+            ),
             WorkerEvent::PageFailed {
                 book_id,
                 source_instance_id,
@@ -795,29 +849,62 @@ impl SuiSuiViewApp {
                 target_long_edge,
                 decode,
                 ..
-            } => {
-                worker_event_source_is_current(
-                    self.book_id.as_deref(),
-                    self.source.as_deref(),
-                    book_id,
-                    *source_instance_id,
-                ) && *decode == self.decode_options()
-                    && self.target_is_relevant(*target_long_edge)
-                    && self.event_page_id_in_current_spread(*page_id)
-            }
+            } => (
+                book_id,
+                *source_instance_id,
+                *page_id,
+                *target_long_edge,
+                *decode,
+            ),
+        };
+        let source_is_current = worker_event_source_is_current(
+            self.book_id.as_deref(),
+            self.source.as_deref(),
+            book_id,
+            source_instance_id,
+        );
+        if !source_is_current
+            || decode != self.decode_options()
+            || !self.target_is_relevant(target_long_edge)
+        {
+            return WorkerEventRoute::DropStale;
         }
+        let Some(page_index) = resolve_worker_event_index(self.source.as_deref(), page_id) else {
+            return WorkerEventRoute::DropStale;
+        };
+        worker_event_route_for(
+            true,
+            true,
+            true,
+            Some(page_index),
+            self.worker_event_page_is_paint_critical(page_index),
+        )
     }
 
-    /// True when the page identified by `page_id` still maps to an index in the
-    /// current snapshot and that index is part of the visible spread.
-    fn event_page_id_in_current_spread(&self, page_id: crate::core::source::PageId) -> bool {
-        let Some(source) = self.source.as_ref() else {
-            return false;
+    fn worker_event_page_is_paint_critical(&self, index: usize) -> bool {
+        let paged_visible;
+        let visible_indices = if self.view_mode == ViewMode::VerticalStrip {
+            self.strip_visible_indices.as_slice()
+        } else {
+            paged_visible = self.spread_indices();
+            paged_visible.as_slice()
         };
-        let Some(index) = source.page_index_for_id(page_id) else {
-            return false;
-        };
-        self.spread_indices().contains(&index)
+        let pending_indices = self
+            .pending_page_turn
+            .map(|pending| self.spread_indices_for(pending.target))
+            .unwrap_or_default();
+        let transition_indices = self
+            .transition
+            .as_ref()
+            .map(|transition| transition.from_indices.as_slice())
+            .unwrap_or_default();
+        worker_event_page_is_paint_critical_for(
+            index,
+            self.current_page,
+            visible_indices,
+            &pending_indices,
+            transition_indices,
+        )
     }
 
     fn handle_worker_event(&mut self, event: WorkerEvent) -> bool {
@@ -1201,6 +1288,7 @@ impl SuiSuiViewApp {
         self.current_view_state = None;
         self.edge_prompt = None;
         self.pending_delete_dialog = None;
+        self.deferred_worker_events.clear();
         self.decoded_pages.clear();
         self.decoded_bytes = 0;
         self.page_metrics.clear();
@@ -1593,7 +1681,7 @@ mod tests {
     use std::num::NonZeroUsize;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn strip_persist_target_uses_anchor_page_and_offset_in_strip_mode() {
@@ -2738,6 +2826,78 @@ mod tests {
         );
         assert_eq!(resolve_worker_event_index(Some(&source), PageId(5)), None);
         assert_eq!(resolve_worker_event_index(None, PageId(0)), None);
+    }
+
+    #[test]
+    fn worker_event_drain_limits_allow_one_event_but_bound_later_work() {
+        use super::{deferred_worker_event_allowed, worker_event_receive_allowed};
+
+        assert!(worker_event_receive_allowed(0, Duration::from_secs(1)));
+        assert!(worker_event_receive_allowed(127, Duration::ZERO));
+        assert!(!worker_event_receive_allowed(128, Duration::ZERO));
+        assert!(!worker_event_receive_allowed(1, Duration::from_millis(4)));
+
+        assert!(deferred_worker_event_allowed(0, Duration::from_secs(1)));
+        assert!(deferred_worker_event_allowed(127, Duration::ZERO));
+        assert!(!deferred_worker_event_allowed(128, Duration::ZERO));
+        assert!(!deferred_worker_event_allowed(1, Duration::from_millis(4)));
+    }
+
+    #[test]
+    fn worker_event_routing_drops_stale_and_prioritizes_paint_dependencies() {
+        use super::{
+            worker_event_page_is_paint_critical_for, worker_event_route_for, WorkerEventRoute,
+        };
+
+        for stale in [
+            (false, true, true, Some(0)),
+            (true, false, true, Some(0)),
+            (true, true, false, Some(0)),
+            (true, true, true, None),
+        ] {
+            assert_eq!(
+                worker_event_route_for(stale.0, stale.1, stale.2, stale.3, true),
+                WorkerEventRoute::DropStale
+            );
+        }
+        assert_eq!(
+            worker_event_route_for(true, true, true, Some(0), true),
+            WorkerEventRoute::PaintCritical
+        );
+        assert_eq!(
+            worker_event_route_for(true, true, true, Some(4), false),
+            WorkerEventRoute::Background
+        );
+
+        assert!(worker_event_page_is_paint_critical_for(2, 2, &[], &[], &[]));
+        assert!(worker_event_page_is_paint_critical_for(
+            5,
+            2,
+            &[4, 5, 6],
+            &[],
+            &[]
+        ));
+        assert!(worker_event_page_is_paint_critical_for(
+            8,
+            2,
+            &[2, 3],
+            &[7, 8],
+            &[]
+        ));
+        assert!(worker_event_page_is_paint_critical_for(
+            1,
+            2,
+            &[2, 3],
+            &[],
+            &[0, 1]
+        ));
+        assert!(!worker_event_page_is_paint_critical_for(
+            9,
+            2,
+            &[2, 3],
+            &[7, 8],
+            &[0, 1]
+        ));
     }
 
     #[test]
