@@ -23,7 +23,7 @@ pub use crate::core::deband::DebandStrength;
 pub use crate::core::i18n::Language;
 pub use bookmarks::{
     BookRecord, BookRecordInput, PageBookmark, PageBookmarkChange, PageBookmarkEntry,
-    ReadingPosition, UpscaleProbeRecord, UPSCALE_PROBE_VERSION,
+    PageBookmarkPathRebase, ReadingPosition, UpscaleProbeRecord, UPSCALE_PROBE_VERSION,
 };
 pub use decoders::{DecodeMode, DecoderPreference, DecoderPreferences};
 pub use display::{GpuEffectMode, WgpuUpscaleMethod};

@@ -11,8 +11,8 @@ use crate::core::source::{
     classify_path, open_source_from_path, BookSource, SharedSource, SourceKind,
 };
 use crate::core::state::{
-    AppSettings, DecodeMode, DecoderPreferences, FitMode, ReadingDirection, ReadingPosition,
-    StateStore, WindowPlacement,
+    AppSettings, DecodeMode, DecoderPreferences, FitMode, PageBookmarkPathRebase, ReadingDirection,
+    ReadingPosition, StateStore, WindowPlacement,
 };
 use crate::core::worker::{
     clamp_navigation_target_long_edge, DecodeOptions, DecodeStrategy, NavigationDirection,
@@ -531,6 +531,22 @@ impl SuiSuiViewApp {
             self.notify_state_save_failed(&error);
             return;
         }
+        if rebase_archive_page_bookmarks_on_open(origin) {
+            let bookmark_path =
+                bookmark_path_for_open(origin, &opened_path, source.as_ref()).to_path_buf();
+            match self
+                .store
+                .rebase_moved_archive_page_bookmarks(&book_id, &bookmark_path)
+            {
+                Ok(PageBookmarkPathRebase::Rebased(_)) => self.bookmark_rows.clear(),
+                Ok(
+                    PageBookmarkPathRebase::NotNeeded
+                    | PageBookmarkPathRebase::Ambiguous
+                    | PageBookmarkPathRebase::Conflict,
+                ) => {}
+                Err(error) => self.notify_state_save_failed(&error),
+            }
+        }
         let reading_position = reading_position_for_open(
             &self.store,
             source.as_ref(),
@@ -725,6 +741,10 @@ pub(in crate::app) fn open_origin_for_source_kind(kind: SourceKind) -> Option<Op
         SourceKind::SingleImage => Some(OpenOrigin::SingleImage),
         SourceKind::Unsupported | SourceKind::UnsupportedRar => None,
     }
+}
+
+fn rebase_archive_page_bookmarks_on_open(origin: OpenOrigin) -> bool {
+    origin == OpenOrigin::ZipCbz
 }
 
 fn startup_seed_target_long_edge(placement: &WindowPlacement) -> u32 {

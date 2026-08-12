@@ -1,11 +1,20 @@
 use super::{
-    open_seed_target_long_edge, resolve_open_view, selected_open_page,
-    startup_seed_target_long_edge, OpenViewFallback, ViewMode,
+    open_seed_target_long_edge, rebase_archive_page_bookmarks_on_open, resolve_open_view,
+    selected_open_page, startup_seed_target_long_edge, OpenOrigin, OpenViewFallback, ViewMode,
 };
 use crate::core::source::{BookSource, SourceError};
 use crate::core::state::{FitMode, ReadingDirection, ReadingPosition, WindowPlacement};
 use crate::core::worker::{DEFAULT_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE, MIN_TARGET_LONG_EDGE};
 use std::path::{Path, PathBuf};
+
+#[test]
+fn manual_bookmark_path_rebase_runs_only_for_archives() {
+    assert!(rebase_archive_page_bookmarks_on_open(OpenOrigin::ZipCbz));
+    assert!(!rebase_archive_page_bookmarks_on_open(OpenOrigin::Folder));
+    assert!(!rebase_archive_page_bookmarks_on_open(
+        OpenOrigin::SingleImage
+    ));
+}
 
 #[test]
 fn startup_seed_target_keeps_default_floor_for_normal_windows() {

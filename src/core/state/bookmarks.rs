@@ -1,6 +1,7 @@
 use super::{now_unix_nanos, FitMode, ReadingDirection, StateStore};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +153,14 @@ pub enum PageBookmarkChange {
     Removed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageBookmarkPathRebase {
+    Rebased(usize),
+    NotNeeded,
+    Ambiguous,
+    Conflict,
+}
+
 pub(super) fn path_key(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
@@ -282,6 +291,74 @@ impl StateStore {
                 (PageBookmarkChange::Added, true)
             })?;
         result.ok_or_else(missing_book_record_error)
+    }
+
+    /// Move the manual-bookmark scope from one vanished archive location to the
+    /// newly opened location without touching automatic reading history.
+    ///
+    /// A live, distinct old path means the archive was copied, not moved. More
+    /// than one vanished old path is ambiguous, and an already-bookmarked
+    /// destination is a conflict; all three cases deliberately remain unchanged.
+    /// Candidate discovery and mutation run in `mutate_book_record`, so they see
+    /// the newest cross-process record under the books lock.
+    pub fn rebase_moved_archive_page_bookmarks(
+        &mut self,
+        book_id: &str,
+        new_path: &Path,
+    ) -> std::io::Result<PageBookmarkPathRebase> {
+        let metadata = fs::metadata(new_path)?;
+        if !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "archive bookmark destination is not a file",
+            ));
+        }
+        let new_canonical = fs::canonicalize(new_path)?;
+        let new_path = path_key(new_path);
+        let now = now_unix_nanos();
+        let result = self.mutate_book_record(book_id, move |record| {
+            let source_paths: BTreeSet<String> = record
+                .page_bookmarks
+                .iter()
+                .map(|bookmark| bookmark.source_path.clone())
+                .filter(|path| !path.is_empty() && path != &new_path)
+                .collect();
+            let mut candidates = Vec::new();
+            for path in source_paths {
+                match bookmark_path_rebase_candidate(&path, &new_canonical) {
+                    Some(true) => candidates.push(path),
+                    Some(false) => {}
+                    None => return (PageBookmarkPathRebase::Ambiguous, false),
+                }
+            }
+
+            let old_path = match candidates.as_slice() {
+                [] => return (PageBookmarkPathRebase::NotNeeded, false),
+                [old_path] => old_path,
+                _ => return (PageBookmarkPathRebase::Ambiguous, false),
+            };
+            if record
+                .page_bookmarks
+                .iter()
+                .any(|bookmark| bookmark.source_path == new_path)
+            {
+                return (PageBookmarkPathRebase::Conflict, false);
+            }
+
+            let mut rebased = 0;
+            for bookmark in &mut record.page_bookmarks {
+                if bookmark.source_path == *old_path {
+                    bookmark.source_path.clone_from(&new_path);
+                    bookmark.updated_at = now;
+                    rebased += 1;
+                }
+            }
+            debug_assert!(rebased > 0);
+            record.page_bookmarks.sort_by(page_bookmark_order);
+            record.updated_at = now;
+            (PageBookmarkPathRebase::Rebased(rebased), true)
+        })?;
+        Ok(result.unwrap_or(PageBookmarkPathRebase::NotNeeded))
     }
 
     /// Re-point this book's bookmarks at their pages after the page set changed
@@ -422,6 +499,17 @@ fn missing_book_record_error() -> std::io::Error {
         std::io::ErrorKind::NotFound,
         "book record does not exist yet",
     )
+}
+
+/// `Some(true)` is the same file (for example Windows case aliases) or a
+/// vanished path; `Some(false)` is a live, distinct copy. An uninspectable path
+/// is `None` so callers conservatively leave every bookmark untouched.
+fn bookmark_path_rebase_candidate(old_path: &str, new_canonical: &Path) -> Option<bool> {
+    match fs::canonicalize(old_path) {
+        Ok(old_canonical) => Some(old_canonical == new_canonical),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(true),
+        Err(_) => None,
+    }
 }
 
 fn page_bookmark_entries_for_book(book: &BookRecord) -> Vec<PageBookmarkEntry> {
