@@ -607,7 +607,7 @@ impl SuiSuiViewApp {
             book_id: source.book_id(),
             title: source.title(),
             last_page,
-            last_page_name: self.current_bookmark_page_name(source.as_ref(), last_page),
+            last_page_name: self.current_reading_position_page_name(source.as_ref(), last_page),
             total_pages: source.page_count(),
             path: &path,
             reading_direction: self.reading_direction,
@@ -644,7 +644,7 @@ impl SuiSuiViewApp {
             book_id: source.book_id(),
             title: source.title(),
             last_page,
-            last_page_name: self.current_bookmark_page_name(source.as_ref(), last_page),
+            last_page_name: self.current_reading_position_page_name(source.as_ref(), last_page),
             total_pages: source.page_count(),
             path: &path,
             reading_direction: self.reading_direction,
@@ -671,17 +671,19 @@ impl SuiSuiViewApp {
         source.source_path()
     }
 
-    fn current_bookmark_page_name<'a>(
+    /// Page-name identity for automatic resume. Manual page bookmarks keep
+    /// their own `page_name` and are remapped separately when a source opens.
+    fn current_reading_position_page_name<'a>(
         &self,
         source: &'a dyn BookSource,
         page: usize,
     ) -> Option<&'a str> {
-        if self.open_origin == Some(OpenOrigin::ZipCbz) && self.settings.remember_archive_page_name
-        {
-            source.page_name(page)
-        } else {
-            None
-        }
+        reading_position_page_name_for_open(
+            self.open_origin,
+            self.settings.remember_archive_page_name,
+            source,
+            page,
+        )
     }
 
     /// Page index and strip-anchor offset to persist for the current view. In
@@ -1433,6 +1435,22 @@ fn strip_persist_target(
     }
 }
 
+fn reading_position_page_name_for_open<'a>(
+    origin: Option<OpenOrigin>,
+    remember_archive_page_name: bool,
+    source: &'a dyn BookSource,
+    page: usize,
+) -> Option<&'a str> {
+    match origin {
+        // A folder's content fingerprint changes whenever its page set changes.
+        // Saving the name unconditionally lets automatic resume follow the same
+        // file after adoption re-keys the record onto the new fingerprint.
+        Some(OpenOrigin::Folder) => source.page_name(page),
+        Some(OpenOrigin::ZipCbz) if remember_archive_page_name => source.page_name(page),
+        Some(OpenOrigin::ZipCbz | OpenOrigin::SingleImage) | None => None,
+    }
+}
+
 /// Current index of a worker event's page in `source`, or None when the page
 /// vanished from the snapshot mid-flight (the event must then be dropped so an
 /// orphaned id never enters the cache).
@@ -1572,6 +1590,61 @@ mod tests {
             (8, None)
         );
         assert_eq!(strip_persist_target(false, None, None, 8), (8, None));
+    }
+
+    #[test]
+    fn automatic_resume_page_name_is_always_saved_for_folders_and_setting_gated_for_archives() {
+        use super::{reading_position_page_name_for_open, OpenOrigin};
+        use crate::core::source::{BookSource, SourceError};
+
+        struct NamedSource;
+        impl BookSource for NamedSource {
+            fn title(&self) -> &str {
+                "named"
+            }
+
+            fn source_path(&self) -> &Path {
+                Path::new("named")
+            }
+
+            fn book_id(&self) -> &str {
+                "named"
+            }
+
+            fn page_count(&self) -> usize {
+                1
+            }
+
+            fn page_name(&self, index: usize) -> Option<&str> {
+                (index == 0).then_some("001.jpg")
+            }
+
+            fn read_page(&self, _index: usize) -> Result<Vec<u8>, SourceError> {
+                Ok(Vec::new())
+            }
+        }
+
+        let source = NamedSource;
+        assert_eq!(
+            reading_position_page_name_for_open(Some(OpenOrigin::Folder), false, &source, 0),
+            Some("001.jpg")
+        );
+        assert_eq!(
+            reading_position_page_name_for_open(Some(OpenOrigin::Folder), true, &source, 0),
+            Some("001.jpg")
+        );
+        assert_eq!(
+            reading_position_page_name_for_open(Some(OpenOrigin::ZipCbz), false, &source, 0),
+            None
+        );
+        assert_eq!(
+            reading_position_page_name_for_open(Some(OpenOrigin::ZipCbz), true, &source, 0),
+            Some("001.jpg")
+        );
+        assert_eq!(
+            reading_position_page_name_for_open(Some(OpenOrigin::SingleImage), true, &source, 0),
+            None
+        );
     }
 
     #[test]

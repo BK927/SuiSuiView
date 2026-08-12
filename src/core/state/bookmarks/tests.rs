@@ -1029,8 +1029,8 @@ fn remap_page_bookmarks_follows_names_and_drops_vanished_pages() {
         .upsert_book_record(BookRecordInput {
             book_id: "book-1",
             title: "Book One",
-            last_page: 0,
-            last_page_name: None,
+            last_page: 3,
+            last_page_name: Some("004.jpg"),
             total_pages: 4,
             path: Path::new("C:/books/book-1"),
             reading_direction: ReadingDirection::LeftToRight,
@@ -1058,13 +1058,32 @@ fn remap_page_bookmarks_follows_names_and_drops_vanished_pages() {
         .unwrap();
 
     // "002.jpg" was deleted from the folder, so everything after it shifts down.
-    store
+    let automatic_before = store.book_record("book-1").unwrap();
+    assert!(store
         .remap_page_bookmarks("book-1", source_path, |page_name| match page_name {
             "003.jpg" => Some(1),
             "004.jpg" => Some(2),
             _ => None,
         })
-        .unwrap();
+        .unwrap());
+
+    let automatic_after = store.book_record("book-1").unwrap();
+    assert_eq!(automatic_after.last_page, automatic_before.last_page);
+    assert_eq!(
+        automatic_after.last_page_name,
+        automatic_before.last_page_name
+    );
+    assert_eq!(
+        automatic_after.path_positions,
+        automatic_before.path_positions
+    );
+    assert!(!store
+        .remap_page_bookmarks("book-1", source_path, |page_name| match page_name {
+            "003.jpg" => Some(1),
+            "004.jpg" => Some(2),
+            _ => None,
+        })
+        .unwrap());
 
     let bookmarks = store.page_bookmarks("book-1");
     let by_title: Vec<_> = bookmarks

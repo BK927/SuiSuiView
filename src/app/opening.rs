@@ -519,21 +519,18 @@ impl SuiSuiViewApp {
         self.pending_delete_dialog = None;
         let book_id = source.book_id().to_owned();
         let page_count = source.page_count();
+        let bookmark_path =
+            bookmark_path_for_open(origin, &opened_path, source.as_ref()).to_path_buf();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf::arm_open_to_first_visible(&mut self.open_to_first_visible_trace, &book_id);
         // Editing a folder's images (including this app deleting a page) changes
         // its content fingerprint, so the record saved under the old id would go
         // unreachable. Re-key it onto the new id first, then read as usual.
-        if let Err(error) = self.store.adopt_record_for_path(
-            &book_id,
-            bookmark_path_for_open(origin, &opened_path, source.as_ref()),
-        ) {
+        if let Err(error) = self.store.adopt_record_for_path(&book_id, &bookmark_path) {
             self.notify_state_save_failed(&error);
             return;
         }
         if rebase_archive_page_bookmarks_on_open(origin) {
-            let bookmark_path =
-                bookmark_path_for_open(origin, &opened_path, source.as_ref()).to_path_buf();
             match self
                 .store
                 .rebase_moved_archive_page_bookmarks(&book_id, &bookmark_path)
@@ -547,11 +544,25 @@ impl SuiSuiViewApp {
                 Err(error) => self.notify_state_save_failed(&error),
             }
         }
-        let reading_position = reading_position_for_open(
-            &self.store,
-            source.as_ref(),
-            origin,
-            &opened_path,
+        // Manual page bookmarks are independent of automatic resume. Re-resolve
+        // only their page indices from their remembered names after adoption
+        // (and, for an archive, after a moved-path rebase). This is intentionally
+        // run on every folder/archive open; the store mutation is a no-op when
+        // the saved mapping already matches the source.
+        if remap_page_bookmarks_on_open(origin) {
+            match self
+                .store
+                .remap_page_bookmarks(&book_id, &bookmark_path, |page_name| {
+                    page_index_for_name(source.as_ref(), page_name)
+                }) {
+                Ok(true) => self.bookmark_rows.clear(),
+                Ok(false) => {}
+                Err(error) => self.notify_state_save_failed(&error),
+            }
+        }
+        let reading_position = self.store.reading_position(
+            &book_id,
+            &bookmark_path,
             self.settings.resume_by_file_identity,
         );
         let resolved_view = resolve_open_view(
@@ -745,6 +756,10 @@ pub(in crate::app) fn open_origin_for_source_kind(kind: SourceKind) -> Option<Op
 
 fn rebase_archive_page_bookmarks_on_open(origin: OpenOrigin) -> bool {
     origin == OpenOrigin::ZipCbz
+}
+
+fn remap_page_bookmarks_on_open(origin: OpenOrigin) -> bool {
+    matches!(origin, OpenOrigin::Folder | OpenOrigin::ZipCbz)
 }
 
 fn startup_seed_target_long_edge(placement: &WindowPlacement) -> u32 {

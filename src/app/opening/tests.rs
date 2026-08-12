@@ -1,6 +1,7 @@
 use super::{
-    open_seed_target_long_edge, rebase_archive_page_bookmarks_on_open, resolve_open_view,
-    selected_open_page, startup_seed_target_long_edge, OpenOrigin, OpenViewFallback, ViewMode,
+    open_seed_target_long_edge, page_index_for_name, rebase_archive_page_bookmarks_on_open,
+    remap_page_bookmarks_on_open, resolve_open_view, selected_open_page,
+    startup_seed_target_long_edge, OpenOrigin, OpenViewFallback, ViewMode,
 };
 use crate::core::source::{BookSource, SourceError};
 use crate::core::state::{FitMode, ReadingDirection, ReadingPosition, WindowPlacement};
@@ -14,6 +15,22 @@ fn manual_bookmark_path_rebase_runs_only_for_archives() {
     assert!(!rebase_archive_page_bookmarks_on_open(
         OpenOrigin::SingleImage
     ));
+}
+
+#[test]
+fn manual_bookmark_name_remap_runs_for_folder_and_archive_sources() {
+    assert!(remap_page_bookmarks_on_open(OpenOrigin::Folder));
+    assert!(remap_page_bookmarks_on_open(OpenOrigin::ZipCbz));
+    assert!(!remap_page_bookmarks_on_open(OpenOrigin::SingleImage));
+}
+
+#[test]
+fn manual_bookmark_name_remap_resolves_reordered_pages_and_rejects_vanished_names() {
+    let edited = TestSource::with_names(vec!["003.jpg", "001.jpg", "004.jpg"]);
+
+    assert_eq!(page_index_for_name(&edited, "003.jpg"), Some(0));
+    assert_eq!(page_index_for_name(&edited, "004.jpg"), Some(2));
+    assert_eq!(page_index_for_name(&edited, "002.jpg"), None);
 }
 
 #[test]
@@ -188,6 +205,17 @@ fn selected_open_page_clamps_explicit_page_to_page_count() {
     assert_eq!(
         selected_open_page(&source, Some(9), None, Some(&saved), None),
         1
+    );
+}
+
+#[test]
+fn automatic_resume_follows_its_saved_page_name_after_reordering() {
+    let edited = TestSource::with_names(vec!["003.jpg", "001.jpg", "002.jpg"]);
+    let saved = reading_position(1, Some("002.jpg"));
+
+    assert_eq!(
+        selected_open_page(&edited, None, None, Some(&saved), None),
+        2
     );
 }
 
