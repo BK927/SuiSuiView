@@ -182,6 +182,17 @@ fn normalized_canonical_path(path: &Path) -> String {
 }
 
 impl StateStore {
+    /// Ensure non-reading metadata (manual bookmarks or an upscaler probe) has
+    /// a record to attach to without inventing an automatic resume position.
+    pub fn ensure_book_record_shell(
+        &mut self,
+        book_id: &str,
+        title: &str,
+        total_pages: usize,
+    ) -> std::io::Result<()> {
+        self.ensure_book_record_shell_transaction(book_id, title, total_pages)
+    }
+
     pub fn recent_books(&self, limit: usize) -> Vec<BookRecord> {
         let mut records = self.load_all_book_records();
         // Automatic resume records continue to exist while recent locations

@@ -1943,6 +1943,68 @@ fn manual_only_adoption_does_not_invent_an_automatic_resume_position() {
 }
 
 #[test]
+fn manual_bookmark_shell_does_not_create_an_automatic_resume_position() {
+    let mut store = test_store("manual-bookmark-shell");
+    let folder = Path::new("C:/books/folder");
+
+    store
+        .ensure_book_record_shell("folder-v2:manual", "Folder", 10)
+        .unwrap();
+    store
+        .upsert_page_bookmark(
+            "folder-v2:manual",
+            folder,
+            7,
+            "Manual mark",
+            Some("008.jpg".into()),
+        )
+        .unwrap();
+
+    let record = store.book_record("folder-v2:manual").unwrap();
+    assert!(record.known_paths.is_empty());
+    assert!(record.path_positions.is_empty());
+    assert_eq!(record.page_bookmarks.len(), 1);
+    assert!(store
+        .reading_position("folder-v2:manual", folder, true)
+        .is_none());
+    assert!(store
+        .reading_position("folder-v2:manual", folder, false)
+        .is_none());
+}
+
+#[test]
+fn metadata_shell_flushes_an_existing_deferred_automatic_position() {
+    let base = unique_base("metadata-shell-pending-resume");
+    let mut store = store_at(&base);
+    let folder = Path::new("C:/books/folder");
+    assert!(store.upsert_book_record_deferred(BookRecordInput {
+        book_id: "folder-v2:pending",
+        title: "Folder",
+        last_page: 5,
+        last_page_name: Some("006.jpg"),
+        total_pages: 10,
+        path: folder,
+        reading_direction: ReadingDirection::LeftToRight,
+        fit_mode: FitMode::FitWidth,
+        manual_zoom: None,
+        view_mode: None,
+        strip_offset_frac: None,
+        smart_spread_phase: 0,
+    }));
+
+    store
+        .ensure_book_record_shell("folder-v2:pending", "Folder", 10)
+        .unwrap();
+
+    let reopened = store_at(&base);
+    let position = reopened
+        .reading_position("folder-v2:pending", folder, false)
+        .unwrap();
+    assert_eq!(position.last_page, 5);
+    assert_eq!(position.last_page_name.as_deref(), Some("006.jpg"));
+}
+
+#[test]
 fn moved_archive_rebases_only_manual_bookmark_paths() {
     let base = unique_base("archive-bookmark-rebase");
     fs::create_dir_all(&base).unwrap();

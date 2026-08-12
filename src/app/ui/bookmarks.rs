@@ -171,10 +171,19 @@ impl SuiSuiViewApp {
             .as_ref()
             .and_then(|source| source.page_name(page))
             .map(str::to_owned);
+        let source_title = self
+            .source
+            .as_ref()
+            .map(|source| source.title().to_owned())
+            .unwrap_or_default();
+        let total_pages = self.source.as_ref().map_or(0, |source| source.page_count());
         let prewarm_source = self.source.clone();
         let prewarm_path = source_path.to_string_lossy().to_string();
         let decode = self.decode_options();
-        if let Err(error) = self.write_current_book_record() {
+        if let Err(error) =
+            self.store
+                .ensure_book_record_shell(&book_id, &source_title, total_pages)
+        {
             self.notify_state_save_failed(&error);
             return;
         }

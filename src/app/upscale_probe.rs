@@ -462,8 +462,19 @@ impl SuiSuiViewApp {
             pages: self.probe_page_results.len().min(u8::MAX as usize) as u8,
             version: UPSCALE_PROBE_VERSION,
         };
-        // Ensure the record exists (mirrors the bookmark write path), then attach the probe.
-        if let Err(error) = self.write_current_book_record() {
+        let Some((title, total_pages)) = self
+            .source
+            .as_ref()
+            .map(|source| (source.title().to_owned(), source.page_count()))
+        else {
+            return;
+        };
+        // Probe metadata is independent from automatic resume. Ensure only a
+        // non-reading shell when auto-save is disabled or has not run yet.
+        if let Err(error) = self
+            .store
+            .ensure_book_record_shell(&book_id, &title, total_pages)
+        {
             self.notify_state_save_failed(&error);
             return;
         }

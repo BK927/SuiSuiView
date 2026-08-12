@@ -202,6 +202,42 @@ impl StateStore {
         Ok(())
     }
 
+    pub(super) fn ensure_book_record_shell_transaction(
+        &mut self,
+        book_id: &str,
+        title: &str,
+        total_pages: usize,
+    ) -> io::Result<()> {
+        let _lock = ExclusiveFileLock::acquire(&books_lock_path(&self.books_dir))?;
+        recover_book_record_migration(&self.books_dir)?;
+        if read_book_redirect(&self.books_dir, book_id)?.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "book record identity was retired",
+            ));
+        }
+        let path = book_record_path(&self.books_dir, book_id);
+        let latest = read_book_record_fresh(&path, book_id)?;
+        let pending = self.pending_books.get(book_id);
+        let should_write = pending.is_some() || latest.is_none();
+        let record = match pending {
+            Some(pending) => merge_reading_record(latest, pending),
+            None => match latest {
+                Some(record) => record,
+                None => manual_record_shell(book_id, title, total_pages),
+            },
+        };
+        if should_write {
+            write_book_record_atomic(&path, &record)?;
+        }
+        self.books
+            .borrow_mut()
+            .records
+            .insert(book_id.to_owned(), record);
+        self.pending_books.remove(book_id);
+        Ok(())
+    }
+
     /// Re-key a path-proven, single-scope record without opening a gap between
     /// reading the source and committing the destination. Automatic resume and
     /// manual bookmarks are copied through separate helpers so neither domain
@@ -433,6 +469,27 @@ fn reset_global_reading_position(record: &mut BookRecord) {
     record.view_mode = None;
     record.strip_offset_frac = None;
     record.smart_spread_phase = 0;
+}
+
+fn manual_record_shell(book_id: &str, title: &str, total_pages: usize) -> BookRecord {
+    BookRecord {
+        book_id: book_id.to_owned(),
+        title: title.to_owned(),
+        last_page: 0,
+        last_page_name: None,
+        total_pages,
+        known_paths: Vec::new(),
+        reading_direction: ReadingDirection::default(),
+        fit_mode: FitMode::default(),
+        manual_zoom: None,
+        view_mode: None,
+        strip_offset_frac: None,
+        smart_spread_phase: 0,
+        path_positions: Default::default(),
+        page_bookmarks: Vec::new(),
+        upscale_probe: None,
+        updated_at: 0,
+    }
 }
 
 fn migrate_manual_scope(source: &BookRecord, destination: &mut BookRecord, expected_path: &str) {
