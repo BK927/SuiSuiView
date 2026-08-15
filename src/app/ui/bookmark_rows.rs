@@ -35,16 +35,54 @@ struct BookmarkRowsKey {
     query: String,
 }
 
+/// Identity of a delete scope. Unlike [`BookmarkRowsKey`] this carries no
+/// query: the scope count answers "how many bookmarks would `Delete all`
+/// remove", which the search box narrows the visible rows but not the scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BookmarkScopeKey {
+    filter: BookmarkFilter,
+    book_id: Option<String>,
+    source_path: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub(in crate::app) struct BookmarkRowsCache {
     key: Option<BookmarkRowsKey>,
     rows: Vec<BookmarkRow>,
+    scope_count: Option<(BookmarkScopeKey, usize)>,
 }
 
 impl BookmarkRowsCache {
     pub(in crate::app) fn clear(&mut self) {
         self.key = None;
         self.rows.clear();
+        self.scope_count = None;
+    }
+
+    /// Cached count for this scope, if it was measured since the last mutation.
+    ///
+    /// The popover header and the delete dialog both want this number every
+    /// frame, and measuring it walks every book record. Caching it here reuses
+    /// the row cache's invalidation: every site that changes bookmarks already
+    /// calls [`Self::clear`].
+    pub(in crate::app) fn scope_count(
+        &self,
+        filter: BookmarkFilter,
+        book_id: Option<&str>,
+        source_path: Option<&str>,
+    ) -> Option<usize> {
+        let (key, count) = self.scope_count.as_ref()?;
+        (key == &scope_key(filter, book_id, source_path)).then_some(*count)
+    }
+
+    pub(in crate::app) fn set_scope_count(
+        &mut self,
+        filter: BookmarkFilter,
+        book_id: Option<&str>,
+        source_path: Option<&str>,
+        count: usize,
+    ) {
+        self.scope_count = Some((scope_key(filter, book_id, source_path), count));
     }
 
     pub(in crate::app) fn needs_refresh(
@@ -86,6 +124,18 @@ impl BookmarkRowsCache {
 
     pub(in crate::app) fn row(&self, index: usize) -> Option<BookmarkRow> {
         self.rows.get(index).cloned()
+    }
+}
+
+fn scope_key(
+    filter: BookmarkFilter,
+    book_id: Option<&str>,
+    source_path: Option<&str>,
+) -> BookmarkScopeKey {
+    BookmarkScopeKey {
+        filter,
+        book_id: book_id.map(str::to_owned),
+        source_path: source_path.map(str::to_owned),
     }
 }
 
@@ -148,8 +198,54 @@ fn bookmark_row(entry: PageBookmarkEntry) -> BookmarkRow {
 
 #[cfg(test)]
 mod tests {
-    use super::{filtered_bookmark_rows, BookmarkFilter, BookmarkRow};
+    use super::{filtered_bookmark_rows, BookmarkFilter, BookmarkRow, BookmarkRowsCache};
     use crate::core::state::{PageBookmark, PageBookmarkEntry};
+
+    #[test]
+    fn scope_count_is_kept_per_scope_and_dropped_on_clear() {
+        let mut cache = BookmarkRowsCache::default();
+        assert_eq!(
+            cache.scope_count(BookmarkFilter::All, Some("book-1"), Some("C:/books/book-1")),
+            None
+        );
+
+        cache.set_scope_count(
+            BookmarkFilter::All,
+            Some("book-1"),
+            Some("C:/books/book-1"),
+            7,
+        );
+        assert_eq!(
+            cache.scope_count(BookmarkFilter::All, Some("book-1"), Some("C:/books/book-1")),
+            Some(7)
+        );
+
+        // A different scope, book, or path is a different question.
+        assert_eq!(
+            cache.scope_count(
+                BookmarkFilter::ThisBook,
+                Some("book-1"),
+                Some("C:/books/book-1")
+            ),
+            None
+        );
+        assert_eq!(
+            cache.scope_count(BookmarkFilter::All, Some("book-2"), Some("C:/books/book-1")),
+            None
+        );
+        assert_eq!(
+            cache.scope_count(BookmarkFilter::All, Some("book-1"), Some("C:/books/other")),
+            None
+        );
+
+        // Every bookmark mutation clears the row cache; the count must go too,
+        // or the popover header and delete dialog keep quoting a stale total.
+        cache.clear();
+        assert_eq!(
+            cache.scope_count(BookmarkFilter::All, Some("book-1"), Some("C:/books/book-1")),
+            None
+        );
+    }
 
     #[test]
     fn filtered_bookmark_rows_searches_display_path_and_title() {

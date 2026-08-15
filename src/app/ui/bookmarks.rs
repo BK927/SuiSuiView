@@ -631,19 +631,48 @@ impl SuiSuiViewApp {
         }
     }
 
-    fn bookmark_delete_scope_count(&self) -> usize {
+    fn bookmark_delete_scope_count(&mut self) -> usize {
         self.bookmark_delete_scope_count_for(self.bookmark_filter)
     }
 
-    fn bookmark_delete_scope_count_for(&self, scope: BookmarkFilter) -> usize {
+    /// Both the popover header and the delete dialog ask for this every frame,
+    /// and answering it walks every book record. Serve it from the row cache,
+    /// which every bookmark mutation already clears.
+    fn bookmark_delete_scope_count_for(&mut self, scope: BookmarkFilter) -> usize {
+        let source_path = self
+            .current_bookmark_source_path()
+            .map(|path| path.to_string_lossy().to_string());
+        let book_id = self.book_id.clone();
+        if let Some(count) =
+            self.bookmark_rows
+                .scope_count(scope, book_id.as_deref(), source_path.as_deref())
+        {
+            return count;
+        }
+        let count = self.measure_bookmark_delete_scope(scope, book_id.as_deref(), &source_path);
+        self.bookmark_rows.set_scope_count(
+            scope,
+            book_id.as_deref(),
+            source_path.as_deref(),
+            count,
+        );
+        count
+    }
+
+    fn measure_bookmark_delete_scope(
+        &self,
+        scope: BookmarkFilter,
+        book_id: Option<&str>,
+        source_path: &Option<String>,
+    ) -> usize {
         match scope {
             BookmarkFilter::All => self.store.all_page_bookmark_count(),
-            BookmarkFilter::ThisBook => self
-                .book_id
-                .as_deref()
-                .and_then(|book_id| {
-                    self.current_bookmark_source_path()
-                        .map(|path| self.store.page_bookmark_entries(book_id, &path).len())
+            BookmarkFilter::ThisBook => book_id
+                .zip(source_path.as_deref())
+                .map(|(book_id, path)| {
+                    self.store
+                        .page_bookmark_entries(book_id, std::path::Path::new(path))
+                        .len()
                 })
                 .unwrap_or_default(),
         }
