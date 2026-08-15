@@ -259,13 +259,27 @@ pub(super) fn keyboard_route_for(
         // The file-delete dialog reads the same egui frame later and owns its
         // Escape, arrows, Tab, and Enter handling. Global shortcuts stop here.
         KeyboardLayer::FileDeleteConfirmation => KeyboardRoute::DelegateToOverlay,
-        KeyboardLayer::GpuConfirmation
-        | KeyboardLayer::BookmarkDeleteConfirmation
-        | KeyboardLayer::EdgePrompt => {
+        // Both dim the screen behind a full-area click blocker, so they own the
+        // keyboard for as long as they are up.
+        KeyboardLayer::GpuConfirmation | KeyboardLayer::BookmarkDeleteConfirmation => {
             if escape_pressed {
                 KeyboardRoute::DismissOverlay
             } else {
                 KeyboardRoute::Block
+            }
+        }
+        // The edge prompt is a toast, not a dialog: it paints no scrim, blocks
+        // no clicks, and dismisses itself after a timeout. Blocking the keyboard
+        // for it stalled every page-turn and next-book key at the first and last
+        // page -- and the prompt labels its own buttons with those very
+        // shortcuts. Keyboard ownership follows pointer ownership, so only
+        // Escape is consumed and the rest reaches the viewer, which clears the
+        // prompt as it acts.
+        KeyboardLayer::EdgePrompt => {
+            if escape_pressed {
+                KeyboardRoute::DismissOverlay
+            } else {
+                KeyboardRoute::PassToViewer
             }
         }
         KeyboardLayer::BookmarkPopover => {
@@ -367,7 +381,57 @@ mod tests {
             keyboard_route_for(KeyboardLayer::Viewer, true, false, false),
             KeyboardRoute::PassToViewer
         );
+    }
 
+    /// The edge prompt paints no scrim and blocks no clicks, so it must not
+    /// block keys either. It once routed every non-Escape key to `Block`, which
+    /// froze page turns and next-book shortcuts for as long as the prompt was
+    /// up -- and hovering it suspends the auto-dismiss, so that was unbounded.
+    #[test]
+    fn edge_prompt_consumes_escape_but_never_blocks_the_viewer() {
+        assert_eq!(
+            keyboard_route_for(KeyboardLayer::EdgePrompt, true, false, false),
+            KeyboardRoute::DismissOverlay
+        );
+        for wants_keyboard_input in [false, true] {
+            for enter_pressed in [false, true] {
+                assert_eq!(
+                    keyboard_route_for(
+                        KeyboardLayer::EdgePrompt,
+                        false,
+                        enter_pressed,
+                        wants_keyboard_input,
+                    ),
+                    KeyboardRoute::PassToViewer,
+                    "the edge prompt must not swallow viewer keys",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scrimmed_dialogs_still_own_the_keyboard() {
+        for layer in [
+            KeyboardLayer::GpuConfirmation,
+            KeyboardLayer::BookmarkDeleteConfirmation,
+        ] {
+            assert_eq!(
+                keyboard_route_for(layer, false, false, false),
+                KeyboardRoute::Block
+            );
+            assert_eq!(
+                keyboard_route_for(layer, true, false, false),
+                KeyboardRoute::DismissOverlay
+            );
+        }
+        assert_eq!(
+            keyboard_route_for(KeyboardLayer::FastStartFailure, false, false, false),
+            KeyboardRoute::Block
+        );
+    }
+
+    #[test]
+    fn focused_bookmark_popover_allows_only_navigation_and_its_own_toggle() {
         assert!(focused_bookmark_popover_allows_action(
             KeyboardAction::Command(AppCommand::ToggleBookmarkPopover)
         ));
