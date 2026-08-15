@@ -211,17 +211,19 @@ impl StateStore {
             .unwrap_or_default()
     }
 
+    /// Counts without materializing the library: this runs while the bookmark
+    /// popover is open, and cloning every record (and every string inside it)
+    /// to reach a single number showed up as popover-wide lag.
     pub fn all_page_bookmark_count(&self) -> usize {
-        self.load_all_book_records()
-            .iter()
-            .map(|record| {
-                record
-                    .page_bookmarks
-                    .iter()
-                    .filter(|bookmark| !bookmark.source_path.is_empty())
-                    .count()
-            })
-            .sum()
+        let mut count = 0;
+        self.for_each_book_record(|record| {
+            count += record
+                .page_bookmarks
+                .iter()
+                .filter(|bookmark| !bookmark.source_path.is_empty())
+                .count();
+        });
+        count
     }
 
     pub fn has_page_bookmark(&self, book_id: &str, source_path: &Path, page: usize) -> bool {

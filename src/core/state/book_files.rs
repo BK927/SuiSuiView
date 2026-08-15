@@ -34,7 +34,9 @@ impl StateStore {
         Some(record)
     }
 
-    pub(super) fn load_all_book_records(&self) -> Vec<BookRecord> {
+    /// Parse every book record on disk once, then leave `records` complete so
+    /// later whole-library questions stay in memory.
+    fn ensure_all_book_records_loaded(&self) {
         if !self.books.borrow().all_loaded {
             #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
             let started = Instant::now();
@@ -72,6 +74,36 @@ impl StateStore {
                 &[PerfField::Usize("records", scanned)],
             );
         }
+    }
+
+    /// Visit every current book record in place, in unspecified order.
+    ///
+    /// [`Self::load_all_book_records`] deep-copies the whole library, which is
+    /// the wrong primitive for a question that only needs to look at it. Use
+    /// this for aggregates.
+    pub(super) fn for_each_book_record(&self, mut visit: impl FnMut(&BookRecord)) {
+        self.ensure_all_book_records_loaded();
+        let books = self.books.borrow();
+        for record in books.records.values() {
+            // A pending edit supersedes the parsed copy; it is visited below.
+            if self.pending_books.contains_key(&record.book_id) {
+                continue;
+            }
+            if book_redirect_exists(&self.books_dir, &record.book_id) {
+                continue;
+            }
+            visit(record);
+        }
+        for pending in self.pending_books.values() {
+            if book_redirect_exists(&self.books_dir, &pending.book_id) {
+                continue;
+            }
+            visit(pending);
+        }
+    }
+
+    pub(super) fn load_all_book_records(&self) -> Vec<BookRecord> {
+        self.ensure_all_book_records_loaded();
         let mut records: Vec<BookRecord> = self
             .books
             .borrow()
@@ -217,7 +249,7 @@ pub(super) fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::state::{FitMode, PersistedState, ReadingDirection};
+    use crate::core::state::{FitMode, PageBookmark, PersistedState, ReadingDirection};
     use std::hint::black_box;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -264,6 +296,66 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(base);
+    }
+
+    /// The catalog benchmark above measures the one-time scan. This measures the
+    /// shape the bookmark popover actually produces: the same whole-library
+    /// question asked again on an already-warm store, once per frame for as long
+    /// as the popover is open.
+    #[test]
+    #[ignore = "release-only synthetic performance probe; run explicitly with --ignored"]
+    fn synthetic_warm_bookmark_count_benchmark() {
+        let base = unique_benchmark_base();
+        let books_dir = base.join("books");
+        fs::create_dir_all(&books_dir).expect("create synthetic books directory");
+
+        for index in 0..SYNTHETIC_RECORDS {
+            let mut record = synthetic_record(index);
+            record.page_bookmarks = vec![synthetic_bookmark(index)];
+            let text = serde_json::to_string(&record).expect("serialize synthetic book record");
+            fs::write(book_file_path(&books_dir, &record.book_id), text)
+                .expect("write synthetic book record");
+        }
+
+        let store = benchmark_store(&base);
+        // The first frame pays the scan; every later frame is what we measure.
+        assert_eq!(store.all_page_bookmark_count(), SYNTHETIC_RECORDS);
+
+        let mut samples_us = Vec::with_capacity(BENCHMARK_SAMPLES);
+        for _ in 0..BENCHMARK_SAMPLES {
+            let started = Instant::now();
+            let count = black_box(store.all_page_bookmark_count());
+            samples_us.push(started.elapsed().as_micros());
+            assert_eq!(count, SYNTHETIC_RECORDS);
+        }
+        samples_us.sort_unstable();
+
+        let p95_index = (samples_us.len() * 95 / 100).min(samples_us.len() - 1);
+        println!(
+            "{}",
+            serde_json::json!({
+                "benchmark": "synthetic_warm_bookmark_count",
+                "records": SYNTHETIC_RECORDS,
+                "samples": BENCHMARK_SAMPLES,
+                "median_us": samples_us[samples_us.len() / 2],
+                "p95_us": samples_us[p95_index],
+                "max_us": samples_us[samples_us.len() - 1],
+            })
+        );
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    fn synthetic_bookmark(index: usize) -> PageBookmark {
+        PageBookmark {
+            page: index % 200,
+            source_path: format!("C:/synthetic/books/{index:08x}.cbz"),
+            title: format!("Synthetic bookmark {index}"),
+            page_name: Some(format!("chapter/page-{index:04}.jpg")),
+            pinned: false,
+            created_at: index as u64,
+            updated_at: index as u64,
+        }
     }
 
     fn benchmark_store(base: &Path) -> StateStore {
