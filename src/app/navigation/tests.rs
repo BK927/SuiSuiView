@@ -1,9 +1,9 @@
 use super::super::QueuedPageTurns;
 use super::{
     normalize_sibling_book_direction, plain_forward_step, push_queued_page_turn,
-    push_queued_sibling_book_turn, should_open_edge_prompt, skip_missing_target,
-    toggled_double_mode, zoom_motion_active, EdgePrompt, MAX_QUEUED_PAGE_TURNS,
-    MAX_QUEUED_SIBLING_BOOK_TURNS, ZOOM_SETTLE_MS,
+    push_queued_sibling_book_turn, reserve_sibling_book_turn, should_open_edge_prompt,
+    skip_missing_target, take_sibling_book_turn, toggled_double_mode, zoom_motion_active,
+    EdgePrompt, MAX_QUEUED_PAGE_TURNS, MAX_QUEUED_SIBLING_BOOK_TURNS, ZOOM_SETTLE_MS,
 };
 use crate::app::ViewMode;
 use crate::core::state::ReadingDirection;
@@ -107,6 +107,54 @@ fn queued_sibling_book_turns_are_capped() {
     }
 
     assert_eq!(queue.len(), MAX_QUEUED_SIBLING_BOOK_TURNS);
+}
+
+/// A single press during a book transition must survive its own key release.
+/// The open outlasts the ~100ms the key is down, so the release always arrives
+/// while the turn is still reserved; clearing the reservation there dropped the
+/// press with no status and left the reader on the old book.
+#[test]
+fn a_committed_sibling_book_turn_outlives_the_key_release() {
+    let mut pending = None;
+    let mut queue = VecDeque::new();
+
+    reserve_sibling_book_turn(&mut pending, &mut queue, 1);
+    // The key release clears only the auto-repeat queue.
+    queue.clear();
+
+    assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), Some(1));
+}
+
+/// Everything past the committed turn is auto-repeat under a held key, so the
+/// release still ends the run instead of coasting on through unseen books.
+#[test]
+fn releasing_a_held_key_drops_only_the_repeat_reservations() {
+    let mut pending = None;
+    let mut queue = VecDeque::new();
+
+    reserve_sibling_book_turn(&mut pending, &mut queue, 1);
+    reserve_sibling_book_turn(&mut pending, &mut queue, 1);
+    assert_eq!(queue.len(), 1);
+
+    queue.clear();
+
+    assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), Some(1));
+    assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), None);
+}
+
+#[test]
+fn sibling_book_reservations_normalize_and_run_committed_first() {
+    let mut pending = None;
+    let mut queue = VecDeque::new();
+
+    reserve_sibling_book_turn(&mut pending, &mut queue, -4);
+    reserve_sibling_book_turn(&mut pending, &mut queue, 3);
+
+    assert_eq!(pending, Some(-1));
+    assert_eq!(queue.iter().copied().collect::<Vec<_>>(), vec![1]);
+    assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), Some(-1));
+    assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), Some(1));
+    assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), None);
 }
 
 #[test]

@@ -743,7 +743,7 @@ impl SuiSuiViewApp {
             ],
         ));
         self.persist_reading_position();
-        if self.queued_sibling_book_turns.is_empty() {
+        if self.pending_sibling_book_turn.is_none() && self.queued_sibling_book_turns.is_empty() {
             self.request_adjacent_seed_prefetch();
         }
     }

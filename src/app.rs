@@ -288,6 +288,10 @@ pub struct SuiSuiViewApp {
     pending_page_turn: Option<PendingPageTurn>,
     queued_page_turns: Option<QueuedPageTurns>,
     page_turn_paint_hold: bool,
+    /// The one sibling-book turn that has been committed but not started yet.
+    /// Unlike `queued_sibling_book_turns` a key release never takes it back --
+    /// see `reserve_sibling_book_turn`.
+    pending_sibling_book_turn: Option<isize>,
     queued_sibling_book_turns: VecDeque<isize>,
     sibling_book_visual_pending: bool,
     sibling_book_wgpu_present_wait: Option<(u64, usize)>,
@@ -466,6 +470,7 @@ impl SuiSuiViewApp {
             pending_page_turn: None,
             queued_page_turns: None,
             page_turn_paint_hold: false,
+            pending_sibling_book_turn: None,
             queued_sibling_book_turns: VecDeque::new(),
             sibling_book_visual_pending: false,
             sibling_book_wgpu_present_wait: None,
