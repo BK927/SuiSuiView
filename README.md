@@ -122,6 +122,14 @@ discovery and file reading also run in the background, with an opening indicator
 while the current page remains visible. A sleeping or busy disk can still delay
 the result; image quality and the bookmark storage format are unchanged.
 
+Rapid next/previous-file taps are kept in order and shown one book at a time.
+Releasing a held key cancels its queued automatic repeats; separate taps remain
+queued and may finish after release. While another book is opening or reserved,
+the current book's off-screen page prefetch pauses. First-page preparation uses
+the destination book's saved view and the active renderer's decode policy so a
+compatible prepared image can be reused. These paths keep the existing image
+quality and image-cache budgets.
+
 State is saved to the platform data directory. On Windows this resolves to an
 AppData `SuiSuiView/` folder: `state.json` holds settings and window state, and
 each book's data lives in its own file under `books/`.

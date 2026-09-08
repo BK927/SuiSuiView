@@ -50,10 +50,10 @@ impl SuiSuiViewApp {
         let store = self.store.fork_for_background();
         let settings = self.settings.clone();
         let seed_target_long_edge = open_seed_target_long_edge(self.target_long_edge);
-        let seed_target_view = self.seed_target_view_for_open(view_fallback);
-        let decode = startup_decode_options(&settings);
+        let seed_plan = self.open_seed_plan();
         let pending_jump = self.pending_bookmark_jump.clone();
         self.loader_pending = true;
+        self.refresh_worker_prefetch();
         self.set_status(self.i18n().text("status.opening"));
         self.source_task.request_cancellable(&self.egui_ctx, move |cancellation| {
             let result = (|| {
@@ -100,6 +100,7 @@ impl SuiSuiViewApp {
                     }
                     if cancellation.cancelled() { return Ok(None); }
                     let seeded_page = result.as_ref().ok().and_then(|prepared| {
+                        let (decode, seed_target_view) = seed_plan.resolve(&settings, prepared.speculative_reading_position.as_ref(), view_fallback);
                         let pending_page = pending_jump.as_ref().and_then(|pending| pending_bookmark_page(prepared.source.as_ref(), pending));
                         let page_index = selected_open_page(prepared.source.as_ref(), explicit_page, prepared.forced_page, prepared.speculative_reading_position.as_ref(), pending_page);
                         let started = Instant::now();
@@ -140,7 +141,10 @@ impl SuiSuiViewApp {
                     self.open_to_first_visible_trace = None;
                 }
                 match result {
-                    Ok(None) => self.set_status(self.i18n().text("status.no_sibling_book")),
+                    Ok(None) => {
+                        self.refresh_worker_prefetch();
+                        self.set_status(self.i18n().text("status.no_sibling_book"));
+                    }
                     Err(error) => {
                         self.clear_pending_sibling_book_turns();
                         self.handle_open_failure(error, failure_action);

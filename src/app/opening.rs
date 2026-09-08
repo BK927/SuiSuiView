@@ -10,12 +10,11 @@ use crate::core::source::{
     classify_path, open_source_from_path, BookSource, SharedSource, SourceKind,
 };
 use crate::core::state::{
-    AppSettings, BookRecordAdoption, DecodeMode, DecoderPreferences, FitMode,
-    PageBookmarkPathRebase, PreparedBookState, ReadingDirection, ReadingPosition, StateStore,
-    WindowPlacement,
+    AppSettings, BookRecordAdoption, FitMode, PageBookmarkPathRebase, PreparedBookState,
+    ReadingDirection, ReadingPosition, StateStore, WindowPlacement,
 };
 use crate::core::worker::{
-    clamp_navigation_target_long_edge, DecodeOptions, DecodeStrategy, NavigationDirection,
+    clamp_navigation_target_long_edge, DecodeOptions, NavigationDirection,
     DEFAULT_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -24,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Instant;
 
+mod seed;
 mod source_task;
 mod state_prepare;
 pub(in crate::app) use source_task::SourceTaskOutput;
@@ -375,7 +375,10 @@ impl SuiSuiViewApp {
     ) {
         super::navigation::sibling_turn_log(|| format!("open failure: {message}"));
         match failure_action {
-            OpenFailureAction::KeepCurrent => self.notify(message),
+            OpenFailureAction::KeepCurrent => {
+                self.refresh_worker_prefetch();
+                self.notify(message);
+            }
             OpenFailureAction::ClearCurrent => self.clear_local_book_state(message),
         }
     }
@@ -668,26 +671,7 @@ fn open_seed_target_long_edge(current_target_long_edge: u32) -> u32 {
 }
 
 fn startup_decode_options(settings: &AppSettings) -> DecodeOptions {
-    let strategy = match settings.decode_mode {
-        DecodeMode::AutoFast => DecodeStrategy::Auto,
-        DecodeMode::Compatibility => DecodeStrategy::ImageCrate,
-        DecodeMode::Custom => DecodeStrategy::Auto,
-    };
-    let decoder_preferences = if matches!(settings.decode_mode, DecodeMode::Custom) {
-        settings.decoder_preferences
-    } else {
-        DecoderPreferences::default()
-    };
-    DecodeOptions {
-        strategy,
-        decoder_preferences,
-        fast_sampled_scaled_decode: settings.fast_sampled_scaled_decode,
-        cpu_upscale_filter: settings.cpu_upscale_filter,
-        cpu_downscale_filter: crate::core::state::CPU_DOWNSCALE_FILTER,
-        allow_display_upscale: false,
-        apply_exif_orientation: settings.apply_exif_orientation,
-        apply_embedded_icc: settings.apply_embedded_icc,
-    }
+    super::worker_events::decode_options_from_settings(settings, false)
 }
 
 pub(in crate::app) fn reading_position_for_open(

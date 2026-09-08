@@ -133,6 +133,10 @@ impl SuiSuiViewApp {
     /// the view is a fit mode or the vertical strip, the CPU upscale filter maps
     /// to a kernel, and the shader has not failed.
     pub(in crate::app) fn glow_upscale_kernel(&self) -> Option<KernelChoice> {
+        self.glow_upscale_kernel_for_fit(self.fit_mode)
+    }
+
+    pub(in crate::app) fn glow_upscale_kernel_for_fit(&self, fit_mode: FitMode) -> Option<KernelChoice> {
         if !self.glow_is_active_backend() {
             return None;
         }
@@ -141,7 +145,7 @@ impl SuiSuiViewApp {
         }
         let fit_ok = self.view_mode == ViewMode::VerticalStrip
             || matches!(
-                self.fit_mode,
+                fit_mode,
                 FitMode::FitPage | FitMode::FitWidth | FitMode::FitHeight
             );
         if !fit_ok {
@@ -156,13 +160,6 @@ impl SuiSuiViewApp {
     /// state the paint path reads to route WGSL callbacks vs the CPU texture path.
     pub(in crate::app) fn glow_is_active_backend(&self) -> bool {
         !self.gpu_effects_available && self.gpu_target_format.is_none()
-    }
-
-    /// True when `glow_upscale_kernel` would return `Some` — the routing signal
-    /// threaded into the CPU display-upscale policy so the worker stops
-    /// pre-enlarging pages the shader will enlarge at draw time.
-    pub(in crate::app) fn glow_kernel_available(&self) -> bool {
-        self.glow_upscale_kernel().is_some()
     }
 
     /// Draw one native-size page texture into `page_rect`, enlarging it with the

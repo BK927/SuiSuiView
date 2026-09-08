@@ -3,7 +3,7 @@ use super::{
     SuiSuiViewApp, ViewMode, TEXTURE_PRESENT_REPAINT_DELAY,
 };
 use crate::core::source::{BookSource, PageId};
-use crate::core::state::{DecodeMode, DecoderPreferences, WgpuUpscaleMethod};
+use crate::core::state::{AppSettings, DecodeMode, DecoderPreferences, FitMode, WgpuUpscaleMethod};
 use crate::core::worker::{
     DecodeOptions, DecodeStrategy, WorkerEvent, WorkerOptions, PREVIEW_TARGET_LONG_EDGE,
 };
@@ -285,51 +285,55 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn decode_options(&self) -> DecodeOptions {
-        let strategy = match self.settings.decode_mode {
-            DecodeMode::AutoFast => DecodeStrategy::Auto,
-            DecodeMode::Compatibility => DecodeStrategy::ImageCrate,
-            DecodeMode::Custom => DecodeStrategy::Auto,
-        };
-        let decoder_preferences = if matches!(self.settings.decode_mode, DecodeMode::Custom) {
-            self.settings.decoder_preferences
-        } else {
-            DecoderPreferences::default()
-        };
-        DecodeOptions {
-            strategy,
-            decoder_preferences,
-            fast_sampled_scaled_decode: self.settings.fast_sampled_scaled_decode,
-            cpu_upscale_filter: self.settings.cpu_upscale_filter,
-            cpu_downscale_filter: crate::core::state::CPU_DOWNSCALE_FILTER,
-            allow_display_upscale: self.should_allow_display_upscale(),
-            apply_exif_orientation: self.settings.apply_exif_orientation,
-            apply_embedded_icc: self.settings.apply_embedded_icc,
-        }
+        self.decode_options_for_fit(self.fit_mode)
     }
 
-    fn should_allow_display_upscale(&self) -> bool {
-        should_allow_cpu_display_upscale(
-            self.fit_mode,
+    pub(in crate::app) fn decode_options_for_fit(&self, fit_mode: FitMode) -> DecodeOptions {
+        let allow_display_upscale = should_allow_cpu_display_upscale(
+            fit_mode,
             self.manual_zoom,
-            self.gpu_display_upscale_can_own_upscale(),
-            self.glow_kernel_available(),
+            self.active_wgpu_upscale_method_for_fit(fit_mode) != WgpuUpscaleMethod::None,
+            self.glow_upscale_kernel_for_fit(fit_mode).is_some(),
             self.settings.cpu_upscale_filter,
-        )
-    }
-
-    fn gpu_display_upscale_can_own_upscale(&self) -> bool {
-        self.active_wgpu_upscale_method() != WgpuUpscaleMethod::None
+        );
+        decode_options_from_settings(&self.settings, allow_display_upscale)
     }
 
     pub(in crate::app) fn worker_options(&self) -> WorkerOptions {
         WorkerOptions {
             decode: self.decode_options(),
             target_intent: self.current_prepared_target_intent(),
-            prefetch_enabled: self.settings.prefetch_enabled,
+            prefetch_enabled: self.settings.prefetch_enabled
+                && !self.loader_pending
+                && !self.sibling_book_turn_reserved(),
             progressive_preview_enabled: self.settings.progressive_preview_enabled,
             cache_bytes: self.worker_cache_budget_bytes(),
             app_cached_pages: self.app_cached_page_keys(),
         }
+    }
+}
+
+/// Startup and live preparation must differ only in who owns display enlargement.
+pub(in crate::app) fn decode_options_from_settings(
+    settings: &AppSettings,
+    allow_display_upscale: bool,
+) -> DecodeOptions {
+    DecodeOptions {
+        strategy: match settings.decode_mode {
+            DecodeMode::Compatibility => DecodeStrategy::ImageCrate,
+            DecodeMode::AutoFast | DecodeMode::Custom => DecodeStrategy::Auto,
+        },
+        decoder_preferences: if settings.decode_mode == DecodeMode::Custom {
+            settings.decoder_preferences
+        } else {
+            DecoderPreferences::default()
+        },
+        fast_sampled_scaled_decode: settings.fast_sampled_scaled_decode,
+        cpu_upscale_filter: settings.cpu_upscale_filter,
+        cpu_downscale_filter: crate::core::state::CPU_DOWNSCALE_FILTER,
+        allow_display_upscale,
+        apply_exif_orientation: settings.apply_exif_orientation,
+        apply_embedded_icc: settings.apply_embedded_icc,
     }
 }
 

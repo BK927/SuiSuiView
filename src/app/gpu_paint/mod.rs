@@ -117,7 +117,14 @@ impl SuiSuiViewApp {
     }
 
     pub(super) fn active_wgpu_upscale_method(&self) -> WgpuUpscaleMethod {
-        if !fit_mode_allows_display_upscale(self.fit_mode)
+        self.active_wgpu_upscale_method_for_fit(self.fit_mode)
+    }
+
+    pub(in crate::app) fn active_wgpu_upscale_method_for_fit(
+        &self,
+        fit_mode: FitMode,
+    ) -> WgpuUpscaleMethod {
+        if !fit_mode_allows_display_upscale(fit_mode)
             || !self.gpu_effects_available
             || self.gpu_target_format.is_none()
             || matches!(self.settings.gpu_effect_mode, GpuEffectMode::CpuOnly)

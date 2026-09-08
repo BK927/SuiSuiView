@@ -349,10 +349,13 @@ impl SuiSuiViewApp {
         }
         let store = self.store.fork_for_background();
         let resume_by_file_identity = self.settings.resume_by_file_identity;
-        let seed_target_view = self.seed_target_view_for_open(Some(view_fallback));
+        let settings = self.settings.clone();
+        let seed_plan = self.open_seed_plan();
         let tx = self.loader_tx.clone();
         let ctx = self.egui_ctx.clone();
         let event_path = path.clone();
+        self.loader_pending = true;
+        self.refresh_worker_prefetch();
         self.set_status(self.i18n().text("status.opening"));
         let spawn_result = thread::Builder::new()
             .name("suisuiview-adjacent-state-loader".to_owned())
@@ -368,6 +371,11 @@ impl SuiSuiViewApp {
                 .map_err(|error| LoaderFailure::State(error.to_string()));
                 let (seeded_page, seeded_followup_page) = match result.as_ref() {
                     Ok(prepared) => {
+                        let (resolved_decode, seed_target_view) = seed_plan.resolve(
+                            &settings,
+                            prepared.speculative_reading_position.as_ref(),
+                            Some(view_fallback),
+                        );
                         let page_index = selected_open_page(
                             prepared.source.as_ref(),
                             explicit_page,
@@ -375,17 +383,32 @@ impl SuiSuiViewApp {
                             prepared.speculative_reading_position.as_ref(),
                             None,
                         );
-                        if page_index == seeded_page.index {
+                        let resolved_target = seed_target_long_edge_from_dimensions(
+                            seeded_page.page.original_width,
+                            seeded_page.page.original_height,
+                            target_long_edge,
+                            seed_target_view,
+                        );
+                        let same_page = page_index == seeded_page.index;
+                        if same_page
+                            && resolved_decode == decode
+                            && seeded_page.key.target_long_edge == resolved_target
+                        {
                             (Some(seeded_page), seeded_followup_page)
                         } else {
                             (
                                 prepare_seeded_first_page(
                                     prepared.source.as_ref(),
                                     page_index,
-                                    target_long_edge,
-                                    decode,
+                                    if same_page {
+                                        resolved_target
+                                    } else {
+                                        target_long_edge
+                                    },
+                                    resolved_decode,
                                     false,
-                                    seed_target_view,
+                                    // Cached dimensions already include EXIF orientation.
+                                    if same_page { None } else { seed_target_view },
                                 ),
                                 None,
                             )
@@ -408,16 +431,14 @@ impl SuiSuiViewApp {
                 });
                 ctx.request_repaint();
             });
-        match spawn_result {
-            Ok(_) => self.loader_pending = true,
-            Err(error) => {
-                self.sibling_book_visual_pending = false;
-                self.clear_pending_sibling_book_turns();
-                self.handle_open_failure(
-                    format!("Could not start source state loader: {error}"),
-                    failure_action,
-                );
-            }
+        if let Err(error) = spawn_result {
+            self.loader_pending = false;
+            self.sibling_book_visual_pending = false;
+            self.clear_pending_sibling_book_turns();
+            self.handle_open_failure(
+                format!("Could not start source state loader: {error}"),
+                failure_action,
+            );
         }
     }
 
@@ -696,10 +717,27 @@ fn seed_target_long_edge_from_view(
     fallback_target_long_edge: u32,
     target_view: Option<SeedTargetView>,
 ) -> u32 {
-    let Some(target_view) = target_view else {
+    if target_view.is_none() {
+        return fallback_target_long_edge;
+    }
+    let Some((width, height)) = source_dimensions_from_bytes(bytes) else {
         return fallback_target_long_edge;
     };
-    let Some((width, height)) = source_dimensions_from_bytes(bytes) else {
+    seed_target_long_edge_from_dimensions(
+        width as usize,
+        height as usize,
+        fallback_target_long_edge,
+        target_view,
+    )
+}
+
+fn seed_target_long_edge_from_dimensions(
+    width: usize,
+    height: usize,
+    fallback_target_long_edge: u32,
+    target_view: Option<SeedTargetView>,
+) -> u32 {
+    let Some(target_view) = target_view else {
         return fallback_target_long_edge;
     };
     target_long_edge_for_view(
@@ -715,166 +753,4 @@ fn seed_target_long_edge_from_view(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        adjacent_seed_matches_successor, should_skip_memory_aware_adjacent_seed,
-        should_skip_memory_aware_adjacent_seed_source, ADJACENT_SEED_LARGE_SOURCE_BYTES,
-        ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE,
-    };
-    use crate::core::source::{BookSource, SourceError};
-    use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
-    use std::path::{Path, PathBuf};
-
-    #[test]
-    fn adjacent_seed_successor_match_requires_path_and_direction() {
-        let current = Path::new("book-1.cbz");
-        let successor = Path::new("book-2.cbz");
-
-        assert!(adjacent_seed_matches_successor(
-            current,
-            successor,
-            1,
-            current,
-            Some(successor),
-            1,
-        ));
-        assert!(!adjacent_seed_matches_successor(
-            current,
-            Path::new("book-3.cbz"),
-            1,
-            current,
-            Some(successor),
-            1,
-        ));
-        assert!(!adjacent_seed_matches_successor(
-            current,
-            successor,
-            -1,
-            current,
-            Some(successor),
-            1,
-        ));
-    }
-
-    #[test]
-    fn adjacent_seed_direction_match_keeps_existing_sibling_behavior() {
-        assert!(adjacent_seed_matches_successor(
-            Path::new("book-1.cbz"),
-            Path::new("book-2.cbz"),
-            1,
-            Path::new("book-1.cbz"),
-            None,
-            1,
-        ));
-    }
-
-    #[test]
-    fn memory_aware_adjacent_seed_skips_8192px_sources() {
-        let bytes = png_bytes(ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE, 1);
-
-        assert!(should_skip_memory_aware_adjacent_seed(&bytes));
-    }
-
-    #[test]
-    fn memory_aware_adjacent_seed_keeps_smaller_sources() {
-        let bytes = png_bytes(ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE - 1, 1);
-
-        assert!(!should_skip_memory_aware_adjacent_seed(&bytes));
-    }
-
-    #[test]
-    fn memory_aware_adjacent_seed_keeps_unknown_dimensions() {
-        assert!(!should_skip_memory_aware_adjacent_seed(b"not an image"));
-    }
-
-    #[test]
-    fn memory_aware_adjacent_seed_skips_large_known_source_bytes() {
-        let source = TestSource {
-            byte_size: Some(ADJACENT_SEED_LARGE_SOURCE_BYTES),
-            bytes: Vec::new(),
-        };
-
-        assert!(should_skip_memory_aware_adjacent_seed_source(&source, 0));
-    }
-
-    #[test]
-    fn memory_aware_adjacent_seed_keeps_large_bytes_with_smaller_dimensions() {
-        let source = TestSource {
-            byte_size: Some(ADJACENT_SEED_LARGE_SOURCE_BYTES),
-            bytes: png_bytes(ADJACENT_SEED_LARGE_SOURCE_LONG_EDGE - 1, 1),
-        };
-
-        assert!(!should_skip_memory_aware_adjacent_seed_source(&source, 0));
-    }
-
-    #[test]
-    fn memory_aware_adjacent_seed_keeps_small_or_unknown_source_bytes() {
-        let small = TestSource {
-            byte_size: Some(ADJACENT_SEED_LARGE_SOURCE_BYTES - 1),
-            bytes: Vec::new(),
-        };
-        let unknown = TestSource {
-            byte_size: None,
-            bytes: Vec::new(),
-        };
-
-        assert!(!should_skip_memory_aware_adjacent_seed_source(&small, 0));
-        assert!(!should_skip_memory_aware_adjacent_seed_source(&unknown, 0));
-    }
-
-    fn png_bytes(width: u32, height: u32) -> Vec<u8> {
-        let pixels = vec![0; width as usize * height as usize * 4];
-        let mut bytes = Vec::new();
-        PngEncoder::new(&mut bytes)
-            .write_image(&pixels, width, height, ColorType::Rgba8.into())
-            .expect("test PNG should encode");
-        bytes
-    }
-
-    struct TestSource {
-        byte_size: Option<u64>,
-        bytes: Vec<u8>,
-    }
-
-    impl BookSource for TestSource {
-        fn title(&self) -> &str {
-            "test"
-        }
-
-        fn source_path(&self) -> &Path {
-            Path::new("test")
-        }
-
-        fn book_id(&self) -> &str {
-            "test"
-        }
-
-        fn page_count(&self) -> usize {
-            1
-        }
-
-        fn page_name(&self, _index: usize) -> Option<&str> {
-            Some("page.png")
-        }
-
-        fn page_file_path(&self, _index: usize) -> Option<PathBuf> {
-            None
-        }
-
-        fn page_byte_size(&self, _index: usize) -> Option<u64> {
-            self.byte_size
-        }
-
-        fn read_page(&self, _index: usize) -> Result<Vec<u8>, SourceError> {
-            Ok(self.bytes.clone())
-        }
-
-        fn read_page_prefix(
-            &self,
-            _index: usize,
-            max_bytes: usize,
-        ) -> Result<Vec<u8>, SourceError> {
-            Ok(self.bytes[..self.bytes.len().min(max_bytes)].to_vec())
-        }
-    }
-}
+mod tests;

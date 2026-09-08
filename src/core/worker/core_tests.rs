@@ -357,6 +357,8 @@ fn worker_publishes_completed_page_before_handling_queued_command() {
         sent_command: AtomicBool::new(false),
         page_bytes: encoded_test_image(ImageFormat::Png),
         path: PathBuf::from("commanding-source"),
+        command_on_page: 0,
+        next_center: 1,
     });
     let handle = thread::spawn(move || {
         run_worker(
@@ -390,6 +392,94 @@ fn worker_publishes_completed_page_before_handling_queued_command() {
     assert!(crate::core::perf_trace::flush_timeout(Duration::from_secs(
         1
     )));
+}
+
+#[test]
+fn worker_applies_new_schedule_after_reading_an_invisible_page_before_decode() {
+    for next_center in [0, 2] {
+        let (command_tx, command_rx) = unbounded();
+        let (event_tx, event_rx) = unbounded();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = shutdown.clone();
+        let source: SharedSource = Arc::new(CommandingSource {
+            command_tx: command_tx.clone(),
+            sent_command: AtomicBool::new(false),
+            page_bytes: encoded_test_image(ImageFormat::Png),
+            path: PathBuf::from("commanding-prefetch-source"),
+            command_on_page: 1,
+            next_center,
+        });
+        let handle = thread::spawn(move || {
+            run_worker(
+                command_rx,
+                event_tx,
+                egui::Context::default(),
+                worker_shutdown,
+            );
+        });
+        command_tx
+            .send(WorkerCommand::LoadBook {
+                source,
+                center: 0,
+                direction: NavigationDirection::Forward,
+                target_long_edge: 2048,
+                visible_pages: 1,
+                options: WorkerOptions {
+                    progressive_preview_enabled: false,
+                    ..WorkerOptions::default()
+                },
+            })
+            .unwrap();
+
+        let events: Vec<_> = (0..2)
+            .map(|_| event_rx.recv_timeout(Duration::from_secs(2)).unwrap())
+            .collect();
+        let pages: Vec<_> = events
+            .into_iter()
+            .map(|event| match event {
+                WorkerEvent::PageReady { page_id, .. } => page_id,
+                WorkerEvent::PageFailed { message, .. } => panic!("page failed: {message}"),
+            })
+            .collect();
+        // Page 1's read enqueued a new schedule. The invisible page must not
+        // spend a decode or publish an event before that schedule is applied.
+        assert_eq!(pages, vec![PageId(0), PageId(next_center as u32)]);
+        if next_center == 0 {
+            // Opening failed or the reservation was cleared: restore prefetch on
+            // the same book. Its visible page stays cached, and page 1 can run again.
+            command_tx
+                .send(WorkerCommand::SetPage {
+                    center: 0,
+                    direction: NavigationDirection::Forward,
+                    target_long_edge: 2048,
+                    visible_pages: 1,
+                    options: WorkerOptions {
+                        progressive_preview_enabled: false,
+                        ..WorkerOptions::default()
+                    },
+                })
+                .unwrap();
+            let visible = event_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(matches!(
+                visible,
+                WorkerEvent::PageReady {
+                    page_id: PageId(0),
+                    ..
+                }
+            ));
+            let resumed = event_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(matches!(
+                resumed,
+                WorkerEvent::PageReady {
+                    page_id: PageId(1),
+                    ..
+                }
+            ));
+        }
+        shutdown.store(true, Ordering::Release);
+        let _ = command_tx.send(WorkerCommand::Shutdown);
+        handle.join().unwrap();
+    }
 }
 
 #[test]
@@ -439,6 +529,8 @@ struct CommandingSource {
     sent_command: AtomicBool,
     page_bytes: Vec<u8>,
     path: PathBuf,
+    command_on_page: usize,
+    next_center: usize,
 }
 
 impl BookSource for CommandingSource {
@@ -455,29 +547,38 @@ impl BookSource for CommandingSource {
     }
 
     fn page_count(&self) -> usize {
-        2
+        3
     }
 
     fn page_name(&self, index: usize) -> Option<&str> {
         match index {
             0 => Some("page-0000.png"),
             1 => Some("page-0001.png"),
+            2 => Some("page-0002.png"),
             _ => None,
         }
     }
 
     fn read_page(&self, index: usize) -> Result<Vec<u8>, SourceError> {
-        if index == 0 && !self.sent_command.swap(true, Ordering::AcqRel) {
+        if index == self.command_on_page && !self.sent_command.swap(true, Ordering::AcqRel) {
             self.command_tx
                 .send(WorkerCommand::SetPage {
-                    center: 1,
+                    center: self.next_center,
                     direction: NavigationDirection::Forward,
                     target_long_edge: 2048,
                     visible_pages: 1,
-                    options: WorkerOptions::default(),
+                    options: WorkerOptions {
+                        prefetch_enabled: false,
+                        progressive_preview_enabled: false,
+                        ..WorkerOptions::default()
+                    },
                 })
                 .unwrap();
         }
         Ok(self.page_bytes.clone())
+    }
+
+    fn supports_concurrent_page_reads(&self) -> bool {
+        false
     }
 }

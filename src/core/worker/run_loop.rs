@@ -317,48 +317,74 @@ pub(in crate::core::worker) fn run_worker(
                     continue;
                 }
 
-                let result = consume_matching_decode(
+                let result = match consume_matching_decode(
                     &mut decode_ahead,
                     &book_id,
                     book_epoch,
                     page_id,
                     job.target_long_edge,
                     options.decode,
-                )
-                .unwrap_or_else(|| {
-                    let read_result = read_source_bytes(
-                        source_bytes_cache.as_mut(),
-                        &mut read_ahead,
-                        &active_source,
-                        &book_id,
-                        book_epoch,
-                        page_id,
-                        job.index,
-                    );
-                    if shutdown_requested.load(Ordering::Acquire) {
-                        return Err("Page worker shutdown requested".to_owned());
-                    }
+                ) {
+                    Some(result) => result,
+                    None => {
+                        let read_result = read_source_bytes(
+                            source_bytes_cache.as_mut(),
+                            &mut read_ahead,
+                            &active_source,
+                            &book_id,
+                            book_epoch,
+                            page_id,
+                            job.index,
+                        );
+                        if shutdown_requested.load(Ordering::Acquire) {
+                            break 'work;
+                        }
+                        // A slow HDD read may finish after a new book or a tighter
+                        // prefetch policy was requested. Apply that command before
+                        // spending CPU on invisible pixels the new schedule may
+                        // not need. Visible requests still finish and publish.
+                        if !is_visible_page_index(job.index, center, visible_pages)
+                            && !command_rx.is_empty()
+                        {
+                            continue 'work;
+                        }
 
-                    if read_result.is_ok() {
-                        if let Some(candidate) = decode_ahead_policy.candidate() {
-                            let decode_ahead_reserved = decode_ahead::maybe_start_decode(
-                                &mut decode_ahead,
-                                &command_rx,
-                                &active_source,
-                                &book_id,
-                                book_epoch,
-                                &jobs,
-                                job_position.saturating_add(1),
-                                center,
-                                visible_pages,
-                                &options,
-                                &cache,
-                                &published_app_cache_hints,
-                                candidate,
-                                decode_ahead_policy
-                                    .needs_prepare_timing_for(&active_source, job.index),
-                            );
-                            if !decode_ahead_reserved {
+                        if read_result.is_ok() {
+                            if let Some(candidate) = decode_ahead_policy.candidate() {
+                                let decode_ahead_reserved = decode_ahead::maybe_start_decode(
+                                    &mut decode_ahead,
+                                    &command_rx,
+                                    &active_source,
+                                    &book_id,
+                                    book_epoch,
+                                    &jobs,
+                                    job_position.saturating_add(1),
+                                    center,
+                                    visible_pages,
+                                    &options,
+                                    &cache,
+                                    &published_app_cache_hints,
+                                    candidate,
+                                    decode_ahead_policy
+                                        .needs_prepare_timing_for(&active_source, job.index),
+                                );
+                                if !decode_ahead_reserved {
+                                    read_ahead::maybe_start(
+                                        &mut read_ahead,
+                                        &command_rx,
+                                        &active_source,
+                                        &book_id,
+                                        book_epoch,
+                                        &jobs,
+                                        job_position.saturating_add(1),
+                                        center,
+                                        visible_pages,
+                                        &options,
+                                        &cache,
+                                        &published_app_cache_hints,
+                                    );
+                                }
+                            } else {
                                 read_ahead::maybe_start(
                                     &mut read_ahead,
                                     &command_rx,
@@ -374,35 +400,21 @@ pub(in crate::core::worker) fn run_worker(
                                     &published_app_cache_hints,
                                 );
                             }
-                        } else {
-                            read_ahead::maybe_start(
-                                &mut read_ahead,
-                                &command_rx,
-                                &active_source,
-                                &book_id,
-                                book_epoch,
-                                &jobs,
-                                job_position.saturating_add(1),
-                                center,
-                                visible_pages,
-                                &options,
-                                &cache,
-                                &published_app_cache_hints,
-                            );
                         }
-                    }
 
-                    read_result.and_then(|bytes| {
-                        prepare_page_with_perf(
-                            bytes.as_ref(),
-                            job,
-                            book_epoch,
-                            options.decode,
-                            false,
-                            decode_ahead_policy.needs_prepare_timing_for(&active_source, job.index),
-                        )
-                    })
-                });
+                        read_result.and_then(|bytes| {
+                            prepare_page_with_perf(
+                                bytes.as_ref(),
+                                job,
+                                book_epoch,
+                                options.decode,
+                                false,
+                                decode_ahead_policy
+                                    .needs_prepare_timing_for(&active_source, job.index),
+                            )
+                        })
+                    }
+                };
                 if shutdown_requested.load(Ordering::Acquire) {
                     break 'work;
                 }
