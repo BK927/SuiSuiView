@@ -8,12 +8,17 @@ use std::thread;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ImageInfoKey {
     book_id: String,
+    source_instance_id: u64,
     page: usize,
 }
 
 impl ImageInfoKey {
-    fn new(book_id: String, page: usize) -> Self {
-        Self { book_id, page }
+    fn new(book_id: String, source_instance_id: u64, page: usize) -> Self {
+        Self {
+            book_id,
+            source_instance_id,
+            page,
+        }
     }
 }
 
@@ -116,7 +121,7 @@ impl SuiSuiViewApp {
             return ImageInfoStatus::Empty;
         };
 
-        let key = ImageInfoKey::new(book_id, self.current_page);
+        let key = ImageInfoKey::new(book_id, source.source_instance_id(), self.current_page);
         self.image_info.drain(&key);
         if let Some(status) = self.image_info.status(&key) {
             return status;
@@ -134,20 +139,20 @@ mod tests {
     #[test]
     fn image_info_key_distinguishes_book_and_page() {
         assert_ne!(
-            ImageInfoKey::new("book-a".to_owned(), 1),
-            ImageInfoKey::new("book-b".to_owned(), 1)
+            ImageInfoKey::new("book-a".to_owned(), 1, 1),
+            ImageInfoKey::new("book-b".to_owned(), 1, 1)
         );
         assert_ne!(
-            ImageInfoKey::new("book-a".to_owned(), 1),
-            ImageInfoKey::new("book-a".to_owned(), 2)
+            ImageInfoKey::new("book-a".to_owned(), 1, 1),
+            ImageInfoKey::new("book-a".to_owned(), 1, 2)
         );
     }
 
     #[test]
     fn stale_image_info_event_is_ignored() {
         let mut state = ImageInfoState::new();
-        let active = ImageInfoKey::new("book-a".to_owned(), 1);
-        let stale = ImageInfoKey::new("book-a".to_owned(), 0);
+        let active = ImageInfoKey::new("book-a".to_owned(), 1, 1);
+        let stale = ImageInfoKey::new("book-a".to_owned(), 1, 0);
 
         state.accept_event(
             &active,
@@ -163,7 +168,7 @@ mod tests {
     #[test]
     fn active_image_info_event_is_cached() {
         let mut state = ImageInfoState::new();
-        let active = ImageInfoKey::new("book-a".to_owned(), 1);
+        let active = ImageInfoKey::new("book-a".to_owned(), 1, 1);
 
         state.accept_event(
             &active,
@@ -174,5 +179,41 @@ mod tests {
         );
 
         assert!(state.status(&active).is_some());
+    }
+
+    #[test]
+    fn refreshed_source_rejects_cached_and_late_info_at_the_same_index() {
+        let mut state = ImageInfoState::new();
+        let old = ImageInfoKey::new("book-a".to_owned(), 1, 0);
+        let refreshed = ImageInfoKey::new("book-a".to_owned(), 2, 0);
+        state.accept_event(
+            &old,
+            ImageInfoEvent {
+                key: old.clone(),
+                result: Err("old image".into()),
+            },
+        );
+        assert!(state.status(&old).is_some());
+        assert!(state.status(&refreshed).is_none());
+        state.inflight = Some(refreshed.clone());
+        state.accept_event(
+            &refreshed,
+            ImageInfoEvent {
+                key: old,
+                result: Err("late old image".into()),
+            },
+        );
+        assert_eq!(state.inflight.as_ref(), Some(&refreshed));
+        assert!(state.status(&refreshed).is_none());
+        state.accept_event(
+            &refreshed,
+            ImageInfoEvent {
+                key: refreshed.clone(),
+                result: Err("new image".into()),
+            },
+        );
+        assert!(
+            matches!(state.status(&refreshed), Some(super::ImageInfoStatus::Failed(message)) if message == "new image")
+        );
     }
 }

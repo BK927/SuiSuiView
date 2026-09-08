@@ -194,6 +194,22 @@ impl StateStore {
             .unwrap_or_default()
     }
 
+    pub fn try_all_page_bookmarks(&self) -> std::io::Result<Vec<PageBookmarkEntry>> {
+        self.ensure_all_book_records_loaded()?;
+        Ok(self.all_page_bookmarks())
+    }
+
+    pub fn try_page_bookmark_entries(
+        &self,
+        book_id: &str,
+        source_path: &Path,
+    ) -> std::io::Result<Vec<PageBookmarkEntry>> {
+        Ok(self
+            .read_book_record_for_bookmarks(book_id)?
+            .map(|record| page_bookmark_entries_for_path(&record, &path_key(source_path)))
+            .unwrap_or_default())
+    }
+
     pub fn all_page_bookmarks(&self) -> Vec<PageBookmarkEntry> {
         self.load_all_book_records()
             .iter()
@@ -224,6 +240,27 @@ impl StateStore {
                 .count();
         });
         count
+    }
+
+    /// Display-only snapshot of the current book, loaded by open preparation or
+    /// updated by a local mutation. Does not check disk redirects every frame.
+    pub fn cached_page_is_bookmarked(
+        &self,
+        book_id: &str,
+        source_path: &Path,
+        page: usize,
+    ) -> bool {
+        let source_path = path_key(source_path);
+        let cache = self.books.borrow();
+        self.pending_books
+            .get(book_id)
+            .or_else(|| cache.records.get(book_id))
+            .is_some_and(|record| {
+                record
+                    .page_bookmarks
+                    .iter()
+                    .any(|bookmark| bookmark.source_path == source_path && bookmark.page == page)
+            })
     }
 
     pub fn has_page_bookmark(&self, book_id: &str, source_path: &Path, page: usize) -> bool {

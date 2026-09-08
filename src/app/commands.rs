@@ -58,7 +58,12 @@ pub(super) enum DeleteMode {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum KeyboardAction {
-    Command(AppCommand),
+    Command {
+        command: AppCommand,
+        /// True when the press came from key auto-repeat rather than a
+        /// discrete tap. Sibling-book turns reserve differently by it.
+        repeat: bool,
+    },
     Release(NavigationRelease),
 }
 
@@ -79,6 +84,7 @@ pub(super) fn collect_keyboard_actions(
             egui::Event::Key {
                 key,
                 pressed: true,
+                repeat,
                 modifiers,
                 ..
             } => {
@@ -87,7 +93,7 @@ pub(super) fn collect_keyboard_actions(
                     continue;
                 };
                 shifted_asterisk_key = is_shifted_asterisk_key(*key, *modifiers);
-                collect_shortcut_commands(shortcut, settings, &mut actions);
+                collect_shortcut_commands(shortcut, *repeat, settings, &mut actions);
             }
             egui::Event::Key {
                 key,
@@ -110,7 +116,7 @@ pub(super) fn collect_keyboard_actions(
                     continue;
                 }
                 if let Some(shortcut) = shortcut_from_input_event(event, input.modifiers) {
-                    collect_shortcut_commands(shortcut, settings, &mut actions);
+                    collect_shortcut_commands(shortcut, false, settings, &mut actions);
                 }
             }
             _ => shifted_asterisk_key = false,
@@ -121,13 +127,14 @@ pub(super) fn collect_keyboard_actions(
 
 fn collect_shortcut_commands(
     shortcut: KeyShortcut,
+    repeat: bool,
     settings: &AppSettings,
     actions: &mut Vec<KeyboardAction>,
 ) {
     for binding in &settings.key_bindings {
         if binding.shortcut == shortcut {
             if let Some(command) = app_command_for_id(binding.command) {
-                actions.push(KeyboardAction::Command(command));
+                actions.push(KeyboardAction::Command { command, repeat });
             }
         }
     }
@@ -431,8 +438,37 @@ mod tests {
 
         assert_eq!(
             collect_keyboard_actions(&input, &settings),
-            vec![KeyboardAction::Command(AppCommand::NextPage)]
+            vec![KeyboardAction::Command {
+                command: AppCommand::NextPage,
+                repeat: true,
+            }]
         );
+    }
+
+    /// The sibling-book reservation cancels differently for taps and repeats,
+    /// so the collected action must carry which one the press was.
+    #[test]
+    fn keyboard_actions_distinguish_tap_from_repeat() {
+        let settings = AppSettings {
+            key_bindings: default_key_bindings(),
+            ..AppSettings::default()
+        };
+        for repeat in [false, true] {
+            let input = input_with_events(vec![key_event(
+                Key::CloseBracket,
+                true,
+                repeat,
+                egui::Modifiers::default(),
+            )]);
+
+            assert_eq!(
+                collect_keyboard_actions(&input, &settings),
+                vec![KeyboardAction::Command {
+                    command: AppCommand::NextBook,
+                    repeat,
+                }]
+            );
+        }
     }
 
     #[test]
@@ -525,9 +561,10 @@ mod tests {
 
         assert_eq!(
             collect_keyboard_actions(&input, &settings),
-            vec![KeyboardAction::Command(AppCommand::SetFitMode(
-                FitMode::Original
-            ))]
+            vec![KeyboardAction::Command {
+                command: AppCommand::SetFitMode(FitMode::Original),
+                repeat: false,
+            }]
         );
     }
 
@@ -538,9 +575,10 @@ mod tests {
 
         assert_eq!(
             collect_keyboard_actions(&input, &settings),
-            vec![KeyboardAction::Command(AppCommand::SetFitMode(
-                FitMode::Original
-            ))]
+            vec![KeyboardAction::Command {
+                command: AppCommand::SetFitMode(FitMode::Original),
+                repeat: false,
+            }]
         );
     }
 
@@ -585,9 +623,10 @@ mod tests {
 
         assert_eq!(
             collect_keyboard_actions(&input, &settings),
-            vec![KeyboardAction::Command(AppCommand::SetFitMode(
-                FitMode::Original
-            ))]
+            vec![KeyboardAction::Command {
+                command: AppCommand::SetFitMode(FitMode::Original),
+                repeat: false,
+            }]
         );
     }
 

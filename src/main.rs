@@ -25,6 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let _stall_session = crate::core::stall_trace::start_session();
     let store = StateStore::load();
     let _startup_flash_guard = startup_window::start_flash_guard(startup_window_guard_mode(&store));
     let startup_open_path = startup_open_path();
@@ -190,6 +191,8 @@ fn is_gui_cli_redirect_arg(arg: &std::ffi::OsString) -> bool {
 }
 
 fn startup_open_path() -> Option<PathBuf> {
+    let _stall_scope =
+        crate::core::stall_trace::scope(crate::core::stall_trace::Stage::StartupPath);
     std::env::args_os().skip(1).map(PathBuf::from).find(|path| {
         matches!(
             classify_path(path),

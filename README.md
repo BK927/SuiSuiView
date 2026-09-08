@@ -116,6 +116,12 @@ technical names such as JPEG and ZIP/CBZ stay in English.
 
 ## Bookmarks And State
 
+The bookmark list and its total count load in the background. Loading thumbnails
+show a spinner, and search edits reuse the loaded list. Next/previous-file
+discovery and file reading also run in the background, with an opening indicator
+while the current page remains visible. A sleeping or busy disk can still delay
+the result; image quality and the bookmark storage format are unchanged.
+
 State is saved to the platform data directory. On Windows this resolves to an
 AppData `SuiSuiView/` folder: `state.json` holds settings and window state, and
 each book's data lives in its own file under `books/`.
@@ -190,7 +196,9 @@ standalone files.
 - `F2` or `Ctrl+O`: open a file.
 - `F`: open a folder.
 - `F4`: close the current book.
-- `Esc`, `X`, or `Ctrl+W`: exit.
+- `Esc`: close an open settings or information window first; otherwise exit
+  when enabled in settings. While recording a shortcut, cancel recording first.
+- `X` or `Ctrl+W`: exit.
 - `F11`, `Alt+Enter`, or `N`: fullscreen.
 - `M`: maximize or restore.
 - `Q`: minimize.
@@ -244,6 +252,29 @@ can use the app default, CPU scaler filters, or a WGSL display upscaler.
 - `Ctrl+middle-click`: return to 100%.
 
 </details>
+
+## Optional Stall Diagnostics
+
+Support builds compiled with `--features stall-diagnostics` can record slow
+operations locally when `SUISUIVIEW_STALL_LOG` names a new absolute output file.
+Create its parent directory first. Without that environment variable, diagnostics
+stay off; default builds compile the instrumentation out entirely.
+
+Close all running SuiSuiView windows before starting a diagnostic session. If
+your support build includes `start-stall-diagnostics.cmd`, double-click it beside
+`suisuiview.exe`, use the viewer normally, then close the viewer. Its
+`stall-diagnostics` folder contains the new report. Starting the executable
+directly returns to normal operation without recording.
+
+The report contains fixed operation names, UI/background roles and relative
+timings, plus session and dropped-sample markers. It excludes file names, paths,
+book IDs, page numbers, settings, image contents and error text. Nothing is
+uploaded. Completed operations taking at least 100 ms are recorded; an independent
+worker also samples operations still running after one second. Each session is
+limited to 2 MiB. Existing reports are never overwritten. Use an SSD destination
+when investigating HDD idle/wake behavior so diagnostic writes do not wake that HDD.
+These timings identify where time was spent; a slow background operation alone
+does not establish that the UI was unresponsive.
 
 ## License
 

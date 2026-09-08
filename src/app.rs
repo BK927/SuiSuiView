@@ -22,6 +22,7 @@ use ui::{BookmarkFilter, BookmarkRowsCache, BookmarkThumbnails};
 
 mod about;
 mod adjacent_seed;
+mod background_job;
 mod cache;
 mod commands;
 mod context_menu;
@@ -88,11 +89,12 @@ pub(in crate::app) use opening::{LoaderEvent, OpenOrigin};
 pub(crate) fn restart_current_process_into_glow() -> Result<(), String> {
     platform::restart_current_process_into_glow()
 }
-pub(in crate::app) use navigation::SiblingOpenRetry;
 pub(in crate::app) use refresh::{RefreshOutcome, RefreshTicket};
 #[cfg(test)]
 use sibling_books::adjacent_sibling_book_paths;
-pub(in crate::app) use sibling_books::{adjacent_sibling_book_paths_ordered, sibling_book_path};
+pub(in crate::app) use sibling_books::adjacent_sibling_book_paths_ordered;
+#[cfg(test)]
+use sibling_books::sibling_book_path;
 #[cfg(test)]
 use viewer::{
     double_spread_indices, ordered_spread_indices, relative_difference,
@@ -156,6 +158,15 @@ struct PendingPageTurn {
 struct QueuedPageTurns {
     direction: NavigationDirection,
     remaining: usize,
+}
+
+/// A sibling-book turn reserved behind the committed `pending_sibling_book_turn`
+/// slot. `cancellable` records how it was asked for: auto-repeat under a held
+/// key may be taken back by the key release; a discrete tap may not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QueuedSiblingBookTurn {
+    direction: isize,
+    cancellable: bool,
 }
 
 pub struct SuiSuiViewApp {
@@ -292,11 +303,12 @@ pub struct SuiSuiViewApp {
     /// Unlike `queued_sibling_book_turns` a key release never takes it back --
     /// see `reserve_sibling_book_turn`.
     pending_sibling_book_turn: Option<isize>,
-    queued_sibling_book_turns: VecDeque<isize>,
+    queued_sibling_book_turns: VecDeque<QueuedSiblingBookTurn>,
     sibling_book_visual_pending: bool,
     sibling_book_wgpu_present_wait: Option<(u64, usize)>,
     sibling_book_visual_hold_until: Option<Instant>,
-    sibling_open_retry: Option<SiblingOpenRetry>,
+    source_task: background_job::BackgroundJob<opening::SourceTaskOutput>,
+    source_task_failure_action: opening::OpenFailureAction,
     view_target_settle: ViewTargetSettle,
     pending_original_inspection_cache_cleanup_at: Option<Instant>,
     pending_gpu_original_inspection_cleanup: bool,
@@ -475,7 +487,8 @@ impl SuiSuiViewApp {
             sibling_book_visual_pending: false,
             sibling_book_wgpu_present_wait: None,
             sibling_book_visual_hold_until: None,
-            sibling_open_retry: None,
+            source_task: Default::default(),
+            source_task_failure_action: opening::OpenFailureAction::KeepCurrent,
             view_target_settle: ViewTargetSettle::default(),
             pending_original_inspection_cache_cleanup_at: None,
             pending_gpu_original_inspection_cleanup: false,
@@ -609,7 +622,6 @@ impl SuiSuiViewApp {
             self.egui_ctx.request_repaint_after(STATE_SAVE_DEBOUNCE);
             return Err(error);
         }
-        self.bookmark_rows.clear();
         // The debounce timer covers the pending book record *and* a dirty
         // `state.json` (window geometry). Writing the record here settles only the
         // first half, so blanking the timer used to drop a window move/resize made
@@ -642,7 +654,6 @@ impl SuiSuiViewApp {
             smart_spread_phase: self.smart_spread_phase,
         });
         if changed {
-            self.bookmark_rows.clear();
             self.pending_state_save_at = Some(Instant::now() + STATE_SAVE_DEBOUNCE);
             self.egui_ctx.request_repaint_after(STATE_SAVE_DEBOUNCE);
         }
@@ -751,6 +762,10 @@ impl SuiSuiViewApp {
     }
 
     fn clear_local_book_state(&mut self, status: impl Into<String>) {
+        self.source_task.cancel();
+        self.loader_generation = self.loader_generation.wrapping_add(1);
+        self.loader_pending = false;
+        self.bookmark_rows.clear();
         self.source = None;
         self.book_id = None;
         self.open_origin = None;

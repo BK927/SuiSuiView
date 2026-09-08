@@ -101,6 +101,8 @@ impl ThumbnailWorkerState {
         source: Option<ThumbnailSource>,
         decode: DecodeOptions,
     ) -> Result<(Arc<ColorImage>, Vec2), BookmarkThumbnailFailure> {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::Thumbnail);
         let disk_entry = BookmarkThumbnailDiskEntry::new(bookmark_thumbnail_cache_key(key));
         if let Ok(Some(image)) = read_cached_thumbnail(&disk_entry) {
             let original_size = egui::vec2(image.size[0] as f32, image.size[1] as f32);

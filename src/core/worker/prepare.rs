@@ -124,6 +124,8 @@ pub fn prepare_image_with_options(
     target_long_edge: u32,
     options: DecodeOptions,
 ) -> Result<PreparedPage, String> {
+    let _stall_scope =
+        crate::core::stall_trace::scope(crate::core::stall_trace::Stage::PreparePage);
     if let Some(message) = unsupported_message_for_bytes(bytes) {
         return Err(message.to_owned());
     }

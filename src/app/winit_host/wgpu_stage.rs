@@ -144,6 +144,8 @@ impl WinitHostApp {
         mut painter: Painter,
         mut viewport_info: egui::ViewportInfo,
     ) {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::RedrawWgpu);
         // Cleared before the frame so this frame's repaint requests (via the
         // shared egui repaint callback) set a fresh deadline for `about_to_wait`.
         *self.redraw_deadline.lock().unwrap() = None;
@@ -233,7 +235,9 @@ impl WinitHostApp {
             window.request_redraw();
             return;
         }
+        let event_start = egui_state.egui_input().events.len();
         let response = egui_state.on_window_event(window, &event);
+        super::clipboard_keys::preserve_key_event(egui_state.egui_input_mut(), event_start, &event);
         if response.repaint {
             window.request_redraw();
         }

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod clipboard_keys;
 mod dpi_guard;
 mod glow_stage;
 mod glow_window;
@@ -431,6 +432,8 @@ impl winit::application::ApplicationHandler<()> for WinitHostApp {
         _window_id: winit::window::WindowId,
         mut event: winit::event::WindowEvent,
     ) {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::WindowEvent);
         // Resolve the event window up front and read its LIVE visibility +
         // maximized state, so the DPI guard never resizes/learns from a maximized
         // window (OS-determined size) and never emits a correction while the window

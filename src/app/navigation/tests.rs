@@ -1,4 +1,4 @@
-use super::super::QueuedPageTurns;
+use super::super::{QueuedPageTurns, QueuedSiblingBookTurn};
 use super::{
     normalize_sibling_book_direction, plain_forward_step, push_queued_page_turn,
     push_queued_sibling_book_turn, reserve_sibling_book_turn, should_open_edge_prompt,
@@ -87,15 +87,26 @@ fn sibling_book_direction_normalizes_to_step() {
     assert_eq!(normalize_sibling_book_direction(3), 1);
 }
 
+/// Drop only the cancellable (auto-repeat) reservations, exactly what the
+/// sibling-book key release does via `clear_queued_sibling_book_turns`.
+fn release_sibling_book_key(queue: &mut VecDeque<QueuedSiblingBookTurn>) {
+    queue.retain(|turn| !turn.cancellable);
+}
+
 #[test]
 fn queued_sibling_book_turns_keep_single_reserved_turn() {
     let mut queue = VecDeque::new();
 
-    push_queued_sibling_book_turn(&mut queue, 1);
-    push_queued_sibling_book_turn(&mut queue, -1);
-    push_queued_sibling_book_turn(&mut queue, 1);
+    push_queued_sibling_book_turn(&mut queue, 1, true);
+    push_queued_sibling_book_turn(&mut queue, -1, true);
 
-    assert_eq!(queue.into_iter().collect::<Vec<_>>(), vec![1]);
+    assert_eq!(
+        queue.into_iter().collect::<Vec<_>>(),
+        vec![QueuedSiblingBookTurn {
+            direction: 1,
+            cancellable: true,
+        }]
+    );
 }
 
 #[test]
@@ -103,10 +114,29 @@ fn queued_sibling_book_turns_are_capped() {
     let mut queue = VecDeque::new();
 
     for _ in 0..MAX_QUEUED_SIBLING_BOOK_TURNS + 8 {
-        push_queued_sibling_book_turn(&mut queue, 1);
+        push_queued_sibling_book_turn(&mut queue, 1, false);
     }
 
     assert_eq!(queue.len(), MAX_QUEUED_SIBLING_BOOK_TURNS);
+}
+
+/// A discrete tap arriving at a full queue replaces an auto-repeat reservation
+/// instead of being dropped: the tap is deliberate, and the repeat was going to
+/// be cancelled by the release anyway.
+#[test]
+fn a_tap_replaces_a_queued_repeat_reservation_at_the_cap() {
+    let mut queue = VecDeque::new();
+
+    push_queued_sibling_book_turn(&mut queue, 1, true);
+    push_queued_sibling_book_turn(&mut queue, -1, false);
+
+    assert_eq!(
+        queue.into_iter().collect::<Vec<_>>(),
+        vec![QueuedSiblingBookTurn {
+            direction: -1,
+            cancellable: false,
+        }]
+    );
 }
 
 /// A single press during a book transition must survive its own key release.
@@ -118,25 +148,43 @@ fn a_committed_sibling_book_turn_outlives_the_key_release() {
     let mut pending = None;
     let mut queue = VecDeque::new();
 
-    reserve_sibling_book_turn(&mut pending, &mut queue, 1);
-    // The key release clears only the auto-repeat queue.
-    queue.clear();
+    reserve_sibling_book_turn(&mut pending, &mut queue, 1, false);
+    release_sibling_book_key(&mut queue);
 
     assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), Some(1));
 }
 
-/// Everything past the committed turn is auto-repeat under a held key, so the
-/// release still ends the run instead of coasting on through unseen books.
+/// Rapid tap-tap flipping: with the committed slot occupied, the second tap
+/// rides the queue -- and the first tap's release used to clear it, silently
+/// losing every tap after the first during one transition window.
+#[test]
+fn a_second_tap_behind_the_committed_turn_outlives_the_key_release() {
+    let mut pending = None;
+    let mut queue = VecDeque::new();
+
+    reserve_sibling_book_turn(&mut pending, &mut queue, 1, false);
+    reserve_sibling_book_turn(&mut pending, &mut queue, 1, false);
+    release_sibling_book_key(&mut queue);
+    release_sibling_book_key(&mut queue);
+
+    assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), Some(1));
+    assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), Some(1));
+    assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), None);
+}
+
+/// Reservations past the committed turn made by auto-repeat under a held key
+/// are dropped on release, so letting go ends the run instead of coasting on
+/// through unseen books.
 #[test]
 fn releasing_a_held_key_drops_only_the_repeat_reservations() {
     let mut pending = None;
     let mut queue = VecDeque::new();
 
-    reserve_sibling_book_turn(&mut pending, &mut queue, 1);
-    reserve_sibling_book_turn(&mut pending, &mut queue, 1);
+    reserve_sibling_book_turn(&mut pending, &mut queue, 1, true);
+    reserve_sibling_book_turn(&mut pending, &mut queue, 1, true);
     assert_eq!(queue.len(), 1);
 
-    queue.clear();
+    release_sibling_book_key(&mut queue);
 
     assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), Some(1));
     assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), None);
@@ -147,11 +195,10 @@ fn sibling_book_reservations_normalize_and_run_committed_first() {
     let mut pending = None;
     let mut queue = VecDeque::new();
 
-    reserve_sibling_book_turn(&mut pending, &mut queue, -4);
-    reserve_sibling_book_turn(&mut pending, &mut queue, 3);
+    reserve_sibling_book_turn(&mut pending, &mut queue, -4, false);
+    reserve_sibling_book_turn(&mut pending, &mut queue, 3, false);
 
     assert_eq!(pending, Some(-1));
-    assert_eq!(queue.iter().copied().collect::<Vec<_>>(), vec![1]);
     assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), Some(-1));
     assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), Some(1));
     assert_eq!(take_sibling_book_turn(&mut pending, &mut queue), None);

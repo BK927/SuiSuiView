@@ -4,7 +4,7 @@ use super::bookmark_text::{allocate_bookmark_title, paint_bookmark_title};
 use super::bookmark_thumbnails::{thumbnail_tint_for_state, BookmarkThumbnailState};
 use super::{dialog, icons, theme};
 use crate::core::i18n::I18n;
-use crate::core::state::{PageBookmarkChange, PageBookmarkEntry};
+use crate::core::state::PageBookmarkChange;
 use egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Rect, RichText, Sense, Stroke,
     StrokeKind,
@@ -123,6 +123,7 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn close_bookmark_popover(&mut self) {
         self.bookmark_popover_open = false;
+        self.bookmark_rows.cancel_loading();
         self.bookmark_delete_dialog = None;
         self.bookmark_popover_anchor = None;
     }
@@ -150,10 +151,12 @@ impl SuiSuiViewApp {
             return false;
         };
         self.store
-            .has_page_bookmark(book_id, &source_path, self.current_page)
+            .cached_page_is_bookmarked(book_id, &source_path, self.current_page)
     }
 
     pub(in crate::app) fn toggle_current_page_bookmark(&mut self) {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::BookmarkToggle);
         self.bookmark_delete_dialog = None;
         let i18n = self.i18n();
         let Some(book_id) = self.book_id.clone() else {
@@ -464,6 +467,21 @@ impl SuiSuiViewApp {
         }
 
         self.refresh_bookmark_rows_if_needed();
+        if self.bookmark_rows.is_loading() {
+            ui.allocate_ui(egui::vec2(ui.available_width(), rows_height), |ui| {
+                ui.centered_and_justified(|ui| {
+                    ui.spinner();
+                });
+            });
+            return;
+        }
+        if self.bookmark_rows.error().is_some() {
+            ui.label(self.i18n().text("bookmark.load_failed"));
+            if ui.button(self.i18n().text("bookmark.retry")).clicked() {
+                self.bookmark_rows.clear();
+            }
+            return;
+        }
         if self.bookmark_rows.len() == 0 {
             empty_bookmark_message(ui, &self.i18n().text("bookmark.empty_all"), rows_height);
             return;
@@ -649,71 +667,28 @@ impl SuiSuiViewApp {
         {
             return count;
         }
-        let count = self.measure_bookmark_delete_scope(scope, book_id.as_deref(), &source_path);
-        self.bookmark_rows.set_scope_count(
-            scope,
-            book_id.as_deref(),
-            source_path.as_deref(),
-            count,
-        );
-        count
-    }
-
-    fn measure_bookmark_delete_scope(
-        &self,
-        scope: BookmarkFilter,
-        book_id: Option<&str>,
-        source_path: &Option<String>,
-    ) -> usize {
-        match scope {
-            BookmarkFilter::All => self.store.all_page_bookmark_count(),
-            BookmarkFilter::ThisBook => book_id
-                .zip(source_path.as_deref())
-                .map(|(book_id, path)| {
-                    self.store
-                        .page_bookmark_entries(book_id, std::path::Path::new(path))
-                        .len()
-                })
-                .unwrap_or_default(),
-        }
-    }
-
-    fn bookmark_entries_for_active_filter(&self) -> Vec<PageBookmarkEntry> {
-        match self.bookmark_filter {
-            BookmarkFilter::All => self.store.all_page_bookmarks(),
-            BookmarkFilter::ThisBook => self
-                .book_id
-                .as_deref()
-                .and_then(|book_id| {
-                    self.current_bookmark_source_path()
-                        .map(|path| self.store.page_bookmark_entries(book_id, &path))
-                })
-                .unwrap_or_default(),
-        }
+        // Unknown counts stay disabled until the same background snapshot as
+        // the rows is ready. Search never changes the deletion scope.
+        0
     }
 
     fn refresh_bookmark_rows_if_needed(&mut self) {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::BookmarkList);
         let filter = self.bookmark_filter;
         let book_id = self.book_id.clone();
         let source_path = self
             .current_bookmark_source_path()
             .map(|path| path.to_string_lossy().to_string());
         let query = self.bookmark_search.clone();
-        if self.bookmark_rows.needs_refresh(
+        self.bookmark_rows.refresh_async(
+            &self.egui_ctx,
+            || self.store.fork_for_background(),
             filter,
             book_id.as_deref(),
             source_path.as_deref(),
             &query,
-        ) {
-            let entries = self.bookmark_entries_for_active_filter();
-            self.bookmark_rows.refresh(
-                filter,
-                book_id.as_deref(),
-                source_path.as_deref(),
-                &query,
-                entries,
-            );
-        }
+        );
     }
 
     fn bookmark_thumbnail_state(
@@ -734,6 +709,8 @@ impl SuiSuiViewApp {
     }
 
     fn jump_to_bookmark(&mut self, row: BookmarkRow) {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::BookmarkJump);
         let active_path = self.current_bookmark_source_path();
         let current_bookmark_path = active_path.as_ref().is_some_and(|path| {
             row.known_path
@@ -870,6 +847,12 @@ fn show_bookmark_thumbnail(ui: &mut egui::Ui, thumbnail: BookmarkThumbnailState)
                 image_rect,
                 Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                 Color32::WHITE,
+            );
+        }
+        BookmarkThumbnailState::Loading => {
+            egui::Spinner::new().size(20.0).paint_at(
+                ui,
+                Rect::from_center_size(rect.center(), egui::vec2(20.0, 20.0)),
             );
         }
         state => {

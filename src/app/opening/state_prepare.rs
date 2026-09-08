@@ -43,6 +43,8 @@ pub(in crate::app) fn prepare_source_open(
     opened_path: &Path,
     allow_identity_match: bool,
 ) -> std::io::Result<PreparedSourceOpen> {
+    let _stall_scope =
+        crate::core::stall_trace::scope(crate::core::stall_trace::Stage::PrepareBook);
     let bookmark_path = bookmark_path_for_open(origin, opened_path, source.as_ref());
     let legacy_book_id = source.legacy_book_id();
     let mut attempt = 0;
@@ -85,6 +87,8 @@ impl SuiSuiViewApp {
         prepared: PreparedSourceOpen,
         context: PreparedSourceContext,
     ) {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::InstallBook);
         let PreparedSourceOpen {
             source,
             forced_page,
@@ -221,7 +225,6 @@ impl SuiSuiViewApp {
         message: String,
         failure_action: OpenFailureAction,
     ) {
-        self.sibling_open_retry = None;
         if self
             .pending_bookmark_jump
             .as_ref()

@@ -104,10 +104,7 @@ pub(in crate::app) fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
 }
 
 pub(in crate::app) fn copy_color_image_to_clipboard(image: &ColorImage) -> Result<(), String> {
-    let mut bytes = Vec::with_capacity(image.pixels.len() * 4);
-    for pixel in &image.pixels {
-        bytes.extend_from_slice(&[pixel.r(), pixel.g(), pixel.b(), pixel.a()]);
-    }
+    let bytes = clipboard_rgba_bytes(image);
     Clipboard::new()
         .map_err(|error| error.to_string())?
         .set_image(ClipboardImageData {
@@ -174,6 +171,26 @@ fn restart_current_process_with_env(force_glow_once: bool) -> Result<(), String>
         .spawn()
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+fn clipboard_rgba_bytes(image: &ColorImage) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(image.pixels.len() * 4);
+    for pixel in &image.pixels {
+        bytes.extend_from_slice(&pixel.to_srgba_unmultiplied());
+    }
+    bytes
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    #[test]
+    fn clipboard_preserves_straight_alpha_colors() {
+        let rgba = [
+            255, 0, 0, 255, 255, 0, 0, 128, 0, 255, 0, 128, 0, 0, 255, 64,
+        ];
+        let image = egui::ColorImage::from_rgba_unmultiplied([4, 1], &rgba);
+        assert_eq!(super::clipboard_rgba_bytes(&image), rgba);
+    }
 }
 
 #[cfg(target_os = "windows")]

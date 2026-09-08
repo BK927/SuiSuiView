@@ -1,6 +1,6 @@
 use super::{
-    perf, sibling_book_path, transition_screen_sign, worker_center_page_for_mode, EdgePrompt,
-    OpenOrigin, SuiSuiViewApp, Transition, ViewMode, SIBLING_BOOK_TURN_REPAINT_DELAY,
+    perf, transition_screen_sign, worker_center_page_for_mode, EdgePrompt, OpenOrigin,
+    QueuedSiblingBookTurn, SuiSuiViewApp, Transition, ViewMode, SIBLING_BOOK_TURN_REPAINT_DELAY,
 };
 use crate::core::effects::ViewEffects;
 use crate::core::state::{EdgePageAction, FitMode, PageTransitionStyle, ReadingDirection};
@@ -12,7 +12,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const MAX_QUEUED_PAGE_TURNS: usize = 1;
 pub(in crate::app) const MAX_QUEUED_WORKER_VISIBLE_PAGES: usize = 25;
 const MAX_QUEUED_SIBLING_BOOK_TURNS: usize = 1;
-const SIBLING_OPEN_RETRY_LIMIT: usize = 16;
 
 /// A zoom gesture is treated as "in motion" for this long after the last
 /// interactive `manual_zoom` change. While in motion, the WGSL downscaler is
@@ -26,13 +25,27 @@ const ZOOM_SETTLE_MS: u64 = 200;
 const MIN_MANUAL_ZOOM: f32 = 0.1;
 const MAX_MANUAL_ZOOM: f32 = 16.0;
 
-/// Active "skip unopenable sibling books" walk: while set, a failed sibling
-/// open continues to the next candidate in the same direction instead of
-/// stopping at the failure toast.
-pub(in crate::app) struct SiblingOpenRetry {
-    pub(in crate::app) direction: isize,
-    pub(in crate::app) attempts_left: usize,
-    pub(in crate::app) origin_book: Option<PathBuf>,
+/// `SUISUIVIEW_SIBLING_TURN_LOG=1` traces the sibling-book reservation
+/// lifecycle (reserve / take / clear / open outcome) to stderr with
+/// millisecond timestamps. Read once via `OnceLock` so the hot path pays
+/// nothing when unset. Field diagnostic for intermittently swallowed
+/// next/previous-book presses.
+fn sibling_turn_log_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SUISUIVIEW_SIBLING_TURN_LOG").is_some())
+}
+
+pub(in crate::app) fn sibling_turn_log(message: impl FnOnce() -> String) {
+    if !sibling_turn_log_enabled() {
+        return;
+    }
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let elapsed = START.get_or_init(Instant::now).elapsed();
+    eprintln!(
+        "[sibling-turn +{:>8.1}ms] {}",
+        elapsed.as_secs_f64() * 1000.0,
+        message()
+    );
 }
 
 impl SuiSuiViewApp {
@@ -389,6 +402,15 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn clear_pending_sibling_book_turns(&mut self) {
+        if self.pending_sibling_book_turn.is_some() || !self.queued_sibling_book_turns.is_empty() {
+            sibling_turn_log(|| {
+                format!(
+                    "clear_pending drops pending={:?} queued={}",
+                    self.pending_sibling_book_turn,
+                    self.queued_sibling_book_turns.len(),
+                )
+            });
+        }
         self.pending_sibling_book_turn = None;
         self.queued_sibling_book_turns.clear();
         self.sibling_book_wgpu_present_wait = None;
@@ -396,11 +418,22 @@ impl SuiSuiViewApp {
     }
 
     /// Key-release half of the held-key run: drop only the turns auto-repeat
-    /// reserved. The committed turn in `pending_sibling_book_turn` stands for a
-    /// press the reader made deliberately and outlives the release -- clearing
-    /// it here is what used to swallow single presses landing mid-transition.
+    /// reserved. The committed turn in `pending_sibling_book_turn` and queued
+    /// discrete taps stand for presses the reader made deliberately and outlive
+    /// the release -- clearing them here is what used to swallow presses
+    /// landing mid-transition.
     pub(in crate::app) fn clear_queued_sibling_book_turns(&mut self) {
-        self.queued_sibling_book_turns.clear();
+        let before = self.queued_sibling_book_turns.len();
+        self.queued_sibling_book_turns
+            .retain(|turn| !turn.cancellable);
+        if self.queued_sibling_book_turns.len() != before {
+            sibling_turn_log(|| {
+                format!(
+                    "key release drops {} repeat reservation(s)",
+                    before - self.queued_sibling_book_turns.len(),
+                )
+            });
+        }
     }
 
     pub(in crate::app) fn mark_current_book_visual_painted(&mut self) {
@@ -659,19 +692,39 @@ impl SuiSuiViewApp {
         parts.join(", ")
     }
 
+    /// A deliberate request: a discrete key tap, a click on the edge prompt or
+    /// context menu, or an edge-page action. Reserved turns from this path are
+    /// never taken back by a key release.
     pub(in crate::app) fn open_sibling_book(&mut self, direction: isize) {
+        self.open_sibling_book_from(direction, false);
+    }
+
+    /// An auto-repeat press under a held key. Reserved turns from this path are
+    /// dropped when the key is released, so letting go ends the run.
+    pub(in crate::app) fn open_sibling_book_repeat(&mut self, direction: isize) {
+        self.open_sibling_book_from(direction, true);
+    }
+
+    fn open_sibling_book_from(&mut self, direction: isize, cancellable: bool) {
         let direction = normalize_sibling_book_direction(direction);
+        sibling_turn_log(|| {
+            format!(
+                "request dir={direction} cancellable={cancellable} pending={:?} queued={} loader_pending={} visual_pending={}",
+                self.pending_sibling_book_turn,
+                self.queued_sibling_book_turns.len(),
+                self.loader_pending,
+                self.sibling_book_visual_pending,
+            )
+        });
         if self.should_queue_sibling_book_turn() {
-            self.queue_sibling_book_turn(direction);
+            self.queue_sibling_book_turn(direction, cancellable);
             return;
         }
         self.open_sibling_book_now(direction);
     }
 
     fn should_queue_sibling_book_turn(&self) -> bool {
-        self.sibling_book_turn_reserved()
-            || self.loader_pending
-            || self.sibling_book_visual_pending
+        self.sibling_book_turn_reserved() || self.loader_pending || self.sibling_book_visual_pending
     }
 
     fn sibling_book_turn_reserved(&self) -> bool {
@@ -694,12 +747,13 @@ impl SuiSuiViewApp {
             || self.sibling_book_turn_reserved()
     }
 
-    fn queue_sibling_book_turn(&mut self, direction: isize) {
+    fn queue_sibling_book_turn(&mut self, direction: isize, cancellable: bool) {
         self.edge_prompt = None;
         reserve_sibling_book_turn(
             &mut self.pending_sibling_book_turn,
             &mut self.queued_sibling_book_turns,
             direction,
+            cancellable,
         );
         self.egui_ctx
             .request_repaint_after(SIBLING_BOOK_TURN_REPAINT_DELAY);
@@ -719,6 +773,7 @@ impl SuiSuiViewApp {
         ) else {
             return;
         };
+        sibling_turn_log(|| format!("drive takes reserved dir={direction}"));
         self.open_sibling_book_now(direction);
         if self.sibling_book_turn_reserved() || self.sibling_book_turn_in_progress() {
             ctx.request_repaint_after(SIBLING_BOOK_TURN_REPAINT_DELAY);
@@ -726,12 +781,16 @@ impl SuiSuiViewApp {
     }
 
     fn open_sibling_book_now(&mut self, direction: isize) {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::SiblingNavigation);
         let Some(current) = self.current_book_reference_path() else {
+            sibling_turn_log(|| "open_now aborted: no current book".to_owned());
             self.set_status(self.i18n().text("status.no_current_book"));
             return;
         };
         if perf::adjacent_seed_prefetch_enabled() {
             if let Some(cache) = self.take_adjacent_seed_for_direction(direction) {
+                sibling_turn_log(|| format!("open_now dir={direction} via prefetched seed"));
                 self.install_adjacent_seed_cache(
                     cache,
                     navigation_direction_for_sibling(direction),
@@ -743,19 +802,7 @@ impl SuiSuiViewApp {
             }
             perf::record_adjacent_seed_prefetch_hit(false, self.target_long_edge);
         }
-        let Some(next) = sibling_book_path(&current, direction) else {
-            self.set_status(self.i18n().text("status.no_sibling_book"));
-            return;
-        };
-        self.sibling_open_retry = Some(SiblingOpenRetry {
-            direction,
-            attempts_left: SIBLING_OPEN_RETRY_LIMIT,
-            origin_book: self.current_book_reference_path(),
-        });
-        self.open_sibling_path_with_initial_direction(
-            next,
-            navigation_direction_for_sibling(direction),
-        );
+        self.open_sibling_async(current, direction);
     }
 
     pub(in crate::app) fn current_book_reference_path(&self) -> Option<PathBuf> {
@@ -869,45 +916,67 @@ fn push_queued_page_turn(
     }
 }
 
-fn push_queued_sibling_book_turn(queue: &mut std::collections::VecDeque<isize>, direction: isize) {
+/// Push behind the committed slot, bounded by the cap. At the cap a discrete
+/// tap still replaces a cancellable auto-repeat reservation: the tap is a
+/// deliberate press and outranks a repeat the release was going to drop anyway.
+/// A tap arriving at a cap full of taps is dropped -- the reservation depth is
+/// deliberately shallow so a burst cannot coast through books nobody sees.
+fn push_queued_sibling_book_turn(
+    queue: &mut std::collections::VecDeque<QueuedSiblingBookTurn>,
+    direction: isize,
+    cancellable: bool,
+) {
+    let turn = QueuedSiblingBookTurn {
+        direction: normalize_sibling_book_direction(direction),
+        cancellable,
+    };
     if queue.len() >= MAX_QUEUED_SIBLING_BOOK_TURNS {
+        if !cancellable {
+            if let Some(slot) = queue.iter_mut().find(|queued| queued.cancellable) {
+                *slot = turn;
+            }
+        }
         return;
     }
-    queue.push_back(normalize_sibling_book_direction(direction));
+    queue.push_back(turn);
 }
 
 /// Reserve a sibling-book turn asked for while another one is still in flight.
 ///
 /// The first reservation is committed. A book open spans the loader thread and
 /// the new book's first paint -- far longer than the ~100ms a key spends down --
-/// so a single press landing in that window is always still reserved when the
-/// release arrives. Letting the release take it back dropped the press silently:
-/// the reader saw the old book, no status, and had to press again.
+/// so a press landing in that window is always still reserved when the release
+/// arrives. Letting the release take it back dropped the press silently: the
+/// reader saw the old book, no status, and had to press again.
 ///
-/// Anything past the committed one can only come from auto-repeat under a held
-/// key, so it rides the cancellable queue that the release clears. Letting go
-/// still stops the run rather than coasting through books nobody saw.
-/// Pure for testing.
+/// Reservations behind the committed one ride the queue, each remembering
+/// whether it may be cancelled: auto-repeat under a held key is dropped on
+/// release so letting go ends the run, while a discrete tap is kept -- rapid
+/// tap-tap flipping used to lose every tap after the first to the interleaved
+/// releases. Pure for testing.
 fn reserve_sibling_book_turn(
     pending: &mut Option<isize>,
-    queue: &mut std::collections::VecDeque<isize>,
+    queue: &mut std::collections::VecDeque<QueuedSiblingBookTurn>,
     direction: isize,
+    cancellable: bool,
 ) {
     if pending.is_none() {
         *pending = Some(normalize_sibling_book_direction(direction));
         return;
     }
-    push_queued_sibling_book_turn(queue, direction);
+    push_queued_sibling_book_turn(queue, direction, cancellable);
 }
 
-/// Committed turn first, then the auto-repeat queue. A queued turn is promoted
-/// only as it is taken, so it stays cancellable right up until it runs.
-/// Pure for testing.
+/// Committed turn first, then the queue. A queued turn is promoted only as it
+/// is taken, so an auto-repeat reservation stays cancellable right up until it
+/// runs. Pure for testing.
 fn take_sibling_book_turn(
     pending: &mut Option<isize>,
-    queue: &mut std::collections::VecDeque<isize>,
+    queue: &mut std::collections::VecDeque<QueuedSiblingBookTurn>,
 ) -> Option<isize> {
-    pending.take().or_else(|| queue.pop_front())
+    pending
+        .take()
+        .or_else(|| queue.pop_front().map(|turn| turn.direction))
 }
 
 /// Walks `step` from `start` in `direction` until `exists(candidate)` holds,

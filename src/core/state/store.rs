@@ -16,6 +16,8 @@ use std::path::Path;
 
 impl StateStore {
     pub fn load() -> Self {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::StateLoad);
         let path = book_files::state_file_path();
         let books_dir = book_files::books_dir_path();
         let mut state = fs::read_to_string(&path)

@@ -10,6 +10,8 @@ use std::time::Instant;
 
 impl StateStore {
     pub(super) fn read_book_record(&self, book_id: &str) -> Option<BookRecord> {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::ReadBookRecord);
         if book_redirect_exists(&self.books_dir, book_id) {
             self.books.borrow_mut().records.remove(book_id);
             return None;
@@ -34,16 +36,43 @@ impl StateStore {
         Some(record)
     }
 
+    pub(super) fn read_book_record_for_bookmarks(
+        &self,
+        book_id: &str,
+    ) -> std::io::Result<Option<BookRecord>> {
+        let path = book_file_path(&self.books_dir, book_id);
+        if path.with_extension("redirect").try_exists()? {
+            return Ok(None);
+        }
+        if let Some(record) = self.pending_books.get(book_id) {
+            return Ok(Some(record.clone()));
+        }
+        match fs::read_to_string(path) {
+            Ok(text) => serde_json::from_str(&text)
+                .map(Some)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Parse every book record on disk once, then leave `records` complete so
     /// later whole-library questions stay in memory.
-    fn ensure_all_book_records_loaded(&self) {
+    pub(super) fn ensure_all_book_records_loaded(&self) -> std::io::Result<()> {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::ScanBookRecords);
         if !self.books.borrow().all_loaded {
             #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
             let started = Instant::now();
             let mut books = self.books.borrow_mut();
             #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
             let mut scanned = 0usize;
-            if let Ok(entries) = fs::read_dir(&self.books_dir) {
+            let entries = match fs::read_dir(&self.books_dir) {
+                Ok(entries) => Some(entries),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error),
+            };
+            if let Some(entries) = entries {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
@@ -74,6 +103,7 @@ impl StateStore {
                 &[PerfField::Usize("records", scanned)],
             );
         }
+        Ok(())
     }
 
     /// Visit every current book record in place, in unspecified order.
@@ -82,7 +112,7 @@ impl StateStore {
     /// the wrong primitive for a question that only needs to look at it. Use
     /// this for aggregates.
     pub(super) fn for_each_book_record(&self, mut visit: impl FnMut(&BookRecord)) {
-        self.ensure_all_book_records_loaded();
+        let _ = self.ensure_all_book_records_loaded();
         let books = self.books.borrow();
         for record in books.records.values() {
             // A pending edit supersedes the parsed copy; it is visited below.
@@ -103,7 +133,9 @@ impl StateStore {
     }
 
     pub(super) fn load_all_book_records(&self) -> Vec<BookRecord> {
-        self.ensure_all_book_records_loaded();
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::CollectBookRecords);
+        let _ = self.ensure_all_book_records_loaded();
         let mut records: Vec<BookRecord> = self
             .books
             .borrow()
@@ -213,6 +245,8 @@ fn book_file_path(books_dir: &Path, book_id: &str) -> PathBuf {
 }
 
 fn book_redirect_exists(books_dir: &Path, book_id: &str) -> bool {
+    let _stall_scope =
+        crate::core::stall_trace::scope(crate::core::stall_trace::Stage::RedirectMetadata);
     book_file_path(books_dir, book_id)
         .with_extension("redirect")
         .is_file()
@@ -234,6 +268,7 @@ fn sanitize_book_id(book_id: &str) -> String {
 }
 
 pub(super) fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    let _stall_scope = crate::core::stall_trace::scope(crate::core::stall_trace::Stage::WriteState);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }

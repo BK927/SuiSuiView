@@ -104,6 +104,8 @@ pub(in crate::app) fn adjacent_sibling_book_paths_ordered(
 }
 
 fn sibling_book_entries(current: &Path) -> Option<Vec<PathBuf>> {
+    let _stall_scope =
+        crate::core::stall_trace::scope(crate::core::stall_trace::Stage::SiblingEntries);
     let parent = current.parent()?;
     let mut entries = fs::read_dir(parent)
         .ok()?
@@ -157,6 +159,8 @@ fn name(path: &Path) -> String {
 }
 
 pub(in crate::app) fn same_path(left: &Path, right: &Path) -> bool {
+    let _stall_scope =
+        crate::core::stall_trace::scope(crate::core::stall_trace::Stage::ComparePaths);
     match (left.canonicalize(), right.canonicalize()) {
         (Ok(left), Ok(right)) => left == right,
         _ => left == right,

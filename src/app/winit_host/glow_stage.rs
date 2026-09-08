@@ -61,6 +61,8 @@ impl WinitHostApp {
         gl: Arc<glow::Context>,
         mut egui_glow: egui_glow::EguiGlow,
     ) {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::RedrawGlow);
         self.poll_prewarm();
         if let Some(error) = self.metrics.prewarm_error.clone() {
             self.fail(event_loop, HostFailureStage::WgpuPrewarm, error);
@@ -134,7 +136,13 @@ impl WinitHostApp {
             gl_window.window().request_redraw();
             return;
         }
+        let event_start = egui_glow.egui_winit.egui_input().events.len();
         let response = egui_glow.on_window_event(gl_window.window(), &event);
+        super::clipboard_keys::preserve_key_event(
+            egui_glow.egui_winit.egui_input_mut(),
+            event_start,
+            &event,
+        );
         if response.repaint {
             gl_window.window().request_redraw();
         }

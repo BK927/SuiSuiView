@@ -277,6 +277,8 @@ pub enum SourceKind {
 }
 
 pub fn classify_path(path: &Path) -> SourceKind {
+    let _stall_scope =
+        crate::core::stall_trace::scope(crate::core::stall_trace::Stage::ClassifyPath);
     if path.is_dir() {
         return SourceKind::Folder;
     }
@@ -300,6 +302,7 @@ pub fn classify_path(path: &Path) -> SourceKind {
 }
 
 pub fn open_source_from_path(path: &Path) -> Result<(SharedSource, Option<usize>), SourceError> {
+    let _stall_scope = crate::core::stall_trace::scope(crate::core::stall_trace::Stage::OpenSource);
     match classify_path(path) {
         SourceKind::Folder => {
             FolderSource::open(path).map(|source| (Arc::new(source) as SharedSource, None))
@@ -500,6 +503,8 @@ impl BookSource for FolderSource {
     }
 
     fn read_page(&self, index: usize) -> Result<Vec<u8>, SourceError> {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::ReadPage);
         let page = self.pages.get(index).ok_or(SourceError::InvalidPage {
             index,
             page_count: self.pages.len(),
@@ -676,6 +681,8 @@ impl BookSource for ZipCbzSource {
     }
 
     fn read_page(&self, index: usize) -> Result<Vec<u8>, SourceError> {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::ReadPage);
         let page = self.pages.get(index).ok_or(SourceError::InvalidPage {
             index,
             page_count: self.pages.len(),

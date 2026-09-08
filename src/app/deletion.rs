@@ -116,6 +116,9 @@ impl SuiSuiViewApp {
         let plan = live_plan;
 
         if !self.worker.clear_book_blocking() {
+            // ClearBook is still queued after a timeout. Restore the source
+            // behind it so later SetPage commands can resume normal reading.
+            self.reload_current_book_after_delete_failure();
             self.notify(
                 "Background decode is still finishing; deletion was not attempted. Try again soon.",
             );

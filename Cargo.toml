@@ -25,6 +25,7 @@ native-avif = ["dep:libavif"]
 native-ai = ["dep:pdfium-render"]
 perf-dev = []
 perf-diagnostics = []
+stall-diagnostics = []
 runtime-probe = []
 
 [[bin]]

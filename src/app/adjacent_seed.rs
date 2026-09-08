@@ -338,6 +338,7 @@ impl SuiSuiViewApp {
 
         perf::record_adjacent_seed_prefetch_hit(true, target_long_edge);
         self.pending_bookmark_jump = None;
+        self.source_task.cancel();
         self.loader_generation = self.loader_generation.wrapping_add(1);
         let generation = self.loader_generation;
         self.clear_adjacent_seed_cache();
@@ -424,7 +425,7 @@ impl SuiSuiViewApp {
         &mut self,
         direction: isize,
         path: Option<&Path>,
-        explicit_page: Option<usize>,
+        _explicit_page: Option<usize>,
     ) -> Option<AdjacentSeedCache> {
         if !perf::adjacent_seed_prefetch_enabled() {
             return None;
@@ -450,26 +451,10 @@ impl SuiSuiViewApp {
             return None;
         }
 
-        let reading_position = reading_position_for_open(
-            &self.store,
-            cache.source.as_ref(),
-            cache.origin,
-            &cache.path,
-            self.settings.resume_by_file_identity,
-        );
-        let selected_page = selected_open_page(
-            cache.source.as_ref(),
-            explicit_page,
-            cache.forced_page,
-            reading_position.as_ref(),
-            None,
-        );
-        if selected_page == cache.seeded_page.index {
-            Some(cache)
-        } else {
-            drop_adjacent_seed_caches_off_thread(vec![cache]);
-            None
-        }
+        // The installation worker re-reads the selected position and prepares
+        // a replacement seed when needed. Checking it here would stat the
+        // history volume on the input thread even for a prefetched hit.
+        Some(cache)
     }
 
     fn retain_adjacent_seed_caches_for_current(

@@ -1,9 +1,8 @@
 use super::{
     adjacent_seed::{prepare_seeded_first_page, SeedTargetView},
     perf,
-    sibling_books::{same_path, sibling_book_path},
     viewer::{StripAnchor, ViewMode, ViewTargetSettle, SPREAD_GAP_POINTS},
-    PendingBookmarkJump, SeededPreparedPage, SiblingOpenRetry, SuiSuiViewApp,
+    PendingBookmarkJump, SeededPreparedPage, SuiSuiViewApp,
 };
 use crate::core::effects::ViewEffects;
 use crate::core::formats::unsupported_message_for_extension;
@@ -25,7 +24,9 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Instant;
 
+mod source_task;
 mod state_prepare;
+pub(in crate::app) use source_task::SourceTaskOutput;
 
 use self::state_prepare::PreparedSourceContext;
 pub(in crate::app) use self::state_prepare::{prepare_source_open, PreparedSourceOpen};
@@ -216,7 +217,6 @@ pub(crate) fn start_startup_open_loader(path: PathBuf, store: &StateStore) -> Op
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn open_path(&mut self, path: PathBuf) {
-        self.sibling_open_retry = None;
         self.clear_pending_sibling_book_turns();
         self.open_path_with_initial_direction(path, NavigationDirection::Forward);
     }
@@ -237,23 +237,6 @@ impl SuiSuiViewApp {
         );
     }
 
-    pub(in crate::app) fn open_sibling_path_with_initial_direction(
-        &mut self,
-        path: PathBuf,
-        initial_direction: NavigationDirection,
-    ) {
-        let view_fallback = Some(self.open_view_fallback());
-        self.pending_bookmark_jump = None;
-        self.clear_adjacent_seed_cache();
-        self.open_path_inner(
-            path,
-            initial_direction,
-            view_fallback,
-            None,
-            OpenFailureAction::KeepCurrent,
-        );
-    }
-
     pub(in crate::app) fn open_path_for_bookmark(
         &mut self,
         path: PathBuf,
@@ -261,7 +244,6 @@ impl SuiSuiViewApp {
         page: usize,
         page_name: Option<String>,
     ) {
-        self.sibling_open_retry = None;
         self.clear_pending_sibling_book_turns();
         self.pending_bookmark_jump = Some(PendingBookmarkJump {
             book_id,
@@ -286,7 +268,6 @@ impl SuiSuiViewApp {
         explicit_page: Option<usize>,
         view_fallback: Option<OpenViewFallback>,
     ) {
-        self.sibling_open_retry = None;
         self.pending_bookmark_jump = None;
         self.clear_adjacent_seed_cache();
         self.open_path_inner(
@@ -305,7 +286,6 @@ impl SuiSuiViewApp {
         explicit_page: Option<usize>,
         view_fallback: Option<OpenViewFallback>,
     ) {
-        self.sibling_open_retry = None;
         self.pending_bookmark_jump = None;
         self.clear_adjacent_seed_cache();
         self.open_path_inner(
@@ -325,142 +305,16 @@ impl SuiSuiViewApp {
         explicit_page: Option<usize>,
         failure_action: OpenFailureAction,
     ) {
-        let source_kind = classify_path(&path);
-        match source_kind {
-            SourceKind::Folder | SourceKind::ZipCbz | SourceKind::SingleImage => {
-                // An explicit open request supersedes a destructive decision
-                // about the currently visible source. Cancel immediately,
-                // rather than leaving a window where the old target can be
-                // confirmed while the replacement is still loading.
-                self.pending_delete_dialog = None;
-                let origin = match source_kind {
-                    SourceKind::Folder => OpenOrigin::Folder,
-                    SourceKind::ZipCbz => OpenOrigin::ZipCbz,
-                    SourceKind::SingleImage => OpenOrigin::SingleImage,
-                    _ => unreachable!("openable source kinds are handled above"),
-                };
-                self.loader_generation = self.loader_generation.wrapping_add(1);
-                let generation = self.loader_generation;
-                #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-                {
-                    self.open_to_first_visible_trace =
-                        Some(perf::OpenToFirstVisibleTrace::new(origin.perf_label()));
-                }
-                let tx = self.loader_tx.clone();
-                let ctx = self.egui_ctx.clone();
-                let load_path = path.clone();
-                let store = self.store.fork_for_background();
-                let settings = self.settings.clone();
-                let seed_target_long_edge = open_seed_target_long_edge(self.target_long_edge);
-                let seed_target_view = self.seed_target_view_for_open(view_fallback);
-                let decode = startup_decode_options(&settings);
-                let resume_by_file_identity = settings.resume_by_file_identity;
-                let pending_bookmark_jump = self.pending_bookmark_jump.clone();
-                self.set_status(self.i18n().text("status.opening"));
-
-                let spawn_result = thread::Builder::new()
-                    .name("suisuiview-source-loader".to_owned())
-                    .spawn(move || {
-                        let started = Instant::now();
-                        let source_result = open_source_from_path(&load_path);
-                        perf::record_open_source(
-                            started,
-                            origin.perf_label(),
-                            source_result.is_ok(),
-                        );
-                        let result = match source_result {
-                            Ok((source, forced_page)) => prepare_source_open(
-                                &store,
-                                source,
-                                forced_page,
-                                origin,
-                                &load_path,
-                                resume_by_file_identity,
-                            )
-                            .map_err(|error| LoaderFailure::State(error.to_string())),
-                            Err(error) => Err(LoaderFailure::Source(error.to_string())),
-                        };
-                        let seeded_page = result.as_ref().ok().and_then(|prepared| {
-                            let pending_page = pending_bookmark_jump.as_ref().and_then(|pending| {
-                                pending_bookmark_page(prepared.source.as_ref(), pending)
-                            });
-                            let page_index = selected_open_page(
-                                prepared.source.as_ref(),
-                                explicit_page,
-                                prepared.forced_page,
-                                prepared.speculative_reading_position.as_ref(),
-                                pending_page,
-                            );
-                            let started = Instant::now();
-                            let seeded = prepare_seeded_first_page(
-                                prepared.source.as_ref(),
-                                page_index,
-                                seed_target_long_edge,
-                                decode,
-                                false,
-                                seed_target_view,
-                            );
-                            perf::record_startup_seed_prepare(
-                                started,
-                                origin.perf_label(),
-                                page_index,
-                                seed_target_long_edge,
-                                seeded.is_some(),
-                            );
-                            seeded
-                        });
-                        let _ = tx.send(LoaderEvent {
-                            generation,
-                            path: load_path,
-                            origin,
-                            initial_direction,
-                            view_fallback,
-                            explicit_page,
-                            failure_action,
-                            result,
-                            seeded_page,
-                            seeded_followup_page: None,
-                            discovery_attempt: 1,
-                        });
-                        ctx.request_repaint();
-                    });
-                match spawn_result {
-                    Ok(_) => {
-                        self.loader_pending = true;
-                    }
-                    Err(error) => {
-                        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-                        {
-                            self.open_to_first_visible_trace = None;
-                        }
-                        self.sibling_book_visual_pending = false;
-                        self.clear_pending_sibling_book_turns();
-                        self.handle_open_failure(
-                            format!("Could not start source loader: {error}"),
-                            failure_action,
-                        );
-                    }
-                }
-            }
-            SourceKind::UnsupportedRar => {
-                self.handle_open_failure(
-                    "CBR/RAR requires the restricted read-only archive backend before it can be opened."
-                        .to_owned(),
-                    failure_action,
-                );
-            }
-            SourceKind::Unsupported => {
-                let extension = path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .unwrap_or_default();
-                self.handle_open_failure(
-                    unsupported_message_for_extension(extension)
-                        .unwrap_or_else(|| format!("Unsupported file type: {}", path.display())),
-                    failure_action,
-                );
-            }
-        }
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::OpenPath);
+        self.start_source_task(
+            path,
+            initial_direction,
+            view_fallback,
+            explicit_page,
+            failure_action,
+            None,
+        );
     }
 
     pub(in crate::app) fn drain_loader_events(&mut self) {
@@ -488,43 +342,6 @@ impl SuiSuiViewApp {
                     );
                 }
                 Err(failure) => {
-                    if matches!(&failure, LoaderFailure::Source(_)) {
-                        if let Some(retry) = self.sibling_open_retry.take() {
-                            if retry.attempts_left > 0 {
-                                if let Some(next) = sibling_book_path(&event.path, retry.direction)
-                                {
-                                    let full_circle = retry
-                                        .origin_book
-                                        .as_ref()
-                                        .is_some_and(|origin| same_path(&next, origin));
-                                    if !full_circle {
-                                        let skipped = event
-                                            .path
-                                            .file_name()
-                                            .map(|name| name.to_string_lossy().into_owned())
-                                            .unwrap_or_default();
-                                        self.set_status(self.i18n().with_vars(
-                                            "status.sibling_book_skipped",
-                                            &[("name", skipped)],
-                                        ));
-                                        self.sibling_open_retry = Some(SiblingOpenRetry {
-                                            attempts_left: retry.attempts_left - 1,
-                                            ..retry
-                                        });
-                                        self.open_sibling_path_with_initial_direction(
-                                            next,
-                                            event.initial_direction,
-                                        );
-                                        continue;
-                                    }
-                                }
-                            }
-                            // exhausted / no candidate / full circle: state stays cleared
-                            // (take()) and control falls through to the failure handling below.
-                        }
-                    } else {
-                        self.sibling_open_retry = None;
-                    }
                     if self
                         .pending_bookmark_jump
                         .as_ref()
@@ -556,6 +373,7 @@ impl SuiSuiViewApp {
         message: String,
         failure_action: OpenFailureAction,
     ) {
+        super::navigation::sibling_turn_log(|| format!("open failure: {message}"));
         match failure_action {
             OpenFailureAction::KeepCurrent => self.notify(message),
             OpenFailureAction::ClearCurrent => self.clear_local_book_state(message),
@@ -576,7 +394,6 @@ impl SuiSuiViewApp {
         view_fallback: Option<OpenViewFallback>,
         explicit_page: Option<usize>,
     ) {
-        self.sibling_open_retry = None;
         // A confirmation is bound to the source that produced its delete plan.
         // Installing any new source makes that plan stale, so remove the dialog
         // before the new book can appear behind it.
@@ -743,6 +560,14 @@ impl SuiSuiViewApp {
             ],
         ));
         self.persist_reading_position();
+        super::navigation::sibling_turn_log(|| {
+            format!(
+                "installed {} pending={:?} queued={}",
+                source.title(),
+                self.pending_sibling_book_turn,
+                self.queued_sibling_book_turns.len(),
+            )
+        });
         if self.pending_sibling_book_turn.is_none() && self.queued_sibling_book_turns.is_empty() {
             self.request_adjacent_seed_prefetch();
         }

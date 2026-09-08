@@ -16,6 +16,9 @@ impl SuiSuiViewApp {
     fn show_status_bar(&self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
+                if self.loader_pending {
+                    ui.spinner();
+                }
                 ui.label(&self.status);
                 if self.source.is_some() {
                     ui.separator();
@@ -37,10 +40,12 @@ impl SuiSuiViewApp {
 
     fn show_status_toast(&self, ctx: &egui::Context) {
         let elapsed = self.toast_updated_at.elapsed();
-        if self.toast.is_empty() || elapsed > TOAST_VISIBLE_FOR {
+        if !self.loader_pending && (self.toast.is_empty() || elapsed > TOAST_VISIBLE_FOR) {
             return;
         }
-        ctx.request_repaint_after(TOAST_VISIBLE_FOR - elapsed);
+        if !self.loader_pending {
+            ctx.request_repaint_after(TOAST_VISIBLE_FOR.saturating_sub(elapsed));
+        }
 
         let top_offset = if self.top_bar_is_visible(ctx) {
             58.0
@@ -59,7 +64,14 @@ impl SuiSuiViewApp {
                     .corner_radius(CornerRadius::same(6))
                     .inner_margin(Margin::symmetric(10, 7))
                     .show(ui, |ui| {
-                        ui.label(&self.toast);
+                        if self.loader_pending {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(self.i18n().text("status.opening"));
+                            });
+                        } else {
+                            ui.label(&self.toast);
+                        }
                     });
             });
     }

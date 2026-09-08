@@ -1,4 +1,9 @@
 use super::path_labels;
+use crate::app::background_job::BackgroundJob;
+use crate::core::state::StateStore;
+use std::sync::Arc;
+
+mod loading;
 use crate::core::i18n::I18n;
 use crate::core::state::{PageBookmark, PageBookmarkEntry};
 
@@ -29,9 +34,7 @@ pub(in crate::app) struct BookmarkRow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BookmarkRowsKey {
-    filter: BookmarkFilter,
-    book_id: Option<String>,
-    source_path: Option<String>,
+    scope: BookmarkScopeKey,
     query: String,
 }
 
@@ -50,10 +53,20 @@ pub(in crate::app) struct BookmarkRowsCache {
     key: Option<BookmarkRowsKey>,
     rows: Vec<BookmarkRow>,
     scope_count: Option<(BookmarkScopeKey, usize)>,
+    catalog: Option<(BookmarkScopeKey, Arc<Vec<PageBookmarkEntry>>)>,
+    loading: BackgroundJob<Result<loading::LoadedCatalog, String>>,
+    loading_scope: Option<BookmarkScopeKey>,
+    filtering: BackgroundJob<Vec<BookmarkRow>>,
+    error: Option<String>,
 }
 
 impl BookmarkRowsCache {
     pub(in crate::app) fn clear(&mut self) {
+        self.loading.cancel();
+        self.loading_scope = None;
+        self.filtering.cancel();
+        self.catalog = None;
+        self.error = None;
         self.key = None;
         self.rows.clear();
         self.scope_count = None;
@@ -75,6 +88,7 @@ impl BookmarkRowsCache {
         (key == &scope_key(filter, book_id, source_path)).then_some(*count)
     }
 
+    #[cfg(test)]
     pub(in crate::app) fn set_scope_count(
         &mut self,
         filter: BookmarkFilter,
@@ -94,28 +108,9 @@ impl BookmarkRowsCache {
     ) -> bool {
         self.key.as_ref()
             != Some(&BookmarkRowsKey {
-                filter,
-                book_id: book_id.map(str::to_owned),
-                source_path: source_path.map(str::to_owned),
+                scope: scope_key(filter, book_id, source_path),
                 query: query.to_owned(),
             })
-    }
-
-    pub(in crate::app) fn refresh(
-        &mut self,
-        filter: BookmarkFilter,
-        book_id: Option<&str>,
-        source_path: Option<&str>,
-        query: &str,
-        entries: Vec<PageBookmarkEntry>,
-    ) {
-        self.key = Some(BookmarkRowsKey {
-            filter,
-            book_id: book_id.map(str::to_owned),
-            source_path: source_path.map(str::to_owned),
-            query: query.to_owned(),
-        });
-        self.rows = filtered_bookmark_rows(entries, query, filter);
     }
 
     pub(in crate::app) fn len(&self) -> usize {
@@ -134,13 +129,17 @@ fn scope_key(
 ) -> BookmarkScopeKey {
     BookmarkScopeKey {
         filter,
-        book_id: book_id.map(str::to_owned),
-        source_path: source_path.map(str::to_owned),
+        book_id: (filter == BookmarkFilter::ThisBook)
+            .then(|| book_id.map(str::to_owned))
+            .flatten(),
+        source_path: (filter == BookmarkFilter::ThisBook)
+            .then(|| source_path.map(str::to_owned))
+            .flatten(),
     }
 }
 
 fn filtered_bookmark_rows(
-    entries: Vec<PageBookmarkEntry>,
+    entries: impl IntoIterator<Item = PageBookmarkEntry>,
     query: &str,
     filter: BookmarkFilter,
 ) -> Vec<BookmarkRow> {
@@ -220,7 +219,7 @@ mod tests {
             Some(7)
         );
 
-        // A different scope, book, or path is a different question.
+        // This-book counts are distinct; All is independent of the active book.
         assert_eq!(
             cache.scope_count(
                 BookmarkFilter::ThisBook,
@@ -231,11 +230,11 @@ mod tests {
         );
         assert_eq!(
             cache.scope_count(BookmarkFilter::All, Some("book-2"), Some("C:/books/book-1")),
-            None
+            Some(7)
         );
         assert_eq!(
             cache.scope_count(BookmarkFilter::All, Some("book-1"), Some("C:/books/other")),
-            None
+            Some(7)
         );
 
         // Every bookmark mutation clears the row cache; the count must go too,
@@ -273,7 +272,7 @@ mod tests {
         assert_eq!(pages(&this_book), vec![0, 5]);
     }
 
-    fn sample_entries() -> Vec<PageBookmarkEntry> {
+    pub(super) fn sample_entries() -> Vec<PageBookmarkEntry> {
         vec![
             entry(
                 "book-1",

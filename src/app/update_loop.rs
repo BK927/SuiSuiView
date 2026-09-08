@@ -7,6 +7,8 @@ use std::time::Instant;
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn update_frame(&mut self, ctx: &egui::Context) {
+        let _stall_scope =
+            crate::core::stall_trace::scope(crate::core::stall_trace::Stage::UpdateFrame);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let update_started = Instant::now();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -22,6 +24,7 @@ impl SuiSuiViewApp {
         self.drain_ipc_open_requests(ctx);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("drain_ipc_open_requests");
+        self.drain_source_task();
         self.drain_loader_events();
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("drain_loader_events");

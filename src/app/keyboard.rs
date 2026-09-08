@@ -12,6 +12,7 @@ pub(in crate::app) enum KeyboardLayer {
     BookmarkDeleteConfirmation,
     EdgePrompt,
     BookmarkPopover,
+    AuxiliaryWindow,
     Viewer,
 }
 
@@ -27,6 +28,10 @@ pub(super) enum KeyboardRoute {
 impl SuiSuiViewApp {
     pub(in crate::app) fn handle_keyboard(&mut self, ctx: &egui::Context) {
         let layer = self.keyboard_layer();
+        // The shortcut editor owns Escape while recording a new binding.
+        if layer == KeyboardLayer::AuxiliaryWindow && self.settings_is_capturing_keyboard() {
+            return;
+        }
         let escape_pressed = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let enter_pressed = ctx.input(|input| input.key_pressed(egui::Key::Enter));
         let route = keyboard_route_for(
@@ -53,6 +58,15 @@ impl SuiSuiViewApp {
                 KeyboardLayer::BookmarkPopover => {
                     self.close_bookmark_popover();
                 }
+                KeyboardLayer::AuxiliaryWindow => {
+                    if self.about_open {
+                        self.about_open = false;
+                    } else {
+                        self.settings_open = false;
+                        self.shortcut_capture = None;
+                        self.shortcut_conflict = None;
+                    }
+                }
                 KeyboardLayer::FileDeleteConfirmation | KeyboardLayer::Viewer => unreachable!(),
             },
             KeyboardRoute::PassToBookmarkPopover | KeyboardRoute::PassToViewer => {
@@ -64,7 +78,9 @@ impl SuiSuiViewApp {
                         continue;
                     }
                     match action {
-                        KeyboardAction::Command(command) => self.apply_command(ctx, command),
+                        KeyboardAction::Command { command, repeat } => {
+                            self.apply_keyboard_command(ctx, command, repeat)
+                        }
                         KeyboardAction::Release(release) => {
                             self.apply_navigation_key_release(release)
                         }
@@ -81,7 +97,7 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn keyboard_layer(&self) -> KeyboardLayer {
-        keyboard_layer_for(
+        let layer = keyboard_layer_for(
             self.fast_start_failure_notice
                 .as_ref()
                 .is_some_and(|notice| !notice.shown),
@@ -90,13 +106,30 @@ impl SuiSuiViewApp {
             self.bookmark_delete_dialog.is_some(),
             self.edge_prompt.is_some(),
             self.bookmark_popover_open,
-        )
+        );
+        if layer == KeyboardLayer::Viewer && (self.settings_open || self.about_open) {
+            KeyboardLayer::AuxiliaryWindow
+        } else {
+            layer
+        }
     }
 
     fn apply_navigation_key_release(&mut self, release: NavigationRelease) {
         match release {
             NavigationRelease::PageTurn => self.clear_queued_page_turns(),
             NavigationRelease::SiblingBook => self.clear_queued_sibling_book_turns(),
+        }
+    }
+
+    /// Key-event dispatch: sibling-book turns reserve differently for discrete
+    /// taps and auto-repeat (the key release cancels only the latter), so they
+    /// keep the `repeat` flag. Every other command ignores it and shares the
+    /// pointer-driven `apply_command` path.
+    fn apply_keyboard_command(&mut self, ctx: &egui::Context, command: AppCommand, repeat: bool) {
+        match command {
+            AppCommand::NextBook if repeat => self.open_sibling_book_repeat(1),
+            AppCommand::PreviousBook if repeat => self.open_sibling_book_repeat(-1),
+            _ => self.apply_command(ctx, command),
         }
     }
 
@@ -291,6 +324,15 @@ pub(super) fn keyboard_route_for(
                 KeyboardRoute::PassToViewer
             }
         }
+        KeyboardLayer::AuxiliaryWindow => {
+            if escape_pressed {
+                KeyboardRoute::DismissOverlay
+            } else if wants_keyboard_input {
+                KeyboardRoute::Block
+            } else {
+                KeyboardRoute::PassToViewer
+            }
+        }
         KeyboardLayer::Viewer => KeyboardRoute::PassToViewer,
     }
 }
@@ -298,8 +340,10 @@ pub(super) fn keyboard_route_for(
 pub(super) fn focused_bookmark_popover_allows_action(action: KeyboardAction) -> bool {
     matches!(
         action,
-        KeyboardAction::Command(AppCommand::ToggleBookmarkPopover)
-            | KeyboardAction::Release(NavigationRelease::PageTurn)
+        KeyboardAction::Command {
+            command: AppCommand::ToggleBookmarkPopover,
+            ..
+        } | KeyboardAction::Release(NavigationRelease::PageTurn)
             | KeyboardAction::Release(NavigationRelease::SiblingBook)
     )
 }
@@ -307,6 +351,28 @@ pub(super) fn focused_bookmark_popover_allows_action(action: KeyboardAction) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auxiliary_windows_consume_escape_and_keep_text_editing_local() {
+        for focused in [false, true] {
+            assert_eq!(
+                keyboard_route_for(KeyboardLayer::AuxiliaryWindow, true, false, focused),
+                KeyboardRoute::DismissOverlay
+            );
+        }
+        assert_eq!(
+            keyboard_route_for(KeyboardLayer::AuxiliaryWindow, false, false, true),
+            KeyboardRoute::Block
+        );
+        assert_eq!(
+            keyboard_route_for(KeyboardLayer::AuxiliaryWindow, false, false, false),
+            KeyboardRoute::PassToViewer
+        );
+        assert_eq!(
+            keyboard_route_for(KeyboardLayer::Viewer, true, false, false),
+            KeyboardRoute::PassToViewer
+        );
+    }
 
     #[test]
     fn overlays_preempt_viewer_shortcuts_in_modal_order() {
@@ -433,7 +499,10 @@ mod tests {
     #[test]
     fn focused_bookmark_popover_allows_only_navigation_and_its_own_toggle() {
         assert!(focused_bookmark_popover_allows_action(
-            KeyboardAction::Command(AppCommand::ToggleBookmarkPopover)
+            KeyboardAction::Command {
+                command: AppCommand::ToggleBookmarkPopover,
+                repeat: false,
+            }
         ));
         assert!(focused_bookmark_popover_allows_action(
             KeyboardAction::Release(NavigationRelease::PageTurn)
@@ -442,7 +511,10 @@ mod tests {
             KeyboardAction::Release(NavigationRelease::SiblingBook)
         ));
         assert!(!focused_bookmark_popover_allows_action(
-            KeyboardAction::Command(AppCommand::ToggleCurrentPageBookmark)
+            KeyboardAction::Command {
+                command: AppCommand::ToggleCurrentPageBookmark,
+                repeat: false,
+            }
         ));
     }
 }

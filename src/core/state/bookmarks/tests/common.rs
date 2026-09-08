@@ -797,3 +797,42 @@ fn smoke_real_zip_book_resume_round_trip() {
     assert_eq!(position.last_page, 1);
     assert_eq!(position.last_page_name.as_deref(), Some("02.png"));
 }
+#[test]
+fn bookmark_background_read_reports_io_error_and_retries() {
+    let store = test_store("bookmark-read-error");
+    fs::create_dir_all(store.path.parent().unwrap()).unwrap();
+    fs::write(&store.books_dir, b"not a directory").unwrap();
+    assert!(store.try_all_page_bookmarks().is_err());
+    fs::remove_file(&store.books_dir).unwrap();
+    fs::create_dir_all(&store.books_dir).unwrap();
+    assert!(store.try_all_page_bookmarks().unwrap().is_empty());
+    fs::remove_dir_all(store.path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn bookmark_background_read_reports_malformed_current_record() {
+    let store = test_store("bookmark-malformed-record");
+    fs::create_dir_all(&store.books_dir).unwrap();
+    fs::write(store.books_dir.join("book-1.json"), b"invalid json").unwrap();
+    assert!(store.try_page_bookmark_entries("book-1", Path::new("book.zip")).is_err());
+    fs::remove_dir_all(store.path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn current_page_star_uses_opened_snapshot_without_filesystem_reads() {
+    let store = test_store("bookmark-display-snapshot");
+    let record: super::BookRecord = serde_json::from_str(r#"{
+        "book_id":"book-1","title":"Book","last_page":0,"total_pages":2,
+        "known_paths":["book.zip"],"reading_direction":"RightToLeft","fit_mode":"FitPage","updated_at":1,
+        "page_bookmarks":[{"page":0,"source_path":"book.zip","title":"Cover","pinned":false,"created_at":1,"updated_at":1}]
+    }"#).unwrap();
+    store.books.borrow_mut().records.insert("book-1".to_owned(), record);
+    // A redirect on disk must not trigger per-frame I/O. Disk-aware consumers
+    // still resolve it; display uses the last locally opened/mutated snapshot.
+    fs::create_dir_all(&store.books_dir).unwrap();
+    fs::write(store.books_dir.join("book-1.redirect"), b"redirect").unwrap();
+    assert!(store.cached_page_is_bookmarked("book-1", Path::new("book.zip"), 0));
+    assert!(!store.cached_page_is_bookmarked("book-1", Path::new("book.zip"), 1));
+    assert!(store.try_page_bookmark_entries("book-1", Path::new("book.zip")).unwrap().is_empty());
+    fs::remove_dir_all(store.path.parent().unwrap()).unwrap();
+}
