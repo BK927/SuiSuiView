@@ -1,12 +1,14 @@
 use super::perf;
+use super::viewer::spread_natural_size;
 use super::{
-    texture_options_for_sampling, SuiSuiViewApp, TextureCacheKey, TextureEntry, ViewMode,
-    BYTES_PER_RGBA_PIXEL,
+    gpu_visual_needs_wgsl, rect_target_size, texture_options_for_sampling, SuiSuiViewApp,
+    TextureCacheKey, TextureEntry, ViewMode, BYTES_PER_RGBA_PIXEL,
 };
+use crate::core::deband::DebandStrength;
 use crate::core::effects::ViewEffects;
-use crate::core::state::WgpuUpscaleMethod;
+use crate::core::state::{WgpuUpscaleMethod, WGPU_DOWNSCALE_METHOD};
 use crate::core::worker::{NavigationDirection, MAX_TARGET_LONG_EDGE};
-use egui::{self, ImageData};
+use egui::{self, ImageData, Pos2, Rect, Vec2};
 use std::sync::Arc;
 use std::time::Duration;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -41,11 +43,13 @@ impl SuiSuiViewApp {
         let mut uploads = 0usize;
 
         'candidates: for page in candidates {
-            for index in self.spread_indices_for(page) {
+            let indices = self.spread_indices_for(page);
+            let scale = self.prewarm_spread_scale(ctx, &indices);
+            for index in indices {
                 if visible.contains(&index) {
                     continue;
                 }
-                if !self.prewarm_page_texture(ctx, index) {
+                if !self.prewarm_page_texture(ctx, index, scale) {
                     continue;
                 }
                 uploads += 1;
@@ -82,7 +86,29 @@ impl SuiSuiViewApp {
             && self.pending_page_turn.is_none()
     }
 
-    fn prewarm_page_texture(&mut self, ctx: &egui::Context, index: usize) -> bool {
+    fn prewarm_spread_scale(&self, ctx: &egui::Context, indices: &[usize]) -> Option<f32> {
+        if !self.can_paint_wgsl_effects() || self.sibling_book_transition_stabilizing() {
+            return None;
+        }
+        let viewport = self.last_viewer_size_points?;
+        // Share settled spread geometry with painting. Unknown partner dimensions
+        // retain the existing prewarm behavior instead of guessing a render route.
+        let sizes = indices
+            .iter()
+            .map(|index| {
+                self.page_metrics_at(*index)
+                    .map(|m| Vec2::new(m.width, m.height))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(self.scale_for(viewport, spread_natural_size(sizes), ctx.pixels_per_point()))
+    }
+
+    fn prewarm_page_texture(
+        &mut self,
+        ctx: &egui::Context,
+        index: usize,
+        scale: Option<f32>,
+    ) -> bool {
         let Some(requested) = self.page_key_at(index, self.target_long_edge) else {
             return false;
         };
@@ -98,10 +124,20 @@ impl SuiSuiViewApp {
             return false;
         }
 
-        let page = self.decoded_pages.get(&best_key).cloned();
-        let Some(page) = page else {
+        let Some(page) = self.decoded_pages.peek(&best_key) else {
             return false;
         };
+        if !prewarm_uses_egui_texture(
+            page.image_size(),
+            Vec2::new(page.original_width as f32, page.original_height as f32),
+            scale,
+            ctx.pixels_per_point(),
+            self.active_deband(),
+        ) {
+            // WGSL uses its own source texture; this egui texture would never
+            // be consumed at the predicted scale. Keep decoded-page prefetch.
+            return false;
+        }
         // egui textures are always RGBA regardless of how the page retained its pixels, so budget
         // against the RGBA footprint (a luma page's `byte_size` is only a quarter of that).
         let texture_byte_size = page
@@ -113,6 +149,7 @@ impl SuiSuiViewApp {
         }
 
         let image = Arc::new(page.color_image());
+        self.decoded_pages.promote(&best_key);
         let byte_size = texture_byte_size;
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let texture_started = Instant::now();
@@ -136,6 +173,33 @@ impl SuiSuiViewApp {
     fn texture_cache_has_room_for(&self, byte_size: usize) -> bool {
         self.texture_cache_bytes().saturating_add(byte_size) <= self.texture_cache_budget_bytes()
     }
+}
+
+fn prewarm_uses_egui_texture(
+    image_size: [usize; 2],
+    original_size: Vec2,
+    spread_scale: Option<f32>,
+    pixels_per_point: f32,
+    deband: DebandStrength,
+) -> bool {
+    let Some(scale) = spread_scale else {
+        // Glow, temporary fallback, or unknown layout: retain ordinary prewarm.
+        return true;
+    };
+    // Eligibility already excludes effects and display upscaling. Use the same
+    // downscale/deband routing as painting, including its near-native bypass.
+    !gpu_visual_needs_wgsl(
+        image_size,
+        rect_target_size(
+            Rect::from_min_size(Pos2::ZERO, original_size * scale),
+            pixels_per_point,
+        ),
+        ViewEffects::default(),
+        WgpuUpscaleMethod::None,
+        WGPU_DOWNSCALE_METHOD,
+        1.0,
+        deband,
+    )
 }
 
 fn prewarm_candidate_pages_from_turns(
@@ -191,6 +255,65 @@ fn opposite_direction(direction: NavigationDirection) -> NavigationDirection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prewarm_follows_paint_route_at_display_scale_and_dpi() {
+        let decoded = [2240, 3360];
+        let original = Vec2::new(4480.0, 6720.0);
+        // Half-size display uses quality downscaling and its own source texture.
+        assert!(!prewarm_uses_egui_texture(
+            decoded,
+            original,
+            Some(0.25),
+            1.0,
+            DebandStrength::Off
+        ));
+        // Native and near-native display keep useful egui prewarm, including DPI scaling.
+        for (scale, dpi) in [(0.5, 1.0), (0.475, 1.0), (0.25, 2.0)] {
+            assert!(prewarm_uses_egui_texture(
+                decoded,
+                original,
+                Some(scale),
+                dpi,
+                DebandStrength::Off
+            ));
+        }
+        assert!(prewarm_uses_egui_texture(
+            decoded,
+            original,
+            None,
+            1.0,
+            DebandStrength::Off
+        ));
+        for deband in [
+            DebandStrength::Weak,
+            DebandStrength::Medium,
+            DebandStrength::Strong,
+        ] {
+            assert!(!prewarm_uses_egui_texture(
+                decoded,
+                original,
+                Some(0.5),
+                1.0,
+                deband
+            ));
+        }
+    }
+
+    #[test]
+    fn spread_geometry_includes_partner_and_gap_for_prewarm() {
+        let left = Vec2::new(1600.0, 2400.0);
+        let right = Vec2::new(1700.0, 2500.0);
+        assert_eq!(spread_natural_size([left]), left);
+        assert_eq!(
+            spread_natural_size([left, right]),
+            Vec2::new(3314.0, 2500.0)
+        );
+        assert_eq!(
+            spread_natural_size([right, left]),
+            Vec2::new(3314.0, 2500.0)
+        );
+    }
 
     #[test]
     fn candidate_pages_prefer_last_navigation_direction() {

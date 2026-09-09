@@ -134,6 +134,18 @@ impl PageMetrics {
     }
 }
 
+pub(in crate::app) fn spread_natural_size(sizes: impl IntoIterator<Item = Vec2>) -> Vec2 {
+    let mut natural = Vec2::new(0.0, 1.0);
+    for (index, size) in sizes.into_iter().enumerate() {
+        if index > 0 {
+            natural.x += super::SPREAD_GAP_POINTS;
+        }
+        natural.x += size.x;
+        natural.y = natural.y.max(size.y);
+    }
+    natural
+}
+
 pub(in crate::app) fn ordered_spread_indices(
     mut indices: Vec<usize>,
     mode: ViewMode,

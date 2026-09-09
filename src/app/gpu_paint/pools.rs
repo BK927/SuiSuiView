@@ -246,14 +246,13 @@ impl GpuPaintResources {
         let upload_started = Instant::now();
         let [width, height] = image_size;
         let byte_size = width.saturating_mul(height).saturating_mul(4);
-        // VRAM is always RGBA. Expand luma -> RGBA here, after the LRU-miss check, so the cost is
-        // paid at most once per source texture (per-frame repaints hit the early return above). For
-        // RGBA pages `to_rgba_vec` just clones the retained buffer.
-        let rgba = pixels.to_rgba_vec(width, height);
+        // VRAM is always RGBA. Borrow canonical RGBA pixels; only luma pages
+        // need a temporary expansion, and only after a source-cache miss.
+        let rgba = source_upload_bytes(pixels, image_size);
         if rgba.len() != byte_size {
             return false;
         }
-        let rgba = rgba.as_slice();
+        let rgba = rgba.as_ref();
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("suisuiview-gpu-effect-source"),
             size: wgpu::Extent3d {
@@ -315,6 +314,7 @@ impl GpuPaintResources {
             self.source_texture_bytes = self
                 .source_texture_bytes
                 .saturating_sub(old_texture.byte_size);
+            self.retire_source_draws(&old_texture.bind_group);
         }
         self.source_texture_bytes = self.source_texture_bytes.saturating_add(byte_size);
         self.prune_source_textures();
@@ -584,8 +584,32 @@ impl GpuPaintResources {
                 break;
             };
             self.source_texture_bytes = self.source_texture_bytes.saturating_sub(texture.byte_size);
+            self.retire_source_draws(&texture.bind_group);
         }
         self.publish_gpu_pool_bytes();
+    }
+
+    /// A direct draw's binding owns the source texture too. Retire old draws
+    /// with an evicted source so the draw cache cannot bypass the source budget.
+    /// Current-pass draws must survive painting; quality intermediates have
+    /// independent bindings and keep their own cache lifetime.
+    fn retire_source_draws(&mut self, binding: &Arc<wgpu::BindGroup>) {
+        let retired = self
+            .draw_bind_groups
+            .iter()
+            .filter_map(|(id, state)| {
+                (state.inserted_pass != self.current_pass
+                    && Arc::ptr_eq(&state.texture_bind_group, binding))
+                .then_some(*id)
+            })
+            .collect::<Vec<_>>();
+        for id in retired {
+            if let Some(state) = self.draw_bind_groups.pop(&id) {
+                self.draw_state_intermediate_bytes = self
+                    .draw_state_intermediate_bytes
+                    .saturating_sub(state.intermediate_byte_size);
+            }
+        }
     }
 
     pub(super) fn drop_original_inspection_sources(&mut self) {
@@ -665,6 +689,13 @@ impl GpuPaintResources {
                 .saturating_sub(draw_state.intermediate_byte_size);
         }
         self.publish_gpu_pool_bytes();
+    }
+}
+
+pub(super) fn source_upload_bytes(pixels: &PagePixels, size: [usize; 2]) -> Cow<'_, [u8]> {
+    match pixels {
+        PagePixels::Rgba(bytes) => Cow::Borrowed(bytes.as_ref()),
+        PagePixels::Luma(_) => Cow::Owned(pixels.to_rgba_vec(size[0], size[1])),
     }
 }
 

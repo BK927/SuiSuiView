@@ -31,9 +31,9 @@ pub(in crate::app) use interaction::{
 pub(in crate::app) use model::relative_difference;
 pub(in crate::app) use model::{
     double_spread_indices, ordered_spread_indices, page_visual_size,
-    smart_spread_indices_for_metrics, worker_center_page_for_mode, CurrentViewState, PageMetrics,
-    PageRenderInfo, PageVisual, PrepareScaleState, Transition, UpscaleDecisionOrigin, ViewMode,
-    WgpuScaleState,
+    smart_spread_indices_for_metrics, spread_natural_size, worker_center_page_for_mode,
+    CurrentViewState, PageMetrics, PageRenderInfo, PageVisual, PrepareScaleState, Transition,
+    UpscaleDecisionOrigin, ViewMode, WgpuScaleState,
 };
 pub(in crate::app) use paint_helpers::texture_options_for_sampling;
 pub(in crate::app) use strip::{StripAnchor, StripDimScanWorker};
@@ -588,22 +588,10 @@ impl SuiSuiViewApp {
         } else {
             0.0
         };
-        let natural_width = pages
-            .iter()
-            .map(|(_index, _visual, size)| size.x)
-            .sum::<f32>()
-            + gap * pages.len().saturating_sub(1) as f32;
-        let natural_height = pages
-            .iter()
-            .map(|(_index, _visual, size)| size.y)
-            .fold(1.0_f32, |left, right| left.max(right));
-        let scale = self.scale_for(
-            request.viewport.size(),
-            Vec2::new(natural_width, natural_height),
-            ctx.pixels_per_point(),
-        );
-        let spread_width = natural_width * scale * request.scale.x;
-        let spread_height = natural_height * scale * request.scale.y;
+        let natural = spread_natural_size(pages.iter().map(|(_index, _visual, size)| *size));
+        let scale = self.scale_for(request.viewport.size(), natural, ctx.pixels_per_point());
+        let spread_width = natural.x * scale * request.scale.x;
+        let spread_height = natural.y * scale * request.scale.y;
         let spread_size = Vec2::new(spread_width, spread_height);
         // Keep the image reachable: on the settled plain paint (no transition
         // offset, full alpha) pull the stored pan back so the spread can never

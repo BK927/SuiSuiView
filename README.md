@@ -165,6 +165,9 @@ per-book file.
   CatmullRom filter; WGPU downscaling uses Pyramid Lanczos3. These downscale
   algorithms are not user-selectable in normal settings. GPU debanding and
   linear-light downscaling can be enabled separately.
+  Cache cleanup preserves images needed by the current frame and reusable
+  quality-processing buffers; nearby texture preparation follows the active
+  display path to avoid uploading unused copies.
 - Decoders: decode mode and per-format decoder choices. `기본값` is shown as
   selected text, with the resolved backend summarized beside each format.
 - File links: on Windows, register SuiSuiView as a Default Apps candidate for
