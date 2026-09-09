@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./assets/app-icon.png" alt="SuiSuiView app icon" width="96" height="96">
-  <h1>SuiSuiView</h1>
-  <p><strong>Fast, lightweight native image and comic viewer for folders, ZIP, and CBZ.</strong></p>
+  <h1>SuiSuiView — Image &amp; Comic Viewer for Windows</h1>
+  <p><strong>Read local images and comics with the picture and controls you prefer.</strong></p>
   <p>
     <img alt="Rust" src="https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white">
     <img alt="egui" src="https://img.shields.io/badge/egui-native%20UI-4B5563">
@@ -11,33 +11,88 @@
   </p>
 </div>
 
-SuiSuiView is built for people who want image folders and comic archives to open
-quickly, turn pages smoothly, and remember their place without feeling like a
-full media-management suite.
+Image and comic viewer for Windows with Anime4K and other GPU upscalers,
+customizable controls, smart two-page reading, and ZIP/CBZ support.
+Open image folders and read in single-page, two-page or continuous vertical view.
 
-![SuiSuiView main window](./assets/preview.png)
+**한국어:** 화질부터 조작까지, 내 취향대로 보는 Windows 이미지·만화 뷰어.
+SuiSuiView는 폴더·ZIP·CBZ를 열어 한 페이지·두 페이지·세로 연속 보기로 읽고,
+Anime4K·CuNNy·ACNet 등의 확대 방식과 단축키·마우스 동작을 고를 수 있습니다.
+GPU 업스케일링은 GPU 가속을 켜고 앱을 다시 시작한 뒤 화면 맞춤 모드에서
+사용합니다. 앱 UI는 영어·한국어를 지원합니다.
+
+## Availability
+
+**Alpha — source builds only.** There are no public executable releases or
+Microsoft Store listing yet. You can [build from source](#build-from-source)
+and [report feedback on GitHub](https://github.com/BK927/SuiSuiView/issues).
+
+Free GitHub executables and a paid Microsoft Store edition are planned around
+the same core viewer. GitHub downloads will be updated manually; the Store
+edition is intended to offer installation convenience and support continued
+development. Store-managed updates depend on the final package. A release date
+and price have not been announced. The free edition will not be a trial or a
+feature-limited viewer.
+
+현재는 소스 빌드로만 사용할 수 있는 Alpha 단계입니다. 무료 GitHub 실행 파일과
+유료 Microsoft Store 배포는 준비 중이며, 두 경로에서 같은 핵심 뷰어를 제공할
+계획입니다.
+
+![SuiSuiView showing an original sample in two-page reading mode](./assets/site/reading-spread.png)
+
+The reading samples were made for this project and opened in the actual app.
 
 ## Why SuiSuiView?
 
 | Focus | What it means |
 | --- | --- |
-| Fast reading | Background decode, display-sized preparation, nearby-page cache, and lightweight transitions. |
-| Comic friendly | Folder, `.zip`, and `.cbz` support with single-page and two-page spread modes. |
-| Stable bookmarks | ZIP/CBZ bookmarks are based on book contents, so moving or renaming a book should keep your place. |
-| Tunable decoders | Auto Fast uses the app default fast paths, compatibility mode keeps the broad `image` baseline, and custom mode lets you override per-format decoders. |
-| Tunable scaling | Separate CPU and WGPU scaler choices let display preparation stay light while GPU rendering can use quality-first downscaling. |
-| Safe viewing tools | Rotate, flip, invert, smooth, sharpen, and gamma effects are session-only and never rewrite the source image. |
+| Choose the enlargement | Use Anime4K v3.2 CNN x2 S/M, CuNNy or ACNet variants for fit-mode display enlargement with GPU acceleration. CPU upscale filters are also selectable. |
+| Make the controls yours | Set keyboard and mouse bindings, choose top-bar scaler quick picks, and adjust scrolling and page-turn behavior. |
+| Read local files | Open image folders, `.zip` and `.cbz` without unpacking them yourself; switch between single-page, two-page and vertical reading. |
+| Keep your place | Reading progress and manual bookmarks use the contents of a ZIP/CBZ as its identity, so renaming or moving the same archive keeps them. |
 
-## Quick Start
+GPU acceleration is optional and requires an app restart when switched. GPU
+upscaling applies to fit-page, fit-width and fit-height enlargement, not every
+manual zoom level. Results and processing cost depend on the image, settings
+and hardware. ArtCNN options are experimental. Upscaling changes the displayed
+image; it does not overwrite the original or export enlarged files.
 
-If you are running SuiSuiView from the source tree:
+The app also provides session-only rotation, flips, inversion, smoothing,
+sharpening and gamma effects, plus per-format decoder preferences. These viewing
+effects leave the source image unchanged.
+
+## Build From Source
+
+On Windows, install:
+
+1. [Git for Windows](https://git-scm.com/downloads/win).
+2. [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+   with **Desktop development with C++**, including the MSVC C++ build tools and
+   a Windows SDK. The default build compiles bundled native libraries as well as
+   Rust code.
+3. [Rust through rustup](https://www.rust-lang.org/tools/install), using the
+   stable **MSVC** toolchain (`stable-x86_64-pc-windows-msvc` for Windows x64).
+
+Open a new PowerShell window after installation, then run:
 
 ```powershell
-cargo run --release
+git clone https://github.com/BK927/SuiSuiView.git
+cd SuiSuiView
+cargo run --release --locked
 ```
 
-Release builds are the right way to judge page-turn and image-decode
-responsiveness.
+The first build downloads dependencies and can take several minutes. If the
+linker or C++ tools cannot be found, use the **Developer PowerShell for Visual
+Studio** installed with the build tools. The executable is created at
+`target/release/suisuiview.exe` and can be opened directly after the build.
+
+The default build includes still WebP decoding. Optional AVIF and
+PDF-compatible Illustrator previews need additional dependencies and are not
+enabled by this command. Use a release build when evaluating responsiveness.
+
+Press `F2` / `Ctrl+O` to open an image or archive, or `F` to open a folder.
+To try GPU upscaling, open Settings with `F5`, enable GPU acceleration in
+Rendering, restart the app, then select an upscaler and a fit mode.
 
 ## Open And Read
 
@@ -64,13 +119,15 @@ that book does not already have a saved reading position.
 | Tier | Formats |
 | --- | --- |
 | Built in | Folders, single images, `.zip`, `.cbz`, `.jpg`, `.jpeg`, `.jpe`, `.jfif`, `.png`, `.apng`, `.webp`, `.bmp`, `.dib`, `.gif`, `.tif`, `.tiff`, `.tga`, `.pnm`, `.pbm`, `.pgm`, `.ppm`, `.ico`, `.qoi`, `.psd` |
-| Optional or experimental | `.dds`, `.exr`, `.hdr`, `.rgbe`, `.jxl`, `.svg`, `.svgz`, `.avif`, `.ai` |
-| Recognized but not opened yet | `.heic`, `.heif`, `.jxr`, RAW/DNG camera formats |
+| Experimental decoders included | `.dds`, `.exr`, `.hdr`, `.rgbe`; compatibility varies and HDR display output is not supported |
+| Optional builds only | `.avif` with `native-avif`; PDF-compatible `.ai` first-page preview with `native-ai` and an app-local PDFium library |
+| Not currently supported | `.jxl`, `.svg`, `.svgz`, `.heic`, `.heif`, `.hif`, `.jxr`, `.wdp`, `.hdp`, RAW/DNG camera formats, `.pdf`, `.rar`, `.cbr`, `.7z`, `.cb7`, `.clip`, `.bpg` |
 
-Some recognized formats are preview-only or available only in optional builds.
-PSD and PDF-compatible `.ai` files show flattened previews only. Unsupported
-formats show a clear message instead of opening. Animated APNG, GIF, and WebP
-files open as still previews; animation playback is not currently supported.
+PSD shows a flattened composite preview, not layers or Photoshop effects.
+Optional `.ai` support does not add general PDF reading. Some unsupported file
+extensions are recognized to explain why they cannot be opened; installing a
+system codec does not currently enable HEIC or RAW viewing. Animated APNG, GIF,
+and WebP files open as still previews; animation playback is not supported.
 
 ## Decoder Settings
 
@@ -78,8 +135,9 @@ Auto Fast selects the app's validated fast paths and falls back when needed.
 Compatibility mode keeps the conservative baseline, and Custom mode lets you
 override individual formats from Settings.
 
-Optional builds can enable extra WebP, AVIF, and PDF-compatible `.ai` preview
-backends. They are off by default.
+Still WebP support, including the native `libwebp` backend, is enabled by
+default. AVIF and PDF-compatible `.ai` preview backends are optional and off by
+default.
 
 ## Settings
 
@@ -97,8 +155,11 @@ per-book file.
   physical VRAM usage. Manifest-backed SR Lab SPAN x2 is
   available as a slow manual GPU upscaler when local SPAN weights are present.
   Fixed 2x GPU SR upscalers skip tiny enlargements, can auto-stack once for
-  large enlargement, and reuse the selected WGPU downscaler when their 2x/4x
-  output is larger than the final display size.
+  large enlargement, and use the app's fixed WGPU downscaler when their 2x/4x
+  output is larger than the final display size. CPU downscaling uses the fixed
+  CatmullRom filter; WGPU downscaling uses Pyramid Lanczos3. These downscale
+  algorithms are not user-selectable in normal settings. GPU debanding and
+  linear-light downscaling can be enabled separately.
 - Decoders: decode mode and per-format decoder choices. `기본값` is shown as
   selected text, with the resolved backend summarized beside each format.
 - File links: on Windows, register SuiSuiView as a Default Apps candidate for
@@ -109,7 +170,7 @@ per-book file.
 
 Fast sampled/scaled decode is enabled by default. It lets large JPEG, WebP,
 PNG, BMP, and GIF pages use format-specific display-sized preparation before
-falling back to full decode plus the selected CPU downscale filter.
+falling back to full decode plus the app's fixed CPU downscale filter.
 
 The UI language can be set to system default, Korean, or English. UI text and
 state words such as Default, Off, and Experimental are localized, while
@@ -254,8 +315,11 @@ standalone files.
 - `U`, `I`, `S`: change display filter.
 - `Ctrl+G`: toggle gamma correction.
 
-The top-bar compare toggle can split the current page into A/B panes. Each side
-can use the app default, CPU scaler filters, or a WGSL display upscaler.
+The top-bar compare toggle splits the current page into A/B panes. Its choices
+are the current app preparation, selected CPU filters, and the listed WGSL
+Bilinear, FSR-style, FSR1 EASU+RCAS and NIS-style options. Anime4K, CuNNy and
+ACNet are not directly selectable as A/B targets; compare those by changing
+the normal GPU upscaler on the same page and fit mode.
 
 ### Mouse
 
@@ -293,7 +357,7 @@ does not establish that the UI was unresponsive.
 
 ## License
 
-SuiSuiView is licensed under `GPL-3.0-only`. The free GitHub release and the
-paid Microsoft Store release are built around the same open-source viewer; the
-Store release pays for official Store distribution, signed installation, and
-Microsoft Store automatic updates.
+SuiSuiView is licensed under `GPL-3.0-only`. See [LICENSE](./LICENSE) and
+[third-party notices](./THIRD_PARTY_NOTICES.txt). The planned free GitHub and
+paid Microsoft Store editions use the same core open-source viewer; neither
+executable distribution is publicly available yet. See [Availability](#availability).

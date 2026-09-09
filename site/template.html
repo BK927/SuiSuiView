@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="${lang}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${title}</title>
+  <meta name="description" content="${description}">
+  <meta name="theme-color" content="#0b111c">
+  <link rel="canonical" href="${canonical}">
+  ${alternates}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="SuiSuiView">
+  <meta property="og:title" content="${title}">
+  <meta property="og:description" content="${description}">
+  <meta property="og:url" content="${canonical}">
+  <meta property="og:image" content="https://bk927.github.io/SuiSuiView/assets/reading-spread.png">
+  <meta property="og:image:alt" content="${social_alt}">
+  <link rel="icon" href="${base}assets/icon.png" type="image/png">
+  <link rel="stylesheet" href="${base}assets/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">${skip}</a>
+  <header class="site-header wrap">
+    <a class="brand" href="${canonical}" aria-label="SuiSuiView">
+      <img src="${base}assets/icon.png" alt="" width="${icon_width}" height="${icon_height}">
+      <span>SuiSuiView</span>
+    </a>
+    <nav class="section-nav" aria-label="${nav_label}">
+      <a href="#quality">${nav_quality}</a>
+      <a href="#reading">${nav_reading}</a>
+      <a href="#build">${nav_build}</a>
+    </nav>
+    <a class="header-github" href="${github}">GitHub <span aria-hidden="true">↗</span></a>
+  </header>
+  <main id="main">
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <p class="eyebrow">${category}</p>
+      <h1 id="hero-title">${headline}<span>${headline_second}</span></h1>
+      <p class="hero-copy">${intro}</p>
+      <div class="actions">
+        <a class="button primary" href="${github}">${cta_github}<span aria-hidden="true"> ↗</span></a>
+        <a class="button secondary" href="#build">${cta_build}<span aria-hidden="true"> ↓</span></a>
+      </div>
+      <p class="release-note"><span class="status-dot" aria-hidden="true"></span><strong>Alpha</strong> · ${status}</p>
+      <nav class="language-nav" aria-label="${language_label}">${languages}</nav>
+      <div class="hero-screen">${reading_spread}</div>
+      <p class="screen-note">${screens_note}</p>
+    </section>
+
+    <section id="quality" class="section wrap" aria-labelledby="quality-title">
+      <div class="section-heading"><p class="eyebrow">01 / ${quality_label}</p>
+        <h2 id="quality-title">${quality_title}</h2><p>${quality_intro}</p></div>
+      <div class="feature-grid">${quality_cards}</div>
+      <div class="comparison-grid">${upscale_bilinear}${upscale_anime4k}${upscale_cunny}</div>
+      <p class="note">${comparison_note}</p>
+      <aside class="use-note"><strong>${gpu_note_title}</strong><p>${gpu_note}</p></aside>
+    </section>
+
+    <section id="controls" class="section wrap" aria-labelledby="controls-title">
+      <div class="section-heading"><p class="eyebrow">02 / ${controls_label}</p>
+        <h2 id="controls-title">${controls_title}</h2><p>${controls_intro}</p></div>
+      <div class="feature-grid">${control_cards}</div>
+      <div class="comparison-grid">${custom_controls}${custom_mouse}${custom_toolbar}</div>
+    </section>
+
+    <section id="reading" class="section wrap" aria-labelledby="reading-title">
+      <div class="section-heading"><p class="eyebrow">03 / ${reading_label}</p>
+        <h2 id="reading-title">${reading_title}</h2><p>${reading_intro}</p></div>
+      <div class="reading-screens">${reading_vertical}${reading_bookmarks}</div>
+      <div class="feature-grid reading-grid">${reading_cards}</div>
+    </section>
+
+    <section id="formats" class="section wrap format-section" aria-labelledby="formats-title">
+      <div class="section-heading"><p class="eyebrow">04 / ${formats_label}</p>
+        <h2 id="formats-title">${formats_title}</h2><p>${formats_intro}</p></div>
+      <div class="table-scroll"><table><caption class="visually-hidden">${formats_title}</caption>
+        <tbody>${format_rows}</tbody></table></div>
+    </section>
+
+    <section id="build" class="section wrap" aria-labelledby="build-title">
+      <div class="section-heading"><p class="eyebrow">05 / ${build_label}</p>
+        <h2 id="build-title">${build_title}</h2><p>${build_intro}</p></div>
+      <div class="distribution-grid">
+        <article class="distribution-card"><span class="pill">${planned}</span><h3>${github_title}</h3><p>${github_body}</p></article>
+        <article class="distribution-card"><span class="pill">${planned}</span><h3>${store_title}</h3><p>${store_body}</p></article>
+      </div>
+      <p class="note">${distribution_note}</p>
+      <div class="build-panel"><h3>${source_title}</h3><p>${source_intro}</p>
+        <ol>${build_steps}</ol>
+        <div class="tool-links"><a href="https://git-scm.com/downloads/win">Git for Windows ↗</a>
+          <a href="https://rustup.rs/">Rustup ↗</a>
+          <a href="https://visualstudio.microsoft.com/visual-cpp-build-tools/">Visual Studio Build Tools ↗</a></div>
+        <pre><code>git clone https://github.com/BK927/SuiSuiView.git
+cd SuiSuiView
+cargo run --release --locked</code></pre>
+        <p class="note">${build_note}</p><a class="text-link" href="${github}#build-from-source">${readme_link} ↗</a>
+      </div>
+    </section>
+
+    <section id="faq" class="section wrap faq-section" aria-labelledby="faq-title">
+      <div class="section-heading"><p class="eyebrow">06 / ${faq_label}</p><h2 id="faq-title">${faq_title}</h2></div>
+      <div class="faq-list">${faq}</div>
+    </section>
+  </main>
+  <footer class="site-footer wrap">
+    <div><a class="footer-brand" href="${canonical}">SuiSuiView</a><p>${footer}</p><p class="technology">Rust · egui · wgpu · GPL-3.0</p></div>
+    <div><a class="text-link" href="${github}">${cta_github} ↗</a><nav class="language-nav" aria-label="${language_label}">${languages}</nav></div>
+  </footer>
+</body>
+</html>
