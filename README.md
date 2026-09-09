@@ -21,6 +21,11 @@ Anime4K·CuNNy·ACNet 등의 확대 방식과 단축키·마우스 동작을 고
 GPU 업스케일링은 GPU 가속을 켜고 앱을 다시 시작한 뒤 화면 맞춤 모드에서
 사용합니다. 앱 UI는 영어·한국어를 지원합니다.
 
+**Explore SuiSuiView:** [English](https://bk927.github.io/SuiSuiView/) ·
+[한국어](https://bk927.github.io/SuiSuiView/ko/) ·
+[日本語](https://bk927.github.io/SuiSuiView/ja/) ·
+[简体中文](https://bk927.github.io/SuiSuiView/zh-hans/)
+
 ## Availability
 
 **Alpha — source builds only.** There are no public executable releases or

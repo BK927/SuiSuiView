@@ -281,7 +281,7 @@ def build(output=OUTPUT, assets=None):
     sitemap = '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + "".join(
         f"<url><loc>{BASE_URL}{route(language)}</loc></url>" for language in LANGUAGES
     ) + "</urlset>\n"
-    (output / "sitemap.xml").write_text(sitemap, encoding="utf-8")
+    (output / "sitemap.xml").write_text(sitemap, encoding="utf-8", newline="\n")
     (output / ".nojekyll").write_bytes(b"")
     validate(output)
     return len(expected_files())
