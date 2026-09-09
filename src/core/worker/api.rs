@@ -3,7 +3,7 @@ use crate::core::source::{PageId, SharedSource};
 use crate::core::state::{CpuScaleFilter, DecoderPreferences};
 use crossbeam_channel::Sender;
 use egui::{Color32, ColorImage};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use super::clamp_target_long_edge;
 
@@ -403,8 +403,50 @@ pub struct WorkerOptions {
     pub prefetch_enabled: bool,
     pub progressive_preview_enabled: bool,
     pub cache_bytes: usize,
-    pub app_cached_pages: Vec<CachedPageKey>,
+    pub app_cached_pages: Vec<CachedPageRef>,
 }
+
+/// A cache observation that expires with its last real owner. This does not pin
+/// pixels or assume that an earlier app snapshot still retains an evicted page.
+#[derive(Clone)]
+pub struct CachedPageRef {
+    pub key: CachedPageKey,
+    page: Weak<PreparedPage>,
+}
+
+impl CachedPageRef {
+    pub fn new(key: CachedPageKey, page: &Arc<PreparedPage>) -> Self {
+        Self {
+            key,
+            page: Arc::downgrade(page),
+        }
+    }
+
+    pub(super) fn covers(&self, page_id: PageId, target: u32, decode: DecodeOptions) -> bool {
+        self.key.covers(page_id, target, decode) && self.page.strong_count() != 0
+    }
+
+    pub(super) fn is_alive(&self) -> bool {
+        self.page.strong_count() != 0
+    }
+}
+
+impl std::fmt::Debug for CachedPageRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedPageRef")
+            .field("key", &self.key)
+            .field("alive", &self.is_alive())
+            .finish()
+    }
+}
+
+impl PartialEq for CachedPageRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.page.ptr_eq(&other.page)
+    }
+}
+
+impl Eq for CachedPageRef {}
 
 impl Default for WorkerOptions {
     fn default() -> Self {

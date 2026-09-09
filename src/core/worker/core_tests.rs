@@ -349,7 +349,7 @@ fn display_dimensions_can_upscale_for_fit_modes() {
 #[test]
 fn worker_publishes_completed_page_before_handling_queued_command() {
     let (command_tx, command_rx) = unbounded();
-    let (event_tx, event_rx) = unbounded();
+    let (event_tx, event_rx) = super::delivery::event_channel();
     let shutdown_requested = Arc::new(AtomicBool::new(false));
     let worker_shutdown = shutdown_requested.clone();
     let source: SharedSource = Arc::new(CommandingSource {
@@ -378,7 +378,10 @@ fn worker_publishes_completed_page_before_handling_queued_command() {
             options: WorkerOptions::default(),
         })
         .unwrap();
-    let first_event = event_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let first_event = event_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .into_event();
 
     match first_event {
         WorkerEvent::PageReady { page_id, .. } => assert_eq!(page_id, PageId(0)),
@@ -398,7 +401,7 @@ fn worker_publishes_completed_page_before_handling_queued_command() {
 fn worker_applies_new_schedule_after_reading_an_invisible_page_before_decode() {
     for next_center in [0, 2] {
         let (command_tx, command_rx) = unbounded();
-        let (event_tx, event_rx) = unbounded();
+        let (event_tx, event_rx) = super::delivery::event_channel();
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker_shutdown = shutdown.clone();
         let source: SharedSource = Arc::new(CommandingSource {
@@ -432,7 +435,12 @@ fn worker_applies_new_schedule_after_reading_an_invisible_page_before_decode() {
             .unwrap();
 
         let events: Vec<_> = (0..2)
-            .map(|_| event_rx.recv_timeout(Duration::from_secs(2)).unwrap())
+            .map(|_| {
+                event_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap()
+                    .into_event()
+            })
             .collect();
         let pages: Vec<_> = events
             .into_iter()
@@ -459,7 +467,10 @@ fn worker_applies_new_schedule_after_reading_an_invisible_page_before_decode() {
                     },
                 })
                 .unwrap();
-            let visible = event_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let visible = event_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .into_event();
             assert!(matches!(
                 visible,
                 WorkerEvent::PageReady {
@@ -467,7 +478,10 @@ fn worker_applies_new_schedule_after_reading_an_invisible_page_before_decode() {
                     ..
                 }
             ));
-            let resumed = event_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let resumed = event_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .into_event();
             assert!(matches!(
                 resumed,
                 WorkerEvent::PageReady {

@@ -5,7 +5,7 @@ use crate::core::state::{
     WgpuUpscaleMethod,
 };
 use crate::core::worker::{
-    NavigationDirection, PageWorker, PreparedPage, WorkerEvent, DEFAULT_TARGET_LONG_EDGE,
+    NavigationDirection, PageWorker, PreparedPage, DEFAULT_TARGET_LONG_EDGE,
 };
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use debug_compare::{DebugCompareState, DebugCompareWorker};
@@ -190,7 +190,7 @@ pub struct SuiSuiViewApp {
     about_section: about::AboutSection,
     image_info: ImageInfoState,
     worker: PageWorker,
-    deferred_worker_events: VecDeque<WorkerEvent>,
+    deferred_worker_events: VecDeque<crate::core::worker::PendingWorkerEvent>,
     loader_tx: Sender<LoaderEvent>,
     loader_rx: Receiver<LoaderEvent>,
     loader_pending: bool,

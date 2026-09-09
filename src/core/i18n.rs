@@ -393,7 +393,7 @@ const CATALOG_KO_KR: &[(&str, &str)] = &[
     ("settings.performance.cache_summary", "{mode} {cache} MB"),
     (
         "settings.performance.memory_usage_live",
-        "현재 사용량: RAM {ram} MB · GPU {gpu} MB",
+        "표시 캐시 추정: 이미지 {ram} MB · GPU {gpu} MB",
     ),
     ("settings.bookmarks.auto_save", "보고 있던 이미지 위치를 자동 저장"),
     ("settings.bookmarks.auto_save.help", "페이지 이동 시 현재 책의 마지막 위치를 이어보기 기록으로 저장합니다."),
@@ -1014,7 +1014,7 @@ const CATALOG_EN_US: &[(&str, &str)] = &[
     ("settings.performance.cache_summary", "{mode} {cache} MB"),
     (
         "settings.performance.memory_usage_live",
-        "Current usage: RAM {ram} MB · GPU {gpu} MB",
+        "Display cache estimate: images {ram} MB · GPU {gpu} MB",
     ),
     ("settings.bookmarks.auto_save", "Automatically save reading position"),
     ("settings.bookmarks.auto_save.help", "Save the current book's last position as you turn pages."),

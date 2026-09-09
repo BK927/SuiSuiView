@@ -54,6 +54,7 @@ pub(super) struct GpuDrawState {
 }
 
 pub(super) struct GpuIntermediateTexture {
+    pub(super) _allocation: super::accounting::TextureAllocation,
     pub(super) _texture: wgpu::Texture,
     pub(super) _view: wgpu::TextureView,
     pub(super) mip_views: Vec<wgpu::TextureView>,
@@ -362,6 +363,7 @@ impl GpuPaintResources {
         if let Some((_old_key, old_texture)) = self.intermediate_textures.push(
             key,
             Arc::new(GpuIntermediateTexture {
+                _allocation: super::accounting::TextureAllocation::new(byte_size),
                 _texture: texture,
                 _view: view,
                 mip_views,
@@ -417,6 +419,7 @@ impl GpuPaintResources {
         if let Some((_old_key, old_texture)) = self.intermediate_textures.push(
             key,
             Arc::new(GpuIntermediateTexture {
+                _allocation: super::accounting::TextureAllocation::new(byte_size),
                 _texture: texture,
                 _view: view,
                 mip_views,

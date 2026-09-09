@@ -21,6 +21,7 @@ use std::sync::{Arc, OnceLock};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::time::Instant;
 
+mod accounting;
 mod deband;
 mod passes;
 mod pools;
@@ -56,9 +57,16 @@ static GPU_SOURCE_TEXTURE_BYTES_LIVE: AtomicUsize = AtomicUsize::new(0);
 static GPU_INTERMEDIATE_TEXTURE_BYTES_LIVE: AtomicUsize = AtomicUsize::new(0);
 static GPU_DRAW_STATE_BYTES_LIVE: AtomicUsize = AtomicUsize::new(0);
 
+/// Cached source payload plus unique intermediate allocations still owned by
+/// any pool or draw state. Pool ownership counters below intentionally overlap.
+pub(crate) fn gpu_cached_texture_bytes_live() -> usize {
+    GPU_SOURCE_TEXTURE_BYTES_LIVE.load(Ordering::Relaxed) + accounting::intermediate_bytes()
+}
+
 /// Live GPU pool usage in bytes as `(source_textures, intermediate_textures, draw_states)`.
 /// Reflects the most recent state published by the render thread; returns zeros before any
 /// GPU paint resources exist.
+#[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 pub(crate) fn gpu_pool_bytes_live() -> (usize, usize, usize) {
     (
         GPU_SOURCE_TEXTURE_BYTES_LIVE.load(Ordering::Relaxed),

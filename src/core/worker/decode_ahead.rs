@@ -193,9 +193,9 @@ pub(super) fn maybe_start_decode(
     candidate: DecodeAheadCandidate,
     measure_prepare_timing: bool,
 ) -> bool {
-    discard_finished_decode(decode_ahead, "discard_finished");
+    has_pending(decode_ahead);
     if !source.supports_concurrent_page_reads() {
-        clear_pending_decode(decode_ahead, "serialized_source");
+        cancel_pending_decode(decode_ahead, "serialized_source");
         return false;
     }
     if decode_ahead.is_some() {
@@ -253,8 +253,14 @@ pub(super) fn consume_matching_decode(
             .map(|decode_ahead| decode_ahead.finish("consume"));
     }
 
-    cancel_pending_decode(pending, "stale");
     None
+}
+
+pub(super) fn has_pending(pending: &mut Option<DecodeAhead>) -> bool {
+    if pending.as_ref().is_some_and(DecodeAhead::is_cancelled) {
+        discard_finished_decode(pending, "discard_cancelled");
+    }
+    pending.is_some()
 }
 
 pub(super) fn clear_pending_decode(pending: &mut Option<DecodeAhead>, reason: &'static str) {
@@ -673,6 +679,54 @@ mod tests {
     }
 
     #[test]
+    fn finished_decode_survives_an_unrelated_request_until_consumed() {
+        let source: SharedSource = Arc::new(StaticSource {
+            path: PathBuf::from("static-source"),
+            bytes: vec![1, 2, 3, 4],
+        });
+        let mut pending = Some(DecodeAhead::start(
+            source,
+            "book".to_owned(),
+            7,
+            PageId(1),
+            PageJob {
+                index: 1,
+                target_long_edge: 2048,
+            },
+            DecodeOptions::default(),
+            false,
+        ));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !pending.as_ref().unwrap().is_finished() {
+            assert!(Instant::now() < deadline);
+            thread::yield_now();
+        }
+        assert!(consume_matching_decode(
+            &mut pending,
+            "book",
+            7,
+            PageId(0),
+            2048,
+            DecodeOptions::default()
+        )
+        .is_none());
+        assert!(super::has_pending(&mut pending));
+        // The fixture deliberately fails decode; its completed error is still
+        // a useful result and must not be silently discarded or reread.
+        assert!(consume_matching_decode(
+            &mut pending,
+            "book",
+            7,
+            PageId(1),
+            2048,
+            DecodeOptions::default()
+        )
+        .unwrap()
+        .is_err());
+        assert!(pending.is_none());
+    }
+
+    #[test]
     fn cancelled_decode_is_not_consumed_as_page_result() {
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -699,6 +753,7 @@ mod tests {
         started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
 
         cancel_pending_decode(&mut pending, "test");
+        assert!(super::has_pending(&mut pending));
         assert!(consume_matching_decode(
             &mut pending,
             "book",
@@ -716,6 +771,17 @@ mod tests {
 
     #[test]
     fn cancel_pending_decode_if_not_scheduled_rechecks_app_cache() {
+        let cached_page = Arc::new(crate::core::worker::PreparedPage {
+            pixels: crate::core::worker::PagePixels::Rgba(vec![0; 4].into()),
+            original_width: 1,
+            original_height: 1,
+            display_width: 1,
+            display_height: 1,
+            byte_size: 4,
+            target_long_edge: 2048,
+            decode_backend: crate::core::worker::DecodeBackend::ImageCrate,
+            notice: None,
+        });
         let source: SharedSource = Arc::new(StaticSource {
             path: PathBuf::from("static-source"),
             bytes: vec![1, 2, 3, 4],
@@ -734,10 +800,9 @@ mod tests {
         ));
         let options = WorkerOptions {
             progressive_preview_enabled: false,
-            app_cached_pages: vec![CachedPageKey::new(
-                PageId(1),
-                2048,
-                DecodeOptions::default(),
+            app_cached_pages: vec![crate::core::worker::CachedPageRef::new(
+                CachedPageKey::new(PageId(1), 2048, DecodeOptions::default()),
+                &cached_page,
             )],
             ..WorkerOptions::default()
         };

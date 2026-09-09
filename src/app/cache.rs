@@ -9,7 +9,7 @@ use crate::core::state::{
     CpuScaleFilter, FitMode, WgpuDownscaleMethod, WgpuScalePlan, WgpuUpscaleMethod,
 };
 use crate::core::worker::{
-    clamp_target_long_edge, preview_prefetch_indices, CachedPageKey, DecodeOptions,
+    clamp_target_long_edge, preview_prefetch_indices, CachedPageKey, CachedPageRef, DecodeOptions,
     NavigationDirection, PreparedTargetIntent, FULL_QUALITY_PREFETCH_BACKWARD_PAGES,
     FULL_QUALITY_PREFETCH_FORWARD_PAGES, MAX_TARGET_LONG_EDGE, PREVIEW_TARGET_LONG_EDGE,
 };
@@ -127,10 +127,15 @@ impl SuiSuiViewApp {
         })
     }
 
-    pub(in crate::app) fn app_cached_page_keys(&self) -> Vec<CachedPageKey> {
+    pub(in crate::app) fn app_cached_page_refs(&self) -> Vec<CachedPageRef> {
         self.decoded_pages
             .iter()
-            .map(|(key, _)| CachedPageKey::new(key.page_id, key.target_long_edge, key.decode))
+            .map(|(key, page)| {
+                CachedPageRef::new(
+                    CachedPageKey::new(key.page_id, key.target_long_edge, key.decode),
+                    page,
+                )
+            })
             .collect()
     }
 

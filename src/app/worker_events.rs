@@ -68,14 +68,14 @@ impl SuiSuiViewApp {
             if !worker_event_receive_allowed(received, started.elapsed()) {
                 break true;
             }
-            let Some(event) = self.worker.try_recv() else {
+            let Some(event) = self.worker.try_recv_pending() else {
                 break false;
             };
             received += 1;
-            match self.worker_event_route(&event) {
+            match self.worker_event_route(event.event()) {
                 WorkerEventRoute::DropStale => {}
                 WorkerEventRoute::PaintCritical => {
-                    decoded_cache_changed |= self.handle_worker_event(event);
+                    decoded_cache_changed |= self.handle_worker_event(event.into_event());
                 }
                 WorkerEventRoute::Background => self.deferred_worker_events.push_back(event),
             }
@@ -87,10 +87,10 @@ impl SuiSuiViewApp {
                 break;
             };
             deferred_processed += 1;
-            match self.worker_event_route(&event) {
+            match self.worker_event_route(event.event()) {
                 WorkerEventRoute::DropStale => {}
                 WorkerEventRoute::PaintCritical | WorkerEventRoute::Background => {
-                    decoded_cache_changed |= self.handle_worker_event(event);
+                    decoded_cache_changed |= self.handle_worker_event(event.into_event());
                 }
             }
         }
@@ -308,7 +308,7 @@ impl SuiSuiViewApp {
                 && !self.sibling_book_turn_reserved(),
             progressive_preview_enabled: self.settings.progressive_preview_enabled,
             cache_bytes: self.worker_cache_budget_bytes(),
-            app_cached_pages: self.app_cached_page_keys(),
+            app_cached_pages: self.app_cached_page_refs(),
         }
     }
 }

@@ -16,6 +16,7 @@ mod decode_ahead;
 mod decode_policy;
 #[cfg(test)]
 mod decoder_tests;
+mod delivery;
 mod gif;
 mod image_crate;
 mod jpeg;
@@ -28,11 +29,13 @@ mod resize;
 mod run_loop;
 mod scheduler;
 mod selection;
+mod session;
 mod source_bytes;
 #[cfg(feature = "native-webp")]
 mod webp;
 
 pub use api::*;
+pub use delivery::PendingWorkerEvent;
 #[cfg(test)]
 pub use prepare::prepare_image;
 pub use prepare::{
@@ -72,7 +75,8 @@ const PNG_SAMPLED_MIN_RATIO: u32 = 2;
 
 pub struct PageWorker {
     command_tx: Sender<WorkerCommand>,
-    event_rx: Receiver<WorkerEvent>,
+    event_rx: Receiver<PendingWorkerEvent>,
+    delivery_usage: Arc<delivery::DeliveryUsage>,
     shutdown_requested: Arc<AtomicBool>,
     stopped_rx: Receiver<()>,
     join: Option<JoinHandle<()>>,
@@ -81,7 +85,8 @@ pub struct PageWorker {
 impl PageWorker {
     pub fn new(ctx: Context) -> Self {
         let (command_tx, command_rx) = unbounded();
-        let (event_tx, event_rx) = unbounded();
+        let (event_tx, event_rx) = delivery::event_channel();
+        let delivery_usage = event_tx.usage.clone();
         let (stopped_tx, stopped_rx) = bounded(1);
         let shutdown_requested = Arc::new(AtomicBool::new(false));
         let worker_shutdown_requested = shutdown_requested.clone();
@@ -96,6 +101,7 @@ impl PageWorker {
         Self {
             command_tx,
             event_rx,
+            delivery_usage,
             shutdown_requested,
             stopped_rx,
             join: Some(join),
@@ -139,7 +145,17 @@ impl PageWorker {
     }
 
     pub fn try_recv(&self) -> Option<WorkerEvent> {
+        self.try_recv_pending().map(PendingWorkerEvent::into_event)
+    }
+
+    pub fn try_recv_pending(&self) -> Option<PendingWorkerEvent> {
         self.event_rx.try_recv().ok()
+    }
+
+    /// Outstanding result payload, including deferred UI events. This can share
+    /// allocations with caches; it is not an additional process-memory counter.
+    pub fn pending_result_bytes(&self) -> usize {
+        self.delivery_usage.bytes()
     }
 
     pub fn clear_book_blocking(&self) -> bool {
@@ -187,6 +203,9 @@ impl Drop for PageWorker {
 
 #[cfg(test)]
 mod core_tests;
+
+#[cfg(test)]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod luma_tests;

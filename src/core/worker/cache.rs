@@ -1,4 +1,4 @@
-use super::{clamp_target_long_edge, CachedPageKey, DecodeOptions, PreparedPage};
+use super::{clamp_target_long_edge, CachedPageKey, CachedPageRef, DecodeOptions, PreparedPage};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
 use crate::core::source::{PageId, SharedSource};
@@ -10,7 +10,7 @@ use std::time::Duration;
 
 const PUBLISHED_APP_CACHE_HINT_LIMIT: usize = 64;
 
-pub(super) type PublishedAppCacheHints = VecDeque<CachedPageKey>;
+pub(super) type PublishedAppCacheHints = VecDeque<CachedPageRef>;
 
 pub(super) fn page_cache_key(
     book_id: &str,
@@ -104,11 +104,10 @@ pub(super) fn should_skip_published_app_cache_hint(
 pub(super) fn remember_published_app_cache_hint(
     hints: &mut PublishedAppCacheHints,
     key: CachedPageKey,
+    page: &Arc<PreparedPage>,
 ) {
-    if let Some(position) = hints.iter().position(|existing| *existing == key) {
-        let _ = hints.remove(position);
-    }
-    hints.push_back(key);
+    hints.retain(|existing| existing.key != key && existing.is_alive());
+    hints.push_back(CachedPageRef::new(key, page));
     while hints.len() > PUBLISHED_APP_CACHE_HINT_LIMIT {
         let _ = hints.pop_front();
     }
@@ -298,7 +297,12 @@ mod tests {
     fn published_app_cache_hint_skips_only_prefetch_pages() {
         let decode = DecodeOptions::default();
         let mut hints = PublishedAppCacheHints::new();
-        remember_published_app_cache_hint(&mut hints, CachedPageKey::new(PageId(6), 4096, decode));
+        let page = Arc::new(test_prepared_page(4, 4096));
+        remember_published_app_cache_hint(
+            &mut hints,
+            CachedPageKey::new(PageId(6), 4096, decode),
+            &page,
+        );
 
         assert!(should_skip_published_app_cache_hint(
             &hints,
@@ -320,10 +324,12 @@ mod tests {
     fn published_app_cache_hint_is_bounded_and_recent() {
         let decode = DecodeOptions::default();
         let mut hints = PublishedAppCacheHints::new();
+        let page = Arc::new(test_prepared_page(4, 4096));
         for index in 0..=PUBLISHED_APP_CACHE_HINT_LIMIT {
             remember_published_app_cache_hint(
                 &mut hints,
                 CachedPageKey::new(PageId(index as u32), 4096, decode),
+                &page,
             );
         }
 

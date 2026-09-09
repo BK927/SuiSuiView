@@ -4,7 +4,7 @@ use super::{PreparedPage, WorkerCommand, WorkerOptions};
 use crate::core::source::{PageId, PageReadHint, SharedSource};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::{perf_trace, perf_trace::PerfField};
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{bounded, Receiver};
 use lru::LruCache;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -17,11 +17,9 @@ pub(super) struct ReadAhead {
     book_epoch: usize,
     page_id: PageId,
     index: usize,
-    handle: Option<JoinHandle<ReadAheadResult>>,
-}
-
-struct ReadAheadResult {
-    result: Result<Vec<u8>, String>,
+    handle: Option<JoinHandle<()>>,
+    result: Option<Receiver<Result<Vec<u8>, String>>>,
+    cancelled: bool,
 }
 
 impl ReadAhead {
@@ -32,6 +30,7 @@ impl ReadAhead {
         page_id: PageId,
         index: usize,
     ) -> Self {
+        let (result_tx, result_rx) = bounded(1);
         let handle = thread::Builder::new()
             .name("suisuiview-page-read-ahead".to_owned())
             .stack_size(READ_AHEAD_STACK_BYTES)
@@ -48,7 +47,10 @@ impl ReadAhead {
                     result.is_ok(),
                     read_hint,
                 );
-                ReadAheadResult { result }
+                // Cancellation drops the receiver. Both an already-delivered
+                // buffer and a read that finishes later are then released,
+                // even if the main worker is idle after ClearBook.
+                let _ = result_tx.send(result);
             })
             .expect("page read-ahead thread should start");
 
@@ -58,11 +60,16 @@ impl ReadAhead {
             page_id,
             index,
             handle: Some(handle),
+            result: Some(result_rx),
+            cancelled: false,
         }
     }
 
     pub(super) fn matches(&self, book_id: &str, book_epoch: usize, page_id: PageId) -> bool {
-        self.book_id == book_id && self.book_epoch == book_epoch && self.page_id == page_id
+        !self.cancelled
+            && self.book_id == book_id
+            && self.book_epoch == book_epoch
+            && self.page_id == page_id
     }
 
     pub(super) fn finish(mut self, reason: &'static str) -> Result<Vec<u8>, String> {
@@ -82,8 +89,13 @@ impl ReadAhead {
         let started = Instant::now();
         let joined = handle
             .join()
-            .map(|output| output.result)
-            .unwrap_or_else(|_| Err("Page read-ahead thread panicked".to_owned()));
+            .map_err(|_| "Page read-ahead thread panicked".to_owned())
+            .and_then(|()| {
+                self.result
+                    .take()
+                    .and_then(|receiver| receiver.try_recv().ok())
+                    .unwrap_or_else(|| Err("Page read-ahead was cancelled".to_owned()))
+            });
         record_join_wait(
             self.index,
             self.book_epoch,
@@ -119,8 +131,9 @@ pub(super) fn maybe_start(
     cache: &LruCache<String, Arc<PreparedPage>>,
     published_app_cache_hints: &PublishedAppCacheHints,
 ) {
+    discard_cancelled(read_ahead);
     if !source.supports_concurrent_page_reads() {
-        clear_pending(read_ahead, "serialized_source");
+        cancel_pending(read_ahead, "serialized_source");
         return;
     }
     if read_ahead.is_some() {
@@ -217,8 +230,53 @@ pub(super) fn consume_matching(
         return pending.take().map(|read| read.finish("consume"));
     }
 
-    clear_pending(pending, "stale");
     None
+}
+
+pub(super) fn has_pending(pending: &mut Option<ReadAhead>) -> bool {
+    discard_cancelled(pending);
+    pending.is_some()
+}
+
+pub(super) fn cancel_pending(pending: &mut Option<ReadAhead>, reason: &'static str) {
+    if let Some(read) = pending.as_mut() {
+        if !read.cancelled {
+            record_detach(read.index, read.book_epoch, reason);
+        }
+        read.cancelled = true;
+        // The completion handle reserves concurrency, never pixel ownership.
+        read.result = None;
+    }
+    discard_cancelled(pending);
+}
+
+fn discard_cancelled(pending: &mut Option<ReadAhead>) {
+    if pending.as_ref().is_some_and(|read| {
+        read.cancelled && read.handle.as_ref().is_some_and(JoinHandle::is_finished)
+    }) {
+        if let Some(read) = pending.take() {
+            let _ = read.finish("discard_cancelled");
+        }
+    }
+}
+
+pub(super) fn cancel_if_not_scheduled(
+    pending: &mut Option<ReadAhead>,
+    source: &SharedSource,
+    epoch: usize,
+    jobs: &[PageJob],
+) {
+    if pending.as_ref().is_some_and(|read| {
+        !read.cancelled
+            && read.book_id == source.book_id()
+            && read.book_epoch == epoch
+            && jobs
+                .iter()
+                .any(|job| source.page_id(job.index) == Some(read.page_id))
+    }) {
+        return;
+    }
+    cancel_pending(pending, "unscheduled");
 }
 
 pub(super) fn clear_matching(
@@ -232,7 +290,7 @@ pub(super) fn clear_matching(
         .as_ref()
         .is_some_and(|read| read.matches(book_id, book_epoch, page_id))
     {
-        clear_pending(pending, reason);
+        cancel_pending(pending, reason);
     }
 }
 
@@ -479,6 +537,66 @@ mod tests {
 
         assert!(pending.is_none());
         assert!(read_log.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn useful_read_survives_replanning_and_cancelled_read_keeps_its_lane() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let source: SharedSource = Arc::new(BlockingSource {
+            path: PathBuf::from("blocking-source"),
+            bytes: vec![1, 2, 3, 4],
+            started_tx: Mutex::new(Some(started_tx)),
+            release_rx: Mutex::new(release_rx),
+            done_tx,
+        });
+        let book = source.book_id();
+        let mut pending = Some(ReadAhead::start(
+            source.clone(),
+            book.to_owned(),
+            7,
+            PageId(1),
+            1,
+        ));
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(consume_matching(&mut pending, book, 7, PageId(0)).is_none());
+        super::cancel_if_not_scheduled(
+            &mut pending,
+            &source,
+            7,
+            &[PageJob {
+                index: 1,
+                target_long_edge: 4096,
+            }],
+        );
+        assert!(pending.as_ref().unwrap().matches(book, 7, PageId(1)));
+
+        super::cancel_pending(&mut pending, "test");
+        assert!(super::has_pending(&mut pending));
+        assert!(consume_matching(&mut pending, book, 7, PageId(1)).is_none());
+        assert!(super::has_pending(&mut pending));
+        release_tx.send(()).unwrap();
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !pending
+            .as_ref()
+            .unwrap()
+            .handle
+            .as_ref()
+            .unwrap()
+            .is_finished()
+        {
+            assert!(Instant::now() < deadline);
+            thread::yield_now();
+        }
+        // Simulate an idle worker after ClearBook: completion retains no result
+        // receiver, and the JoinHandle returns (), not the encoded buffer.
+        assert!(pending.as_ref().unwrap().result.is_none());
+        while super::has_pending(&mut pending) {
+            assert!(Instant::now() < deadline);
+            thread::yield_now();
+        }
     }
 
     #[test]

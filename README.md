@@ -92,8 +92,9 @@ per-book file.
 - Rendering: transition effect, fast sampled/scaled decode, GPU
   acceleration, scaler/filter controls, EXIF orientation, embedded ICC
   conversion, prefetch, and a total memory budget (Saver/Standard/Ample presets,
-  an automatic renderer-aware default, or a manual limit) with a live RAM/GPU
-  usage readout. Manifest-backed SR Lab SPAN x2 is
+  an automatic renderer-aware default, or a manual limit) with an estimate of
+  cached display-image and GPU texture bytes. This is not total process RAM or
+  physical VRAM usage. Manifest-backed SR Lab SPAN x2 is
   available as a slow manual GPU upscaler when local SPAN weights are present.
   Fixed 2x GPU SR upscalers skip tiny enlargements, can auto-stack once for
   large enlargement, and reuse the selected WGPU downscaler when their 2x/4x
@@ -129,6 +130,12 @@ the current book's off-screen page prefetch pauses. First-page preparation uses
 the destination book's saved view and the active renderer's decode policy so a
 compatible prepared image can be reused. These paths keep the existing image
 quality and image-cache budgets.
+
+Page requests reuse compatible reads that have already finished. Prefetch checks
+whether prepared pixels still exist, and completed pages waiting for the UI have
+a byte limit that also covers deferred processing. Navigation and shutdown
+commands remain available while delivery waits for room. A single page larger
+than that limit can still be delivered to preserve display quality.
 
 State is saved to the platform data directory. On Windows this resolves to an
 AppData `SuiSuiView/` folder: `state.json` holds settings and window state, and

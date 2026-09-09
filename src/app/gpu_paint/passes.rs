@@ -896,6 +896,7 @@ impl GpuPaintResources {
             .texture
             .create_view(&super::pools::mip_view_descriptor(0))];
         let intermediate = Arc::new(GpuIntermediateTexture {
+            _allocation: super::accounting::TextureAllocation::new(output_byte_size),
             _texture: output.texture,
             _view: output.view,
             mip_views,

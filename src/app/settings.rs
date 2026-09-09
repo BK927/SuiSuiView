@@ -110,12 +110,11 @@ impl SuiSuiViewApp {
         }
         let mut active_section = self.settings_section;
         let i18n = self.i18n();
-        // Read-only live memory usage for the performance section summary. Captured here while
-        // `self` is accessible; GPU figures mirror the render thread's pool byte counters.
-        let live_ram_bytes = self.decoded_bytes + self.texture_cache_bytes();
-        let (gpu_source_bytes, gpu_intermediate_bytes, gpu_draw_state_bytes) =
-            gpu_paint::gpu_pool_bytes_live();
-        let live_gpu_bytes = gpu_source_bytes + gpu_intermediate_bytes + gpu_draw_state_bytes;
+        // Display-cache payload estimates, not process RAM or driver VRAM. egui
+        // viewer textures belong in the GPU figure; intermediate pins count once.
+        let live_ram_bytes = self.decoded_bytes;
+        let live_gpu_bytes =
+            self.texture_cache_bytes() + gpu_paint::gpu_cached_texture_bytes_live();
         let dialog_size = dialog::bounded_dialog_size(
             ctx,
             dialog::SPLIT_DIALOG_SIZE,
