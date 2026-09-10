@@ -29,6 +29,8 @@
 use crate::core::i18n::I18n;
 use serde::{Deserialize, Serialize};
 use std::f32::consts::{FRAC_PI_2, TAU};
+mod controls;
+pub use controls::{CustomDeband, ResolvedDeband};
 
 /// Salt for the grain hash so grain noise decorrelates from the per-iteration
 /// angle hashes. The WGSL mirror (`deband.wgsl`) hardcodes the SAME value.
@@ -51,6 +53,7 @@ pub enum DebandStrength {
     Weak,
     Medium,
     Strong,
+    Custom,
 }
 
 /// Resolved debanding parameters in 8-bit units.
@@ -66,7 +69,13 @@ pub(crate) struct DebandParams {
 
 impl DebandStrength {
     /// Menu order: Off first, then increasing strength.
-    pub const ALL: [Self; 4] = [Self::Off, Self::Weak, Self::Medium, Self::Strong];
+    pub const ALL: [Self; 5] = [
+        Self::Off,
+        Self::Weak,
+        Self::Medium,
+        Self::Strong,
+        Self::Custom,
+    ];
 
     /// The validated preset for this strength, or `None` for `Off` (no pass).
     ///
@@ -82,7 +91,7 @@ impl DebandStrength {
                 threshold: 2.0,
                 grain: 0.5,
             }),
-            Self::Medium => Some(DebandParams {
+            Self::Medium | Self::Custom => Some(DebandParams {
                 iterations: 3,
                 base_radius: 12.0,
                 threshold: 3.0,
@@ -108,6 +117,7 @@ impl DebandStrength {
             Self::Weak => "weak",
             Self::Medium => "medium",
             Self::Strong => "strong",
+            Self::Custom => "custom",
         }
     }
 
@@ -119,6 +129,7 @@ impl DebandStrength {
             Self::Weak => "deband.level.weak",
             Self::Medium => "deband.level.medium",
             Self::Strong => "deband.level.strong",
+            Self::Custom => "deband.level.custom",
         };
         i18n.text(key)
     }

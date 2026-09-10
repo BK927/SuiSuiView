@@ -4,7 +4,6 @@ use super::{
     viewer::{StripAnchor, ViewMode, ViewTargetSettle, SPREAD_GAP_POINTS},
     PendingBookmarkJump, SeededPreparedPage, SuiSuiViewApp,
 };
-use crate::core::effects::ViewEffects;
 use crate::core::formats::unsupported_message_for_extension;
 use crate::core::source::{
     classify_path, open_source_from_path, BookSource, SharedSource, SourceKind,
@@ -515,7 +514,7 @@ impl SuiSuiViewApp {
         self.sibling_book_wgpu_present_wait = None;
         self.sibling_book_visual_hold_until = None;
         self.pan = Vec2::ZERO;
-        self.effects = ViewEffects::default();
+        self.effects = self.settings.view_adjustments.effects(Default::default());
         self.current_view_state = None;
         self.deferred_worker_events.clear();
         self.decoded_pages.clear();

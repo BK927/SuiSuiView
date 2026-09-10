@@ -322,7 +322,7 @@ mod tests {
         clamp_pan_to_viewport, pixel_grid_spacing, source_pixel_scale, texture_options_for_sampling,
     };
     use crate::app::{gpu_visual_needs_wgsl, TextureSampling};
-    use crate::core::deband::DebandStrength;
+    use crate::core::deband::ResolvedDeband;
     use crate::core::effects::ViewEffects;
     use crate::core::state::{WgpuDownscaleMethod, WgpuUpscaleMethod};
     use egui::{Pos2, Rect, TextureOptions, Vec2};
@@ -336,7 +336,7 @@ mod tests {
             WgpuUpscaleMethod::Auto,
             WgpuDownscaleMethod::Bilinear,
             1.10,
-            DebandStrength::Off,
+            ResolvedDeband::Off,
         ));
         assert!(gpu_visual_needs_wgsl(
             [2000, 3000],
@@ -345,7 +345,7 @@ mod tests {
             WgpuUpscaleMethod::Auto,
             WgpuDownscaleMethod::Hamming,
             1.10,
-            DebandStrength::Off,
+            ResolvedDeband::Off,
         ));
         // Deband forces the WGSL path even for an otherwise-native downscale with
         // no effects, so the pre-pass actually runs.
@@ -356,7 +356,7 @@ mod tests {
             WgpuUpscaleMethod::Auto,
             WgpuDownscaleMethod::Bilinear,
             1.10,
-            DebandStrength::Medium,
+            ResolvedDeband::Medium,
         ));
     }
 
@@ -369,7 +369,7 @@ mod tests {
             WgpuUpscaleMethod::Auto,
             WgpuDownscaleMethod::Bilinear,
             1.10,
-            DebandStrength::Off,
+            ResolvedDeband::Off,
         ));
         assert!(gpu_visual_needs_wgsl(
             [800, 1200],
@@ -378,7 +378,7 @@ mod tests {
             WgpuUpscaleMethod::WgslNisStyle,
             WgpuDownscaleMethod::Bilinear,
             1.10,
-            DebandStrength::Off,
+            ResolvedDeband::Off,
         ));
         assert!(gpu_visual_needs_wgsl(
             [2000, 3000],
@@ -390,7 +390,7 @@ mod tests {
             WgpuUpscaleMethod::Auto,
             WgpuDownscaleMethod::Bilinear,
             1.10,
-            DebandStrength::Off,
+            ResolvedDeband::Off,
         ));
     }
 

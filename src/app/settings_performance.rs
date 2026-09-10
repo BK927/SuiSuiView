@@ -3,8 +3,8 @@ use super::settings::{checkbox_with_help, grid_label_with_help, info_icon, setti
 use super::ui::theme;
 use crate::core::i18n::I18n;
 use crate::core::state::{
-    AppSettings, CacheMemoryMode, DecodeMode, DecoderPreference, MANUAL_CACHE_MB_MAX,
-    MANUAL_CACHE_MB_MIN,
+    AppSettings, CacheMemoryMode, DecodeMode, DecoderPreference, FastPrepareOverride,
+    MANUAL_CACHE_MB_MAX, MANUAL_CACHE_MB_MIN,
 };
 use egui::{self, RichText};
 
@@ -42,8 +42,6 @@ const ICO_DECODER_OPTIONS: &[DecoderPreference] = &[
 ];
 const AVIF_DECODER_OPTIONS: &[DecoderPreference] =
     &[DecoderPreference::Default, DecoderPreference::LibAvifDav1d];
-const SVG_DECODER_OPTIONS: &[DecoderPreference] =
-    &[DecoderPreference::Default, DecoderPreference::Resvg];
 const PSD_DECODER_OPTIONS: &[DecoderPreference] =
     &[DecoderPreference::Default, DecoderPreference::ZunePsd];
 const AI_DECODER_OPTIONS: &[DecoderPreference] =
@@ -88,22 +86,36 @@ pub(in crate::app) fn show_decoder_settings(
     );
 
     ui.add_space(8.0);
+    show_fast_prepare_settings(ui, draft, changed, i18n);
+    if draft.decode_mode != DecodeMode::Custom {
+        let note = if draft.decode_mode == DecodeMode::Compatibility {
+            "settings.decoder.compat_note"
+        } else {
+            "settings.decoder.auto_note"
+        };
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new(i18n.text(note))
+                .size(12.0)
+                .color(theme::TEXT_MUTED),
+        );
+        return;
+    }
+    ui.add_space(8.0);
     setting_group(
         ui,
         &i18n.text("settings.decoder.by_format.title"),
         &i18n.text("settings.decoder.by_format.desc"),
         |ui| {
-            let enabled = draft.decode_mode == DecodeMode::Custom;
-            let mode_help = (!enabled).then(|| i18n.text("settings.decoder.custom_only"));
-            let avif_enabled = enabled && cfg!(feature = "native-avif");
+            let avif_enabled = cfg!(feature = "native-avif");
             let avif_help = if cfg!(feature = "native-avif") {
-                mode_help.clone()
+                None
             } else {
                 Some(i18n.text("settings.decoder.native_avif_only"))
             };
-            let ai_enabled = enabled && cfg!(feature = "native-ai");
+            let ai_enabled = cfg!(feature = "native-ai");
             let ai_help = if cfg!(feature = "native-ai") {
-                mode_help.clone()
+                None
             } else {
                 Some(i18n.text("settings.decoder.native_ai_only"))
             };
@@ -115,9 +127,9 @@ pub(in crate::app) fn show_decoder_settings(
                     decoder_row(
                         ui,
                         changed,
-                        enabled,
+                        true,
                         "JPEG",
-                        mode_help.clone(),
+                        None,
                         &mut draft.decoder_preferences.jpeg,
                         JPEG_DECODER_OPTIONS,
                         i18n,
@@ -125,9 +137,9 @@ pub(in crate::app) fn show_decoder_settings(
                     decoder_row(
                         ui,
                         changed,
-                        enabled,
+                        true,
                         "PNG",
-                        mode_help.clone(),
+                        None,
                         &mut draft.decoder_preferences.png,
                         PNG_DECODER_OPTIONS,
                         i18n,
@@ -135,9 +147,9 @@ pub(in crate::app) fn show_decoder_settings(
                     decoder_row(
                         ui,
                         changed,
-                        enabled,
+                        true,
                         "WebP",
-                        mode_help.clone(),
+                        None,
                         &mut draft.decoder_preferences.webp,
                         WEBP_DECODER_OPTIONS,
                         i18n,
@@ -145,9 +157,9 @@ pub(in crate::app) fn show_decoder_settings(
                     decoder_row(
                         ui,
                         changed,
-                        enabled,
+                        true,
                         "GIF",
-                        mode_help.clone(),
+                        None,
                         &mut draft.decoder_preferences.gif,
                         GIF_DECODER_OPTIONS,
                         i18n,
@@ -155,9 +167,9 @@ pub(in crate::app) fn show_decoder_settings(
                     decoder_row(
                         ui,
                         changed,
-                        enabled,
+                        true,
                         "BMP",
-                        mode_help.clone(),
+                        None,
                         &mut draft.decoder_preferences.bmp,
                         BMP_DECODER_OPTIONS,
                         i18n,
@@ -165,9 +177,9 @@ pub(in crate::app) fn show_decoder_settings(
                     decoder_row(
                         ui,
                         changed,
-                        enabled,
+                        true,
                         "ICO",
-                        mode_help.clone(),
+                        None,
                         &mut draft.decoder_preferences.ico,
                         ICO_DECODER_OPTIONS,
                         i18n,
@@ -185,19 +197,9 @@ pub(in crate::app) fn show_decoder_settings(
                     decoder_row(
                         ui,
                         changed,
-                        false,
-                        "SVG",
-                        Some(i18n.text("settings.decoder.planned")),
-                        &mut draft.decoder_preferences.svg,
-                        SVG_DECODER_OPTIONS,
-                        i18n,
-                    );
-                    decoder_row(
-                        ui,
-                        changed,
-                        enabled,
+                        true,
                         "PSD",
-                        mode_help.clone(),
+                        None,
                         &mut draft.decoder_preferences.psd,
                         PSD_DECODER_OPTIONS,
                         i18n,
@@ -213,18 +215,56 @@ pub(in crate::app) fn show_decoder_settings(
                         i18n,
                     );
                 });
+        },
+    );
+}
 
-            if draft.decode_mode == DecodeMode::Compatibility {
-                ui.add_space(4.0);
+fn show_fast_prepare_settings(
+    ui: &mut egui::Ui,
+    draft: &mut AppSettings,
+    changed: &mut bool,
+    i18n: I18n,
+) {
+    setting_group(
+        ui,
+        &i18n.text("settings.decoder.fast_prepare.title"),
+        &i18n.text("settings.decoder.fast_prepare.desc"),
+        |ui| {
+            let enabled =
+                draft.fast_sampled_scaled_decode && draft.decode_mode != DecodeMode::Compatibility;
+            ui.add_enabled_ui(enabled, |ui| {
+                egui::Grid::new("settings_fast_prepare_overrides")
+                    .num_columns(2)
+                    .spacing([14.0, 8.0])
+                    .show(ui, |ui| {
+                        for (format, value) in [
+                            ("JPEG", &mut draft.fast_prepare_overrides.jpeg),
+                            ("PNG", &mut draft.fast_prepare_overrides.png),
+                            ("WebP", &mut draft.fast_prepare_overrides.webp),
+                            ("BMP", &mut draft.fast_prepare_overrides.bmp),
+                            ("GIF", &mut draft.fast_prepare_overrides.gif),
+                        ] {
+                            ui.label(format);
+                            egui::ComboBox::from_id_salt(("fast_prepare_override", format))
+                                .selected_text(value.label_i18n(i18n))
+                                .show_ui(ui, |ui| {
+                                    for choice in FastPrepareOverride::ALL {
+                                        *changed |= ui
+                                            .selectable_value(
+                                                value,
+                                                choice,
+                                                choice.label_i18n(i18n),
+                                            )
+                                            .changed();
+                                    }
+                                });
+                            ui.end_row();
+                        }
+                    });
+            });
+            if !enabled {
                 ui.label(
-                    RichText::new(i18n.text("settings.decoder.compat_note"))
-                        .size(12.0)
-                        .color(theme::TEXT_MUTED),
-                );
-            } else if draft.decode_mode == DecodeMode::AutoFast {
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(i18n.text("settings.decoder.auto_note"))
+                    RichText::new(i18n.text("settings.decoder.fast_prepare.disabled"))
                         .size(12.0)
                         .color(theme::TEXT_MUTED),
                 );

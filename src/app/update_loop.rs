@@ -7,6 +7,9 @@ use std::time::Instant;
 
 impl SuiSuiViewApp {
     pub(in crate::app) fn update_frame(&mut self, ctx: &egui::Context) {
+        if self.settings.background_refine {
+            super::gpu_paint::refine::note_input(ctx);
+        }
         let _stall_scope =
             crate::core::stall_trace::scope(crate::core::stall_trace::Stage::UpdateFrame);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -90,6 +93,7 @@ impl SuiSuiViewApp {
         record_update_phase!("drive_auto_page_turn_diagnostics");
 
         self.show_top_bar(ctx);
+        self.show_adjustment_window(ctx);
         self.show_status_surfaces(ctx);
         self.show_settings_window(ctx);
         self.show_about_window(ctx);
@@ -97,12 +101,17 @@ impl SuiSuiViewApp {
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("status_surfaces");
 
+        self.drain_cpu_adjustments(ctx);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
-            .show(ctx, |ui| self.show_viewer(ui, ctx));
+            .show(ctx, |ui| {
+                self.show_viewer(ui, ctx);
+                self.paint_refine_frame_finish(ui.painter(), ui.max_rect());
+            });
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         record_update_phase!("show_viewer");
 
+        self.prune_cpu_adjustments();
         self.show_bookmark_popover(ctx);
         self.show_edge_prompt(ctx);
         self.show_delete_confirmation_dialog(ctx);

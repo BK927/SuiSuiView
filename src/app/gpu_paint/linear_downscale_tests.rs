@@ -4,7 +4,6 @@
 //! to pick the shipped default. Shares the real-device harness in `super::tests`.
 
 use super::tests::{capture_gpu_frame, smoke_device, DownscaleSmokeFixture};
-use crate::core::gpu_effect::set_linear_downscale_test_override;
 use crate::core::state::{WgpuDownscaleMethod, WgpuUpscaleMethod};
 
 /// 1px black/white checkerboard. Downscaling this exercises the worst case for
@@ -97,12 +96,11 @@ fn wgpu_linear_downscale_gamma_vs_linear_measurement() {
             return;
         };
 
-        // Render one path with the linear flag forced on/off, on a FRESH fixture
-        // each time so the content-keyed pyramid cache (which does not key on the
-        // flag) can never serve the other path's stale intermediates.
+        // Exercise the explicit display request flag, as normal paint callbacks
+        // do. Separate fixtures keep these captures independent.
         let render = |linear: bool, source_size: [usize; 2], target: [u32; 2], rgba: Vec<u8>| {
-            set_linear_downscale_test_override(Some(linear));
             let mut fixture = DownscaleSmokeFixture::with_rgba(&device, &queue, source_size, rgba);
+            fixture.set_linear_downscale(linear);
             let pixels = capture_gpu_frame(
                 &device,
                 &queue,
@@ -112,7 +110,6 @@ fn wgpu_linear_downscale_gamma_vs_linear_measurement() {
                 WgpuUpscaleMethod::None,
                 WgpuDownscaleMethod::PyramidLanczos3,
             );
-            set_linear_downscale_test_override(None);
             pixels
         };
 

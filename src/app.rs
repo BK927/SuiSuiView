@@ -22,6 +22,7 @@ use ui::{BookmarkFilter, BookmarkRowsCache, BookmarkThumbnails};
 
 mod about;
 mod adjacent_seed;
+mod adjustments;
 mod background_job;
 mod cache;
 mod commands;
@@ -38,6 +39,7 @@ mod gpu_paint;
 mod image_header;
 mod image_info;
 mod keyboard;
+pub(crate) mod monitor_color;
 mod navigation;
 mod opening;
 mod perf;
@@ -45,6 +47,7 @@ mod platform;
 mod realtime_sr;
 mod refresh;
 mod runtime;
+mod scaler_catalog;
 mod settings;
 mod settings_input;
 mod settings_performance;
@@ -101,9 +104,9 @@ use viewer::{
     smart_spread_indices_for_metrics, transition_paint_params,
 };
 pub(in crate::app) use viewer::{
-    page_visual_size, texture_options_for_sampling, transition_screen_sign,
-    worker_center_page_for_mode, CurrentViewState, PageMetrics, PageRenderInfo, PageVisual,
-    StripAnchor, StripDimScanWorker, Transition, UpscaleDecisionOrigin, ViewMode, ViewTargetSettle,
+    texture_options_for_sampling, transition_screen_sign, worker_center_page_for_mode,
+    CurrentViewState, PageMetrics, PageVisual, StripAnchor, StripDimScanWorker, Transition,
+    UpscaleDecisionOrigin, ViewMode, ViewTargetSettle,
 };
 
 #[cfg(test)]
@@ -225,6 +228,7 @@ pub struct SuiSuiViewApp {
     /// When the accumulator last saw input; a stale partial notch is dropped.
     wheel_gesture_last: Option<Instant>,
     effects: ViewEffects,
+    adjustments: adjustments::AdjustmentWindow,
     target_long_edge: u32,
     current_view_state: Option<CurrentViewState>,
     last_viewer_size_points: Option<Vec2>,
@@ -437,7 +441,8 @@ impl SuiSuiViewApp {
             last_zoom_motion: None,
             wheel_gesture_accum: 0.0,
             wheel_gesture_last: None,
-            effects: ViewEffects::default(),
+            effects: settings.view_adjustments.effects(Default::default()),
+            adjustments: adjustments::AdjustmentWindow::default(),
             target_long_edge: DEFAULT_TARGET_LONG_EDGE,
             current_view_state: None,
             last_viewer_size_points: None,
@@ -773,7 +778,7 @@ impl SuiSuiViewApp {
         self.current_page = 0;
         self.pan = Vec2::ZERO;
         self.manual_zoom = 1.0;
-        self.effects = ViewEffects::default();
+        self.effects = self.settings.view_adjustments.effects(Default::default());
         self.current_view_state = None;
         self.edge_prompt = None;
         self.pending_delete_dialog = None;
@@ -906,6 +911,11 @@ impl SuiSuiViewApp {
 impl Drop for SuiSuiViewApp {
     fn drop(&mut self) {
         let shutdown_started = Instant::now();
+        if self.adjustments.save_at.take().is_some() {
+            if let Err(error) = self.store.update_settings(self.settings.clone()) {
+                self.notify_state_save_failed(&error);
+            }
+        }
         let page_worker_stopped = self.worker.request_shutdown();
         let debug_compare_stopped = self
             .debug_compare_worker

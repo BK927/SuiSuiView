@@ -229,12 +229,22 @@ impl StateStore {
 }
 
 pub(super) fn state_file_path() -> PathBuf {
+    if let Some(directory) = crate::core::profile::override_directory()
+        .expect("invalid isolated profile; refusing to load the normal user profile")
+    {
+        return directory.join("state.json");
+    }
     ProjectDirs::from("", "", "SuiSuiView")
         .map(|dirs| dirs.data_dir().join("state.json"))
         .unwrap_or_else(|| PathBuf::from("SuiSuiView-state.json"))
 }
 
 pub(super) fn books_dir_path() -> PathBuf {
+    if let Some(directory) = crate::core::profile::override_directory()
+        .expect("invalid isolated profile; refusing to load the normal user profile")
+    {
+        return directory.join("books");
+    }
     ProjectDirs::from("", "", "SuiSuiView")
         .map(|dirs| dirs.data_dir().join("books"))
         .unwrap_or_else(|| PathBuf::from("SuiSuiView-books"))

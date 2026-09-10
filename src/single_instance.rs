@@ -355,6 +355,16 @@ mod tests {
     }
 
     #[test]
+    fn isolated_profile_state_paths_use_independent_ipc_namespaces() {
+        let personal = pipe_name_for_key(r"C:\Users\me\AppData\Local\SuiSuiView\state.json");
+        let profile_a = pipe_name_for_key(r"C:\test-profiles\a\state.json");
+        let profile_b = pipe_name_for_key(r"C:\test-profiles\b\state.json");
+        assert_ne!(profile_a, personal);
+        assert_ne!(profile_b, personal);
+        assert_ne!(profile_a, profile_b);
+    }
+
+    #[test]
     fn queued_request_wakes_when_callback_is_attached_late() {
         let (listener, sender, wake) = IpcListener::channel();
         assert!(enqueue_request(

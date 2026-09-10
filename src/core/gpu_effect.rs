@@ -19,22 +19,6 @@ const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// `SUISUIVIEW_LINEAR_DOWNSCALE=1` (or `0`/`true`/`false`/`on`/`off`), parsed once.
 pub(crate) const LINEAR_DOWNSCALE: bool = false;
 
-/// Mirror of `AppSettings.linear_light_downscale`, stored by the app each time
-/// a WGSL page paint is requested (an atomic store per paint is free). A mirror
-/// instead of threading the flag through every `params_for_*` signature: those
-/// constructors are also called by CLI benches with no settings in scope.
-static LINEAR_DOWNSCALE_SETTING: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(LINEAR_DOWNSCALE);
-
-/// Publish the user setting for subsequent draws. Called from the app's WGSL
-/// paint path; benches/tests that never call it get the const default.
-// The caller lives in the binary crate's app tree (gpu_paint/mod.rs); the lib
-// compilation sees no caller — same idiom as `params_for_hardware_mipmap_sample`.
-#[allow(dead_code)]
-pub(crate) fn set_linear_downscale_setting(enabled: bool) {
-    LINEAR_DOWNSCALE_SETTING.store(enabled, std::sync::atomic::Ordering::Relaxed);
-}
-
 fn linear_downscale_env() -> Option<bool> {
     static ENV: OnceLock<Option<bool>> = OnceLock::new();
     *ENV.get_or_init(|| {
@@ -57,8 +41,7 @@ pub(crate) fn linear_downscale_enabled() -> bool {
     if let Some(forced) = linear_downscale_test_override() {
         return forced;
     }
-    linear_downscale_env()
-        .unwrap_or_else(|| LINEAR_DOWNSCALE_SETTING.load(std::sync::atomic::Ordering::Relaxed))
+    linear_downscale_env().unwrap_or(LINEAR_DOWNSCALE)
 }
 
 // The offscreen measurement renders BOTH legs in one process, which the env
@@ -103,9 +86,47 @@ pub(crate) struct EffectParams {
     upscale: [u32; 4],
     opacity: [f32; 4],
     display: [f32; 4],
+    tone: [f32; 4],
+    levels: [f32; 4],
 }
 
 impl EffectParams {
+    /// Sample a crop of a finished display result without rerunning its effects.
+    /// The virtual full target maps destination pixels into that reference UV.
+    pub(crate) fn with_inspection_uv(
+        mut self,
+        uv: egui::Rect,
+        clipped_offset: [u32; 2],
+        destination_size: [u32; 2],
+    ) -> Self {
+        let virtual_size = [
+            destination_size[0] as f32 / uv.width().max(f32::EPSILON),
+            destination_size[1] as f32 / uv.height().max(f32::EPSILON),
+        ];
+        self.display = [
+            uv.min.x * virtual_size[0] + clipped_offset[0] as f32,
+            uv.min.y * virtual_size[1] + clipped_offset[1] as f32,
+            virtual_size[0],
+            virtual_size[1],
+        ];
+        self.upscale[3] = 0;
+        self.upscale[1] = 0;
+        self
+    }
+
+    pub(crate) fn with_request_linear(mut self, enabled: bool) -> Self {
+        self.upscale[3] &= !2;
+        if enabled
+            && self.upscale[1] != 0
+            && self.upscale[2] == 0
+            && (self.display[2] < self.source_output[2] as f32
+                || self.display[3] < self.source_output[3] as f32)
+        {
+            self.upscale[3] |= 2;
+        }
+        self
+    }
+
     /// Turn on the final-composite output dither (`gpu_effect.wgsl` reads
     /// `params.upscale.w`). Set only on the draw that composites to the egui
     /// target when its sampled texture is an fp16 quality-chain intermediate, so
@@ -566,6 +587,18 @@ pub(crate) fn params_for_effects_with_shader_method_and_display(
             output_origin[1],
         ],
         upscale: [shader_method_id, downscale_method_id, 0, 0],
+        tone: [
+            effects.tone.brightness_pct as f32 / 100.0,
+            effects.tone.contrast_pct as f32 / 100.0,
+            100.0 / effects.tone.gamma_pct.max(10) as f32,
+            effects.tone.filter_pct as f32 / 100.0,
+        ],
+        levels: [
+            effects.tone.black as f32 / 255.0,
+            effects.tone.white as f32 / 255.0,
+            0.0,
+            0.0,
+        ],
         opacity: [
             opacity,
             visible_target_size[0].max(1) as f32,
@@ -634,6 +667,8 @@ pub(crate) fn params_for_hardware_mipmap_sample_with_display(
         transform_filter: [0, 0, 0, 0],
         color_origin: [0, 0, output_origin[0], output_origin[1]],
         upscale: [0, 0, 1, 0],
+        tone: [0.0, 1.0, 1.0, 1.0],
+        levels: [0.0, 1.0, 0.0, 0.0],
         opacity: [
             opacity,
             visible_target_size[0].max(1) as f32,
@@ -715,6 +750,56 @@ mod tests {
     use super::{align_to, color_image_to_rgba, output_size_for_effects};
     use crate::core::effects::{ViewEffects, ViewTransform};
     use egui::{Color32, ColorImage};
+
+    #[test]
+    #[ignore = "requires a local WGPU adapter"]
+    fn adjustment_tones_match_cpu_and_preserve_alpha() {
+        use crate::core::effects::{apply_effects_to_image, ToneControls};
+        let gpu = super::GpuEffectBench::new().expect("local WGPU adapter");
+        let source = ColorImage::new(
+            [256, 4],
+            (0..1024)
+                .map(|i| {
+                    let v = (i % 256) as u8;
+                    Color32::from_rgba_unmultiplied(v, 255 - v, v / 2, [255, 192, 128, 64][i / 256])
+                })
+                .collect(),
+        );
+        for effects in [
+            ViewEffects::default(),
+            ViewEffects {
+                gamma: true,
+                ..Default::default()
+            },
+            ViewEffects {
+                gamma: true,
+                invert_colors: true,
+                tone: ToneControls {
+                    gamma_pct: 165,
+                    brightness_pct: 12,
+                    contrast_pct: 125,
+                    black: 12,
+                    white: 238,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ] {
+            let cpu = apply_effects_to_image(&source, effects);
+            let result = gpu.apply(&source, effects).unwrap();
+            for (index, (expected, actual)) in
+                cpu.pixels.iter().zip(&result.image.pixels).enumerate()
+            {
+                assert_eq!(actual.a(), source.pixels[index].a(), "alpha at {index}");
+                for (left, right) in expected.to_array().into_iter().zip(actual.to_array()) {
+                    assert!(
+                        left.abs_diff(right) <= 2,
+                        "CPU/GPU tone difference at {index}: {expected:?} / {actual:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn gpu_output_size_matches_rotation() {

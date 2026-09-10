@@ -222,7 +222,9 @@ impl SuiSuiViewApp {
                 self.note_strip_dims_changed();
                 self.insert_prepared_page(key, page.clone());
                 decoded_cache_changed = true;
-                self.maybe_enqueue_upscale_probe(key, page);
+                if !self.debug_compare.enabled {
+                    self.maybe_enqueue_upscale_probe(key, page);
+                }
                 self.commit_pending_page_turn_if_ready();
                 if self.spread_indices().contains(&index) {
                     self.egui_ctx
@@ -292,7 +294,7 @@ impl SuiSuiViewApp {
         let allow_display_upscale = should_allow_cpu_display_upscale(
             fit_mode,
             self.manual_zoom,
-            self.active_wgpu_upscale_method_for_fit(fit_mode) != WgpuUpscaleMethod::None,
+            self.configured_wgpu_upscale_method_for_fit(fit_mode) != WgpuUpscaleMethod::None,
             self.glow_upscale_kernel_for_fit(fit_mode).is_some(),
             self.settings.cpu_upscale_filter,
         );
@@ -329,8 +331,9 @@ pub(in crate::app) fn decode_options_from_settings(
             DecoderPreferences::default()
         },
         fast_sampled_scaled_decode: settings.fast_sampled_scaled_decode,
+        fast_prepare_overrides: settings.fast_prepare_overrides,
         cpu_upscale_filter: settings.cpu_upscale_filter,
-        cpu_downscale_filter: crate::core::state::CPU_DOWNSCALE_FILTER,
+        cpu_downscale_filter: settings.expert_downscale.cpu.filter(),
         allow_display_upscale,
         apply_exif_orientation: settings.apply_exif_orientation,
         apply_embedded_icc: settings.apply_embedded_icc,
@@ -362,6 +365,36 @@ mod tests {
     use super::*;
     use crate::core::source::SourceError;
     use std::path::Path;
+
+    #[test]
+    fn fast_prepare_settings_are_identical_for_startup_and_live_decode() {
+        let mut settings = AppSettings::default();
+        settings.fast_prepare_overrides.png = crate::core::state::FastPrepareOverride::Off;
+        settings.fast_prepare_overrides.webp = crate::core::state::FastPrepareOverride::On;
+        settings.expert_downscale.cpu = crate::core::state::CpuDownscaleChoice::Mitchell;
+        let startup = decode_options_from_settings(&settings, false);
+        let live = decode_options_from_settings(&settings, true);
+        assert_eq!(
+            startup.fast_prepare_overrides,
+            settings.fast_prepare_overrides
+        );
+        assert_eq!(startup.fast_prepare_overrides, live.fast_prepare_overrides);
+        assert_eq!(
+            startup.cpu_downscale_filter,
+            crate::core::state::CpuScaleFilter::Mitchell
+        );
+        assert_ne!(
+            startup.cache_token(),
+            DecodeOptions::default().cache_token()
+        );
+        assert_eq!(
+            DecodeOptions {
+                allow_display_upscale: true,
+                ..startup
+            },
+            live
+        );
+    }
 
     #[test]
     fn unmappable_worker_event_index_is_dropped() {

@@ -1,5 +1,5 @@
 use super::super::{gpu_paint::GpuPaintSourceKey, KernelChoice, PageCacheKey};
-use crate::core::deband::DebandStrength;
+use crate::core::deband::ResolvedDeband;
 use crate::core::effects::ViewEffects;
 use crate::core::gpu_effect::output_size_for_effects;
 use crate::core::state::{
@@ -386,7 +386,7 @@ pub(in crate::app) struct CurrentViewState {
     pub(in crate::app) glow_kernel: Option<KernelChoice>,
     /// Debanding strength active for this page (WGPU display path only); `Off`
     /// for CPU/Glow pages and inspection views. Surfaced in the scaler tooltip.
-    pub(in crate::app) deband: DebandStrength,
+    pub(in crate::app) deband: ResolvedDeband,
     pub(in crate::app) target_intent: PreparedTargetIntent,
 }
 
@@ -401,7 +401,7 @@ impl CurrentViewState {
             prepare_scale: render.prepare_scale,
             wgpu_scale: WgpuScaleState::Inactive,
             glow_kernel: None,
-            deband: DebandStrength::Off,
+            deband: ResolvedDeband::Off,
             target_intent,
         }
     }
@@ -418,7 +418,7 @@ impl CurrentViewState {
         wgpu_downscale_method: WgpuDownscaleMethod,
         fixed_2x_sr_min_scale: f32,
         active: bool,
-        deband: DebandStrength,
+        deband: ResolvedDeband,
         target_intent: PreparedTargetIntent,
     ) -> Self {
         let output_size = output_size_for_effects(image_size, effects);
@@ -465,9 +465,11 @@ pub(in crate::app) enum PageVisual {
     },
     Loading {
         index: usize,
+        size: Option<Vec2>,
     },
     Failed {
         index: usize,
+        size: Option<Vec2>,
         message: String,
     },
 }
@@ -476,9 +478,15 @@ pub(in crate::app) fn page_visual_size(visual: &PageVisual) -> Vec2 {
     match visual {
         PageVisual::Ready { size, .. } => *size,
         PageVisual::ReadyGpu { size, .. } => *size,
-        PageVisual::Loading { .. } | PageVisual::Failed { .. } => Vec2::new(900.0, 1300.0),
+        PageVisual::Loading { size, .. } | PageVisual::Failed { size, .. } => {
+            size.unwrap_or(Vec2::new(900.0, 1300.0))
+        }
     }
 }
+
+#[cfg(test)]
+#[path = "geometry_tests.rs"]
+mod geometry_tests;
 
 #[cfg(test)]
 mod tests {

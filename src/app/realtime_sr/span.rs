@@ -35,6 +35,79 @@ const MAX_DISPLAY_TILE_COUNT: usize = 256;
 const MAX_DISPLAY_SOURCE_PIXELS: usize = 1_048_576;
 const OUTPUT_BYTES_PER_PIXEL: usize = 4;
 
+/// Background refinement reuses the checked manifest, halo plan and bridge.
+/// Unlike the foreground renderer it submits one bridge/graph step at a time.
+pub(super) struct BackgroundSpanJob {
+    renderer: LoadedSpanRenderer,
+    source_view: wgpu::TextureView,
+    tile: usize,
+    step: usize,
+    bridge_tile: Option<super::span_bridge::SpanBridgeTile>,
+    bridge_output: Option<super::span_bridge::SpanBridgeOutput>,
+    pub(super) output: std::sync::Arc<RealtimeSrOutput>,
+    pub(super) bytes: usize,
+}
+
+impl BackgroundSpanJob {
+    pub(super) fn new(device: &wgpu::Device, source_view: &wgpu::TextureView,
+        source_size: [usize; 2], budget_bytes: usize) -> Result<Self, &'static str> {
+        let path = span_manifest_path().ok_or("missing_model")?;
+        let manifest = sr_lab::read_manifest(&path).map_err(|_| "invalid_model")?;
+        sr_lab::inspect_manifest(&manifest).map_err(|_| "invalid_model")?;
+        validate_display_manifest(&manifest).map_err(|_| "unsupported_model")?;
+        let weights = blob::read_checked_weights(&path, &manifest, "SPAN background refine")
+            .map_err(|_| "invalid_model")?;
+        let model_bytes = weights.tensors.iter().try_fold(0usize, |total, t|
+            total.checked_add(t.values.len().checked_mul(4)?)).ok_or("size_overflow")?;
+        let output_size = checked_output_size(source_size, manifest.scale as usize).ok_or("size_overflow")?;
+        let output_bytes = output_size[0].checked_mul(output_size[1]).and_then(|p| p.checked_mul(4)).ok_or("size_overflow")?;
+        let workspace_allowance = budget_bytes.checked_sub(model_bytes)
+            .and_then(|remaining| remaining.checked_sub(output_bytes)).ok_or("memory_budget")?;
+        // Reserve model/output bytes first. Tile planning checks the remaining
+        // allowance before allocating feature buffers; display guards apply.
+        let mut renderer = LoadedSpanRenderer::from_weights(device, manifest, &weights).map_err(|_| "model_prepare_failed")?;
+        renderer.start_render_job_with_limits(0, device, source_size, 64,
+            workspace_allowance.min(MAX_DISPLAY_TRANSIENT_BYTES as usize) as u64)
+            .ok_or("workspace_or_source_limit")?;
+        let pending = renderer.pending_render.as_ref().ok_or("prepare_failed")?;
+        let output = std::sync::Arc::new(RealtimeSrOutput {
+            texture: pending.output_texture.clone(), view: pending.output_view.clone(),
+            size: output_size, byte_size: output_bytes,
+        });
+        let bytes = model_bytes.saturating_add(renderer.workspace_bytes as usize).saturating_add(output_bytes);
+        Ok(Self { renderer, source_view: source_view.clone(), tile: 0, step: 0,
+            bridge_tile: None, bridge_output: None, output, bytes })
+    }
+
+    pub(super) fn encode_next(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) -> bool {
+        let pending = self.renderer.pending_render.as_ref().expect("background job owns its plan");
+        let Some(plan) = pending.tile_plans.get(self.tile) else { return true; };
+        let slot = &self.renderer.workspaces[plan.workspace_index];
+        let graph = slot.graph_plan.as_ref().expect("prepared tile graph");
+        if self.bridge_tile.is_none() {
+            let tile = self.renderer.bridge.bind_tile(device, &self.source_view, slot.workspace.input_buffer(), plan.params);
+            self.bridge_output = Some(self.renderer.bridge.bind_output(device, &tile, slot.workspace.output_buffer(), &self.output.view));
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("suisuiview-refine-span-input"), timestamp_writes: None });
+            self.renderer.bridge.dispatch_input(&mut pass, &tile, plan.params);
+            drop(pass);
+            self.bridge_tile = Some(tile);
+            self.step = 0;
+            return false;
+        }
+        if self.step < graph.step_count() {
+            self.step = self.renderer.kernel.encode_graph_plan_range(encoder, graph, self.step, 1);
+            return false;
+        }
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("suisuiview-refine-span-output"), timestamp_writes: None });
+        self.renderer.bridge.dispatch_output(&mut pass, self.bridge_tile.as_ref().unwrap(), self.bridge_output.as_ref().unwrap(), plan.params);
+        drop(pass);
+        self.bridge_tile = None;
+        self.bridge_output = None;
+        self.tile += 1;
+        self.tile == pending.tile_plans.len()
+    }
+}
+
 pub(super) struct SpanRenderer {
     state: SpanRendererState,
 }
@@ -142,9 +215,11 @@ impl SpanRenderer {
         }
     }
 
-    pub(super) fn cancel_pending_render(&mut self) {
+    pub(super) fn retain_pending_requests(&mut self, active: &[u64]) {
         if let SpanRendererState::Ready(renderer) = &mut self.state {
-            renderer.cancel_pending_render("inactive_upscaler");
+            if renderer.pending_render.as_ref().is_some_and(|job| !active.contains(&job.request_key)) {
+                renderer.cancel_pending_render("inactive_request");
+            }
         }
     }
 
@@ -238,12 +313,10 @@ impl LoadedSpanRenderer {
     ) -> Option<RealtimeSrOutput> {
         if let Some(job) = self.pending_render.as_ref() {
             if !job.matches_request(request_key, source_size) {
-                let reason = if job.source_size == source_size {
-                    "request_changed"
-                } else {
-                    "source_changed"
-                };
-                self.cancel_pending_render(reason);
+                // Serialize active spread/A/B requests through one bounded
+                // workspace. Frame finalization cancels only requests absent
+                // from the complete active set; another pane never restarts it.
+                return None;
             }
         }
         if self.pending_render.is_none() {
@@ -257,6 +330,14 @@ impl LoadedSpanRenderer {
         request_key: u64,
         device: &wgpu::Device,
         source_size: [usize; 2],
+    ) -> Option<()> {
+        self.start_render_job_with_limits(request_key, device, source_size,
+            span_display_tile_edge(), span_display_workspace_cache_limit_bytes())
+    }
+
+    fn start_render_job_with_limits(
+        &mut self, request_key: u64, device: &wgpu::Device, source_size: [usize; 2],
+        tile_edge: usize, workspace_cache_limit_bytes: u64,
     ) -> Option<()> {
         let prepare_started = Instant::now();
         let Some(output_size) = checked_output_size(source_size, self.manifest.scale as usize)
@@ -284,7 +365,6 @@ impl LoadedSpanRenderer {
                 return None;
             }
         };
-        let tile_edge = span_display_tile_edge();
         let tile_specs = span_tile_specs(&input_shape, tile_edge, halo);
         let tile_count = tile_specs.len();
         let workspace_shapes = workspace_shape_count(&tile_specs);
@@ -314,7 +394,6 @@ impl LoadedSpanRenderer {
             );
             return None;
         }
-        let workspace_cache_limit_bytes = span_display_workspace_cache_limit_bytes();
         self.reset_workspace_cache_if_source_changed(source_size);
         let tile_plans = match self.prepare_tile_plans(
             device.limits().max_storage_buffer_binding_size as u64,

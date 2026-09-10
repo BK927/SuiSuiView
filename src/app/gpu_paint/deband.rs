@@ -10,7 +10,7 @@
 
 use super::pools::GpuIntermediateTexture;
 use super::{GpuPaintResources, GpuPaintSourceKey};
-use crate::core::deband::{DebandParams, DebandStrength};
+use crate::core::deband::{DebandParams, ResolvedDeband};
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::Ordering;
@@ -92,11 +92,19 @@ impl GpuPaintResources {
         source_key: GpuPaintSourceKey,
         source_size: [usize; 2],
         source_bind_group: Arc<wgpu::BindGroup>,
-        strength: DebandStrength,
+        strength: ResolvedDeband,
     ) -> (Arc<wgpu::BindGroup>, Option<Arc<GpuIntermediateTexture>>) {
         let Some(params) = strength.params() else {
             return (source_bind_group, None);
         };
+        if self.deband_pipeline.is_none() {
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("suisuiview-lazy-deband-layout"),
+                bind_group_layouts: &[&self.texture_bind_group_layout, &self.params_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+            self.deband_pipeline = Some(create_deband_pipeline(device, &layout));
+        }
         let key = deband_source_texture_key(source_key, source_size, strength);
         let target = [source_size[0].max(1) as u32, source_size[1].max(1) as u32];
         // Enrolls in the intermediate pool and stamps last_used_pass = current
@@ -171,7 +179,7 @@ impl GpuPaintResources {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        pass.set_pipeline(&self.deband_pipeline);
+        pass.set_pipeline(self.deband_pipeline.as_ref().expect("active deband pipeline"));
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, params_bind_group, &[]);
         pass.draw(0..3, 0..1);
@@ -184,12 +192,12 @@ impl GpuPaintResources {
 pub(super) fn deband_source_texture_key(
     source_key: GpuPaintSourceKey,
     source_size: [usize; 2],
-    strength: DebandStrength,
+    strength: ResolvedDeband,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     "deband_source".hash(&mut hasher);
     source_key.hash(&mut hasher);
     source_size.hash(&mut hasher);
-    strength.token().hash(&mut hasher);
+    strength.hash(&mut hasher);
     hasher.finish()
 }

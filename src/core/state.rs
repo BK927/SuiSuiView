@@ -9,11 +9,15 @@ mod book_files;
 mod bookmarks;
 mod decoders;
 mod display;
+mod fast_prepare;
 mod fast_start;
 mod input;
 mod open_prepare;
 mod persistence;
+mod render_controls;
 mod rendering;
+pub use fast_prepare::{FastPrepareOverride, FastPrepareOverrides};
+pub use render_controls::{CpuDownscaleChoice, ExpertDownscale, GpuDownscaleChoice};
 #[cfg(test)]
 mod scale_plan_tests;
 mod scalers;
@@ -368,6 +372,18 @@ pub struct AppSettings {
     pub decoder_preferences: DecoderPreferences,
     #[serde(default = "default_true")]
     pub fast_sampled_scaled_decode: bool,
+    #[serde(default, deserialize_with = "render_controls::deserialize_or_default")]
+    pub fast_prepare_overrides: FastPrepareOverrides,
+    #[serde(default, deserialize_with = "render_controls::deserialize_or_default")]
+    pub view_adjustments: crate::core::effects::SavedViewAdjustments,
+    #[serde(default, deserialize_with = "render_controls::deserialize_or_default")]
+    pub expert_downscale: ExpertDownscale,
+    #[serde(default, deserialize_with = "render_controls::deserialize_or_default")]
+    pub custom_deband: crate::core::deband::CustomDeband,
+    #[serde(default, deserialize_with = "render_controls::deserialize_or_default")]
+    pub background_refine: bool,
+    #[serde(default, deserialize_with = "render_controls::deserialize_or_default")]
+    pub monitor_color_management: bool,
     #[serde(default = "default_cpu_upscale_filter")]
     pub cpu_upscale_filter: CpuScaleFilter,
     #[serde(default)]
@@ -383,6 +399,7 @@ pub struct AppSettings {
     pub wgpu_upscale_method: WgpuUpscaleMethod,
     /// Debanding strength for the WGPU display path; `Off` by default.
     #[serde(default)]
+    #[serde(deserialize_with = "render_controls::deserialize_or_default")]
     pub deband: DebandStrength,
     /// Linear-light averaging for the WGPU downscale legs. Off (gamma) by
     /// default: measured stroke washout on line art outweighed mean-luminance
@@ -447,6 +464,8 @@ pub struct AppSettings {
 
 impl AppSettings {
     pub fn normalize_product_choices(&mut self) {
+        self.view_adjustments.tone.normalize();
+        self.custom_deband.normalize();
         if !self.wgpu_upscale_method.user_selectable() {
             self.wgpu_upscale_method = WgpuUpscaleMethod::Auto;
         }
@@ -550,6 +569,12 @@ impl Default for AppSettings {
             decode_mode: DecodeMode::AutoFast,
             decoder_preferences: DecoderPreferences::default(),
             fast_sampled_scaled_decode: true,
+            fast_prepare_overrides: FastPrepareOverrides::default(),
+            view_adjustments: crate::core::effects::SavedViewAdjustments::default(),
+            expert_downscale: ExpertDownscale::default(),
+            custom_deband: crate::core::deband::CustomDeband::default(),
+            background_refine: false,
+            monitor_color_management: false,
             cpu_upscale_filter: default_cpu_upscale_filter(),
             gpu_effect_mode: GpuEffectMode::Auto,
             renderer_mode: RendererMode::LowMemoryGlow,

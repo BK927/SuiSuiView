@@ -63,6 +63,12 @@ pub(crate) struct SpanGpuGraphPlan {
     steps: Vec<SpanGpuGraphStep>,
 }
 
+impl SpanGpuGraphPlan {
+    pub(crate) fn step_count(&self) -> usize {
+        self.steps.len()
+    }
+}
+
 enum SpanGpuGraphStep {
     Dispatch(SpanGpuDispatchStep),
     Copy(SpanGpuCopyStep),
@@ -399,6 +405,37 @@ impl SpanGpuKernel {
         graph_plan: &SpanGpuGraphPlan,
     ) {
         self.encode_graph_plan_with_hooks(encoder, graph_plan, |_| {}, |_| {});
+    }
+
+    /// Encode a bounded, dependency-ordered range on a worker. A caller must
+    /// complete the preceding submission before advancing this cursor.
+    pub(crate) fn encode_graph_plan_range(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        graph_plan: &SpanGpuGraphPlan,
+        start: usize,
+        max_steps: usize,
+    ) -> usize {
+        let end = start.saturating_add(max_steps).min(graph_plan.steps.len());
+        for step in graph_plan.steps.get(start..end).unwrap_or_default() {
+            match step {
+                SpanGpuGraphStep::Dispatch(_) => {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("suisuiview-refine-span-step"),
+                        timestamp_writes: None,
+                    });
+                    self.dispatch_prebuilt_run(&mut pass, std::slice::from_ref(step));
+                }
+                SpanGpuGraphStep::Copy(copy) => encoder.copy_buffer_to_buffer(
+                    &copy.source,
+                    0,
+                    &copy.destination,
+                    0,
+                    copy.byte_len,
+                ),
+            }
+        }
+        end
     }
 
     pub(crate) fn encode_graph_plan_with_hooks(

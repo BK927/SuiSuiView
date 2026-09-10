@@ -409,6 +409,10 @@ impl SuiSuiViewApp {
         let mut textures_invalidated = false;
 
         self.settings = settings;
+        self.effects = self
+            .settings
+            .view_adjustments
+            .effects(self.effects.transform);
         if !self.settings.top_bar_items.compare && self.debug_compare.enabled {
             self.set_debug_compare_enabled(false);
         }

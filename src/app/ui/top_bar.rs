@@ -1,10 +1,7 @@
-use super::super::commands::AppCommand;
-use super::super::debug_compare::DebugCompareTarget;
 use super::super::{SuiSuiViewApp, ViewMode};
 use super::{icons, path_labels, theme};
-use crate::core::effects::ImageFilter;
 use crate::core::i18n::I18n;
-use crate::core::state::{FitMode, PageTransitionStyle};
+use crate::core::state::FitMode;
 use egui::{self, Align2, Button, Color32, FontId, Frame, Margin, RichText, Sense, Stroke, Vec2};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -322,43 +319,16 @@ impl SuiSuiViewApp {
         ctx: &egui::Context,
         ui: &mut egui::Ui,
     ) {
-        let i18n = self.i18n();
-        ui.menu_button(
-            icons::icon_text(icons::WAND, &i18n.text("topbar.correction")),
-            |ui| {
-                self.hold_top_bar_open_for_menu();
-                ui.set_min_width(220.0);
-                ui.label(i18n.text("topbar.transition"));
-                let active_transition = self.settings.effective_page_transition_style();
-                for style in PageTransitionStyle::ALL {
-                    if ui
-                        .selectable_label(active_transition == style, style.label_i18n(i18n))
-                        .clicked()
-                    {
-                        let mut settings = self.settings.clone();
-                        settings.set_page_transition_style(style);
-                        self.apply_settings(ctx, settings);
-                        ui.close();
-                    }
-                }
-
-                ui.separator();
-                ui.label(i18n.text("topbar.filter"));
-                for filter in [
-                    ImageFilter::None,
-                    ImageFilter::Smooth,
-                    ImageFilter::SmoothSharpen,
-                    ImageFilter::RcasSharpen,
-                ] {
-                    if ui
-                        .selectable_label(self.effects.filter == filter, filter.label_i18n(i18n))
-                        .clicked()
-                    {
-                        self.apply_command(ctx, AppCommand::SetFilter(filter));
-                    }
-                }
-            },
-        );
+        let _ = ctx;
+        if ui
+            .selectable_label(
+                self.adjustments.open,
+                icons::icon_text(icons::WAND, &self.i18n().text("topbar.correction")),
+            )
+            .clicked()
+        {
+            self.adjustments.open = !self.adjustments.open;
+        }
     }
 
     pub(in crate::app::ui) fn show_debug_compare_group(&mut self, ui: &mut egui::Ui) {
@@ -377,8 +347,7 @@ impl SuiSuiViewApp {
         }
 
         if self.debug_compare.enabled {
-            compare_target_combo(ui, "compare_left", "A", &mut self.debug_compare.left);
-            compare_target_combo(ui, "compare_right", "B", &mut self.debug_compare.right);
+            self.show_compare_controls(ui);
         }
     }
 
@@ -653,22 +622,6 @@ fn text_width(ui: &egui::Ui, text: &str, font_id: &FontId) -> f32 {
         .layout_no_wrap(text.to_owned(), font_id.clone(), theme::TEXT_PRIMARY)
         .size()
         .x
-}
-
-fn compare_target_combo(
-    ui: &mut egui::Ui,
-    id: &'static str,
-    label: &'static str,
-    target: &mut DebugCompareTarget,
-) {
-    egui::ComboBox::from_id_salt(id)
-        .width(210.0)
-        .selected_text(format!("{label}: {}", target.label()))
-        .show_ui(ui, |ui| {
-            for candidate in DebugCompareTarget::ALL {
-                ui.selectable_value(target, candidate, candidate.label());
-            }
-        });
 }
 
 pub(in crate::app::ui) fn toolbar_separator(ui: &mut egui::Ui) {

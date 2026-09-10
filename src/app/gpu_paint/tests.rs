@@ -1,6 +1,6 @@
 use super::pools::source_texture_content_key;
 use super::*;
-use crate::core::deband::DebandStrength;
+use crate::core::deband::ResolvedDeband;
 use crate::core::source::PageId;
 use crate::core::worker::DecodeOptions;
 use egui::{pos2, vec2};
@@ -27,7 +27,7 @@ fn draw_id_separates_same_page_in_different_panes() {
             WgpuUpscaleMethod::WgslFsr1Style,
             WgpuDownscaleMethod::Bilinear,
             110,
-            DebandStrength::Off,
+            ResolvedDeband::Off,
             false,
             slot,
         )
@@ -56,7 +56,7 @@ fn draw_id_is_stable_within_a_slot() {
             WgpuUpscaleMethod::WgslFsr1Style,
             WgpuDownscaleMethod::Bilinear,
             110,
-            DebandStrength::Off,
+            ResolvedDeband::Off,
             false,
             0,
         )
@@ -82,7 +82,7 @@ fn draw_id_separates_zoom_in_motion_from_settled() {
             WgpuUpscaleMethod::None,
             WgpuDownscaleMethod::PyramidLanczos3,
             110,
-            DebandStrength::Off,
+            ResolvedDeband::Off,
             zoom_in_motion,
             0,
         )
@@ -221,7 +221,7 @@ fn realtime_sr_stage_texture_keys_separate_stack_stages() {
         0,
         [512, 512],
         2,
-        DebandStrength::Off,
+        ResolvedDeband::Off,
     );
     let pass_2 = realtime_sr_stage_texture_key(
         source_key,
@@ -230,7 +230,7 @@ fn realtime_sr_stage_texture_keys_separate_stack_stages() {
         1,
         [1024, 1024],
         2,
-        DebandStrength::Off,
+        ResolvedDeband::Off,
     );
     let single_pass = realtime_sr_stage_texture_key(
         source_key,
@@ -239,7 +239,7 @@ fn realtime_sr_stage_texture_keys_separate_stack_stages() {
         0,
         [512, 512],
         1,
-        DebandStrength::Off,
+        ResolvedDeband::Off,
     );
     assert_ne!(pass_1, pass_2);
     assert_ne!(pass_1, single_pass);
@@ -255,7 +255,7 @@ fn realtime_sr_stage_texture_keys_separate_stack_stages() {
         0,
         [512, 512],
         2,
-        DebandStrength::Medium,
+        ResolvedDeband::Medium,
     );
     assert_ne!(pass_1, pass_1_deband);
     assert_ne!(
@@ -264,14 +264,14 @@ fn realtime_sr_stage_texture_keys_separate_stack_stages() {
             [512, 512],
             [1024, 1024],
             ViewEffects::default(),
-            DebandStrength::Off,
+            ResolvedDeband::Off,
         ),
         source_texture_content_key(
             source_key,
             [512, 512],
             [1024, 1024],
             ViewEffects::default(),
-            DebandStrength::Medium,
+            ResolvedDeband::Medium,
         )
     );
 }
@@ -295,7 +295,7 @@ fn each_upscale_method_gets_its_own_realtime_sr_stage_key() {
         0,
         [800, 1200],
         1,
-        DebandStrength::Off,
+        ResolvedDeband::Off,
     );
     let other = realtime_sr_stage_texture_key(
         source_key,
@@ -304,7 +304,7 @@ fn each_upscale_method_gets_its_own_realtime_sr_stage_key() {
         0,
         [800, 1200],
         1,
-        DebandStrength::Off,
+        ResolvedDeband::Off,
     );
     assert_ne!(normal, other);
 }
@@ -616,6 +616,10 @@ pub(super) struct DownscaleSmokeFixture {
 }
 
 impl DownscaleSmokeFixture {
+    pub(super) fn set_linear_downscale(&mut self, enabled: bool) {
+        self.resources.request_linear_downscale = enabled;
+    }
+
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, source_size: [usize; 2]) -> Self {
         let mut resources = GpuPaintResources::new(device, wgpu::TextureFormat::Rgba8Unorm);
         let source_key = GpuPaintSourceKey {
@@ -740,7 +744,7 @@ pub(super) fn capture_gpu_frame(
         },
         1.0,
         false,
-        DebandStrength::Off,
+        ResolvedDeband::Off,
         &egui::Context::default(),
     );
     let output_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -1208,7 +1212,7 @@ fn prepare_insert_slot(
         },
         opacity,
         false,
-        DebandStrength::Off,
+        ResolvedDeband::Off,
         &egui::Context::default(),
     );
     // Flush any recorded work (empty for this single-pass native path) so a pending
@@ -1226,7 +1230,7 @@ fn prepare_insert_slot(
 
 /// Render the draw state stored at `slot_id` to a tightly packed RGBA8 buffer of
 /// `target_size`, so a test can read back the composite the recycled params produce.
-fn render_stored_slot_rgba(
+pub(super) fn render_stored_slot_rgba(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     resources: &GpuPaintResources,

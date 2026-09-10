@@ -1,9 +1,9 @@
-use super::{
-    transition_screen_sign, worker_center_page_for_mode, EdgePrompt, OpenOrigin,
-    SuiSuiViewApp, Transition, ViewMode,
-};
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use super::perf;
+use super::{
+    transition_screen_sign, worker_center_page_for_mode, EdgePrompt, OpenOrigin, SuiSuiViewApp,
+    Transition, ViewMode,
+};
 use crate::core::effects::ViewEffects;
 use crate::core::state::{EdgePageAction, FitMode, PageTransitionStyle, ReadingDirection};
 use crate::core::worker::{DecodeOptions, NavigationDirection};
@@ -627,9 +627,13 @@ impl SuiSuiViewApp {
     }
 
     pub(in crate::app) fn update_effects(&mut self, update: impl FnOnce(&mut ViewEffects)) {
+        let previous_pixels = self.effects.for_render();
         update(&mut self.effects);
-        self.textures.clear();
-        self.request_original_texture_only_decode_if_needed();
+        self.effects.tone.normalize();
+        self.schedule_adjustment_save();
+        if previous_pixels != self.effects.for_render() {
+            self.request_original_texture_only_decode_if_needed();
+        }
         self.set_status(self.effect_status());
     }
 
@@ -661,8 +665,6 @@ impl SuiSuiViewApp {
         }
         parts.join(", ")
     }
-
-
 }
 
 /// Forward page-turn target for the non-smart view modes: the next anchor, or

@@ -5,7 +5,7 @@ use super::pools::{
 };
 use super::{GpuDisplayRect, GpuPaintResources, GpuPaintSourceKey};
 use crate::app::realtime_sr::RealtimeSrResources;
-use crate::core::deband::DebandStrength;
+use crate::core::deband::ResolvedDeband;
 use crate::core::effects::ViewEffects;
 use crate::core::gpu_effect::{
     output_size_for_effects, params_for_effects, params_for_effects_with_display,
@@ -25,6 +25,18 @@ use std::time::Duration;
 use std::time::Instant;
 
 impl GpuPaintResources {
+    fn final_composite_params(
+        &self,
+        params: crate::core::gpu_effect::EffectParams,
+    ) -> crate::core::gpu_effect::EffectParams {
+        // A managed scene retains fp16 precision; its final ICC output performs
+        // the only 8-bit quantization and dither after the color transform.
+        if self.target_format == wgpu::TextureFormat::Rgba16Float {
+            params
+        } else {
+            params.with_dither()
+        }
+    }
     /// Run the deband pre-pass (if any) at source size, then resolve the draw
     /// state against the debanded source. The deband intermediate is pinned into
     /// the returned draw state so its texture outlives the frame.
@@ -46,7 +58,7 @@ impl GpuPaintResources {
         display_rect: GpuDisplayRect,
         opacity: f32,
         zoom_in_motion: bool,
-        deband: DebandStrength,
+        deband: ResolvedDeband,
         ctx: &egui::Context,
     ) -> GpuDrawState {
         let (source_bind_group, deband_pin) = self.ensure_debanded_source(
@@ -101,7 +113,7 @@ impl GpuPaintResources {
         display_rect: GpuDisplayRect,
         opacity: f32,
         zoom_in_motion: bool,
-        deband: DebandStrength,
+        deband: ResolvedDeband,
         debanded: Option<&Arc<GpuIntermediateTexture>>,
         ctx: &egui::Context,
     ) -> GpuDrawState {
@@ -118,13 +130,33 @@ impl GpuPaintResources {
         // still dither the final quantization. A raw Off-deband source is bit-exact
         // 8-bit and stays undithered.
         let source_is_intermediate = debanded.is_some();
-        let effective_upscaler = scale_plan.effective_upscale_method;
+        self.display_scale_capture
+            .resolve(slot_id, scale_plan, output_size, display_rect);
+        let mut effective_upscaler = scale_plan.effective_upscale_method;
         let effective_downscaler = scale_plan.effective_downscale_method;
         let source_content_key =
             source_texture_content_key(source_key, source_size, output_size, effects, deband);
-        self.realtime_sr
-            .cancel_inactive_pending_work(effective_upscaler);
-        if RealtimeSrResources::is_supported(effective_upscaler) {
+        if self.request_background_refine
+            && crate::app::realtime_sr::background::BackgroundRefiner::supports(effective_upscaler)
+        {
+            self.enqueue_background_refine(
+                queue,
+                slot_id,
+                source_key,
+                source_size,
+                output_size,
+                effects,
+                effective_upscaler,
+                wgpu_downscale_method,
+                display_rect,
+                opacity,
+                deband,
+                debanded,
+                ctx,
+            );
+            effective_upscaler = WgpuUpscaleMethod::WgslFsr1EasuRcas;
+            self.display_scale_capture.fallback(slot_id, true);
+        } else if RealtimeSrResources::is_supported(effective_upscaler) {
             if let Some(draw_state) = self.prepare_realtime_sr_draw_state(
                 device,
                 queue,
@@ -144,6 +176,7 @@ impl GpuPaintResources {
             ) {
                 return draw_state;
             }
+            self.display_scale_capture.fallback(slot_id, false);
         }
         if let Some(rcas_method) = effective_upscaler.rcas_shader_method_id() {
             let intermediate_key = intermediate_texture_key(
@@ -209,8 +242,12 @@ impl GpuPaintResources {
                 opacity,
             );
             // Final composite samples the fp16 EASU intermediate -> dither on.
-            let (params_buffer, params_bind_group) =
-                self.recycle_params_pair(device, queue, slot_id, rcas_params.with_dither());
+            let (params_buffer, params_bind_group) = self.recycle_params_pair(
+                device,
+                queue,
+                slot_id,
+                self.final_composite_params(rcas_params),
+            );
             record_wgpu_upscale_method_render(
                 effective_upscaler,
                 source_size,
@@ -240,6 +277,7 @@ impl GpuPaintResources {
         // paths, and realtime-SR/EASU have already returned above (they carry an
         // upscaler, whereas a `Downscale` plan resolves the upscaler to `None`).
         if zoom_in_motion && scale_plan.direction == WgpuScaleDirection::Downscale {
+            self.display_scale_capture.zoom_mipmap(slot_id);
             return self.prepare_hardware_mipmap_draw_state(
                 device,
                 queue,
@@ -323,7 +361,7 @@ impl GpuPaintResources {
         // Dither only when this draw samples the debanded fp16 intermediate; a raw
         // 8-bit source passes through bit-exact.
         let params = if source_is_intermediate {
-            params.with_dither()
+            self.final_composite_params(params)
         } else {
             params
         };
@@ -352,7 +390,7 @@ impl GpuPaintResources {
         downscaler: WgpuDownscaleMethod,
         display_rect: GpuDisplayRect,
         opacity: f32,
-        deband: DebandStrength,
+        deband: ResolvedDeband,
         debanded: Option<&Arc<GpuIntermediateTexture>>,
         ctx: &egui::Context,
     ) -> Option<GpuDrawState> {
@@ -449,7 +487,7 @@ impl GpuPaintResources {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn prepare_realtime_sr_presentation_draw_state(
+    pub(super) fn prepare_realtime_sr_presentation_draw_state(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -464,6 +502,8 @@ impl GpuPaintResources {
         let sr_output_size = output_size_for_effects(intermediate.size, effects);
         let post_downscaler =
             post_realtime_sr_downscale_method(sr_output_size, display_rect.full_size, downscaler);
+        self.display_scale_capture
+            .post_sr(slot_id, sr_output_size, display_rect, post_downscaler);
         // The zoom-motion reroute in `prepare_draw_state` deliberately does not capture
         // this post-SR downscale: it only fires for `Downscale` plans whose upscaler is
         // `None`, whereas reaching here means a realtime-SR upscaler is active. This
@@ -527,7 +567,7 @@ impl GpuPaintResources {
         // Final composite samples the realtime-SR output (a pooled intermediate) ->
         // dither on.
         let (params_buffer, params_bind_group) =
-            self.recycle_params_pair(device, queue, slot_id, params.with_dither());
+            self.recycle_params_pair(device, queue, slot_id, self.final_composite_params(params));
         GpuDrawState::new(
             intermediate.bind_group.clone(),
             params_buffer,
@@ -629,7 +669,7 @@ impl GpuPaintResources {
             // No stage ran: the composite samples the incoming source directly, so
             // dither only if that source is already an fp16 intermediate.
             let params = if source_is_intermediate {
-                params.with_dither()
+                self.final_composite_params(params)
             } else {
                 params
             };
@@ -655,7 +695,7 @@ impl GpuPaintResources {
         );
         // Final composite samples the last fp16 pyramid intermediate -> dither on.
         let (params_buffer, params_bind_group) =
-            self.recycle_params_pair(device, queue, slot_id, params.with_dither());
+            self.recycle_params_pair(device, queue, slot_id, self.final_composite_params(params));
         GpuDrawState::new(current_bind_group, params_buffer, params_bind_group, pins)
     }
 
@@ -682,7 +722,7 @@ impl GpuPaintResources {
             content_key,
             downscaler,
             effects,
-            crate::core::gpu_effect::linear_downscale_enabled(),
+            self.request_linear_downscale,
             [stage_size[0], stage_size[1]],
             current_size,
             stage_index,
@@ -818,7 +858,7 @@ impl GpuPaintResources {
         );
         // Final composite samples the fp16 mipmap intermediate -> dither on.
         let (params_buffer, params_bind_group) =
-            self.recycle_params_pair(device, queue, slot_id, params.with_dither());
+            self.recycle_params_pair(device, queue, slot_id, self.final_composite_params(params));
         GpuDrawState::new(
             intermediate.bind_group.clone(),
             params_buffer,
@@ -1158,13 +1198,13 @@ pub(super) fn realtime_sr_stage_texture_key(
     stage_index: usize,
     input_size: [usize; 2],
     stack_passes: usize,
-    deband: DebandStrength,
+    deband: ResolvedDeband,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     "realtime_sr_stage".hash(&mut hasher);
     // Stage 0 renders from the debanded view when deband is active; the whole
     // stage chain (and the post-SR content_key it seeds) must key on strength.
-    deband.token().hash(&mut hasher);
+    deband.hash(&mut hasher);
     source_key.hash(&mut hasher);
     base_source_size.hash(&mut hasher);
     wgpu_upscale_method.token().hash(&mut hasher);

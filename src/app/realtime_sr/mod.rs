@@ -12,6 +12,7 @@ mod artcnn;
 mod span;
 mod span_bridge;
 mod span_display;
+pub(super) mod background;
 
 use acnet::AcnetRenderer;
 use anime4k::{Anime4kMRenderer, Anime4kSRenderer};
@@ -43,6 +44,9 @@ pub(super) struct RealtimeSrResources {
     artcnn: Option<ArtcnnRenderer>,
     span: Option<SpanRenderer>,
     acnet: Option<AcnetRenderer>,
+    active_pass: Option<u64>,
+    finished_pass: Option<u64>,
+    active_span_requests: Vec<u64>,
 }
 
 pub(super) struct RealtimeSrOutput {
@@ -61,6 +65,9 @@ impl RealtimeSrResources {
             artcnn: None,
             span: None,
             acnet: None,
+            active_pass: None,
+            finished_pass: None,
+            active_span_requests: Vec::new(),
         }
     }
 
@@ -127,6 +134,10 @@ impl RealtimeSrResources {
         source_view: &wgpu::TextureView,
         source_size: [usize; 2],
     ) -> Option<RealtimeSrOutput> {
+        if method == WgpuUpscaleMethod::WgslSrLabSpanX2
+            && !self.active_span_requests.contains(&request_key) {
+            self.active_span_requests.push(request_key);
+        }
         match method {
             WgpuUpscaleMethod::CunnyVeryfastNvl
             | WgpuUpscaleMethod::CunnyVeryfastSoft
@@ -198,12 +209,21 @@ impl RealtimeSrResources {
         }
     }
 
-    pub(super) fn cancel_inactive_pending_work(&mut self, active_method: WgpuUpscaleMethod) {
-        if !matches!(active_method, WgpuUpscaleMethod::WgslSrLabSpanX2) {
-            if let Some(span) = &mut self.span {
-                span.cancel_pending_render();
-            }
+    pub(super) fn begin_active_frame(&mut self, pass: u64) {
+        if self.active_pass != Some(pass) {
+            self.active_pass = Some(pass);
+            self.active_span_requests.clear();
         }
+    }
+
+    /// Called once after every callback has prepared its actual SR stages.
+    /// Return None for the default path, which has never created a SPAN loader.
+    pub(super) fn finish_active_frame(&mut self, pass: u64) -> Option<bool> {
+        if self.span.is_none() || self.finished_pass == Some(pass) { return None; }
+        self.begin_active_frame(pass);
+        self.finished_pass = Some(pass);
+        self.span.as_mut().unwrap().retain_pending_requests(&self.active_span_requests);
+        Some(!self.active_span_requests.is_empty())
     }
 
     pub(super) fn warm_up_async(&mut self, method: WgpuUpscaleMethod, device: &wgpu::Device) {
@@ -480,7 +500,9 @@ struct CunnyVariantSource {
     pass_specs: &'static [CunnyPassSpec],
 }
 
-const CUNNY_VARIANTS: [CunnyVariantSource; 24] = [
+// One allocation shared by foreground and background builders. A const table
+// promotes its embedded shader strings separately in each codegen unit.
+static CUNNY_VARIANTS: [CunnyVariantSource; 24] = [
     CunnyVariantSource {
         method: WgpuUpscaleMethod::CunnyVeryfastNvl,
         name: "CuNNy veryfast NVL",

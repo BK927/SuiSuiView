@@ -1,6 +1,6 @@
 use super::MAX_IMAGE_DIMENSION;
 use crate::core::source::{PageId, SharedSource};
-use crate::core::state::{CpuScaleFilter, DecoderPreferences};
+use crate::core::state::{CpuScaleFilter, DecoderPreferences, FastPrepareOverrides};
 use crossbeam_channel::Sender;
 use egui::{Color32, ColorImage};
 use std::sync::{Arc, Weak};
@@ -300,6 +300,7 @@ pub struct DecodeOptions {
     pub strategy: DecodeStrategy,
     pub decoder_preferences: DecoderPreferences,
     pub fast_sampled_scaled_decode: bool,
+    pub fast_prepare_overrides: FastPrepareOverrides,
     pub cpu_upscale_filter: CpuScaleFilter,
     pub cpu_downscale_filter: CpuScaleFilter,
     pub allow_display_upscale: bool,
@@ -313,6 +314,7 @@ impl Default for DecodeOptions {
             strategy: DecodeStrategy::Auto,
             decoder_preferences: DecoderPreferences::default(),
             fast_sampled_scaled_decode: true,
+            fast_prepare_overrides: FastPrepareOverrides::default(),
             cpu_upscale_filter: CpuScaleFilter::CatmullRom,
             cpu_downscale_filter: CpuScaleFilter::Hamming,
             allow_display_upscale: false,
@@ -325,14 +327,11 @@ impl Default for DecodeOptions {
 impl DecodeOptions {
     pub fn cache_token(self) -> String {
         format!(
-            "{}-{}-fastprep-{}-down-{}-{}{}{}",
+            "{}-{}-fastprep-{:02x}-down-{}-{}{}{}",
             self.strategy.as_str(),
             self.decoder_preferences.cache_token(),
-            if self.fast_sampled_scaled_decode {
-                "on"
-            } else {
-                "off"
-            },
+            self.fast_prepare_overrides
+                .enabled_mask(self.fast_sampled_scaled_decode),
             self.cpu_downscale_filter.token(),
             if self.allow_display_upscale {
                 self.cpu_upscale_filter.token()

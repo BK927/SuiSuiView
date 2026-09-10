@@ -1,22 +1,14 @@
 use super::{
-    GpuDisplayRect, GpuPaintResources, GpuPaintSourceKey, GPU_DRAW_BIND_GROUP_CACHE_LIMIT,
-    GPU_DRAW_STATE_BYTES_LIVE, GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES,
-    GPU_INTERMEDIATE_TEXTURE_BYTES_LIVE, GPU_INTERMEDIATE_TEXTURE_CACHE_LIMIT,
-    GPU_REALTIME_SR_DEFER_CACHE_LIMIT, GPU_SOURCE_TEXTURE_BUDGET_BYTES,
-    GPU_SOURCE_TEXTURE_BYTES_LIVE, GPU_SOURCE_TEXTURE_CACHE_LIMIT,
+    GpuDisplayRect, GpuPaintResources, GpuPaintSourceKey, GPU_DRAW_STATE_BYTES_LIVE,
+    GPU_INTERMEDIATE_TEXTURE_BYTES_LIVE, GPU_SOURCE_TEXTURE_BYTES_LIVE,
 };
-use crate::app::realtime_sr::RealtimeSrResources;
 use crate::core::effects::ViewEffects;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
 use crate::core::state::{WgpuDownscaleMethod, WgpuUpscaleMethod};
 use crate::core::worker::PagePixels;
-use lru::LruCache;
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
-use std::num::NonZeroUsize;
-#[cfg(test)]
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
@@ -26,10 +18,10 @@ use std::time::Instant;
 use wgpu::util::DeviceExt;
 
 pub(super) struct GpuSourceTexture {
-    _texture: wgpu::Texture,
+    pub(super) _texture: wgpu::Texture,
     pub(super) view: wgpu::TextureView,
     pub(super) bind_group: Arc<wgpu::BindGroup>,
-    byte_size: usize,
+    pub(super) byte_size: usize,
     /// egui pass number that last used this source (cache hit or fresh upload);
     /// entries from the CURRENT pass are never pruned (see
     /// `prune_source_textures`), mirroring the intermediate/draw-state shields so
@@ -106,126 +98,6 @@ impl GpuDrawState {
 }
 
 impl GpuPaintResources {
-    pub(super) fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        let started = Instant::now();
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("suisuiview-gpu-effect-shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
-                "../../core/gpu_effect.wgsl"
-            ))),
-        });
-        let texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("suisuiview-gpu-effect-texture-layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-            });
-        let params_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("suisuiview-gpu-effect-params-layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("suisuiview-gpu-effect-pipeline-layout"),
-            bind_group_layouts: &[&texture_bind_group_layout, &params_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        let pipeline = super::passes::create_effect_pipeline_timed(
-            device,
-            &shader,
-            &pipeline_layout,
-            target_format,
-            "suisuiview-gpu-effect-pipeline",
-        );
-        let intermediate_pipeline = super::passes::create_effect_pipeline_timed(
-            device,
-            &shader,
-            &pipeline_layout,
-            INTERMEDIATE_TEXTURE_FORMAT,
-            "suisuiview-gpu-effect-intermediate-pipeline",
-        );
-        let deband_pipeline = super::deband::create_deband_pipeline(device, &pipeline_layout);
-        let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("suisuiview-gpu-effect-linear-sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let resources = Self {
-            target_format,
-            texture_bind_group_layout,
-            params_bind_group_layout,
-            texture_sampler,
-            pipeline,
-            intermediate_pipeline,
-            deband_pipeline,
-            source_textures: LruCache::new(
-                NonZeroUsize::new(GPU_SOURCE_TEXTURE_CACHE_LIMIT).unwrap(),
-            ),
-            source_texture_bytes: 0,
-            draw_bind_groups: LruCache::new(
-                NonZeroUsize::new(GPU_DRAW_BIND_GROUP_CACHE_LIMIT).unwrap(),
-            ),
-            draw_state_intermediate_bytes: 0,
-            intermediate_textures: LruCache::new(
-                NonZeroUsize::new(GPU_INTERMEDIATE_TEXTURE_CACHE_LIMIT).unwrap(),
-            ),
-            intermediate_texture_bytes: 0,
-            source_texture_budget_bytes: GPU_SOURCE_TEXTURE_BUDGET_BYTES,
-            intermediate_texture_budget_bytes: GPU_INTERMEDIATE_TEXTURE_BUDGET_BYTES,
-            current_pass: 0,
-            deferred_realtime_sr_first_frames: LruCache::new(
-                NonZeroUsize::new(GPU_REALTIME_SR_DEFER_CACHE_LIMIT).unwrap(),
-            ),
-            realtime_sr: RealtimeSrResources::new(),
-            #[cfg(test)]
-            params_buffer_creations: AtomicUsize::new(0),
-        };
-        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        perf_trace::record_duration(
-            "gpu_paint_resources_create",
-            started.elapsed(),
-            &[PerfField::Str(
-                "target_format",
-                texture_format_label(target_format),
-            )],
-        );
-        // Reset the read-only mirrors so a recreation (e.g. target-format change) does not leave
-        // stale byte counts visible to the UI thread.
-        resources.publish_gpu_pool_bytes();
-        resources
-    }
-
     pub(super) fn ensure_source_texture(
         &mut self,
         device: &wgpu::Device,
@@ -478,6 +350,7 @@ impl GpuPaintResources {
         device: &wgpu::Device,
         params: crate::core::gpu_effect::EffectParams,
     ) -> wgpu::BindGroup {
+        let params = params.with_request_linear(self.request_linear_downscale);
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("suisuiview-gpu-effect-params"),
             contents: bytemuck::bytes_of(&params),
@@ -513,6 +386,7 @@ impl GpuPaintResources {
         slot_id: u64,
         params: crate::core::gpu_effect::EffectParams,
     ) -> (Arc<wgpu::Buffer>, Arc<wgpu::BindGroup>) {
+        let params = params.with_request_linear(self.request_linear_downscale);
         if let Some(existing) = self.draw_bind_groups.peek(&slot_id) {
             let buffer = existing.params_buffer.clone();
             let bind_group = existing.params_bind_group.clone();
@@ -724,11 +598,11 @@ pub(super) fn intermediate_texture_key(
     effects: ViewEffects,
     wgpu_upscale_method: WgpuUpscaleMethod,
     display_rect: GpuDisplayRect,
-    deband: crate::core::deband::DebandStrength,
+    deband: crate::core::deband::ResolvedDeband,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     // EASU renders from the (possibly debanded) source bind group; key on it.
-    deband.token().hash(&mut hasher);
+    deband.hash(&mut hasher);
     source_key.hash(&mut hasher);
     source_size.hash(&mut hasher);
     output_size.hash(&mut hasher);
@@ -745,7 +619,7 @@ pub(super) fn source_texture_content_key(
     source_size: [usize; 2],
     output_size: [usize; 2],
     effects: ViewEffects,
-    deband: crate::core::deband::DebandStrength,
+    deband: crate::core::deband::ResolvedDeband,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     "source_texture_content".hash(&mut hasher);
@@ -757,7 +631,7 @@ pub(super) fn source_texture_content_key(
     // from, so the content roots must separate per strength — otherwise a
     // strength change keeps serving stale rendered=true chain intermediates
     // until LRU eviction.
-    deband.token().hash(&mut hasher);
+    deband.hash(&mut hasher);
     hasher.finish()
 }
 

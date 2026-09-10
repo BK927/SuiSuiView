@@ -21,20 +21,16 @@ impl WinitHostApp {
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
     ) -> Result<(), HostStartFailure> {
-        let options = self
-            .options
-            .take()
-            .ok_or_else(|| {
-                HostStartFailure::new(
-                    HostFailureStage::GlCreate,
-                    "handoff preview options were already consumed".to_owned(),
-                )
-            })?;
+        let options = self.options.take().ok_or_else(|| {
+            HostStartFailure::new(
+                HostFailureStage::GlCreate,
+                "handoff preview options were already consumed".to_owned(),
+            )
+        })?;
 
         // Build the WGPU device on a worker thread while we create the window.
-        self.start_prewarm().map_err(|error| {
-            HostStartFailure::new(HostFailureStage::WgpuPrewarm, error)
-        })?;
+        self.start_prewarm()
+            .map_err(|error| HostStartFailure::new(HostFailureStage::WgpuPrewarm, error))?;
         let window = create_plain_window(
             event_loop,
             &options.store,
@@ -44,9 +40,8 @@ impl WinitHostApp {
         )
         .map_err(|error| HostStartFailure::new(HostFailureStage::GlCreate, error))?;
         self.startup_placement = startup_placement(&options.store);
-        self.wait_for_prewarm().map_err(|error| {
-            HostStartFailure::new(HostFailureStage::WgpuPrewarm, error)
-        })?;
+        self.wait_for_prewarm()
+            .map_err(|error| HostStartFailure::new(HostFailureStage::WgpuPrewarm, error))?;
 
         self.dpi_size_guard.seed_initial(&window);
 
@@ -152,6 +147,23 @@ impl WinitHostApp {
         painter.handle_screenshots(&mut egui_state.egui_input_mut().events);
         let raw_input = egui_state.take_egui_input(&window);
         let egui_ctx = egui_state.egui_ctx().clone();
+        // Lock the render format for this entire frame before page callbacks
+        // are built. A checkbox changed inside update_frame applies next frame.
+        let color_managed = if app.settings.monitor_color_management {
+            self.monitor_color
+                .get_or_insert_with(Default::default)
+                .prepare(&egui_ctx, &window, &painter)
+        } else {
+            if self.monitor_color.take().is_some() {
+                super::super::monitor_color::MonitorColor::disable(&egui_ctx);
+            }
+            false
+        };
+        app.gpu_target_format = if color_managed {
+            Some(super::super::monitor_color::SCENE_FORMAT)
+        } else {
+            painter.render_state().map(|state| state.target_format)
+        };
         let full_output = egui_ctx.run(raw_input, |ctx| app.update_frame(ctx));
         let requested_title = process_wgpu_viewport_output(
             &egui_ctx,
@@ -165,20 +177,31 @@ impl WinitHostApp {
         }
         sync_visible_window_title(&window);
         egui_state.handle_platform_output(&window, full_output.platform_output);
-        let clipped_primitives =
+        let mut clipped_primitives =
             egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
         if let Some(error) = injected_failure(HostFailureStage::FirstWgpuFrame) {
             self.fail(event_loop, HostFailureStage::FirstWgpuFrame, error);
             return;
         }
-        painter.paint_and_update_textures(
-            ViewportId::ROOT,
-            full_output.pixels_per_point,
-            [0.015, 0.016, 0.020, 1.0],
-            &clipped_primitives,
-            &full_output.textures_delta,
-            Vec::new(),
-        );
+        let clear = [0.015, 0.016, 0.020, 1.0];
+        if color_managed {
+            self.monitor_color.as_mut().unwrap().paint(
+                &mut painter,
+                full_output.pixels_per_point,
+                clear,
+                &mut clipped_primitives,
+                &full_output.textures_delta,
+            );
+        } else {
+            painter.paint_and_update_textures(
+                ViewportId::ROOT,
+                full_output.pixels_per_point,
+                clear,
+                &clipped_primitives,
+                &full_output.textures_delta,
+                Vec::new(),
+            );
+        }
 
         if self.metrics.first_wgpu_present_ms.is_none() {
             let now_ms = elapsed_ms(self.started_at.elapsed());

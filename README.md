@@ -62,9 +62,11 @@ manual zoom level. Results and processing cost depend on the image, settings
 and hardware. ArtCNN options are experimental. Upscaling changes the displayed
 image; it does not overwrite the original or export enlarged files.
 
-The app also provides session-only rotation, flips, inversion, smoothing,
-sharpening and gamma effects, plus per-format decoder preferences. These viewing
-effects leave the source image unchanged.
+The movable **Adjustments / 보정** window provides gamma, brightness, contrast,
+black and white points, filter strength, inversion, and advanced quality controls.
+Corrections are saved globally across books and restarts; rotation and flips reset
+when changing books. Hold the bypass button to inspect the uncorrected image.
+The source files are never changed.
 
 ## Build From Source
 
@@ -160,16 +162,21 @@ per-book file.
   physical VRAM usage. Manifest-backed SR Lab SPAN x2 is
   available as a slow manual GPU upscaler when local SPAN weights are present.
   Fixed 2x GPU SR upscalers skip tiny enlargements, can auto-stack once for
-  large enlargement, and use the app's fixed WGPU downscaler when their 2x/4x
-  output is larger than the final display size. CPU downscaling uses the fixed
-  CatmullRom filter; WGPU downscaling uses Pyramid Lanczos3. These downscale
-  algorithms are not user-selectable in normal settings. GPU debanding and
-  linear-light downscaling can be enabled separately.
+  large enlargement, and use the selected WGPU downscaler when their 2x/4x
+  output is larger than the final display size. The defaults remain CPU
+  CatmullRom and GPU Pyramid Lanczos3. The adjustment window also offers CPU
+  Mitchell/Lanczos3 and GPU Pyramid Mitchell/Hamming, with linear-light scaling.
+  GPU debanding offers Off/Weak/Medium/Strong and custom strength, radius, grain,
+  and iteration controls. The scaler tooltip reports the active path and bypasses.
+  Upscalers can be browsed as Recommended, All (grouped by family), or Experimental;
+  existing toolbar quick picks remain available.
   Cache cleanup preserves images needed by the current frame and reusable
   quality-processing buffers; nearby texture preparation follows the active
   display path to avoid uploading unused copies.
-- Decoders: decode mode and per-format decoder choices. `기본값` is shown as
-  selected text, with the resolved backend summarized beside each format.
+- Decoders: Custom mode expands per-format decoder and fast-preparation choices.
+  JPEG, PNG, WebP, BMP, and GIF can follow the global fast-preparation switch or
+  be enabled/disabled individually. A disabled global switch always wins. Image
+  information reports the actual decoder and preparation path.
 - File links: on Windows, register SuiSuiView as a Default Apps candidate for
   selected image and comic file types.
 - View, keyboard, and mouse: visible viewer UI, top-bar scaler quick picks,
@@ -178,11 +185,42 @@ per-book file.
 
 Fast sampled/scaled decode is enabled by default. It lets large JPEG, WebP,
 PNG, BMP, and GIF pages use format-specific display-sized preparation before
-falling back to full decode plus the app's fixed CPU downscale filter.
+falling back to full decode plus the selected CPU downscale filter. Original-size
+PNG row decoding is independent of these display-preparation switches.
 
 The UI language can be set to system default, Korean, or English. UI text and
 state words such as Default, Off, and Experimental are localized, while
 technical names such as JPEG and ZIP/CBZ stay in English.
+
+## Comparison And Output Quality
+
+Comparison uses the same prepared page, orientation, pan, and physical display
+scale as the normal viewer. A and B start from the current corrections and can be
+edited independently. Wipe and side-by-side views share navigation. Auto is frozen
+at the result present when comparison opens; these temporary values are not saved
+as presets. The loupe magnifies a cached complete display result. Moving it does
+not decode the source or run full SR again, and its size does not reduce the cost
+of preparing that result. These model comparisons require WGPU.
+
+**Display first, replace when refined** is optional and off by default. With a
+supported manually selected Anime4K, CuNNy, ACNet, or configured SPAN model, it
+shows a complete FSR1 EASU+RCAS image using the same debanding and color controls,
+then replaces it after the selected model finishes. It resumes GPU batches after
+150 ms without input, keeps only the current requests, and replaces a two-page
+spread together. If the memory allowance is insufficient it keeps the fast image
+and reports the reason. Auto retains its existing first-display behavior.
+
+Optional **SDR monitor color management** uses the Windows default display-profile
+policy. WGPU applies an lcms2-derived LUT after the image, background and UI have
+been composited. Monitor changes affect only this output stage. Clipboard images
+remain in the sRGB working space. Missing or unusable profiles fall back with a
+status explanation. HDR output and original wide-gamut preservation are outside
+this feature.
+
+For automated GUI checks, set `SUISUIVIEW_PROFILE_DIR` to an absolute dedicated
+test-profile directory. An invalid or redirected path aborts startup instead of
+falling back to personal settings. Test instances use a separate instance scope;
+state, book records, and thumbnail caches stay under that directory.
 
 ## Bookmarks And State
 
@@ -265,9 +303,9 @@ standalone files.
   embedded-preview path as PSD.
 - [ ] Show AI generation metadata (Stable Diffusion prompt / `parameters`)
   in the current-page info panel when present.
-- [ ] Loupe (magnifier) mode: zoom a region under the cursor without
-  changing the overall fit or zoom.
-- [ ] Session-only brightness and contrast adjustment for dark or aged
+- [x] WGPU comparison loupe: magnify the processed region under the cursor
+  without changing the overall fit or zoom.
+- [x] Global brightness and contrast adjustment for dark or aged
   scans, alongside the existing gamma, sharpen, and smooth effects.
 - [ ] Printing, slideshow, and external editor workflows.
 - [ ] Long-term: HDR display output for HDR-capable formats and monitors.
@@ -323,11 +361,11 @@ standalone files.
 - `U`, `I`, `S`: change display filter.
 - `Ctrl+G`: toggle gamma correction.
 
-The top-bar compare toggle splits the current page into A/B panes. Its choices
-are the current app preparation, selected CPU filters, and the listed WGSL
-Bilinear, FSR-style, FSR1 EASU+RCAS and NIS-style options. Anime4K, CuNNy and
-ACNet are not directly selectable as A/B targets; compare those by changing
-the normal GPU upscaler on the same page and fit mode.
+The top-bar compare toggle opens a shared-scale A/B view of the actual display
+chain. Both sides start from the current settings. Select existing Anime4K, CuNNy,
+ACNet, ArtCNN, configured SPAN or other available methods independently; missing
+or unsupported choices show a reason. Wipe, synchronized side-by-side viewing,
+and the cached-result loupe are available in the comparison controls.
 
 ### Mouse
 

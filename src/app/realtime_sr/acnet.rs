@@ -371,6 +371,11 @@ const ACNET_VARIANTS: [AcnetVariantSource; 4] = [
     },
 ];
 
+pub(super) fn background_source(method: WgpuUpscaleMethod) -> Option<(&'static str, &'static [&'static str], usize)> {
+    ACNET_VARIANTS.iter().find(|variant| variant.method == method)
+        .map(|variant| (variant.shader, variant.entry_points, variant.body_blocks))
+}
+
 const F8B4_ENTRY_POINTS: [&str; 12] = [
     "acnet_head_conv_1x8x3x3_part_0",
     "acnet_head_conv_1x8x3x3_part_1",

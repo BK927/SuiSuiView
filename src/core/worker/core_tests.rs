@@ -6,7 +6,10 @@ use super::{
     WorkerOptions, MAX_ORIGINAL_TARGET_LONG_EDGE, MAX_TARGET_LONG_EDGE,
 };
 use crate::core::source::{BookSource, PageId, SharedSource, SourceError};
-use crate::core::state::{CpuScaleFilter, DecoderPreference, DecoderPreferences};
+use crate::core::state::{
+    CpuScaleFilter, DecoderPreference, DecoderPreferences, FastPrepareOverride,
+    FastPrepareOverrides,
+};
 use crossbeam_channel::unbounded;
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use std::io::Cursor;
@@ -310,6 +313,141 @@ fn fast_sampled_scaled_toggle_disables_large_png_sampling() {
     assert_ne!(page.decode_backend, DecodeBackend::PngSampled);
     assert_eq!(page.display_width, 1024);
     assert_eq!(page.display_height, 8);
+}
+
+#[test]
+fn fast_prepare_overrides_disable_only_the_selected_format() {
+    for (format, expected_backend, overrides, dimensions) in [
+        (
+            ImageFormat::Jpeg,
+            DecodeBackend::JpegScaled,
+            FastPrepareOverrides {
+                jpeg: FastPrepareOverride::Off,
+                ..Default::default()
+            },
+            (2304, 1536),
+        ),
+        (
+            ImageFormat::Png,
+            DecodeBackend::PngSampled,
+            FastPrepareOverrides {
+                png: FastPrepareOverride::Off,
+                ..Default::default()
+            },
+            (2048, 16),
+        ),
+        (
+            ImageFormat::Bmp,
+            DecodeBackend::BmpSampled,
+            FastPrepareOverrides {
+                bmp: FastPrepareOverride::Off,
+                ..Default::default()
+            },
+            (2048, 16),
+        ),
+        (
+            ImageFormat::Gif,
+            DecodeBackend::GifSampled,
+            FastPrepareOverrides {
+                gif: FastPrepareOverride::Off,
+                ..Default::default()
+            },
+            (2048, 16),
+        ),
+        #[cfg(feature = "native-webp")]
+        (
+            ImageFormat::WebP,
+            DecodeBackend::LibWebpScaled,
+            FastPrepareOverrides {
+                webp: FastPrepareOverride::Off,
+                ..Default::default()
+            },
+            (2048, 16),
+        ),
+    ] {
+        let bytes = encoded_sized_test_image(format, dimensions.0, dimensions.1);
+        let enabled = prepare_image_with_options(&bytes, 1024, DecodeOptions::default()).unwrap();
+        let disabled = prepare_image_with_options(
+            &bytes,
+            1024,
+            DecodeOptions {
+                fast_prepare_overrides: overrides,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(enabled.decode_backend, expected_backend, "{format:?}");
+        assert_ne!(disabled.decode_backend, expected_backend, "{format:?}");
+        assert_eq!(enabled.image_size(), disabled.image_size(), "{format:?}");
+    }
+    let png = encoded_sized_test_image(ImageFormat::Png, 2048, 16);
+    let jpeg_only_off = prepare_image_with_options(
+        &png,
+        1024,
+        DecodeOptions {
+            fast_prepare_overrides: FastPrepareOverrides {
+                jpeg: FastPrepareOverride::Off,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(jpeg_only_off.decode_backend, DecodeBackend::PngSampled);
+}
+
+#[test]
+fn fast_prepare_override_on_cannot_bypass_master_or_compatibility_mode() {
+    let bytes = encoded_sized_test_image(ImageFormat::Png, 2048, 16);
+    let overrides = FastPrepareOverrides {
+        png: FastPrepareOverride::On,
+        ..Default::default()
+    };
+    let master_off = prepare_image_with_options(
+        &bytes,
+        1024,
+        DecodeOptions {
+            fast_sampled_scaled_decode: false,
+            fast_prepare_overrides: overrides,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_ne!(master_off.decode_backend, DecodeBackend::PngSampled);
+    let compatibility = prepare_image_with_options(
+        &bytes,
+        1024,
+        DecodeOptions {
+            strategy: DecodeStrategy::ImageCrate,
+            fast_prepare_overrides: overrides,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(compatibility.decode_backend, DecodeBackend::ImageCrate);
+}
+
+#[test]
+fn fast_prepare_png_override_preserves_exact_original_pixels() {
+    let bytes = encoded_sized_test_image(ImageFormat::Png, 2048, 16);
+    let baseline = prepare_image_with_options(&bytes, 2048, DecodeOptions::default()).unwrap();
+    for choice in FastPrepareOverride::ALL {
+        let page = prepare_image_with_options(
+            &bytes,
+            2048,
+            DecodeOptions {
+                fast_prepare_overrides: FastPrepareOverrides {
+                    png: choice,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(page.decode_backend, baseline.decode_backend);
+        assert_eq!(page.image_size(), baseline.image_size());
+        assert_eq!(page.color_image().pixels, baseline.color_image().pixels);
+    }
 }
 
 #[test]

@@ -2,7 +2,7 @@
 use super::perf;
 use super::viewer::ViewMode;
 use super::SuiSuiViewApp;
-use crate::core::deband::DebandStrength;
+use crate::core::deband::ResolvedDeband;
 use crate::core::effects::ViewEffects;
 use crate::core::source::PageId;
 use crate::core::state::{
@@ -241,7 +241,7 @@ impl SuiSuiViewApp {
             };
             pops += 1;
 
-            if pinned_pages.contains(&key.page) {
+            if pinned_pages.contains(&key.page) && key.effects == self.display_effects() {
                 retained.push((key, entry));
                 continue;
             }
@@ -602,7 +602,7 @@ pub(in crate::app) fn gpu_visual_needs_wgsl(
     wgpu_upscale_method: WgpuUpscaleMethod,
     wgpu_downscale_method: WgpuDownscaleMethod,
     fixed_2x_sr_min_scale: f32,
-    deband: DebandStrength,
+    deband: ResolvedDeband,
 ) -> bool {
     let scale_plan = WgpuScalePlan::resolve(
         image_size,

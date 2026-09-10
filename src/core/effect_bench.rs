@@ -244,6 +244,7 @@ fn effect_cases() -> Vec<EffectCase> {
                 filter: ImageFilter::SmoothSharpen,
                 gamma: true,
                 invert_colors: true,
+                tone: Default::default(),
             },
         },
     ]

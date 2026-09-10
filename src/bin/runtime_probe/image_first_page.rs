@@ -134,11 +134,12 @@ fn decode_options_from_current_settings() -> DecodeOptions {
         strategy,
         decoder_preferences,
         cpu_upscale_filter: settings.cpu_upscale_filter,
-        cpu_downscale_filter: suisuiview::core::state::CPU_DOWNSCALE_FILTER,
+        cpu_downscale_filter: settings.expert_downscale.cpu.filter(),
         allow_display_upscale: false,
         apply_exif_orientation: settings.apply_exif_orientation,
         apply_embedded_icc: settings.apply_embedded_icc,
         fast_sampled_scaled_decode: settings.fast_sampled_scaled_decode,
+        fast_prepare_overrides: settings.fast_prepare_overrides,
     }
 }
 

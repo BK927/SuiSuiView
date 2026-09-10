@@ -1,5 +1,8 @@
 use crate::core::i18n::I18n;
 use egui::{Color32, ColorImage, Vec2};
+use serde::{Deserialize, Serialize};
+mod adjustments;
+pub use adjustments::{SavedViewAdjustments, ToneControls};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ViewTransform {
@@ -31,7 +34,7 @@ impl ViewTransform {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ImageFilter {
     #[default]
     None,
@@ -66,6 +69,7 @@ pub struct ViewEffects {
     pub filter: ImageFilter,
     pub gamma: bool,
     pub invert_colors: bool,
+    pub tone: ToneControls,
 }
 
 pub fn apply_effects_to_image(image: &ColorImage, effects: ViewEffects) -> ColorImage {
@@ -76,10 +80,54 @@ pub fn apply_effects_to_image(image: &ColorImage, effects: ViewEffects) -> Color
         ImageFilter::SmoothSharpen => smooth_sharpen_image(&output),
         ImageFilter::RcasSharpen => rcas_sharpen_image(&output),
     };
-    if effects.gamma || effects.invert_colors {
-        output = adjust_gamma_and_invert(&output, effects.gamma, effects.invert_colors);
+    if effects.filter != ImageFilter::None && effects.tone.filter_pct != 100 {
+        let original = transform_image(image, effects.transform);
+        let amount = effects.tone.filter_pct as f32 / 100.0;
+        for (pixel, source) in output.pixels.iter_mut().zip(&original.pixels) {
+            let a = source.to_srgba_unmultiplied();
+            let b = pixel.to_srgba_unmultiplied();
+            let c = |i: usize| {
+                (a[i] as f32 + (b[i] as f32 - a[i] as f32) * amount)
+                    .round()
+                    .clamp(0.0, 255.0) as u8
+            };
+            *pixel = Color32::from_rgba_unmultiplied(c(0), c(1), c(2), a[3]);
+        }
     }
+    apply_tones(&mut output, effects);
     output
+}
+
+/// The CPU adjustment worker already owns its decoded expansion. A tone-only
+/// edit can reuse that buffer instead of holding a second full RGBA image.
+pub fn apply_effects_to_owned_image(mut image: ColorImage, effects: ViewEffects) -> ColorImage {
+    if effects.transform == ViewTransform::default() && effects.filter == ImageFilter::None {
+        apply_tones(&mut image, effects);
+        image
+    } else {
+        apply_effects_to_image(&image, effects)
+    }
+}
+
+fn apply_tones(output: &mut ColorImage, effects: ViewEffects) {
+    if effects.gamma || effects.invert_colors || !effects.tone.color_is_neutral() {
+        // All controls are channel-local and inputs are eight-bit. Evaluate the
+        // exact transfer once, including rounding, instead of per RGB pixel.
+        let channels: [u8; 256] = std::array::from_fn(|value| {
+            effects
+                .tone
+                .channel(value as u8, effects.gamma, effects.invert_colors)
+        });
+        for pixel in &mut output.pixels {
+            let [r, g, b, a] = pixel.to_srgba_unmultiplied();
+            *pixel = Color32::from_rgba_unmultiplied(
+                channels[r as usize],
+                channels[g as usize],
+                channels[b as usize],
+                a,
+            );
+        }
+    }
 }
 
 fn transform_image(image: &ColorImage, transform: ViewTransform) -> ColorImage {
@@ -270,7 +318,6 @@ fn weighted_average_pixel(image: &ColorImage, x: usize, y: usize) -> Color32 {
     let mut r = 0u32;
     let mut g = 0u32;
     let mut b = 0u32;
-    let mut a = 0u32;
     let mut total = 0u32;
     for yy in y.saturating_sub(1)..=(y + 1).min(height - 1) {
         for xx in x.saturating_sub(1)..=(x + 1).min(width - 1) {
@@ -282,11 +329,10 @@ fn weighted_average_pixel(image: &ColorImage, x: usize, y: usize) -> Color32 {
                 1
             };
             let pixel = image.pixels[yy * width + xx];
-            let [pr, pg, pb, pa] = pixel.to_srgba_unmultiplied();
+            let [pr, pg, pb, _] = pixel.to_srgba_unmultiplied();
             r += pr as u32 * weight;
             g += pg as u32 * weight;
             b += pb as u32 * weight;
-            a += pa as u32 * weight;
             total += weight;
         }
     }
@@ -294,7 +340,7 @@ fn weighted_average_pixel(image: &ColorImage, x: usize, y: usize) -> Color32 {
         (r / total) as u8,
         (g / total) as u8,
         (b / total) as u8,
-        (a / total) as u8,
+        image.pixels[y * width + x].a(),
     )
 }
 
@@ -363,28 +409,7 @@ fn sharpen_pixel(original: Color32, blurred: Color32) -> Color32 {
     )
 }
 
-fn adjust_gamma_and_invert(image: &ColorImage, gamma: bool, invert: bool) -> ColorImage {
-    let pixels = image
-        .pixels
-        .iter()
-        .map(|pixel| {
-            let [mut r, mut g, mut b, a] = pixel.to_srgba_unmultiplied();
-            if gamma {
-                r = gamma_channel(r);
-                g = gamma_channel(g);
-                b = gamma_channel(b);
-            }
-            if invert {
-                r = 255 - r;
-                g = 255 - g;
-                b = 255 - b;
-            }
-            Color32::from_rgba_unmultiplied(r, g, b, a)
-        })
-        .collect();
-    ColorImage::new(image.size, pixels)
-}
-
+#[cfg(test)]
 fn gamma_channel(value: u8) -> u8 {
     let normalized = value as f32 / 255.0;
     (normalized.powf(1.0 / 1.2) * 255.0)

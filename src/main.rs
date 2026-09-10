@@ -18,6 +18,9 @@ const RESTART_BYPASS_SINGLE_INSTANCE_ENV: &str = "SUISUIVIEW_RESTART_BYPASS_SING
 const GPU_DEMOTION_GLOW_RESTART_ENV: &str = "SUISUIVIEW_GPU_DEMOTION_GLOW_RESTART";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Diagnostics must never fall back to the personal state after a typo in
+    // their explicit profile path. Validate before any state load or IPC.
+    crate::core::profile::initialize()?;
     if let Some(first_arg) = std::env::args_os().nth(1) {
         if is_gui_cli_redirect_arg(&first_arg) {
             show_cli_redirect_message();

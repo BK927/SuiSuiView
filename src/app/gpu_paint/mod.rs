@@ -1,15 +1,15 @@
 use super::realtime_sr::RealtimeSrResources;
-use super::{PageCacheKey, SuiSuiViewApp};
-use crate::core::deband::DebandStrength;
+use super::PageCacheKey;
+use crate::core::deband::ResolvedDeband;
 use crate::core::effects::ViewEffects;
 use crate::core::gpu_effect::output_size_for_effects;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
+#[cfg(test)]
+use crate::core::state::FitMode;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::state::WgpuScalePlan;
-use crate::core::state::{
-    FitMode, GpuEffectMode, RendererMode, WgpuDownscaleMethod, WgpuUpscaleMethod,
-};
+use crate::core::state::{WgpuDownscaleMethod, WgpuUpscaleMethod};
 use crate::core::worker::PagePixels;
 use egui::{self, PaintCallbackInfo, Rect};
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
@@ -17,14 +17,26 @@ use lru::LruCache;
 use pools::{GpuDrawState, GpuIntermediateTexture, GpuSourceTexture};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use std::time::Instant;
 
 mod accounting;
 mod deband;
+mod initialization;
+mod inspection;
 mod passes;
 mod pools;
+mod request;
+pub(super) use inspection::GpuInspection;
+pub(in crate::app) mod display_status;
+pub(in crate::app) mod refine;
+
+#[cfg(test)]
+use request::{
+    fit_mode_allows_display_upscale, parse_experimental_wgpu_upscale_method,
+    wgpu_upscale_method_from_settings,
+};
 
 // Re-exported into the coordination module solely so the `tests` submodule can reach the
 // pool/pass helpers through its `use super::*` glob after the split.
@@ -44,10 +56,6 @@ const GPU_SOURCE_TEXTURE_CACHE_LIMIT: usize = 32;
 const GPU_DRAW_BIND_GROUP_CACHE_LIMIT: usize = 16;
 const GPU_INTERMEDIATE_TEXTURE_CACHE_LIMIT: usize = 16;
 const GPU_REALTIME_SR_DEFER_CACHE_LIMIT: usize = 64;
-const EXPERIMENT_WGPU_UPSCALE_METHOD_ENV: &str = "SUISUIVIEW_EXPERIMENT_WGPU_UPSCALE_METHOD";
-const EXPERIMENT_SPAN_DISPLAY_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_DISPLAY";
-const EXPERIMENT_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_EXPERIMENT_SPAN_MANIFEST";
-const SR_LAB_SPAN_MANIFEST_ENV: &str = "SUISUIVIEW_SR_LAB_SPAN_MANIFEST";
 
 // Read-only mirrors of the render-thread-owned `GpuPaintResources` byte counters, so the
 // app/UI thread can display live GPU pool usage. These are purely for visibility: budget and
@@ -98,12 +106,14 @@ pub(super) struct GpuPaintRequest {
     pub(super) opacity: f32,
     /// Debanding strength resolved for this page (already gated off for
     /// Manual/Original inspection views and non-WGPU backends).
-    pub(super) deband: DebandStrength,
+    pub(super) deband: ResolvedDeband,
     /// Set while an interactive zoom gesture is in motion. When the resolved plan
     /// is a downscale, this reroutes rendering through the cached hardware-mipmap
     /// path so a continuous zoom does not re-render the quality downscale at a new
     /// content key every frame.
     pub(super) zoom_in_motion: bool,
+    pub(super) linear_downscale: bool,
+    pub(super) inspection: Option<GpuInspection>,
 }
 
 /// GPU pool budgets (bytes) carried from the app/settings thread into the render thread. The
@@ -114,208 +124,6 @@ pub(super) struct GpuPaintRequest {
 pub(super) struct GpuPoolBudgets {
     pub(super) source_texture_bytes: usize,
     pub(super) intermediate_texture_bytes: usize,
-}
-
-impl SuiSuiViewApp {
-    pub(super) fn gpu_paint_book_key(&self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.book_id.hash(&mut hasher);
-        self.opened_path.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    pub(super) fn active_wgpu_upscale_method(&self) -> WgpuUpscaleMethod {
-        self.active_wgpu_upscale_method_for_fit(self.fit_mode)
-    }
-
-    pub(in crate::app) fn active_wgpu_upscale_method_for_fit(
-        &self,
-        fit_mode: FitMode,
-    ) -> WgpuUpscaleMethod {
-        if !fit_mode_allows_display_upscale(fit_mode)
-            || !self.gpu_effects_available
-            || self.gpu_target_format.is_none()
-            || matches!(self.settings.gpu_effect_mode, GpuEffectMode::CpuOnly)
-            || !matches!(self.settings.renderer_mode, RendererMode::Wgpu)
-        {
-            return WgpuUpscaleMethod::None;
-        }
-        if let Some(upscaler) = experimental_wgpu_upscale_method_override() {
-            return upscaler;
-        }
-        let span_manifest_present = matches!(
-            self.settings.wgpu_upscale_method,
-            WgpuUpscaleMethod::WgslSrLabSpanX2
-        ) && span_manifest_env_present();
-        wgpu_upscale_method_from_settings(self.settings.wgpu_upscale_method, span_manifest_present)
-    }
-
-    /// The debanding strength active for the current view, or `Off`. Gated on the
-    /// same conditions as the display upscaler: WGPU backend live, GPU effects
-    /// available, WGSL not opted out, and a fit mode that is not the
-    /// Manual/Original source-inspection path (those must show true pixels).
-    pub(super) fn active_deband(&self) -> DebandStrength {
-        if !fit_mode_allows_display_upscale(self.fit_mode)
-            || !self.gpu_effects_available
-            || self.gpu_target_format.is_none()
-            || matches!(self.settings.gpu_effect_mode, GpuEffectMode::CpuOnly)
-            || !matches!(self.settings.renderer_mode, RendererMode::Wgpu)
-        {
-            return DebandStrength::Off;
-        }
-        self.settings.deband
-    }
-
-    /// WGSL painting is governed by `gpu_effect_mode` (`CpuOnly` is the explicit
-    /// opt-out) plus a usable `gpu_target_format`. The display downscaler is now a
-    /// fixed pyramid Lanczos3 (`WGPU_DOWNSCALE_METHOD`), so the WGSL path is always
-    /// the right target when GPU effects are available — no per-effect/upscale
-    /// gating is needed here; `WgpuScalePlan` handles the native-passthrough case.
-    pub(super) fn can_paint_wgsl_effects(&self) -> bool {
-        self.gpu_effects_available
-            && matches!(
-                self.settings.gpu_effect_mode,
-                GpuEffectMode::Auto | GpuEffectMode::Wgsl
-            )
-            && self.gpu_target_format.is_some()
-    }
-
-    pub(super) fn paint_wgsl_effects(
-        &self,
-        painter: &egui::Painter,
-        request: GpuPaintRequest,
-    ) -> bool {
-        let Some(target_format) = self.gpu_target_format else {
-            return false;
-        };
-        // Publish the user's linear-downscale choice for the params constructors
-        // (mirror; see core/gpu_effect.rs). Also hashed into the downscale cache
-        // keys below so a live toggle can never serve stale gamma/linear pixels.
-        crate::core::gpu_effect::set_linear_downscale_setting(self.settings.linear_light_downscale);
-        let pool_budgets = GpuPoolBudgets {
-            source_texture_bytes: super::gpu_source_texture_budget_bytes(&self.settings),
-            intermediate_texture_bytes: super::gpu_intermediate_texture_budget_bytes(
-                &self.settings,
-            ),
-        };
-        let callback = GpuEffectCallback {
-            source_key: request.source_key,
-            image_size: request.image_size,
-            pixels: request.pixels,
-            effects: request.effects,
-            wgpu_upscale_method: request.wgpu_upscale_method,
-            wgpu_downscale_method: request.wgpu_downscale_method,
-            fixed_2x_sr_min_scale_pct: request.fixed_2x_sr_min_scale_pct,
-            opacity: request.opacity.clamp(0.0, 1.0),
-            deband: request.deband,
-            zoom_in_motion: request.zoom_in_motion,
-            pool_budgets,
-            rect: request.rect,
-            target_format,
-            draw_id: draw_id(
-                request.source_key,
-                request.effects,
-                request.wgpu_upscale_method,
-                request.wgpu_downscale_method,
-                request.fixed_2x_sr_min_scale_pct,
-                request.deband,
-                request.zoom_in_motion,
-                request.slot,
-            ),
-            ctx: painter.ctx().clone(),
-        };
-        painter.add(egui_wgpu::Callback::new_paint_callback(
-            request.rect,
-            callback,
-        ));
-        true
-    }
-
-    pub(super) fn paint_pending_gpu_original_inspection_cleanup(
-        &mut self,
-        painter: &egui::Painter,
-        rect: Rect,
-    ) {
-        if !self.pending_gpu_original_inspection_cleanup {
-            return;
-        }
-        self.pending_gpu_original_inspection_cleanup = false;
-        painter.add(egui_wgpu::Callback::new_paint_callback(
-            rect,
-            GpuOriginalInspectionCleanupCallback,
-        ));
-    }
-}
-
-fn fit_mode_allows_display_upscale(fit_mode: FitMode) -> bool {
-    !matches!(fit_mode, FitMode::Manual | FitMode::Original)
-}
-
-fn experimental_wgpu_upscale_method_override() -> Option<WgpuUpscaleMethod> {
-    static OVERRIDE: OnceLock<Option<WgpuUpscaleMethod>> = OnceLock::new();
-    *OVERRIDE.get_or_init(|| {
-        let generic_value = std::env::var(EXPERIMENT_WGPU_UPSCALE_METHOD_ENV).ok();
-        parse_experimental_wgpu_upscale_method(
-            generic_value.as_deref(),
-            opt_in_env_enabled(EXPERIMENT_SPAN_DISPLAY_ENV),
-            span_manifest_env_present(),
-        )
-    })
-}
-
-fn parse_experimental_wgpu_upscale_method(
-    generic_value: Option<&str>,
-    explicit_span: bool,
-    span_manifest_present: bool,
-) -> Option<WgpuUpscaleMethod> {
-    if let Some(value) = generic_value.map(str::trim) {
-        if let Some(method) = WgpuUpscaleMethod::GPU_METHODS
-            .iter()
-            .copied()
-            .find(|method| method.is_artcnn() && value.eq_ignore_ascii_case(method.token()))
-        {
-            return Some(method);
-        }
-        if value.eq_ignore_ascii_case(WgpuUpscaleMethod::WgslSrLabSpanX2.token())
-            && span_manifest_present
-        {
-            return Some(WgpuUpscaleMethod::WgslSrLabSpanX2);
-        }
-    }
-    if explicit_span && span_manifest_present {
-        Some(WgpuUpscaleMethod::WgslSrLabSpanX2)
-    } else {
-        None
-    }
-}
-
-fn wgpu_upscale_method_from_settings(
-    upscaler: WgpuUpscaleMethod,
-    span_manifest_present: bool,
-) -> WgpuUpscaleMethod {
-    match upscaler {
-        WgpuUpscaleMethod::None => WgpuUpscaleMethod::None,
-        WgpuUpscaleMethod::WgslSrLabSpanX2 if !span_manifest_present => WgpuUpscaleMethod::Auto,
-        upscaler if upscaler.user_selectable() => upscaler,
-        _ => WgpuUpscaleMethod::Auto,
-    }
-}
-
-fn span_manifest_env_present() -> bool {
-    std::env::var(EXPERIMENT_SPAN_MANIFEST_ENV)
-        .or_else(|_| std::env::var(SR_LAB_SPAN_MANIFEST_ENV))
-        .is_ok_and(|value| !value.trim().is_empty())
-}
-
-fn opt_in_env_enabled(name: &str) -> bool {
-    matches!(
-        std::env::var(name).ok().as_deref().map(str::trim),
-        Some(value)
-            if value.eq_ignore_ascii_case("1")
-                || value.eq_ignore_ascii_case("true")
-                || value.eq_ignore_ascii_case("on")
-                || value.eq_ignore_ascii_case("yes")
-    )
 }
 
 struct GpuOriginalInspectionCleanupCallback;
@@ -353,8 +161,11 @@ struct GpuEffectCallback {
     wgpu_downscale_method: WgpuDownscaleMethod,
     fixed_2x_sr_min_scale_pct: u32,
     opacity: f32,
-    deband: DebandStrength,
+    deband: ResolvedDeband,
     zoom_in_motion: bool,
+    linear_downscale: bool,
+    background_refine: bool,
+    inspection: Option<GpuInspection>,
     pool_budgets: GpuPoolBudgets,
     rect: Rect,
     target_format: wgpu::TextureFormat,
@@ -402,7 +213,7 @@ impl CallbackTrait for GpuEffectCallback {
             .get_mut::<GpuPaintResources>()
             .expect("GPU paint resources should be inserted before use");
         if resources.target_format != self.target_format {
-            *resources = GpuPaintResources::new(device, self.target_format);
+            resources.set_target_format(device, self.target_format);
             #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
             {
                 resources_recreated = true;
@@ -414,6 +225,9 @@ impl CallbackTrait for GpuEffectCallback {
         resources.source_texture_budget_bytes = self.pool_budgets.source_texture_bytes;
         resources.intermediate_texture_budget_bytes = self.pool_budgets.intermediate_texture_bytes;
         resources.current_pass = self.ctx.cumulative_pass_nr();
+        resources
+            .realtime_sr
+            .begin_active_frame(resources.current_pass);
         let source_uploaded = resources.ensure_source_texture(
             device,
             queue,
@@ -424,8 +238,29 @@ impl CallbackTrait for GpuEffectCallback {
         #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
         let _ = source_uploaded;
 
+        resources.request_linear_downscale = self.linear_downscale;
+        resources.request_background_refine = self.background_refine;
         let output_size = output_size_for_effects(self.image_size, self.effects);
-        let display_rect = viewport_rect(self.rect, screen_descriptor);
+        let destination_rect = viewport_rect(self.rect, screen_descriptor);
+        let display_rect = self
+            .inspection
+            .map_or(destination_rect, |inspection| GpuDisplayRect {
+                origin: [0, 0],
+                visible_size: inspection.reference_size,
+                sample_offset: [0, 0],
+                full_size: inspection.reference_size,
+            });
+        let source_slot = if self.inspection.is_some() {
+            self.draw_id ^ 0xa53e_2389_a148_f7d0
+        } else {
+            self.draw_id
+        };
+        resources
+            .display_scale_capture
+            .begin_draw(&self.ctx, source_slot, self.source_key);
+        resources.request_inspection = self
+            .inspection
+            .map(|inspection| (inspection, destination_rect, self.draw_id));
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         let scale_plan = WgpuScalePlan::resolve(
             output_size,
@@ -442,7 +277,7 @@ impl CallbackTrait for GpuEffectCallback {
             let draw_state = resources.prepare_draw_state(
                 device,
                 queue,
-                self.draw_id,
+                source_slot,
                 egui_encoder,
                 self.source_key,
                 source_bind_group,
@@ -458,8 +293,22 @@ impl CallbackTrait for GpuEffectCallback {
                 self.deband,
                 &self.ctx,
             );
+            let draw_state = if let Some(inspection) = self.inspection {
+                resources.prepare_inspection_draw(
+                    device,
+                    queue,
+                    egui_encoder,
+                    self.draw_id,
+                    draw_state,
+                    inspection,
+                    destination_rect,
+                )
+            } else {
+                draw_state
+            };
             resources.insert_draw_state(self.draw_id, draw_state);
         }
+        resources.display_scale_capture.publish(&self.ctx);
         #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
         perf_trace::record_duration(
             "gpu_effect_prepare",
@@ -494,6 +343,19 @@ impl CallbackTrait for GpuEffectCallback {
         Vec::new()
     }
 
+    fn finish_prepare(
+        &self,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _encoder: &mut wgpu::CommandEncoder,
+        callback_resources: &mut CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        if let Some(resources) = callback_resources.get_mut::<GpuPaintResources>() {
+            resources.finish_normal_sr_frame(&self.ctx);
+        }
+        Vec::new()
+    }
+
     fn paint(
         &self,
         _info: PaintCallbackInfo,
@@ -522,7 +384,14 @@ struct GpuPaintResources {
     intermediate_pipeline: wgpu::RenderPipeline,
     /// Deband pre-pass pipeline (fp16 intermediate target since V12), sharing the
     /// effect pipeline layout so the source bind group feeds it unchanged.
-    deband_pipeline: wgpu::RenderPipeline,
+    deband_pipeline: Option<wgpu::RenderPipeline>,
+    request_linear_downscale: bool,
+    request_background_refine: bool,
+    request_inspection: Option<(GpuInspection, GpuDisplayRect, u64)>,
+    inspection_pipeline: Option<wgpu::RenderPipeline>,
+    display_pipeline_backup: Option<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    display_scale_capture: display_status::DisplayScaleCapture,
+    refine: refine::RefineCoordinator,
     source_textures: LruCache<GpuPaintSourceKey, GpuSourceTexture>,
     source_texture_bytes: usize,
     draw_bind_groups: LruCache<u64, GpuDrawState>,
@@ -553,7 +422,7 @@ fn draw_id(
     wgpu_upscale_method: WgpuUpscaleMethod,
     wgpu_downscale_method: WgpuDownscaleMethod,
     fixed_2x_sr_min_scale_pct: u32,
-    deband: DebandStrength,
+    deband: ResolvedDeband,
     zoom_in_motion: bool,
     slot: u8,
 ) -> u64 {
@@ -570,7 +439,7 @@ fn draw_id(
     fixed_2x_sr_min_scale_pct.hash(&mut hasher);
     // Distinct draw states per strength so a strength change re-renders instead
     // of reusing the previous strength's cached draw.
-    deband.token().hash(&mut hasher);
+    deband.hash(&mut hasher);
     // The bool changes which pipeline renders (cached mipmap sample vs. the
     // quality downscale), so distinct draw states must not collide.
     zoom_in_motion.hash(&mut hasher);

@@ -169,6 +169,7 @@ struct WinitHostApp {
     // first show lands directly at the saved rect on the correct monitor. See
     // `glow_window::reveal_main_window`.
     startup_placement: glow_window::StartupPlacement,
+    monitor_color: Option<super::monitor_color::MonitorColor>,
 }
 
 enum Stage {
@@ -220,6 +221,7 @@ impl WinitHostApp {
             wgpu_direct,
             started_at: Instant::now(),
             stage: None,
+            monitor_color: None,
             prewarm_rx: None,
             prewarmed_wgpu: None,
             metrics: WinitHostMetrics::default(),

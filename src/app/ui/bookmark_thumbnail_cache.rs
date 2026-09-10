@@ -97,6 +97,11 @@ fn decode_thumbnail_png(bytes: &[u8]) -> Result<ColorImage, String> {
 
 #[cfg(not(test))]
 fn bookmark_thumbnail_cache_dir() -> PathBuf {
+    if let Some(directory) = crate::core::profile::override_directory()
+        .expect("invalid profile override: refusing to use normal cache")
+    {
+        return directory.join("cache/bookmark-thumbnails");
+    }
     ProjectDirs::from("", "", "SuiSuiView")
         .map(|dirs| dirs.cache_dir().join("bookmark-thumbnails"))
         .unwrap_or_else(|| PathBuf::from("SuiSuiView-bookmark-thumbnails-cache"))
@@ -104,6 +109,11 @@ fn bookmark_thumbnail_cache_dir() -> PathBuf {
 
 #[cfg(test)]
 fn bookmark_thumbnail_cache_dir() -> PathBuf {
+    if let Some(directory) = crate::core::profile::override_directory()
+        .expect("invalid profile override: refusing to use normal cache")
+    {
+        return directory.join("cache/bookmark-thumbnails");
+    }
     std::env::temp_dir().join(format!(
         "suisuiview-bookmark-thumbnails-test-{}",
         std::process::id()

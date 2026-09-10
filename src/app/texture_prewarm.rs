@@ -4,9 +4,11 @@ use super::{
     gpu_visual_needs_wgsl, rect_target_size, texture_options_for_sampling, SuiSuiViewApp,
     TextureCacheKey, TextureEntry, ViewMode, BYTES_PER_RGBA_PIXEL,
 };
-use crate::core::deband::DebandStrength;
+use crate::core::deband::ResolvedDeband;
 use crate::core::effects::ViewEffects;
-use crate::core::state::{WgpuUpscaleMethod, WGPU_DOWNSCALE_METHOD};
+use crate::core::state::WgpuUpscaleMethod;
+#[cfg(test)]
+use crate::core::state::WGPU_DOWNSCALE_METHOD;
 use crate::core::worker::{NavigationDirection, MAX_TARGET_LONG_EDGE};
 use egui::{self, ImageData, Pos2, Rect, Vec2};
 use std::sync::Arc;
@@ -79,7 +81,7 @@ impl SuiSuiViewApp {
             && perf::texture_prewarm_enabled()
             && self.source.is_some()
             && self.target_long_edge <= MAX_TARGET_LONG_EDGE
-            && self.effects == ViewEffects::default()
+            && self.display_effects() == ViewEffects::default()
             && self.active_wgpu_upscale_method() == WgpuUpscaleMethod::None
             && !self.debug_compare.enabled
             && self.transition.is_none()
@@ -117,7 +119,7 @@ impl SuiSuiViewApp {
         };
         let texture_key = TextureCacheKey {
             page: best_key,
-            effects: self.effects,
+            effects: self.display_effects(),
             sampling: self.texture_sampling_for_page_key(best_key),
         };
         if self.textures.peek(&texture_key).is_some() {
@@ -127,12 +129,13 @@ impl SuiSuiViewApp {
         let Some(page) = self.decoded_pages.peek(&best_key) else {
             return false;
         };
-        if !prewarm_uses_egui_texture(
+        if !prewarm_uses_egui_texture_with_downscale(
             page.image_size(),
             Vec2::new(page.original_width as f32, page.original_height as f32),
             scale,
             ctx.pixels_per_point(),
             self.active_deband(),
+            self.settings.expert_downscale.gpu.method(),
         ) {
             // WGSL uses its own source texture; this egui texture would never
             // be consumed at the predicted scale. Keep decoded-page prefetch.
@@ -156,7 +159,8 @@ impl SuiSuiViewApp {
         let texture = ctx.load_texture(
             format!(
                 "page-{index}-{}-{:?}",
-                best_key.target_long_edge, self.effects
+                best_key.target_long_edge,
+                self.display_effects()
             ),
             ImageData::Color(image),
             texture_options_for_sampling(texture_key.sampling),
@@ -175,12 +179,13 @@ impl SuiSuiViewApp {
     }
 }
 
-fn prewarm_uses_egui_texture(
+fn prewarm_uses_egui_texture_with_downscale(
     image_size: [usize; 2],
     original_size: Vec2,
     spread_scale: Option<f32>,
     pixels_per_point: f32,
-    deband: DebandStrength,
+    deband: ResolvedDeband,
+    downscale: crate::core::state::WgpuDownscaleMethod,
 ) -> bool {
     let Some(scale) = spread_scale else {
         // Glow, temporary fallback, or unknown layout: retain ordinary prewarm.
@@ -196,7 +201,7 @@ fn prewarm_uses_egui_texture(
         ),
         ViewEffects::default(),
         WgpuUpscaleMethod::None,
-        WGPU_DOWNSCALE_METHOD,
+        downscale,
         1.0,
         deband,
     )
@@ -266,7 +271,7 @@ mod tests {
             original,
             Some(0.25),
             1.0,
-            DebandStrength::Off
+            ResolvedDeband::Off
         ));
         // Native and near-native display keep useful egui prewarm, including DPI scaling.
         for (scale, dpi) in [(0.5, 1.0), (0.475, 1.0), (0.25, 2.0)] {
@@ -275,7 +280,7 @@ mod tests {
                 original,
                 Some(scale),
                 dpi,
-                DebandStrength::Off
+                ResolvedDeband::Off
             ));
         }
         assert!(prewarm_uses_egui_texture(
@@ -283,12 +288,12 @@ mod tests {
             original,
             None,
             1.0,
-            DebandStrength::Off
+            ResolvedDeband::Off
         ));
         for deband in [
-            DebandStrength::Weak,
-            DebandStrength::Medium,
-            DebandStrength::Strong,
+            ResolvedDeband::Weak,
+            ResolvedDeband::Medium,
+            ResolvedDeband::Strong,
         ] {
             assert!(!prewarm_uses_egui_texture(
                 decoded,
@@ -346,4 +351,22 @@ mod tests {
 
         assert_eq!(pages, vec![1, 2]);
     }
+}
+
+#[cfg(test)]
+fn prewarm_uses_egui_texture(
+    image_size: [usize; 2],
+    original_size: Vec2,
+    spread_scale: Option<f32>,
+    pixels_per_point: f32,
+    deband: ResolvedDeband,
+) -> bool {
+    prewarm_uses_egui_texture_with_downscale(
+        image_size,
+        original_size,
+        spread_scale,
+        pixels_per_point,
+        deband,
+        WGPU_DOWNSCALE_METHOD,
+    )
 }

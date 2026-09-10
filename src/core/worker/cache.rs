@@ -246,6 +246,20 @@ mod tests {
         assert_ne!(normal, lanczos);
         assert_ne!(normal, upscaled);
         assert_ne!(normal, conservative_prepare);
+        let format_override = page_cache_key(
+            "book",
+            7,
+            PageId(1),
+            2048,
+            DecodeOptions {
+                fast_prepare_overrides: crate::core::state::FastPrepareOverrides {
+                    jpeg: crate::core::state::FastPrepareOverride::Off,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        );
+        assert_ne!(normal, format_override);
 
         let zune_jpeg = page_cache_key(
             "book",

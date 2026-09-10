@@ -7,7 +7,7 @@ use super::{
 use crate::core::effects::{
     apply_effects_to_image, compose_images_horizontally, transformed_page_size, ViewEffects,
 };
-use crate::core::state::{PageTransitionStyle, WGPU_DOWNSCALE_METHOD};
+use crate::core::state::PageTransitionStyle;
 use crate::core::worker::MAX_TARGET_LONG_EDGE;
 use egui::{
     self, Align2, Color32, ColorImage, FontId, ImageData, Pos2, Rect, Sense, Stroke, StrokeKind,
@@ -20,6 +20,7 @@ use std::time::Instant;
 
 mod interaction;
 mod model;
+mod page_visual;
 mod paint_helpers;
 mod strip;
 mod transition;
@@ -101,7 +102,10 @@ impl SuiSuiViewApp {
         let key = self.page_key_at(index, target_long_edge)?;
         let best_key = self.best_page_key(key)?;
         let page = self.decoded_pages.peek(&best_key)?;
-        Some(apply_effects_to_image(&page.color_image(), self.effects))
+        Some(apply_effects_to_image(
+            &page.color_image(),
+            self.display_effects(),
+        ))
     }
 
     pub(in crate::app) fn compose_spread_image(
@@ -191,217 +195,6 @@ impl SuiSuiViewApp {
         worker_center_page_for_mode(self.current_page, self.view_mode, self.smart_spread_phase)
     }
 
-    fn page_visual(
-        &mut self,
-        ctx: &egui::Context,
-        index: usize,
-        target_long_edge: u32,
-    ) -> PageVisual {
-        let Some(key) = self.page_key_at(index, target_long_edge) else {
-            return PageVisual::Loading { index };
-        };
-        if let Some(visual) = self.original_texture_only_visual(index, key) {
-            return visual;
-        }
-        let Some(best_key) = self.best_page_key(key) else {
-            if let Some(error) = self.page_errors.get(&key) {
-                return PageVisual::Failed {
-                    index,
-                    message: error.clone(),
-                };
-            }
-            return PageVisual::Loading { index };
-        };
-        let use_wgsl_effects = self.can_paint_wgsl_effects();
-        let sampling = self.texture_sampling_for_page_key(best_key);
-        let texture_key = TextureCacheKey {
-            page: best_key,
-            effects: self.effects,
-            sampling,
-        };
-
-        if !use_wgsl_effects {
-            if let Some(texture) = self
-                .textures
-                .get(&texture_key)
-                .map(|entry| entry.texture.clone())
-            {
-                let page = self.decoded_pages.get(&best_key);
-                if let Some(page) = page {
-                    let size = transformed_page_size(
-                        page.original_width as f32,
-                        page.original_height as f32,
-                        self.effects.transform,
-                    );
-                    #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-                    perf::record_open_to_first_visible_if_pending(
-                        &mut self.open_to_first_visible_trace,
-                        self.book_id.as_deref(),
-                        index,
-                        best_key.target_long_edge,
-                        false,
-                    );
-                    return PageVisual::Ready {
-                        texture,
-                        size,
-                        render_info: Some(PageRenderInfo::from_page(index, best_key, page)),
-                    };
-                }
-            }
-        }
-
-        let page = self
-            .decoded_pages
-            .get(&best_key)
-            .cloned()
-            .expect("best page key should exist in decoded cache");
-        if use_wgsl_effects {
-            let (wgpu_upscale_method, wgpu_upscale_origin) =
-                self.book_aware_wgpu_upscale_method(self.active_wgpu_upscale_method());
-            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-            perf::record_open_to_first_visible_if_pending(
-                &mut self.open_to_first_visible_trace,
-                self.book_id.as_deref(),
-                index,
-                best_key.target_long_edge,
-                true,
-            );
-            return PageVisual::ReadyGpu {
-                source_key: GpuPaintSourceKey {
-                    book: self.gpu_paint_book_key(),
-                    page: best_key,
-                },
-                image_size: page.image_size(),
-                pixels: page.pixels.clone(),
-                size: transformed_page_size(
-                    page.original_width as f32,
-                    page.original_height as f32,
-                    self.effects.transform,
-                ),
-                effects: self.effects,
-                wgpu_upscale_method,
-                wgpu_upscale_origin,
-                wgpu_downscale_method: WGPU_DOWNSCALE_METHOD,
-                render_info: PageRenderInfo::from_page(index, best_key, &page),
-            };
-        }
-        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        let color_image_started = Instant::now();
-        let base_image = page.color_image();
-        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        perf::record_color_image_prepare(
-            color_image_started,
-            index,
-            best_key.target_long_edge,
-            self.effects != ViewEffects::default(),
-        );
-        let image = if self.effects == ViewEffects::default() {
-            Arc::new(base_image)
-        } else {
-            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-            let effects_started = Instant::now();
-            let image = Arc::new(apply_effects_to_image(&base_image, self.effects));
-            #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-            perf::record_page_effects_cpu(effects_started, index, best_key.target_long_edge);
-            image
-        };
-
-        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        let texture_started = Instant::now();
-        let texture_byte_size = image
-            .size
-            .iter()
-            .copied()
-            .product::<usize>()
-            .saturating_mul(BYTES_PER_RGBA_PIXEL);
-        let texture = ctx.load_texture(
-            format!(
-                "page-{index}-{}-{:?}",
-                best_key.target_long_edge, self.effects
-            ),
-            ImageData::Color(image),
-            texture_options_for_sampling(sampling),
-        );
-        ctx.request_repaint_after(super::TEXTURE_PRESENT_REPAINT_DELAY);
-        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        perf::record_texture_load(texture_started, index, best_key.target_long_edge);
-        self.textures.put(
-            texture_key,
-            TextureEntry {
-                texture: texture.clone(),
-                byte_size: texture_byte_size,
-            },
-        );
-        self.prune_texture_cache();
-        let dropped_original = self.drop_original_after_texture_upload_if_enabled(best_key);
-        #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
-        let _ = dropped_original;
-        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        self.record_cache_snapshot(if dropped_original {
-            "original_texture_only_drop"
-        } else {
-            "texture_upload"
-        });
-
-        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        perf::record_open_to_first_visible_if_pending(
-            &mut self.open_to_first_visible_trace,
-            self.book_id.as_deref(),
-            index,
-            best_key.target_long_edge,
-            false,
-        );
-        PageVisual::Ready {
-            texture,
-            size: transformed_page_size(
-                page.original_width as f32,
-                page.original_height as f32,
-                self.effects.transform,
-            ),
-            render_info: Some(PageRenderInfo::from_page(index, best_key, &page)),
-        }
-    }
-
-    fn original_texture_only_visual(
-        &mut self,
-        index: usize,
-        requested: PageCacheKey,
-    ) -> Option<PageVisual> {
-        if !perf::original_texture_only_enabled()
-            || !self
-                .current_prepared_target_intent()
-                .is_original_inspection()
-            || requested.target_long_edge <= MAX_TARGET_LONG_EDGE
-        {
-            return None;
-        }
-        let texture_key = TextureCacheKey {
-            page: requested,
-            effects: self.effects,
-            sampling: self.texture_sampling_for_page_key(requested),
-        };
-        let texture = self
-            .textures
-            .get(&texture_key)
-            .map(|entry| entry.texture.clone())?;
-        let metrics = self.page_metrics.get(&requested.page_id).copied()?;
-        #[cfg(not(any(feature = "perf-dev", feature = "perf-diagnostics")))]
-        let _ = index;
-        #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
-        perf::record_open_to_first_visible_if_pending(
-            &mut self.open_to_first_visible_trace,
-            self.book_id.as_deref(),
-            index,
-            requested.target_long_edge,
-            false,
-        );
-        Some(PageVisual::Ready {
-            texture,
-            size: transformed_page_size(metrics.width, metrics.height, self.effects.transform),
-            render_info: None,
-        })
-    }
-
     pub(in crate::app) fn show_viewer(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let available = ui.available_size();
         let (rect, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
@@ -437,18 +230,14 @@ impl SuiSuiViewApp {
         }
         self.handle_viewer_pointer(ui, &response);
 
-        if self.debug_compare.enabled {
-            self.current_view_state = None;
-            self.transition = None;
-            self.paint_debug_compare(ctx, &painter, rect);
-            return;
-        }
+        self.begin_compare_frame();
 
         if self.view_mode == ViewMode::VerticalStrip {
             // Continuous vertical scroll owns its own layout and paint; the paged
             // transition/spread/pan path below is skipped entirely. Page arrows are
             // meaningless in a strip, so only the filename overlay is drawn.
             self.paint_strip(ctx, &painter, rect);
+            self.paint_debug_compare_overlay(ctx, &painter, rect);
             self.paint_filename_overlay(ctx, &painter, rect);
             return;
         }
@@ -526,6 +315,7 @@ impl SuiSuiViewApp {
             );
         }
         self.paint_filename_overlay(ctx, &painter, rect);
+        self.paint_debug_compare_overlay(ctx, &painter, rect);
         self.paint_page_arrows(ctx, &painter, rect);
     }
 
@@ -668,6 +458,15 @@ impl SuiSuiViewApp {
         settled: bool,
         slot: u8,
     ) -> PagePaintOutcome {
+        if let Some(fully_drawn) =
+            self.paint_compare_page(ctx, painter, viewport, page_rect, &visual)
+        {
+            return PagePaintOutcome {
+                fully_drawn,
+                used_wgpu_callback: true,
+                needs_sibling_visible_hold: false,
+            };
+        }
         let size = page_visual_size(&visual);
         let tint = Color32::from_white_alpha((alpha.clamp(0.0, 1.0) * 255.0) as u8);
         // The pixel grid is a steady-state inspection aid; suppress it while a spread animates.
@@ -760,6 +559,8 @@ impl SuiSuiViewApp {
                     ctx,
                     painter,
                     GpuPaintRequest {
+                        inspection: None,
+                        linear_downscale: self.settings.linear_light_downscale,
                         rect: page_rect,
                         slot,
                         source_key,

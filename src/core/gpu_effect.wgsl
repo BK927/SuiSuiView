@@ -5,6 +5,8 @@ struct Params {
     upscale: vec4<u32>,
     opacity: vec4<f32>,
     display: vec4<f32>,
+    tone: vec4<f32>,
+    levels: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -186,8 +188,21 @@ fn effect_pixel(dst_x: u32, dst_y: u32) -> vec4<f32> {
         color = rcas_sharpen(dst_x, dst_y);
     }
 
+    if params.transform_filter.w != 0u {
+        let original = transformed_pixel(dst_x, dst_y);
+        if params.tone.w != 1.0 {
+            color = vec4<f32>(clamp(mix(original.rgb, color.rgb, params.tone.w), vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
+        }
+        color.a = original.a;
+    }
+    if params.levels.x != 0.0 || params.levels.y != 1.0 {
+        color = vec4<f32>(clamp((color.rgb - params.levels.x) / max(params.levels.y - params.levels.x, 1.0 / 255.0), vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
+    }
+    if params.tone.x != 0.0 || params.tone.y != 1.0 {
+        color = vec4<f32>(clamp((color.rgb - 0.5) * params.tone.y + 0.5 + params.tone.x, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
+    }
     if params.color_origin.x != 0u {
-        color = vec4<f32>(pow(color.rgb, vec3<f32>(1.0 / 1.2)), color.a);
+        color = vec4<f32>(pow(color.rgb, vec3<f32>(params.tone.z)), color.a);
     }
     if params.color_origin.y != 0u {
         color = vec4<f32>(vec3<f32>(1.0) - color.rgb, color.a);

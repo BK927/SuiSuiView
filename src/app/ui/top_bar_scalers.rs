@@ -11,7 +11,30 @@ impl SuiSuiViewApp {
     pub(in crate::app::ui) fn show_scale_group(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         let i18n = self.i18n();
         let current_view = self.current_view_state;
-        let summary = top_bar_scaler_summary(current_view.as_ref(), i18n);
+        let refine = crate::app::gpu_paint::refine::status(ctx);
+        let summary = if self.settings.background_refine && refine.pending > 0 {
+            "FSR1 EASU + RCAS".to_owned()
+        } else {
+            top_bar_scaler_summary(current_view.as_ref(), i18n)
+        };
+        let mut tooltip = top_bar_scaler_tooltip(current_view.as_ref(), i18n);
+        tooltip.push_str(&format!(
+            "\n{}: GPU Pyramid {:?} · CPU {:?}",
+            i18n.text("adjust.selected_downscale"),
+            self.settings.expert_downscale.gpu,
+            self.settings.expert_downscale.cpu
+        ));
+        if self.zoom_settle_repaint_delay().is_some() {
+            tooltip.push_str(&format!("\n{}", i18n.text("adjust.motion_downscale")));
+        } else if matches!(
+            self.fit_mode,
+            crate::core::state::FitMode::Manual | crate::core::state::FitMode::Original
+        ) {
+            tooltip.push_str(&format!("\n{}", i18n.text("adjust.inspection_bypass")));
+        }
+        if self.settings.background_refine {
+            tooltip.push_str(&format!("\n{}", self.refinement_status_text(ctx)));
+        }
         ui.menu_button(icons::icon_text(icons::RESIZE_SMALL, &summary), |ui| {
             self.hold_top_bar_open_for_menu();
             ui.set_min_width(320.0);
@@ -40,7 +63,27 @@ impl SuiSuiViewApp {
             .on_disabled_hover_text(i18n.text("topbar.scale.wgpu_disabled"));
         })
         .response
-        .on_hover_text(top_bar_scaler_tooltip(current_view.as_ref(), i18n));
+        .on_hover_ui(|ui| {
+            ui.label(tooltip);
+            if matches!(self.settings.renderer_mode, RendererMode::Wgpu) {
+                crate::app::gpu_paint::display_status::request_capture(ctx);
+                if let Some(snapshot) = crate::app::gpu_paint::display_status::latest(ctx) {
+                    let mut labels = Vec::new();
+                    for entry in snapshot.entries {
+                        let label = entry.label(i18n);
+                        if !labels.contains(&label) {
+                            labels.push(label);
+                        }
+                    }
+                    for label in labels {
+                        ui.label(format!(
+                            "{}: {label}",
+                            i18n.text("topbar.scale.current_display")
+                        ));
+                    }
+                }
+            }
+        });
     }
 
     fn show_cpu_filter_row(
@@ -117,18 +160,11 @@ fn top_bar_scaler_tooltip(current_view: Option<&CurrentViewState>, i18n: I18n) -
     let Some(current_view) = current_view else {
         return i18n.text("topbar.scale.current_unknown");
     };
-    let mut lines = vec![
-        format!(
-            "{}: {}",
-            i18n.text("topbar.scale.current_prepare"),
-            current_view.prepare_scale.label()
-        ),
-        format!(
-            "{}: {}",
-            i18n.text("topbar.scale.current_display"),
-            current_view.wgpu_scale.label()
-        ),
-    ];
+    let mut lines = vec![format!(
+        "{}: {}",
+        i18n.text("topbar.scale.current_prepare"),
+        current_view.prepare_scale.label()
+    )];
     if let Some(kernel) = glow_kernel_for_chip(current_view) {
         lines.push(i18n.with_vars(
             "topbar.scale.glow_kernel",
@@ -232,9 +268,7 @@ fn compact_wgpu_scale_state_label(state: WgpuScaleState, i18n: I18n) -> Option<S
             origin,
             substituted_below,
         )),
-        // The display downscaler is a fixed internal constant (C2), not a user
-        // choice: the chip says WHAT is happening in plain words; the tooltip
-        // still names the algorithm for the curious.
+        // Keep the chip compact; the hover shows the actual preparation branch.
         WgpuScaleState::Downscale(_method) => Some(i18n.text("topbar.scale.downscale")),
     }
 }
@@ -320,8 +354,7 @@ mod tests {
     use crate::app::KernelChoice;
     use crate::core::i18n::{I18n, ResolvedLanguage};
     use crate::core::state::{
-        AppSettings, CpuScaleFilter, DebandStrength, RendererMode, WgpuDownscaleMethod,
-        WgpuUpscaleMethod,
+        AppSettings, CpuScaleFilter, RendererMode, WgpuDownscaleMethod, WgpuUpscaleMethod,
     };
     use crate::core::worker::{DecodeBackend, PreparedTargetIntent};
 
@@ -485,7 +518,7 @@ mod tests {
             prepare_scale,
             wgpu_scale,
             glow_kernel: None,
-            deband: DebandStrength::Off,
+            deband: crate::core::deband::ResolvedDeband::Off,
             target_intent: PreparedTargetIntent::NormalNavigation,
         }
     }

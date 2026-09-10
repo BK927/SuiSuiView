@@ -122,26 +122,11 @@ pub(in crate::app) fn show_rendering_settings(
                             egui::ComboBox::from_id_salt("wgpu_upscale_method")
                                 .selected_text(selected_upscaler.settings_label_i18n(i18n))
                                 .show_ui(ui, |ui| {
-                                    for upscaler in WgpuUpscaleMethod::SETTINGS_CHOICES {
-                                        if upscaler == WgpuUpscaleMethod::None {
-                                            continue;
-                                        }
-                                        let option_response = ui.selectable_value(
-                                            &mut selected_upscaler,
-                                            upscaler,
-                                            upscaler.settings_label_i18n(i18n),
-                                        );
-                                        selected_upscaler_changed |= option_response.changed();
-                                        if upscaler == WgpuUpscaleMethod::WgslSrLabSpanX2 {
-                                            option_response.on_hover_text(
-                                                i18n.text("settings.rendering.slow_span.help"),
-                                            );
-                                        } else if upscaler.experimental_selectable() {
-                                            option_response.on_hover_text(i18n.text(
-                                                "settings.rendering.experimental_upscaler.help",
-                                            ));
-                                        }
-                                    }
+                                    selected_upscaler_changed |= super::scaler_catalog::show(
+                                        ui,
+                                        &mut selected_upscaler,
+                                        i18n,
+                                    );
                                 });
                         })
                         .response;

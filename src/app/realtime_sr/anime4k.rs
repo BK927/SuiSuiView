@@ -4,6 +4,10 @@ use wgpu::util::DeviceExt;
 
 const FEATURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+// Share the existing embedded models with the background builder.
+pub(super) static S_SHADER: &str = include_str!("../../core/anime4k_v32_cnn_x2_s.wgsl");
+pub(super) static M_SHADER: &str = include_str!("../../core/anime4k_v32_cnn_x2_m.wgsl");
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ConvParams {
@@ -21,9 +25,7 @@ impl Anime4kSRenderer {
     pub(super) fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("suisuiview-realtime-anime4k-v32-cnn-x2-s-shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
-                "../../core/anime4k_v32_cnn_x2_s.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(S_SHADER)),
         });
         let conv_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -270,9 +272,7 @@ impl Anime4kMRenderer {
     pub(super) fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("suisuiview-realtime-anime4k-v32-cnn-x2-m-shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
-                "../../core/anime4k_v32_cnn_x2_m.wgsl"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(M_SHADER)),
         });
         let conv_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
