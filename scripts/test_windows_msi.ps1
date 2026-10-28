@@ -52,7 +52,8 @@ function Invoke-Msi([string]$Name, [string[]]$Arguments, [bool]$ExpectFailure = 
             $remove = [regex]::Match($text, '(?m)^Action start .*: RemoveExistingProducts\.')
             $failure = [regex]::Match($text, '(?m)^Action start .*: TestRollbackFailure\.')
             if (-not $remove.Success -or -not $failure.Success -or $remove.Index -ge $failure.Index -or
-                $text -notmatch 'Intentional disposable-runner rollback test' -or $text -notmatch 'Rollback:') {
+                $text -notmatch 'Intentional disposable-runner rollback test' -or
+                $text.Substring($failure.Index) -notmatch 'Executing op: RollbackInfo\(') {
                 throw 'Missing evidence of prior-product removal, injected late failure and rollback'
             }
         }
