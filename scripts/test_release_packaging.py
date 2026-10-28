@@ -15,6 +15,7 @@ class PackagingGates(unittest.TestCase):
                          'target/release-validation/cargo-test.txt',
                          'target/release-validation/build-artifacts.jsonl',
                          'target/release-validation/licenses.json',
+                'target/release-validation/file-associations.json',
                          'target/release-validation/decoder-smoke/summary.json']
             hashes = {}
             for name in filenames:

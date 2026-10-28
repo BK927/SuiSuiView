@@ -604,7 +604,7 @@ impl ZipCbzSource {
             if file.is_dir() {
                 continue;
             }
-            let Some(name) = normalize_zip_name(file.name()) else {
+            let Some(name) = normalize_zip_name(&file.name()?) else {
                 continue;
             };
             if !is_supported_image_name(&name) {

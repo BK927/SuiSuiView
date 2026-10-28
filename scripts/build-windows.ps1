@@ -10,6 +10,7 @@ Push-Location $repo
 $previousFlags = $env:RUSTFLAGS
 $previousEncodedFlags = $env:CARGO_ENCODED_RUSTFLAGS
 $previousTargetDir = $env:CARGO_TARGET_DIR
+$previousAssociationManifest = $env:SUISUIVIEW_ASSOCIATIONS_MANIFEST
 try {
     $compiler = rustc --version
     if ($LASTEXITCODE -ne 0 -or $compiler -notmatch '^rustc 1\.99\.1 ') {
@@ -30,6 +31,7 @@ try {
     if (Test-Path -LiteralPath $receiptPath) { Remove-Item -LiteralPath $receiptPath }
     cargo build --release --locked --target $target --bin suisuiview --bin suisuiview-cli --message-format=json-render-diagnostics > target/release-validation/build-artifacts.jsonl
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
+    $env:SUISUIVIEW_ASSOCIATIONS_MANIFEST = Join-Path $repo 'target/release-validation/file-associations.json'
     cargo test --release --locked --target $target --lib --bin suisuiview --bin suisuiview-cli 2>&1 |
         Tee-Object target/release-validation/cargo-test.txt
     if ($LASTEXITCODE -ne 0) { throw 'Regression tests failed.' }
@@ -47,6 +49,7 @@ try {
         'target/release-validation/cargo-test.txt',
         'target/release-validation/build-artifacts.jsonl',
         'target/release-validation/licenses.json',
+        'target/release-validation/file-associations.json',
         'target/release-validation/decoder-smoke/summary.json'
     )
     $hashes = @{}
@@ -62,5 +65,6 @@ try {
     $env:RUSTFLAGS = $previousFlags
     $env:CARGO_ENCODED_RUSTFLAGS = $previousEncodedFlags
     $env:CARGO_TARGET_DIR = $previousTargetDir
+    $env:SUISUIVIEW_ASSOCIATIONS_MANIFEST = $previousAssociationManifest
     Pop-Location
 }

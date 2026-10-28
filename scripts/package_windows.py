@@ -40,6 +40,7 @@ def verify_receipt(receipt: dict, commit: str, root: Path) -> None:
                 'target/release-validation/cargo-test.txt',
                 'target/release-validation/build-artifacts.jsonl',
                 'target/release-validation/licenses.json',
+                'target/release-validation/file-associations.json',
                 'target/release-validation/decoder-smoke/summary.json'}
     if set(receipt.get('files', {})) != required:
         raise RuntimeError('Incomplete build/test receipt')
@@ -181,6 +182,7 @@ def main() -> None:
         if (rust_docs / 'COPYRIGHT-library.html').exists():
             shutil.copyfile(rust_docs / 'COPYRIGHT-library.html', rust_licenses / 'COPYRIGHT-library.html')
         shutil.copyfile(exe, bundle / 'suisuiview.exe')
+        shutil.copyfile(validation / 'file-associations.json', bundle / 'file-associations.json')
         (bundle / 'THIRD_PARTY_LICENSES.txt').write_text(licenses, encoding='utf-8')
         (bundle / 'dependency-inventory.json').write_text(json.dumps(inventory, indent=2), encoding='utf-8')
         source_archive = dist / f'{source_name}.tar.gz'
