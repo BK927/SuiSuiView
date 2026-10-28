@@ -136,13 +136,28 @@ fn windows_locale_name() -> Option<String> {
     // The first preferred UI language is authoritative.
     let mut count = 0;
     let mut length = 0;
-    if unsafe { GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, std::ptr::null_mut(), &mut length) } == 0
+    if unsafe {
+        GetUserPreferredUILanguages(
+            MUI_LANGUAGE_NAME,
+            &mut count,
+            std::ptr::null_mut(),
+            &mut length,
+        )
+    } == 0
         || length == 0
     {
         return None;
     }
     let mut buffer = vec![0_u16; length as usize];
-    if unsafe { GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, buffer.as_mut_ptr(), &mut length) } == 0 {
+    if unsafe {
+        GetUserPreferredUILanguages(
+            MUI_LANGUAGE_NAME,
+            &mut count,
+            buffer.as_mut_ptr(),
+            &mut length,
+        )
+    } == 0
+    {
         return None;
     }
     let end = buffer.iter().position(|&value| value == 0)?;
@@ -170,7 +185,10 @@ mod tests {
     #[test]
     fn catalogs_have_unique_nonempty_entries_and_matching_variables() {
         fn variables(text: &str) -> std::collections::BTreeSet<&str> {
-            text.split('{').skip(1).filter_map(|tail| tail.split_once('}').map(|(name, _)| name)).collect()
+            text.split('{')
+                .skip(1)
+                .filter_map(|tail| tail.split_once('}').map(|(name, _)| name))
+                .collect()
         }
         for entries in [CATALOG_KO_KR, CATALOG_EN_US] {
             let mut keys = std::collections::BTreeSet::new();
@@ -187,8 +205,12 @@ mod tests {
 
     #[test]
     fn language_selection_handles_korean_locales_and_manual_overrides() {
-        for locale in ["ko", "ko-KR", "KO_kr", " ko-KP "] { assert!(locale_is_korean(locale)); }
-        for locale in ["en-US", "ja-JP", "", "kok-IN"] { assert!(!locale_is_korean(locale)); }
+        for locale in ["ko", "ko-KR", "KO_kr", " ko-KP "] {
+            assert!(locale_is_korean(locale));
+        }
+        for locale in ["en-US", "ja-JP", "", "kok-IN"] {
+            assert!(!locale_is_korean(locale));
+        }
         assert_eq!(Language::KoKr.resolve(), ResolvedLanguage::KoKr);
         assert_eq!(Language::EnUs.resolve(), ResolvedLanguage::EnUs);
     }

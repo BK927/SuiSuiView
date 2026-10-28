@@ -99,7 +99,7 @@ try {
 
     $repairFile = Join-Path $installDir 'SOURCE.txt'
     Remove-Item -LiteralPath $repairFile
-    Invoke-Msi 'repair' @('/fa', "`"$candidate`"")
+    Invoke-Msi 'repair' @('/i', "`"$candidate`"")
     Assert-Payload
     Invoke-Msi 'uninstall' @('/x', "`"$candidate`"")
     if (Test-Path -LiteralPath (Join-Path $installDir 'suisuiview.exe')) { throw 'Uninstall left the executable' }

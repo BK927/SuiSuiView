@@ -52,9 +52,9 @@ def add_ui(product):
                  Text=button, Default='yes')
         node(c, 'Publish', Event=event, Value=value).text = '1'
         return d
-    d = dialog('WelcomeDlg', 'Install SuiSuiView for your Windows account.\n\n'
+    d = dialog('WelcomeDlg', 'Install or repair SuiSuiView for your Windows account.\n\n'
                'No administrator access is required. Existing default apps are preserved.\n'
-               'This free build has no automatic updater.', 'Install', 'EndDialog', 'Return')
+               'This free build has no automatic updater.', 'Install / Repair', 'EndDialog', 'Return')
     c = node(d, 'Control', Id='Cancel', Type='PushButton', X=160, Y=145, Width=90, Height=20,
              Text='Cancel', Cancel='yes')
     node(c, 'Publish', Event='EndDialog', Value='Exit').text = '1'
@@ -64,7 +64,7 @@ def add_ui(product):
            'Use the Windows Installer log to diagnose the failure.', 'Close', 'EndDialog', 'Return')
     dialog('CancelDlg', 'Setup was cancelled.', 'Close', 'EndDialog', 'Return')
     seq = node(ui, 'InstallUISequence')
-    node(seq, 'Show', Dialog='WelcomeDlg', Before='ExecuteAction').text = 'NOT Installed'
+    node(seq, 'Show', Dialog='WelcomeDlg', Before='ExecuteAction').text = 'NOT REMOVE'
     node(seq, 'Show', Dialog='ExitDlg', OnExit='success').text = 'NOT REMOVE'
     node(seq, 'Show', Dialog='ErrorDlg', OnExit='error').text = '1'
     node(seq, 'Show', Dialog='CancelDlg', OnExit='cancel').text = '1'
@@ -180,6 +180,16 @@ def build(payload: Path, associations: dict, version: str, output: Path, fail=Fa
     # wixl schedules removal before the transaction by default. Move it after
     # InstallInitialize so a failed upgrade can roll back the prior product.
     sql(output, 'UPDATE `InstallExecuteSequence` SET `Sequence` = 1501 WHERE `Action` = \'RemoveExistingProducts\'')
+    # Reopening the same-version MSI performs a real repair, including missing
+    # files, without requiring the user to know msiexec's /fa option.
+    for action, prop, value, sequence in [
+        ('RepairInstalledMode', 'REINSTALLMODE', 'amus', 750),
+        ('RepairInstalledFiles', 'REINSTALL', 'ALL', 751),
+    ]:
+        sql(output, 'INSERT INTO `CustomAction` (`Action`, `Type`, `Source`, `Target`) VALUES '
+            f"({sql_string(action)}, 51, {sql_string(prop)}, {sql_string(value)})")
+        sql(output, 'INSERT INTO `InstallExecuteSequence` (`Action`, `Condition`, `Sequence`) VALUES '
+            f"({sql_string(action)}, {sql_string('Installed AND NOT REMOVE AND NOT ' + prop)}, {sequence})")
     # Registry table "-" rows remove only our dedicated subtrees on uninstall.
     # Name-specific NULL rows remove our optional OpenWith values on uninstall.
     for index, (key, name) in enumerate(cleanup):

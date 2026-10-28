@@ -674,4 +674,3 @@ pub(super) const CATALOG_KO_KR: &[(&str, &str)] = &[
     ("label.mouse.ctrl_wheel_up", "Ctrl+휠 위"),
     ("label.mouse.ctrl_wheel_down", "Ctrl+휠 아래"),
 ];
-

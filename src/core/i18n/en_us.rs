@@ -677,4 +677,3 @@ pub(super) const CATALOG_EN_US: &[(&str, &str)] = &[
     ("label.mouse.ctrl_wheel_up", "Ctrl+wheel up"),
     ("label.mouse.ctrl_wheel_down", "Ctrl+wheel down"),
 ];
-
