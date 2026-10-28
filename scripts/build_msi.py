@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -246,10 +247,21 @@ def main():
             # Test versions are never release assets and share the UpgradeCode.
             major, minor, patch = map(int, version.split('.'))
             older = f'{major}.{minor-1}.0' if patch == 0 and minor else f'{major}.{minor}.{max(0, patch-1)}'
+            if older == version and major:
+                older = f'{major-1}.255.65535'
             if older == version:
                 raise ValueError('No lower test version available')
-            build(payload, associations, older, args.test_fixtures.resolve() / 'older.msi')
-            build(payload, associations, f'{major}.{minor}.{patch+1}', args.test_fixtures.resolve() / 'rollback.msi', fail=True)
+            for label, test_version, fail in [('older', older, False), ('rollback', f'{major}.{minor}.{patch+1}', True)]:
+                fixture_payload = stage / f'fixture-{label}'
+                shutil.copytree(payload, fixture_payload)
+                # Different bytes and an extra file prove that replacement and
+                # rollback happened, rather than merely retaining an untouched MSI.
+                marker = f'MSI TEST FIXTURE: {label} {test_version}'
+                with (fixture_payload / 'SOURCE.txt').open('a', encoding='utf-8') as file:
+                    file.write('\n' + marker + '\n')
+                (fixture_payload / 'msi-test-marker.txt').write_text(marker)
+                build(fixture_payload, associations, test_version,
+                      args.test_fixtures.resolve() / f'{label}.msi', fail=fail)
             (args.test_fixtures / 'versions.json').write_text(json.dumps({'older': older, 'current': version}))
 
 

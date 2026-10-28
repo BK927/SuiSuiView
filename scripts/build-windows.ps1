@@ -31,6 +31,7 @@ try {
     if (Test-Path -LiteralPath $receiptPath) { Remove-Item -LiteralPath $receiptPath }
     cargo build --release --locked --target $target --bin suisuiview --bin suisuiview-cli --message-format=json-render-diagnostics > target/release-validation/build-artifacts.jsonl
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
+    Copy-Item -LiteralPath "target/$target/release/suisuiview-cli.exe" -Destination target/release-validation/decoder-probe.exe
     $env:SUISUIVIEW_ASSOCIATIONS_MANIFEST = Join-Path $repo 'target/release-validation/file-associations.json'
     cargo test --release --locked --target $target --lib --bin suisuiview --bin suisuiview-cli 2>&1 |
         Tee-Object target/release-validation/cargo-test.txt

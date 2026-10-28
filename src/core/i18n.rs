@@ -93,9 +93,14 @@ static EN_US_CATALOG: LazyLock<BTreeMap<&'static str, &'static str>> =
     LazyLock::new(|| CATALOG_EN_US.iter().copied().collect());
 
 fn system_language() -> ResolvedLanguage {
-    system_locale_name()
-        .filter(|locale| locale_is_korean(locale))
-        .map_or(ResolvedLanguage::EnUs, |_| ResolvedLanguage::KoKr)
+    // UI language changes take effect on the next application launch. Avoid
+    // querying Win32 and allocating a UTF-16 buffer in every paint frame.
+    static SYSTEM_LANGUAGE: LazyLock<ResolvedLanguage> = LazyLock::new(|| {
+        system_locale_name()
+            .filter(|locale| locale_is_korean(locale))
+            .map_or(ResolvedLanguage::EnUs, |_| ResolvedLanguage::KoKr)
+    });
+    *SYSTEM_LANGUAGE
 }
 
 fn locale_is_korean(locale: &str) -> bool {
@@ -425,6 +430,8 @@ const CATALOG_KO_KR: &[(&str, &str)] = &[
     ("settings.file_associations.images.title", "이미지"),
     ("settings.file_associations.images.desc", "현재 빌드에서 바로 열 수 있는 이미지 형식입니다."),
     ("settings.file_associations.comics.title", "만화"),
+    ("settings.file_associations.cbz_label", "만화책 ZIP (CBZ)"),
+    ("settings.file_associations.zip_label", "일반 ZIP 압축 파일"),
     ("settings.file_associations.comics.desc", "만화책으로 취급할 압축 포맷입니다."),
     ("settings.file_associations.archives.title", "범용 압축"),
     ("settings.file_associations.archives.desc", "ZIP처럼 다른 용도로도 자주 쓰이는 압축 포맷입니다. 기본 선택에서는 제외됩니다."),
@@ -1100,6 +1107,8 @@ const CATALOG_EN_US: &[(&str, &str)] = &[
     ("settings.file_associations.images.title", "Images"),
     ("settings.file_associations.images.desc", "Image formats this build can open directly."),
     ("settings.file_associations.comics.title", "Comics"),
+    ("settings.file_associations.cbz_label", "Comic book ZIP (CBZ)"),
+    ("settings.file_associations.zip_label", "Generic ZIP archive"),
     ("settings.file_associations.comics.desc", "Archive formats treated as comic books."),
     ("settings.file_associations.archives.title", "Generic Archives"),
     ("settings.file_associations.archives.desc", "Archive formats such as ZIP that are often used for other purposes. They are not selected by default."),

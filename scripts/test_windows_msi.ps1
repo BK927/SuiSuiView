@@ -24,8 +24,23 @@ $result = @{ non_admin = $true; clean_pc_tested = $false; gui_tested = $false; t
 function Invoke-Msi([string]$Name, [string[]]$Arguments, [bool]$ExpectFailure = $false) {
     $log = Join-Path $Evidence "$Name.log"
     $process = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList ($Arguments + @('/qn', '/norestart', '/L*v', "`"$log`"")) -WindowStyle Hidden -PassThru -Wait
-    $success = $process.ExitCode -in @(0, 3010)
-    if ($success -eq $ExpectFailure) { throw "$Name returned unexpected Windows Installer exit code $($process.ExitCode); see $log" }
+    if ($ExpectFailure) {
+        if ($process.ExitCode -ne 1603) { throw "$Name did not reach the expected MSI failure: $($process.ExitCode)" }
+        $text = Get-Content -LiteralPath $log -Raw
+        if ($Name -eq 'block-downgrade' -and $text -notmatch 'A newer SuiSuiView is already installed') {
+            throw 'Downgrade failed for a different reason'
+        }
+        if ($Name -eq 'rollback-failed-upgrade') {
+            $remove = [regex]::Match($text, '(?m)^Action start .*: RemoveExistingProducts\.')
+            $failure = [regex]::Match($text, '(?m)^Action start .*: TestRollbackFailure\.')
+            if (-not $remove.Success -or -not $failure.Success -or $remove.Index -ge $failure.Index -or
+                $text -notmatch 'Intentional disposable-runner rollback test' -or $text -notmatch 'Rollback:') {
+                throw 'Missing evidence of prior-product removal, injected late failure and rollback'
+            }
+        }
+    } elseif ($process.ExitCode -notin @(0, 3010)) {
+        throw "$Name returned unexpected Windows Installer exit code $($process.ExitCode); see $log"
+    }
     $result.tests += @{ name = $Name; exit_code = $process.ExitCode; passed = $true }
 }
 function Assert-Installed([string]$Version) {
@@ -35,6 +50,7 @@ function Assert-Installed([string]$Version) {
     if (-not (Test-Path -LiteralPath (Join-Path $installDir 'suisuiview.exe'))) { throw 'Installed EXE missing' }
 }
 function Assert-Payload {
+    if (Test-Path -LiteralPath (Join-Path $installDir 'msi-test-marker.txt')) { throw 'An upgrade/rollback left the test fixture marker' }
     $extract = Join-Path $Evidence 'zip-payload'
     if (-not (Test-Path -LiteralPath $extract)) { Expand-Archive -LiteralPath $zip.FullName -DestinationPath $extract }
     $payload = @(Get-ChildItem -LiteralPath $extract -Directory)[0].FullName
@@ -64,6 +80,7 @@ try {
     $versions = Get-Content -LiteralPath (Join-Path $fixtures 'versions.json') -Raw | ConvertFrom-Json
     Invoke-Msi 'install-older' @('/i', "`"$(Join-Path $fixtures 'older.msi')`"")
     Assert-Installed $versions.older
+    if ((Get-Content -LiteralPath (Join-Path $installDir 'msi-test-marker.txt') -Raw) -notmatch 'older') { throw 'Older fixture marker missing' }
     Invoke-Msi 'upgrade' @('/i', "`"$candidate`"")
     Assert-Installed $versions.current
     Assert-Payload

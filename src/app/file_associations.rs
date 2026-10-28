@@ -241,7 +241,11 @@ impl SuiSuiViewApp {
             let extension_text = target.extensions.join(", ");
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .checkbox(&mut selected, target.label)
+                    .checkbox(&mut selected, match target.id {
+                        "cbz" => i18n.text("settings.file_associations.cbz_label"),
+                        "zip" => i18n.text("settings.file_associations.zip_label"),
+                        _ => target.label.to_owned(),
+                    })
                     .on_hover_text(&extension_text)
                     .changed()
                 {

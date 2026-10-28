@@ -722,6 +722,14 @@ impl BookSource for ZipCbzSource {
             page_count: self.pages.len(),
         })?;
 
+        if page.uncompressed_size > MAX_SOURCE_PAGE_BYTES {
+            return Err(SourceError::Unsupported("ZIP page exceeds the safe read limit".to_owned()));
+        }
+        let max_bytes = max_bytes.min(MAX_SOURCE_PAGE_BYTES as usize);
+        if max_bytes == 0 {
+            return Ok(Vec::new());
+        }
+
         let mut archive = self.archive.lock().map_err(|_| {
             SourceError::Unsupported("ZIP archive reader is unavailable".to_owned())
         })?;
