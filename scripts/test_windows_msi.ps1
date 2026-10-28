@@ -21,6 +21,13 @@ $env:APPDATA = Join-Path $profilePath 'AppData\Roaming'
 $env:LOCALAPPDATA = Join-Path $profilePath 'AppData\Local'
 $env:HOMEDRIVE = [IO.Path]::GetPathRoot($profilePath).TrimEnd('\')
 $env:HOMEPATH = $profilePath.Substring($env:HOMEDRIVE.Length)
+$env:TEMP = Join-Path $env:LOCALAPPDATA 'Temp'
+$env:TMP = $env:TEMP
+New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+$tempProbe = Join-Path $env:TEMP ([Guid]::NewGuid().ToString('N') + '.tmp')
+Set-Content -LiteralPath $tempProbe -Value 'isolated MSI account'
+Remove-Item -LiteralPath $tempProbe
+if ([IO.Path]::GetTempPath().TrimEnd('\') -ne $env:TEMP) { throw 'Temporary directory escaped the disposable profile' }
 $installerRoot = 'HKCU:\Software\BK927\SuiSuiView\Installer'
 $associationRoot = 'HKCU:\Software\BK927\SuiSuiView\Associations\SuiSuiView.Installed'
 $manifest = Get-Content -LiteralPath (Join-Path $Artifacts 'msi-manifest.json') -Raw | ConvertFrom-Json

@@ -1,4 +1,5 @@
 mod lzma;
+mod compression;
 
 use super::{
     classify_path, open_source_from_path, read_file_bounded, BookSource, FolderSource,

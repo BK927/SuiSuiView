@@ -66,6 +66,11 @@ def main() -> None:
             )
             report = json.loads(report_path.read_text(encoding='utf-8'))
             verify_report(report, 6)
+            prefix = '' if name == 'folder' else '책/'
+            expected = [(prefix + p.name, p.stat().st_size) for p in sorted(book.iterdir())]
+            actual = [(p['name'], p['source_bytes']) for p in report['pages']]
+            if actual != expected or [p['index'] for p in report['pages']] != list(range(6)):
+                raise RuntimeError(f'Wrong page order, names or byte lengths: {name}-{strategy}')
             results.append({'case': f'{name}-{strategy}', 'pages': 6,
                             'backend_counts': report['backend_counts']})
     (output / 'summary.json').write_text(

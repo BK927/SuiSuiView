@@ -67,6 +67,9 @@ fn lzma_rejects_bad_properties_crc_truncation_and_oversize() {
     let mut bad = WITH_EOS.to_vec();
     bad[body + 2] = 4; // Method-14 requires exactly five property bytes.
     assert!(open_fixture(&bad, "lzma-properties").read_page(0).is_err());
+    assert!(open_fixture(&bad, "lzma-properties-prefix")
+        .read_page_prefix(0, 17)
+        .is_err());
     let mut bad = WITH_EOS.to_vec();
     bad[14] ^= 1;
     bad[central + 16] ^= 1;
@@ -76,6 +79,12 @@ fn lzma_rejects_bad_properties_crc_truncation_and_oversize() {
     bad[18..22].copy_from_slice(&short_size);
     bad[central + 20..central + 24].copy_from_slice(&short_size);
     assert!(open_fixture(&bad, "lzma-truncated").read_page(0).is_err());
+    for declared_size in [4999_u32, 5001] {
+        let mut bad = WITH_EOS.to_vec();
+        bad[22..26].copy_from_slice(&declared_size.to_le_bytes());
+        bad[central + 24..central + 28].copy_from_slice(&declared_size.to_le_bytes());
+        assert!(open_fixture(&bad, "lzma-wrong-size").read_page(0).is_err());
+    }
     let mut bad = WITH_EOS.to_vec();
     let too_large = (super::super::MAX_SOURCE_PAGE_BYTES as u32 + 1).to_le_bytes();
     bad[22..26].copy_from_slice(&too_large);
@@ -94,5 +103,8 @@ fn lzma_prefix_rejects_oversized_page_before_decoder_allocation() {
     bad[22..26].copy_from_slice(&too_large);
     bad[central + 24..central + 28].copy_from_slice(&too_large);
     let source = open_fixture(&bad, "lzma-prefix-limit");
-    assert!(matches!(source.read_page_prefix(0, 17), Err(SourceError::Unsupported(_))));
+    assert!(matches!(
+        source.read_page_prefix(0, 17),
+        Err(SourceError::Unsupported(_))
+    ));
 }
