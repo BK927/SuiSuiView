@@ -98,3 +98,64 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
+
+  windows-msi:
+    needs: windows-x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-${{ github.sha }}
+          path: dist
+      - name: Build the pinned free MSI tools
+        run: bash scripts/install-msitools.sh "$RUNNER_TEMP/msitools" "$RUNNER_TEMP/msitools-build"
+      - name: Package the verified ZIP and prepare isolated upgrade tests
+        run: |
+          python3 scripts/build_msi.py --zip dist/SuiSuiView-0.1.0-windows-x64.zip --output dist --test-fixtures target/msi-fixtures
+          cd dist
+          sha256sum SuiSuiView-*-windows-x64.msi > MSI-SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi-${{ github.sha }}
+          path: |
+            dist/*.msi
+            dist/msi-manifest.json
+            dist/MSI-SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi-test-fixtures-${{ github.sha }}
+          path: target/msi-fixtures/
+          retention-days: 7
+
+  windows-msi-validation:
+    needs: windows-msi
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-${{ github.sha }}
+          path: target/msi-input
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-msi-${{ github.sha }}
+          path: target/msi-input
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-msi-test-fixtures-${{ github.sha }}
+          path: target/msi-input/fixtures
+      - name: Install, upgrade, roll back, repair and uninstall as a standard user
+        shell: pwsh
+        run: ./scripts/invoke_msi_test_user.ps1 -Artifacts target/msi-input -Evidence target/msi-validation
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-msi-validation-${{ github.sha }}
+          path: target/msi-validation/
+          if-no-files-found: warn
+          retention-days: 30

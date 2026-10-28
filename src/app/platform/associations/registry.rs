@@ -75,8 +75,8 @@ impl Registry for WindowsRegistry {
     }
 
     fn remove_empty_keys(&mut self, changes: &[Change]) {
-        // RegDeleteKey only removes empty keys; it cannot erase another app's
-        // values or nested keys. Never recursively delete a shared registry root.
+        // RegDeleteKey deletes values too. Check both counts first, and never
+        // delete shared keys (another app could add a value after our check).
         let mut keys: BTreeSet<String> = changes.iter().map(|c| c.key.clone()).collect();
         for change in changes {
             if let Some(class) = change.key.strip_suffix("\\shell\\open\\command") {
@@ -88,6 +88,19 @@ impl Registry for WindowsRegistry {
         keys.remove("Software\\RegisteredApplications");
         let mut keys: Vec<_> = keys.into_iter().collect();
         keys.sort_by_key(|k| std::cmp::Reverse(k.len()));
-        for key in keys { unsafe { RegDeleteKeyW(HKEY_CURRENT_USER, wide(&key).as_ptr()); } }
+        for path in keys {
+            if path.ends_with("\\OpenWithProgids") || path.ends_with("\\RegisteredApplications") {
+                continue;
+            }
+            let Ok(Some(key)) = Self::open(&path, KEY_READ, false) else { continue; };
+            let (mut subkeys, mut values) = (0, 0);
+            let status = unsafe { RegQueryInfoKeyW(key.0, std::ptr::null_mut(), std::ptr::null_mut(),
+                std::ptr::null(), &mut subkeys, std::ptr::null_mut(), std::ptr::null_mut(),
+                &mut values, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) };
+            drop(key);
+            if status == ERROR_SUCCESS && subkeys == 0 && values == 0 {
+                unsafe { RegDeleteKeyW(HKEY_CURRENT_USER, wide(&path).as_ptr()); }
+            }
+        }
     }
 }

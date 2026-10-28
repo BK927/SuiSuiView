@@ -710,6 +710,9 @@ impl BookSource for ZipCbzSource {
                 MAX_SOURCE_PAGE_BYTES as f32 / (1024.0 * 1024.0)
             )));
         }
+        if bytes.len() as u64 != page.uncompressed_size {
+            return Err(SourceError::Unsupported("ZIP page length does not match its header".to_owned()));
+        }
         Ok(bytes)
     }
 
