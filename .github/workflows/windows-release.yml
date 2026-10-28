@@ -1,0 +1,221 @@
+name: Windows release candidate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install the release toolchain
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup override set 1.99.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/cache/restore@v4
+        id: build-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/release
+            target/x86_64-pc-windows-msvc
+          key: windows-release-v2-${{ runner.os }}-1.99.1-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/cache/restore@v4
+        id: cargo-about
+        with:
+          path: ~/.cargo/bin/cargo-about.exe
+          key: cargo-about-${{ runner.os }}-0.9.2
+      - name: Install notice generator
+        if: steps.cargo-about.outputs.cache-hit != 'true'
+        run: |
+          cargo install cargo-about --locked --version 0.9.2 --features cli
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install test image tools
+        run: |
+          cargo about --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install Pillow==11.3.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check packaging and dependency policy
+        run: |
+          python -m unittest discover -s scripts -p 'test_release_*.py'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/native_dependency_scan.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/architecture_check.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build, test and package the default Windows x64 application
+        run: ./scripts/build-windows.ps1
+      - name: Preserve test evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-validation-${{ github.sha }}
+          path: target/release-validation/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Save compiled dependencies for the next validation attempt
+        if: always() && steps.build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/release
+            target/x86_64-pc-windows-msvc
+          key: ${{ steps.build-cache.outputs.cache-primary-key }}
+      - name: Save the installed notice generator
+        if: always() && steps.cargo-about.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cargo/bin/cargo-about.exe
+          key: ${{ steps.cargo-about.outputs.cache-primary-key }}
+      - name: Upload release candidates (no public release is created)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  windows-msi:
+    needs: windows-x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-${{ github.sha }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-validation-${{ github.sha }}
+          path: target/windows-validation
+      - name: Build the pinned free MSI tools
+        run: bash scripts/install-msitools.sh "$RUNNER_TEMP/msitools" "$RUNNER_TEMP/msitools-build"
+      - name: Package the verified ZIP and prepare isolated upgrade tests
+        run: |
+          shopt -s nullglob
+          archives=(dist/*-windows-x64.zip)
+          test "${#archives[@]}" -eq 1
+          python3 scripts/build_msi.py --zip "${archives[0]}" --output dist --test-fixtures target/msi-fixtures --cleanup-dll target/windows-validation/msi-tools/msi-cleanup.dll --cleanup-receipt target/windows-validation/msi-tools/msi-cleanup.json
+          cd dist
+          sha256sum SuiSuiView-*-windows-x64.msi > MSI-SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi-${{ github.sha }}
+          path: |
+            dist/*.msi
+            dist/msi-manifest.json
+            dist/MSI-SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi-test-fixtures-${{ github.sha }}
+          path: target/msi-fixtures/
+          retention-days: 7
+
+  windows-msi-validation:
+    needs: windows-msi
+    runs-on: windows-2022
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [maintenance, rollback]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-${{ github.sha }}
+          path: target/msi-input
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-msi-${{ github.sha }}
+          path: target/msi-input
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-msi-test-fixtures-${{ github.sha }}
+          path: target/msi-input/fixtures
+      - name: Install, upgrade, roll back, repair and uninstall as a standard user
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted VM required' }
+          # Windows Server defaults to blocking unmanaged per-user MSI installs.
+          # Match consumer Windows for this disposable VM only; never elevate
+          # the test account or enable AlwaysInstallElevated.
+          $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer'
+          $original = Get-ItemProperty -LiteralPath $key -Name DisableMSI -ErrorAction SilentlyContinue
+          try {
+            New-Item -Path $key -Force | Out-Null
+            New-ItemProperty -LiteralPath $key -Name DisableMSI -PropertyType DWord -Value 0 -Force | Out-Null
+            ./scripts/invoke_msi_test_user.ps1 -Artifacts target/msi-input -Evidence target/msi-validation -Scenario '${{ matrix.scenario }}'
+          } finally {
+            if ($null -ne $original) { Set-ItemProperty -LiteralPath $key -Name DisableMSI -Value $original.DisableMSI }
+            else { Remove-ItemProperty -LiteralPath $key -Name DisableMSI -ErrorAction SilentlyContinue }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-msi-validation-${{ matrix.scenario }}-${{ github.sha }}
+          path: target/msi-validation/
+          if-no-files-found: warn
+          retention-days: 30
+
+  archive-baseline-tool:
+    # Pinned previously validated source for a same-PC archive-read comparison.
+    # This diagnostic executable is never included in release assets.
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ad14008b80ac000c8b214b362d65165847a35e23
+      - name: Select matching release compiler
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup override set 1.99.1
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/release
+            target/x86_64-pc-windows-msvc
+          key: windows-release-v2-${{ runner.os }}-1.99.1-${{ hashFiles('Cargo.lock') }}
+      - name: Build previous archive diagnostic binary
+        shell: pwsh
+        run: |
+          $env:RUSTFLAGS = '-C target-feature=+crt-static'
+          cargo build --release --locked --target x86_64-pc-windows-msvc --bin suisuiview-cli
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-baseline-ad14008-${{ github.sha }}
+          path: target/x86_64-pc-windows-msvc/release/suisuiview-cli.exe
+          retention-days: 14

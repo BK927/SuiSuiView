@@ -604,7 +604,7 @@ impl ZipCbzSource {
             if file.is_dir() {
                 continue;
             }
-            let Some(name) = normalize_zip_name(file.name()) else {
+            let Some(name) = normalize_zip_name(&file.name()?) else {
                 continue;
             };
             if !is_supported_image_name(&name) {
@@ -710,6 +710,9 @@ impl BookSource for ZipCbzSource {
                 MAX_SOURCE_PAGE_BYTES as f32 / (1024.0 * 1024.0)
             )));
         }
+        if bytes.len() as u64 != page.uncompressed_size {
+            return Err(SourceError::Unsupported("ZIP page length does not match its header".to_owned()));
+        }
         Ok(bytes)
     }
 
@@ -718,6 +721,14 @@ impl BookSource for ZipCbzSource {
             index,
             page_count: self.pages.len(),
         })?;
+
+        if page.uncompressed_size > MAX_SOURCE_PAGE_BYTES {
+            return Err(SourceError::Unsupported("ZIP page exceeds the safe read limit".to_owned()));
+        }
+        let max_bytes = max_bytes.min(MAX_SOURCE_PAGE_BYTES as usize);
+        if max_bytes == 0 {
+            return Ok(Vec::new());
+        }
 
         let mut archive = self.archive.lock().map_err(|_| {
             SourceError::Unsupported("ZIP archive reader is unavailable".to_owned())

@@ -155,7 +155,7 @@ impl SuiSuiViewApp {
                     self.close_requested = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 } else {
-                    self.notify("ESC exit is disabled in settings.");
+                    self.notify(self.i18n().text("status.esc_disabled"));
                 }
             }
             AppCommand::ToggleFullscreen => self.toggle_fullscreen(ctx),
@@ -236,7 +236,10 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn open_file_dialog(&mut self) {
         if let Some(path) = FileDialog::new()
-            .add_filter("Images and comics", OPENABLE_FILE_EXTENSIONS)
+            .add_filter(
+                self.i18n().text("dialog.images_and_comics"),
+                OPENABLE_FILE_EXTENSIONS,
+            )
             .pick_file()
         {
             self.open_path(path);

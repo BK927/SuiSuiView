@@ -97,6 +97,82 @@ The default build includes still WebP decoding. Optional AVIF and
 PDF-compatible Illustrator previews need additional dependencies and are not
 enabled by this command. Use a release build when evaluating responsiveness.
 
+### Windows release candidates
+
+The **Windows release candidate** GitHub Actions workflow builds the default
+Windows x64 viewer, runs release-mode regression and decoder/archive checks,
+and uploads a portable ZIP, a per-user MSI, a corresponding-source archive
+and SHA-256 hashes.
+These are test candidates, not a public release or a clean-PC certification.
+The workflow has read-only repository permissions and never publishes a release.
+
+LZMA ZIP/CBZ is a required test alongside Stored, Deflate and Bzip2. The
+pipeline decodes six image formats through both `auto` and `image-crate` in
+folders and both archive extensions (18 cases / 108 pages). A failure blocks
+packaging. Source tests also cover prefixes, CRC errors, malformed data and
+LZMA streams without an end marker.
+
+For the same packaging locally, use PowerShell 7, Python 3.12+, Rust **1.99.1**
+MSVC and the C++ build tools described above. Commit the public source first:
+
+```powershell
+rustup override set 1.99.1
+cargo install cargo-about --locked --version 0.9.2 --features cli
+python -m pip install Pillow==11.3.0
+./scripts/build-windows.ps1
+```
+
+Output goes to `dist/`. The production executable is built at
+`target/x86_64-pc-windows-msvc/release/suisuiview.exe`. Packaging uses the static
+MSVC runtime and rejects unreviewed DLL imports. WebP, Little CMS and archive
+libraries are built from source; no downloaded codec DLLs or external model
+weights are included. The ZIP carries `LICENSE`, `THIRD_PARTY_NOTICES.txt`,
+generated `THIRD_PARTY_LICENSES.txt`, upstream notice files and build provenance.
+The source archive includes the locked dependencies and patched winit source.
+
+Before making a free GitHub Release public, test the exact ZIP and MSI on a Windows
+10/11 x64 user PC without development tools: extract as a standard user, launch
+offline, open JPEG/PNG/WebP and ZIP/CBZ in paths containing spaces and Korean
+characters, turn pages, switch reading modes, save/reopen settings and bookmarks,
+and exercise both the default renderer and GPU acceleration/restart. Check F1
+notices and record OS, graphics driver, ZIP hash and results. Hosted CI and a
+developer-machine launch do not replace these checks. Publish the matching source
+archive and `SHA256SUMS.txt` alongside the binary ZIP. Builds are unsigned, so
+Windows may show publisher/reputation warnings; do not disable Windows protection.
+
+
+Compare starts off and its toolbar button is hidden for new profiles; enable the
+button in toolbar settings if needed. Explicit saved visibility is preserved.
+Automatic language selection follows the Windows display language (Korean or
+English fallback), independently of regional date/number formatting. Manual
+Korean/English selection overrides automatic detection.
+
+The free Windows candidate is packaged as both a portable ZIP and a per-user
+MSI (no administrator access or automatic updater). The MSI is authored to install
+under `%LocalAppData%\Programs\SuiSuiView`, create a Start menu shortcut, and offer
+repair, manual upgrades, and removal through Windows installed apps. Settings
+and bookmarks are kept when uninstalling. The basic installer uses English
+instructions; the application offers Korean, English, and automatic selection.
+
+MSI and portable copies use separate per-user file registrations. Registering
+formats makes SuiSuiView available in Open with / Default apps; Windows still
+asks you to choose the default application. Generic ZIP remains opt-in. Keep a
+portable folder in a permanent location after registering it, and unregister
+that copy before moving or deleting it.
+
+Installer builds use GNOME msitools/wixl 0.106, verified against its published
+SHA-256. The build tools are separate prerequisites and are not installed on
+users' PCs. Only first-party installer dialogs are included. CI tests MSI
+installation, upgrade rollback, repair, and uninstall in a disposable standard
+user account; this is not clean Windows 10/11 consumer-PC acceptance. Maintenance
+and failed-upgrade rollback run independently, and both must pass.
+
+**Publication is blocked:** failed-upgrade testing restored payload files but
+failed to restore Windows Installer's product registration. A successful install
+or matching ZIP payload does not establish safe rollback. Keep MSI candidates
+in disposable test environments until this failure and clean-PC acceptance are
+resolved.
+
 Press `F2` / `Ctrl+O` to open an image or archive, or `F` to open a folder.
 To try GPU upscaling, open Settings with `F5`, enable GPU acceleration in
 Rendering, restart the app, then select an upscaler and a fit mode.

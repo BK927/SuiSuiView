@@ -241,7 +241,11 @@ impl SuiSuiViewApp {
             let extension_text = target.extensions.join(", ");
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .checkbox(&mut selected, target.label)
+                    .checkbox(&mut selected, match target.id {
+                        "cbz" => i18n.text("settings.file_associations.cbz_label"),
+                        "zip" => i18n.text("settings.file_associations.zip_label"),
+                        _ => target.label.to_owned(),
+                    })
                     .on_hover_text(&extension_text)
                     .changed()
                 {
@@ -469,6 +473,23 @@ mod tests {
         assert!(extensions.contains(&".jpg"));
         assert!(extensions.contains(&".cbz"));
         assert!(!extensions.contains(&".zip"));
+    }
+
+    #[test]
+    fn export_verified_default_installer_associations() {
+        let targets = available_targets();
+        let all = super::all_known_extensions(&targets);
+        for extension in &all {
+            assert!(*extension == ".zip" || *extension == ".cbz" ||
+                crate::core::formats::descriptor_for_extension(extension.trim_start_matches('.'))
+                    .is_some_and(|f| f.is_image_page()), "unsupported association {extension}");
+        }
+        // Build-only evidence: export the same list the application actually uses.
+        if let Some(path) = std::env::var_os("SUISUIVIEW_ASSOCIATIONS_MANIFEST") {
+            let defaults = FileAssociationSelection::default().selected_extensions(&targets);
+            let manifest = serde_json::json!({"known_extensions": all, "default_extensions": defaults});
+            std::fs::write(path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        }
     }
 
     #[test]
