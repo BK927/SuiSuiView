@@ -32,6 +32,21 @@ def sha256(path: Path) -> str:
         return hashlib.file_digest(f, 'sha256').hexdigest()
 
 
+def verify_receipt(receipt: dict, commit: str, root: Path) -> None:
+    if receipt.get('commit') != commit or receipt.get('regression_tests') != 'passed':
+        raise RuntimeError('No successful build/test receipt for this source commit')
+    required = {f'target/{TARGET}/release/suisuiview.exe',
+                f'target/{TARGET}/release/suisuiview-cli.exe',
+                'target/release-validation/cargo-test.txt',
+                'target/release-validation/licenses.json',
+                'target/release-validation/decoder-smoke/summary.json'}
+    if set(receipt.get('files', {})) != required:
+        raise RuntimeError('Incomplete build/test receipt')
+    for filename, expected in receipt['files'].items():
+        if sha256(root / filename) != expected:
+            raise RuntimeError(f'Artifact changed since validation: {filename}')
+
+
 def check_imports(output: str) -> list[str]:
     dlls = sorted(set(re.findall(r'^\s+([\w.-]+\.dll)\s*$', output, re.MULTILINE | re.IGNORECASE)))
     if not dlls:
@@ -84,6 +99,8 @@ def main() -> None:
     name = f'SuiSuiView-{version}-windows-x64'
     source_name = f'SuiSuiView-{version}-source'
     validation = ROOT / 'target/release-validation'
+    receipt = json.loads((validation / 'build-receipt.json').read_text(encoding='utf-8-sig'))
+    verify_receipt(receipt, commit, ROOT)
     licenses, covered = license_report(json.loads((validation / 'licenses.json').read_text(encoding='utf-8')))
     smoke = json.loads((validation / 'decoder-smoke/summary.json').read_text(encoding='utf-8'))
     if smoke.get('passed') is not True or len(smoke.get('cases', [])) != 10:
@@ -139,6 +156,14 @@ def main() -> None:
         for filename in ('LICENSE', 'THIRD_PARTY_NOTICES.txt', 'README.md'):
             shutil.copyfile(ROOT / filename, bundle / filename)
         shutil.copytree(ROOT / 'licenses', bundle / 'licenses', dirs_exist_ok=True)
+        # Cargo reports exclude the standard library linked by rustc.
+        rust_docs = Path(run('rustc', '--print', 'sysroot').strip()) / 'share/doc/rust'
+        rust_licenses = bundle / 'licenses/rust-standard-library'
+        rust_licenses.mkdir(parents=True)
+        for filename in ('COPYRIGHT.html', 'LICENSE-APACHE', 'LICENSE-MIT'):
+            shutil.copyfile(rust_docs / filename, rust_licenses / filename)
+        if (rust_docs / 'COPYRIGHT-library.html').exists():
+            shutil.copyfile(rust_docs / 'COPYRIGHT-library.html', rust_licenses / 'COPYRIGHT-library.html')
         shutil.copyfile(exe, bundle / 'suisuiview.exe')
         (bundle / 'THIRD_PARTY_LICENSES.txt').write_text(licenses, encoding='utf-8')
         (bundle / 'dependency-inventory.json').write_text(json.dumps(inventory, indent=2), encoding='utf-8')
@@ -188,6 +213,7 @@ def main() -> None:
                            'clean_user_pc': 'NOT TESTED', 'gpu_hardware_matrix': 'NOT TESTED'},
         }
         (bundle / 'release-manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+        shutil.copyfile(validation / 'build-receipt.json', bundle / 'build-receipt.json')
         (dist / 'release-manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
         binary_archive = dist / f'{name}.zip'
         with zipfile.ZipFile(binary_archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:

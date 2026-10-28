@@ -3,7 +3,7 @@ name: Windows release candidate
 on:
   pull_request:
   push:
-    branches: [main, 'codex/windows-release-packaging']
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -36,11 +36,22 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: windows-release-v1-${{ runner.os }}-1.99.1-${{ hashFiles('Cargo.lock', 'scripts/build-windows.ps1') }}
-      - name: Install notice generator and test image tools
+            target/release
+            target/x86_64-pc-windows-msvc
+          key: windows-release-v2-${{ runner.os }}-1.99.1-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/cache@v4
+        id: cargo-about
+        with:
+          path: ~/.cargo/bin/cargo-about.exe
+          key: cargo-about-${{ runner.os }}-0.9.2
+      - name: Install notice generator
+        if: steps.cargo-about.outputs.cache-hit != 'true'
         run: |
-          cargo install cargo-about --locked --version 0.9.2
+          cargo install cargo-about --locked --version 0.9.2 --features cli
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install test image tools
+        run: |
+          cargo about --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install Pillow==11.3.0
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

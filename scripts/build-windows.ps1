@@ -18,6 +18,8 @@ try {
     $env:CARGO_TARGET_DIR = Join-Path $repo 'target'
     $target = 'x86_64-pc-windows-msvc'
     New-Item -ItemType Directory -Force target/release-validation | Out-Null
+    $receiptPath = Join-Path $repo 'target/release-validation/build-receipt.json'
+    if (Test-Path -LiteralPath $receiptPath) { Remove-Item -LiteralPath $receiptPath }
     cargo build --release --locked --target $target --bin suisuiview --bin suisuiview-cli
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
     cargo test --release --locked --target $target --lib --bin suisuiview --bin suisuiview-cli 2>&1 |
@@ -27,6 +29,22 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Dependency license review failed.' }
     python scripts/release_smoke.py --cli "target/$target/release/suisuiview-cli.exe" --output target/release-validation/decoder-smoke
     if ($LASTEXITCODE -ne 0) { throw 'Decoder/archive smoke tests failed.' }
+    $commit = git rev-parse HEAD
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot identify source commit.' }
+    $receiptFiles = @(
+        "target/$target/release/suisuiview.exe",
+        "target/$target/release/suisuiview-cli.exe",
+        'target/release-validation/cargo-test.txt',
+        'target/release-validation/licenses.json',
+        'target/release-validation/decoder-smoke/summary.json'
+    )
+    $hashes = @{}
+    foreach ($file in $receiptFiles) {
+        $hashes[$file] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    @{ commit = $commit; files = $hashes; regression_tests = 'passed';
+       ci_run = $env:GITHUB_RUN_ID; created_utc = [DateTime]::UtcNow.ToString('o') } |
+        ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $receiptPath -Encoding utf8
     python scripts/package_windows.py
     if ($LASTEXITCODE -ne 0) { throw 'Packaging failed.' }
 } finally {

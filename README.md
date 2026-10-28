@@ -110,7 +110,7 @@ MSVC and the C++ build tools described above. Commit the public source first:
 
 ```powershell
 rustup override set 1.99.1
-cargo install cargo-about --locked --version 0.9.2
+cargo install cargo-about --locked --version 0.9.2 --features cli
 python -m pip install Pillow==11.3.0
 ./scripts/build-windows.ps1
 ```

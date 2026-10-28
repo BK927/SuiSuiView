@@ -1,10 +1,18 @@
 import unittest
 
-from package_windows import check_imports, license_report
+from pathlib import Path
+from package_windows import check_imports, license_report, verify_receipt
 from release_smoke import verify_report
 
 
 class PackagingGates(unittest.TestCase):
+    def test_stale_or_incomplete_validation_cannot_be_packaged(self):
+        for receipt in ({'commit': 'old', 'regression_tests': 'passed', 'files': {}},
+                        {'commit': 'new', 'regression_tests': 'passed', 'files': {}},
+                        {'commit': 'new', 'regression_tests': 'failed', 'files': {}}):
+            with self.assertRaises(RuntimeError):
+                verify_receipt(receipt, 'new', Path('.'))
+
     def test_system_imports_and_delay_imports(self):
         self.assertEqual(check_imports('    KERNEL32.dll\n    api-ms-win-core-synch-l1-2-0.dll\n'),
                          ['KERNEL32.dll', 'api-ms-win-core-synch-l1-2-0.dll'])

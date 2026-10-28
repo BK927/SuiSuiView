@@ -1250,6 +1250,20 @@ patent infringement, then any patent rights granted to you under this License
 for these implementations of WebM shall terminate as of the date such
 litigation is filed.
 
+Additional Default Native Libraries
+-----------------------------------
+
+Little CMS (lcms2-sys 4.0.6): MIT, Copyright (c) 2023 Marti Maria Saguer.
+libbzip2 1.0.8 (bzip2-sys 0.1.13+1.0.8): bzip2 redistribution terms,
+Copyright (C) 1996-2019 Julian R Seward.
+liblzma (lzma-sys 0.1.20, vendored xz-5.2 source): public-domain library code.
+This software includes code from XZ Utils <https://tukaani.org/xz/>. The xz
+command-line utilities and their separate licensing are not part of this EXE.
+Zstandard 1.5.7 (zstd-sys 2.0.16+zstd.1.5.7): distributed under its BSD option,
+Copyright (c) Meta Platforms, Inc. and affiliates.
+The exact upstream texts, including native vendor notices, are retained under
+licenses/ in Windows packages and in the corresponding-source archive.
+
 Optional Native Codecs
 ----------------------
 
@@ -1383,6 +1397,7 @@ Source: https://github.com/funnyplanter/CuNNy
   `mpv/ds/CuNNy-8x32-DS.glsl`. SuiSuiView is GPL-3.0-only, so the
   GPL/LGPL-compatible source terms are accepted here. The corresponding
   generated WGSL source is included in the repository.
+  The LGPL version 3 text is also supplied in licenses/LGPL-3.0.txt.
 
 Bundled Application Assets
 --------------------------
