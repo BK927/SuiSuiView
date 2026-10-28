@@ -49,11 +49,11 @@ def verify_receipt(receipt: dict, commit: str, root: Path) -> None:
             raise RuntimeError(f'Artifact changed since validation: {filename}')
 
 
-def check_imports(output: str) -> list[str]:
+def check_imports(output: str, allowed: set[str] = SYSTEM_DLLS) -> list[str]:
     dlls = sorted(set(re.findall(r'^\s+([\w.-]+\.dll)\s*$', output, re.MULTILINE | re.IGNORECASE)))
     if not dlls:
         raise RuntimeError('dumpbin did not report any DLL imports')
-    unexpected = [d for d in dlls if d.lower()[:-4] not in SYSTEM_DLLS
+    unexpected = [d for d in dlls if d.lower()[:-4] not in allowed
                   and not d.lower().startswith(('api-ms-win-', 'ext-ms-win-'))]
     if unexpected:
         raise RuntimeError(f'Unreviewed runtime DLL dependencies: {unexpected}')

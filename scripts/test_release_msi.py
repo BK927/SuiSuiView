@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import xml.etree.ElementTree as ET
-from build_msi import make_xml, APP_ID, UPGRADE_CODE
+from build_msi import make_xml, verify_payload, APP_ID, UPGRADE_CODE
 
 
 class InstallerAuthoring(unittest.TestCase):
@@ -28,7 +28,8 @@ class InstallerAuthoring(unittest.TestCase):
             self.assertTrue(all(e.get('Root') == 'HKCU' for e in registry))
             self.assertTrue(all('UserChoice' not in e.get('Key') for e in registry))
             self.assertTrue(all('Portable' not in key for key, _ in cleanup))
-            self.assertIn((rf'Software\Classes\.zip\OpenWithProgids', APP_ID + '.zip'), cleanup)
+            self.assertTrue(all(name == '-' for _, name in cleanup))
+            self.assertEqual(old.find(".//w:Property[@Id='SUI_OPTIONAL_EXTENSIONS']", ns).get('Value'), '.zip')
             self.assertFalse(any(e.get('Key').endswith('.zip\\shell\\open\\command') for e in registry))
             self.assertEqual(len(old.findall('.//w:File', ns)), 2)
 
@@ -41,3 +42,17 @@ class InstallerAuthoring(unittest.TestCase):
             with self.assertRaises(ValueError):
                 make_xml(root, {'known_extensions': ['.cbz', '.bad\\key'],
                                'default_extensions': ['.cbz']}, '0.1.0', root / 'test.wxs')
+
+    def test_payload_verification_uses_full_relative_license_paths(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); payload = root / 'payload'; payload.mkdir()
+            (payload / 'suisuiview.exe').write_bytes(b'exe')
+            (payload / 'LICENSE').write_text('application GPL')
+            (payload / 'licenses').mkdir()
+            (payload / 'licenses/LICENSE').write_text('third party')
+            extracted = root / 'extracted'; installed = extracted / 'Programs/SuiSuiView'
+            shutil.copytree(payload, installed)
+            verify_payload(payload, extracted)
+            (installed / 'licenses/LICENSE').write_text('wrong license')
+            with self.assertRaises(RuntimeError): verify_payload(payload, extracted)

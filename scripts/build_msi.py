@@ -70,7 +70,7 @@ def add_ui(product):
     node(seq, 'Show', Dialog='CancelDlg', OnExit='cancel').text = '1'
 
 
-def make_xml(payload: Path, manifest: dict, version: str, destination: Path) -> tuple[str, list[tuple[str, str]]]:
+def make_xml(payload: Path, manifest: dict, version: str, destination: Path, cleanup_dll: Path = Path('msi-cleanup.dll')) -> tuple[str, list[tuple[str, str]]]:
     if not re.fullmatch(r'\d+\.\d+\.\d+', version):
         raise ValueError('MSI requires a three-part numeric version')
     major, minor, build = map(int, version.split('.'))
@@ -135,6 +135,10 @@ def make_xml(payload: Path, manifest: dict, version: str, destination: Path) -> 
     defaults = set(manifest['default_extensions'])
     if not defaults <= known or '.zip' in defaults or '.cbz' not in defaults:
         raise ValueError('Unexpected verified file association defaults')
+    node(product, 'Binary', Id='AssociationCleanup', SourceFile=str(cleanup_dll))
+    node(product, 'CustomAction', Id='AddOwnedAssociationCleanup', BinaryKey='AssociationCleanup',
+         DllEntry='AddOwnedAssociationCleanup', Return='check')
+    node(product, 'Property', Id='SUI_OPTIONAL_EXTENSIONS', Value=';'.join(sorted(known - defaults)))
     cleanup = []
     for extension in sorted(known):
         if not re.fullmatch(r'\.[a-z0-9_]+', extension):
@@ -143,7 +147,7 @@ def make_xml(payload: Path, manifest: dict, version: str, destination: Path) -> 
         class_key = 'Software\\Classes\\' + prog_id
         # Cleanup covers dynamically selected formats too, without touching
         # portable registrations or another application's OpenWith entry.
-        cleanup.extend([(class_key, '-'), (rf'Software\Classes\{extension}\OpenWithProgids', prog_id)])
+        cleanup.append((class_key, '-'))
         if extension not in defaults:
             continue
         reg(CAPABILITIES + r'\FileAssociations', extension, prog_id)
@@ -166,9 +170,9 @@ def make_xml(payload: Path, manifest: dict, version: str, destination: Path) -> 
     return product_code, cleanup
 
 
-def build(payload: Path, associations: dict, version: str, output: Path, fail=False):
+def build(payload: Path, associations: dict, version: str, output: Path, cleanup_dll: Path, fail=False):
     xml = output.with_suffix('.wxs')
-    product_code, cleanup = make_xml(payload, associations, version, xml)
+    product_code, cleanup = make_xml(payload, associations, version, xml, cleanup_dll)
     # Enable wixl's UI table support with first-party empty extension entrypoints;
     # do not import its MS-RL dialogs, strings, bitmaps or DLLs into our MSI.
     with tempfile.TemporaryDirectory(prefix='msi-ui-', dir=output.parent) as temp:
@@ -180,6 +184,10 @@ def build(payload: Path, associations: dict, version: str, output: Path, fail=Fa
     # wixl schedules removal before the transaction by default. Move it after
     # InstallInitialize so a failed upgrade can roll back the prior product.
     sql(output, 'UPDATE `InstallExecuteSequence` SET `Sequence` = 1501 WHERE `Action` = \'RemoveExistingProducts\'')
+    # Every version uses the same fixed per-user location and owned namespace.
+    # Preserve app-selected optional associations while replacing the product;
+    # final uninstall still removes all entries owned by the installed edition.
+    sql(output, "UPDATE `InstallExecuteSequence` SET `Condition` = 'NOT UPGRADINGPRODUCTCODE' WHERE `Action` = 'RemoveRegistryValues'")
     # Reopening the same-version MSI performs a real repair, including missing
     # files, without requiring the user to know msiexec's /fa option.
     for action, prop, value, sequence in [
@@ -191,10 +199,13 @@ def build(payload: Path, associations: dict, version: str, output: Path, fail=Fa
         sql(output, 'INSERT INTO `InstallExecuteSequence` (`Action`, `Condition`, `Sequence`) VALUES '
             f"({sql_string(action)}, {sql_string('Installed AND NOT REMOVE AND NOT ' + prop)}, {sequence})")
     # Registry table "-" rows remove only our dedicated subtrees on uninstall.
-    # Name-specific NULL rows remove our optional OpenWith values on uninstall.
+    # Optional OpenWith rows are added only during uninstall by the first-party
+    # helper; permanent NULL rows would also write empty values during install.
     for index, (key, name) in enumerate(cleanup):
         sql(output, 'INSERT INTO `Registry` (`Registry`, `Root`, `Key`, `Name`, `Component_`) VALUES '
             f"('cleanup{index}', 1, {sql_string(key)}, {sql_string(name)}, 'Registration')")
+    sql(output, 'INSERT INTO `InstallExecuteSequence` (`Action`, `Condition`, `Sequence`) VALUES '
+        "('AddOwnedAssociationCleanup', 'REMOVE~=\"ALL\" AND NOT UPGRADINGPRODUCTCODE', 2500)")
     if fail:
         sql(output, 'INSERT INTO `CustomAction` (`Action`, `Type`, `Target`) VALUES '
             "('TestRollbackFailure', 19, 'Intentional disposable-runner rollback test')")
@@ -204,15 +215,23 @@ def build(payload: Path, associations: dict, version: str, output: Path, fail=Fa
     # entries and accidental harvest omissions before the Windows install job.
     with tempfile.TemporaryDirectory(prefix='msi-extract-', dir=output.parent) as temp:
         subprocess.run(['msiextract', '-C', temp, str(output)], check=True, stdout=subprocess.DEVNULL)
-        extracted = Path(temp)
-        for file in payload.rglob('*'):
-            if file.is_file():
-                relative = file.relative_to(payload)
-                matches = [p for p in extracted.rglob(file.name) if p.as_posix().endswith(relative.as_posix())]
-                if len(matches) != 1 or matches[0].read_bytes() != file.read_bytes():
-                    raise RuntimeError(f'MSI payload differs: {relative}')
+        verify_payload(payload, Path(temp))
     xml.unlink()
     return product_code
+
+
+def verify_payload(payload: Path, extracted: Path) -> None:
+    roots = list(extracted.rglob('suisuiview.exe'))
+    if len(roots) != 1:
+        raise RuntimeError('Expected exactly one extracted application')
+    installed = roots[0].parent
+    expected = {p.relative_to(payload) for p in payload.rglob('*') if p.is_file()}
+    actual = {p.relative_to(installed) for p in installed.rglob('*') if p.is_file()}
+    if actual != expected:
+        raise RuntimeError('MSI file list differs from ZIP payload')
+    for relative in expected:
+        if (payload / relative).read_bytes() != (installed / relative).read_bytes():
+            raise RuntimeError(f'MSI payload differs: {relative}')
 
 
 def main():
@@ -220,6 +239,8 @@ def main():
     parser.add_argument('--zip', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--test-fixtures', type=Path)
+    parser.add_argument('--cleanup-dll', type=Path, required=True)
+    parser.add_argument('--cleanup-receipt', type=Path, required=True)
     args = parser.parse_args()
     if subprocess.check_output(['wixl', '--version'], text=True).strip() != '0.106':
         raise RuntimeError('Use pinned wixl 0.106')
@@ -244,12 +265,15 @@ def main():
         if exe_hash != manifest['executable_sha256']:
             raise ValueError('MSI executable differs from tested executable')
         associations = json.loads((payload / 'file-associations.json').read_text())
+        cleanup = json.loads(args.cleanup_receipt.read_text(encoding='utf-8'))
+        if cleanup['commit'] != manifest['commit'] or cleanup['sha256'] != hashlib.sha256(args.cleanup_dll.read_bytes()).hexdigest():
+            raise ValueError('MSI helper differs from audited build')
         version = manifest['version']
         output = args.output.resolve() / f'SuiSuiView-{version}-windows-x64.msi'
-        code = build(payload, associations, version, output)
+        code = build(payload, associations, version, output, args.cleanup_dll.resolve())
         evidence = {'commit': manifest['commit'], 'version': version, 'product_code': code,
                     'upgrade_code': UPGRADE_CODE, 'installer': output.name, 'per_user': True,
-                    'signed': False, 'payload_matches_zip': True, 'clean_pc_tested': False,
+                    'signed': False, 'helper': cleanup, 'payload_matches_zip': True, 'clean_pc_tested': False,
                     'sha256': hashlib.sha256(output.read_bytes()).hexdigest()}
         (args.output / 'msi-manifest.json').write_text(json.dumps(evidence, indent=2))
         if args.test_fixtures:
@@ -271,7 +295,7 @@ def main():
                     file.write('\n' + marker + '\n')
                 (fixture_payload / 'msi-test-marker.txt').write_text(marker)
                 build(fixture_payload, associations, test_version,
-                      args.test_fixtures.resolve() / f'{label}.msi', fail=fail)
+                      args.test_fixtures.resolve() / f'{label}.msi', args.cleanup_dll.resolve(), fail=fail)
             (args.test_fixtures / 'versions.json').write_text(json.dumps({'older': older, 'current': version}))
 
 

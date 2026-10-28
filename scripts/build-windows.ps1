@@ -27,6 +27,8 @@ try {
     $env:CARGO_TARGET_DIR = Join-Path $repo 'target'
     $target = 'x86_64-pc-windows-msvc'
     New-Item -ItemType Directory -Force target/release-validation | Out-Null
+    python scripts/build_msi_cleanup.py
+    if ($LASTEXITCODE -ne 0) { throw 'MSI transaction helper build/audit failed.' }
     $receiptPath = Join-Path $repo 'target/release-validation/build-receipt.json'
     if (Test-Path -LiteralPath $receiptPath) { Remove-Item -LiteralPath $receiptPath }
     cargo build --release --locked --target $target --bin suisuiview --bin suisuiview-cli --message-format=json-render-diagnostics > target/release-validation/build-artifacts.jsonl

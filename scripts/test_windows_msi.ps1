@@ -81,13 +81,22 @@ try {
     Invoke-Msi 'install-older' @('/i', "`"$(Join-Path $fixtures 'older.msi')`"")
     Assert-Installed $versions.older
     if ((Get-Content -LiteralPath (Join-Path $installDir 'msi-test-marker.txt') -Raw) -notmatch 'older') { throw 'Older fixture marker missing' }
+    $zipOpenWith = 'HKCU:\Software\Classes\.zip\OpenWithProgids'
+    if ((Test-Path -LiteralPath $zipOpenWith) -and (Get-Item -LiteralPath $zipOpenWith).GetValueNames().Contains('SuiSuiView.Installed.zip')) { throw 'ZIP candidate must remain opt-in' }
+    # Simulate a full optional ZIP registration before upgrading the old app.
+    New-Item -Path $zipOpenWith -Force | Out-Null
+    New-ItemProperty -LiteralPath $zipOpenWith -Name 'SuiSuiView.Installed.zip' -Value '' | Out-Null
+    $zipClass = 'HKCU:\Software\Classes\SuiSuiView.Installed.zip'
+    New-Item -Path "$zipClass\shell\open\command" -Force | Out-Null
+    Set-Item -LiteralPath "$zipClass\shell\open\command" -Value "`"$(Join-Path $installDir 'suisuiview.exe')`" `"%1`""
+    New-ItemProperty -LiteralPath "$associationRoot\Capabilities\FileAssociations" -Name '.zip' -Value 'SuiSuiView.Installed.zip' | Out-Null
     Invoke-Msi 'upgrade' @('/i', "`"$candidate`"")
     Assert-Installed $versions.current
     Assert-Payload
     $command = (Get-Item -LiteralPath 'HKCU:\Software\Classes\SuiSuiView.Installed.png\shell\open\command').GetValue('')
     if ($command -ne "`"$(Join-Path $installDir 'suisuiview.exe')`" `"%1`"") { throw 'File association command is not quoted correctly' }
     if (-not (Get-Item -LiteralPath $openWith).GetValueNames().Contains('SuiSuiView.Installed.png')) { throw 'OpenWith registration missing' }
-    if (Test-Path -LiteralPath 'HKCU:\Software\Classes\SuiSuiView.Installed.zip\shell\open\command') { throw 'Generic ZIP must remain opt-in' }
+    if (-not (Test-Path -LiteralPath "$zipClass\shell\open\command") -or -not (Get-Item -LiteralPath $zipOpenWith).GetValueNames().Contains('SuiSuiView.Installed.zip')) { throw 'Upgrade lost the selected ZIP association' }
     $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'SuiSuiView\SuiSuiView.lnk'
     if (-not (Test-Path -LiteralPath $shortcut)) { throw 'Start menu shortcut missing' }
 
@@ -96,6 +105,7 @@ try {
     Invoke-Msi 'rollback-failed-upgrade' @('/i', "`"$(Join-Path $fixtures 'rollback.msi')`"") $true
     Assert-Installed $versions.current
     Assert-Payload
+    if (-not (Get-Item -LiteralPath $zipOpenWith).GetValueNames().Contains('SuiSuiView.Installed.zip')) { throw 'Rollback lost optional ZIP registration' }
 
     $repairFile = Join-Path $installDir 'SOURCE.txt'
     Remove-Item -LiteralPath $repairFile
@@ -103,8 +113,10 @@ try {
     Assert-Payload
     Invoke-Msi 'uninstall' @('/x', "`"$candidate`"")
     if (Test-Path -LiteralPath (Join-Path $installDir 'suisuiview.exe')) { throw 'Uninstall left the executable' }
+    if (Test-Path -LiteralPath $zipClass) { throw 'Uninstall left the optional ZIP class' }
     if ((Test-Path -LiteralPath $installerRoot) -or (Test-Path -LiteralPath $associationRoot)) { throw 'Uninstall left owned registration keys' }
     if ((Get-Item -LiteralPath $openWith).GetValueNames().Contains('SuiSuiView.Installed.png')) { throw 'Uninstall left its OpenWith value' }
+    if ((Test-Path -LiteralPath $zipOpenWith) -and (Get-Item -LiteralPath $zipOpenWith).GetValueNames().Contains('SuiSuiView.Installed.zip')) { throw 'Uninstall left optional ZIP registration' }
     if (-not (Test-Path -LiteralPath $portableKey) -or -not (Test-Path -LiteralPath $settings)) { throw 'Uninstall removed unrelated user data' }
     if (-not (Get-Item -LiteralPath $openWith).GetValueNames().Contains('SuiSuiView.Portable.CITest.png')) { throw 'Uninstall removed a portable association' }
     $result.passed = $true
