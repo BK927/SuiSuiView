@@ -16,9 +16,9 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = 'x86_64-pc-windows-msvc'
 # Windows inbox DLLs only. New imports require an explicit packaging review.
-SYSTEM_DLLS = set('''advapi32 bcrypt cfgmgr32 comctl32 comdlg32 crypt32 d3d11
+SYSTEM_DLLS = set('''advapi32 bcrypt bcryptprimitives cfgmgr32 comctl32 comdlg32 crypt32 d3d11
 d3d12 d3dcompiler_47 dbghelp dwmapi dxgi gdi32 imm32 kernel32 msimg32 msvcrt
-ntdll ole32 oleaut32 opengl32 propsys rpcrt4 secur32 setupapi shell32 shlwapi
+mscms ntdll ole32 oleaut32 opengl32 pdh propsys psapi rpcrt4 secur32 setupapi shell32 shlwapi
 user32 userenv usp10 uxtheme version winmm winspool wintrust ws2_32 wtsapi32
 powrprof hid normaliz shcore runtimeobject windowscodecs'''.split())
 
