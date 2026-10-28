@@ -141,8 +141,6 @@ archive and `SHA256SUMS.txt` alongside the binary ZIP. Builds are unsigned, so
 Windows may show publisher/reputation warnings; do not disable Windows protection.
 
 
-The Windows candidate validates LZMA ZIP/CBZ in both decode strategies, in addition
-to Stored, Deflate and Bzip2 archives. These checks are mandatory packaging gates.
 Compare starts off and its toolbar button is hidden for new profiles; enable the
 button in toolbar settings if needed. Explicit saved visibility is preserved.
 Automatic language selection follows the Windows display language (Korean or
@@ -150,8 +148,8 @@ English fallback), independently of regional date/number formatting. Manual
 Korean/English selection overrides automatic detection.
 
 The free Windows candidate is packaged as both a portable ZIP and a per-user
-MSI (no administrator access or automatic updater). The MSI installs under
-`%LocalAppData%\Programs\SuiSuiView`, creates a Start menu shortcut, and supports
+MSI (no administrator access or automatic updater). The MSI is authored to install
+under `%LocalAppData%\Programs\SuiSuiView`, create a Start menu shortcut, and offer
 repair, manual upgrades, and removal through Windows installed apps. Settings
 and bookmarks are kept when uninstalling. The basic installer uses English
 instructions; the application offers Korean, English, and automatic selection.
@@ -166,7 +164,14 @@ Installer builds use GNOME msitools/wixl 0.106, verified against its published
 SHA-256. The build tools are separate prerequisites and are not installed on
 users' PCs. Only first-party installer dialogs are included. CI tests MSI
 installation, upgrade rollback, repair, and uninstall in a disposable standard
-user account; this is not clean Windows 10/11 consumer-PC acceptance.
+user account; this is not clean Windows 10/11 consumer-PC acceptance. Maintenance
+and failed-upgrade rollback run independently, and both must pass.
+
+**Publication is blocked:** failed-upgrade testing restored payload files but
+failed to restore Windows Installer's product registration. A successful install
+or matching ZIP payload does not establish safe rollback. Keep MSI candidates
+in disposable test environments until this failure and clean-PC acceptance are
+resolved.
 
 Press `F2` / `Ctrl+O` to open an image or archive, or `F` to open a folder.
 To try GPU upscaling, open Settings with `F5`, enable GPU acceleration in

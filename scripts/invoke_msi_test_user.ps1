@@ -1,5 +1,9 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$Artifacts, [Parameter(Mandatory)][string]$Evidence)
+param(
+    [Parameter(Mandatory)][string]$Artifacts,
+    [Parameter(Mandatory)][string]$Evidence,
+    [Parameter(Mandatory)][ValidateSet('maintenance', 'rollback')][string]$Scenario
+)
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
     throw 'This account-creating test wrapper runs only on disposable GitHub-hosted runners.'
@@ -18,7 +22,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not grant access to the isolated test directory' }
     $script = Join-Path $testRoot 'test_windows_msi.ps1'
     $logs = Join-Path $testRoot 'evidence'
-    $args = @('-NoProfile', '-File', "`"$script`"", '-Artifacts', "`"$(Join-Path $testRoot 'artifacts')`"", '-Evidence', "`"$logs`"")
+    $args = @('-NoProfile', '-File', "`"$script`"", '-Artifacts', "`"$(Join-Path $testRoot 'artifacts')`"", '-Evidence', "`"$logs`"", '-Scenario', $Scenario)
     $process = Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList $args -Credential $credential -LoadUserProfile -WindowStyle Hidden -Wait -PassThru
     if (Test-Path -LiteralPath $logs) {
         New-Item -ItemType Directory -Force -Path $Evidence | Out-Null

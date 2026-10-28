@@ -33,6 +33,11 @@ class InstallerAuthoring(unittest.TestCase):
             self.assertFalse(any(e.get('Key').endswith('.zip\\shell\\open\\command') for e in registry))
             self.assertEqual(len(old.findall('.//w:File', ns)), 2)
             self.assertEqual(old.find(".//w:File[@Name='suisuiview.exe']", ns).get('DefaultVersion'), '0.1.0.0')
+            for component in old.findall('.//w:Component', ns):
+                key_paths = [e for e in component if e.get('KeyPath') == 'yes']
+                self.assertEqual(len(key_paths), 1)
+                self.assertEqual(key_paths[0].tag, '{' + ns['w'] + '}RegistryValue')
+                self.assertEqual(key_paths[0].get('Root'), 'HKCU')
 
     def test_invalid_version_or_extension_cannot_generate_installer(self):
         with tempfile.TemporaryDirectory() as temp:

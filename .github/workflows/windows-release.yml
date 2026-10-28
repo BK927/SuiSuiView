@@ -142,6 +142,10 @@ jobs:
     needs: windows-msi
     runs-on: windows-2022
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [maintenance, rollback]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v4
@@ -168,7 +172,7 @@ jobs:
           try {
             New-Item -Path $key -Force | Out-Null
             New-ItemProperty -LiteralPath $key -Name DisableMSI -PropertyType DWord -Value 0 -Force | Out-Null
-            ./scripts/invoke_msi_test_user.ps1 -Artifacts target/msi-input -Evidence target/msi-validation
+            ./scripts/invoke_msi_test_user.ps1 -Artifacts target/msi-input -Evidence target/msi-validation -Scenario '${{ matrix.scenario }}'
           } finally {
             if ($null -ne $original) { Set-ItemProperty -LiteralPath $key -Name DisableMSI -Value $original.DisableMSI }
             else { Remove-ItemProperty -LiteralPath $key -Name DisableMSI -ErrorAction SilentlyContinue }
@@ -176,7 +180,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: windows-msi-validation-${{ github.sha }}
+          name: windows-msi-validation-${{ matrix.scenario }}-${{ github.sha }}
           path: target/msi-validation/
           if-no-files-found: warn
           retention-days: 30

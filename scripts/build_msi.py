@@ -118,7 +118,11 @@ def make_xml(payload: Path, manifest: dict, version: str, destination: Path, cle
         # the installed EXE as newer than the unversioned MSI row and omits it
         # after removing the old product during a transactional upgrade.
         version_attrs = {'DefaultVersion': executable_version} if relative == 'suisuiview.exe' else {}
-        node(component, 'File', Id=identity('file', relative), Source=str(file), Name=file.name, KeyPath='yes', **version_attrs)
+        node(component, 'File', Id=identity('file', relative), Source=str(file), Name=file.name, KeyPath='no', **version_attrs)
+        # ICE38: components below a user's profile need a HKCU key path so
+        # Windows Installer tracks each user's installation independently.
+        node(component, 'RegistryValue', Id=identity('key', relative), Root='HKCU',
+             Key=INSTALLER_KEY + r'\Components', Name=comp_id, Type='integer', Value='1', KeyPath='yes')
         node(feature, 'ComponentRef', Id=comp_id)
     component = node(install, 'Component', Id='Registration', Guid=guid('registration'), Win64='yes')
     node(feature, 'ComponentRef', Id='Registration')
@@ -294,6 +298,7 @@ def main():
                 older = f'{major-1}.255.65535'
             if older == version:
                 raise ValueError('No lower test version available')
+            fixture_codes = {}
             for label, test_version, fail in [('older', older, False), ('rollback', f'{major}.{minor}.{patch+1}', True)]:
                 fixture_payload = stage / f'fixture-{label}'
                 shutil.copytree(payload, fixture_payload)
@@ -303,9 +308,10 @@ def main():
                 with (fixture_payload / 'SOURCE.txt').open('a', encoding='utf-8') as file:
                     file.write('\n' + marker + '\n')
                 (fixture_payload / 'msi-test-marker.txt').write_text(marker)
-                build(fixture_payload, associations, test_version,
-                      args.test_fixtures.resolve() / f'{label}.msi', args.cleanup_dll.resolve(), fail=fail)
-            (args.test_fixtures / 'versions.json').write_text(json.dumps({'older': older, 'current': version}))
+                fixture_codes[label] = build(fixture_payload, associations, test_version,
+                    args.test_fixtures.resolve() / f'{label}.msi', args.cleanup_dll.resolve(), fail=fail)
+            (args.test_fixtures / 'versions.json').write_text(json.dumps(
+                {'older': older, 'current': version, 'product_codes': fixture_codes}))
 
 
 if __name__ == '__main__':

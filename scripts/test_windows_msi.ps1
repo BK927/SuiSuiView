@@ -1,6 +1,10 @@
 # Runs only in the disposable, non-admin CI test account created by the wrapper.
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$Artifacts, [Parameter(Mandatory)][string]$Evidence)
+param(
+    [Parameter(Mandatory)][string]$Artifacts,
+    [Parameter(Mandatory)][string]$Evidence,
+    [Parameter(Mandatory)][ValidateSet('maintenance', 'rollback')][string]$Scenario
+)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -37,7 +41,7 @@ $zips = @(Get-ChildItem -LiteralPath $Artifacts -Filter '*-windows-x64.zip')
 if ($zips.Count -ne 1) { throw 'Expected exactly one validated ZIP' }
 $zip = $zips[0]
 $installDir = Join-Path $env:LOCALAPPDATA 'Programs\SuiSuiView'
-$result = @{ non_admin = $true; profile = $profilePath; clean_pc_tested = $false; gui_tested = $false; tests = @() }
+$result = @{ scenario = $Scenario; non_admin = $true; profile = $profilePath; clean_pc_tested = $false; gui_tested = $false; tests = @() }
 
 function Invoke-Msi([string]$Name, [string[]]$Arguments, [bool]$ExpectFailure = $false) {
     $log = Join-Path $Evidence "$Name.log"
@@ -53,24 +57,35 @@ function Invoke-Msi([string]$Name, [string[]]$Arguments, [bool]$ExpectFailure = 
             $failure = [regex]::Match($text, '(?m)^Action start .*: TestRollbackFailure\.')
             if (-not $remove.Success -or -not $failure.Success -or $remove.Index -ge $failure.Index -or
                 $text -notmatch 'Intentional disposable-runner rollback test' -or
-                $text.Substring($failure.Index) -notmatch 'Executing op: RollbackInfo\(') {
+                $text.Substring($failure.Index) -notmatch 'Executing op: RollbackInfo\(' -or
+                $text -match 'Error in rollback skipped\.') {
                 throw 'Missing evidence of prior-product removal, injected late failure and rollback'
             }
         }
     } elseif ($process.ExitCode -notin @(0, 3010)) {
         throw "$Name returned unexpected Windows Installer exit code $($process.ExitCode); see $log"
     }
-    $result.tests += @{ name = $Name; exit_code = $process.ExitCode; passed = $true }
+    $result.tests += @{ name = $Name; exit_code = $process.ExitCode; command_passed = $true }
 }
 function Assert-Installed([string]$Version) {
     $registration = Get-ItemProperty -LiteralPath $installerRoot
+    $installer = New-Object -ComObject WindowsInstaller.Installer
+    $productCode = '{' + $registration.ProductCode.Trim('{}') + '}'
+    if ($installer.ProductState($productCode) -ne 5) { throw 'Windows Installer did not retain the installed product registration' }
+    if ($installer.FeatureState($productCode, 'Application') -ne 3) { throw 'Windows Installer application feature is not installed locally' }
     if ($registration.ProductVersion -ne $Version) { throw "Installed version is not $Version" }
     if ([IO.Path]::GetFullPath($registration.InstallLocation).TrimEnd('\') -ne $installDir) { throw 'Unexpected installation directory' }
     if (-not (Test-Path -LiteralPath (Join-Path $installDir 'suisuiview.exe'))) { throw 'Installed EXE missing' }
 }
+function Assert-Unregistered([string]$ProductCode) {
+    $installer = New-Object -ComObject WindowsInstaller.Installer
+    if ($installer.ProductState('{' + $ProductCode.Trim('{}') + '}') -ne -1) {
+        throw "Windows Installer retained a removed or failed product: $ProductCode"
+    }
+}
 function Assert-Payload {
     if (Test-Path -LiteralPath (Join-Path $installDir 'msi-test-marker.txt')) { throw 'An upgrade/rollback left the test fixture marker' }
-    $extract = Join-Path $Evidence 'zip-payload'
+    $extract = Join-Path $Artifacts 'zip-payload'
     if (-not (Test-Path -LiteralPath $extract)) { Expand-Archive -LiteralPath $zip.FullName -DestinationPath $extract }
     $payload = @(Get-ChildItem -LiteralPath $extract -Directory)[0].FullName
     foreach ($file in Get-ChildItem -LiteralPath $payload -Recurse -File) {
@@ -111,6 +126,7 @@ try {
     New-ItemProperty -LiteralPath "$associationRoot\Capabilities\FileAssociations" -Name '.zip' -Value 'SuiSuiView.Installed.zip' | Out-Null
     Invoke-Msi 'upgrade' @('/i', "`"$candidate`"")
     Assert-Installed $versions.current
+    Assert-Unregistered $versions.product_codes.older
     Assert-Payload
     $command = (Get-Item -LiteralPath 'HKCU:\Software\Classes\SuiSuiView.Installed.png\shell\open\command').GetValue('')
     if ($command -ne "`"$(Join-Path $installDir 'suisuiview.exe')`" `"%1`"") { throw 'File association command is not quoted correctly' }
@@ -121,16 +137,23 @@ try {
 
     Invoke-Msi 'block-downgrade' @('/i', "`"$(Join-Path $fixtures 'older.msi')`"") $true
     Assert-Installed $versions.current
-    Invoke-Msi 'rollback-failed-upgrade' @('/i', "`"$(Join-Path $fixtures 'rollback.msi')`"") $true
-    Assert-Installed $versions.current
-    Assert-Payload
-    if (-not (Get-Item -LiteralPath $zipOpenWith).GetValueNames().Contains('SuiSuiView.Installed.zip')) { throw 'Rollback lost optional ZIP registration' }
+    # Separate CI users/VMs keep a broken rollback from hiding maintenance
+    # failures. Both scenarios remain required; neither can waive the other.
+    if ($Scenario -eq 'rollback') {
+        Invoke-Msi 'rollback-failed-upgrade' @('/i', "`"$(Join-Path $fixtures 'rollback.msi')`"") $true
+        Assert-Installed $versions.current
+        Assert-Unregistered $versions.product_codes.rollback
+        Assert-Payload
+        if (-not (Get-Item -LiteralPath $zipOpenWith).GetValueNames().Contains('SuiSuiView.Installed.zip')) { throw 'Rollback lost optional ZIP registration' }
+    }
 
     $repairFile = Join-Path $installDir 'SOURCE.txt'
     Remove-Item -LiteralPath $repairFile
     Invoke-Msi 'repair' @('/i', "`"$candidate`"")
+    Assert-Installed $versions.current
     Assert-Payload
     Invoke-Msi 'uninstall' @('/x', "`"$candidate`"")
+    Assert-Unregistered $manifest.product_code
     if (Test-Path -LiteralPath (Join-Path $installDir 'suisuiview.exe')) { throw 'Uninstall left the executable' }
     if (Test-Path -LiteralPath $zipClass) { throw 'Uninstall left the optional ZIP class' }
     if ((Test-Path -LiteralPath $installerRoot) -or (Test-Path -LiteralPath $associationRoot)) { throw 'Uninstall left owned registration keys' }
@@ -138,6 +161,22 @@ try {
     if ((Test-Path -LiteralPath $zipOpenWith) -and (Get-Item -LiteralPath $zipOpenWith).GetValueNames().Contains('SuiSuiView.Installed.zip')) { throw 'Uninstall left optional ZIP registration' }
     if (-not (Test-Path -LiteralPath $portableKey) -or -not (Test-Path -LiteralPath $settings)) { throw 'Uninstall removed unrelated user data' }
     if (-not (Get-Item -LiteralPath $openWith).GetValueNames().Contains('SuiSuiView.Portable.CITest.png')) { throw 'Uninstall removed a portable association' }
+    if (Test-Path -LiteralPath $shortcut) { throw 'Uninstall left the Start menu shortcut' }
+    $payload = @(Get-ChildItem -LiteralPath (Join-Path $Artifacts 'zip-payload') -Directory)[0].FullName
+    foreach ($file in Get-ChildItem -LiteralPath $payload -Recurse -File) {
+        if (Test-Path -LiteralPath (Join-Path $installDir ([IO.Path]::GetRelativePath($payload, $file.FullName)))) {
+            throw "Uninstall left a packaged file: $($file.Name)"
+        }
+    }
+    if ($Scenario -eq 'maintenance') {
+        Invoke-Msi 'fresh-candidate-install' @('/i', "`"$candidate`"")
+        Assert-Installed $versions.current
+        Assert-Payload
+        if ((Test-Path -LiteralPath $zipOpenWith) -and (Get-Item -LiteralPath $zipOpenWith).GetValueNames().Contains('SuiSuiView.Installed.zip')) { throw 'Fresh install opted into ZIP' }
+        Invoke-Msi 'fresh-candidate-uninstall' @('/x', "`"$candidate`"")
+        Assert-Unregistered $manifest.product_code
+        if (Test-Path -LiteralPath (Join-Path $installDir 'suisuiview.exe')) { throw 'Fresh candidate uninstall left the executable' }
+    }
     $result.passed = $true
 } catch {
     $result.passed = $false
