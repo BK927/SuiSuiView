@@ -11,6 +11,14 @@ $previousFlags = $env:RUSTFLAGS
 $previousEncodedFlags = $env:CARGO_ENCODED_RUSTFLAGS
 $previousTargetDir = $env:CARGO_TARGET_DIR
 try {
+    $compiler = rustc --version
+    if ($LASTEXITCODE -ne 0 -or $compiler -notmatch '^rustc 1\.99\.1 ') {
+        throw 'Select the release toolchain first: rustup override set 1.99.1'
+    }
+    $commit = git rev-parse HEAD
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot identify source commit.' }
+    $dirty = git status --porcelain --untracked-files=normal
+    if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'Commit public source changes before building.' }
     # A target-specific build keeps proc macros on the host while cc-rs sees
     # crt-static for the bundled C libraries. Do not use target-cpu=native.
     $env:RUSTFLAGS = '-C target-feature=+crt-static'
@@ -29,8 +37,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Dependency license review failed.' }
     python scripts/release_smoke.py --cli "target/$target/release/suisuiview-cli.exe" --output target/release-validation/decoder-smoke
     if ($LASTEXITCODE -ne 0) { throw 'Decoder/archive smoke tests failed.' }
-    $commit = git rev-parse HEAD
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot identify source commit.' }
+    $endingCommit = git rev-parse HEAD
+    if ($LASTEXITCODE -ne 0 -or $endingCommit -ne $commit) { throw 'Source commit changed during validation.' }
+    $dirty = git status --porcelain --untracked-files=normal
+    if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'Source files changed during validation.' }
     $receiptFiles = @(
         "target/$target/release/suisuiview.exe",
         "target/$target/release/suisuiview-cli.exe",

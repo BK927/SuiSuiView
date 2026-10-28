@@ -31,7 +31,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustup override set 1.99.1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: build-cache
         with:
           path: |
             ~/.cargo/registry
@@ -39,7 +40,7 @@ jobs:
             target/release
             target/x86_64-pc-windows-msvc
           key: windows-release-v2-${{ runner.os }}-1.99.1-${{ hashFiles('Cargo.lock') }}
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: cargo-about
         with:
           path: ~/.cargo/bin/cargo-about.exe
@@ -73,6 +74,22 @@ jobs:
           path: target/release-validation/
           if-no-files-found: warn
           retention-days: 30
+      - name: Save compiled dependencies for the next validation attempt
+        if: always() && steps.build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/release
+            target/x86_64-pc-windows-msvc
+          key: ${{ steps.build-cache.outputs.cache-primary-key }}
+      - name: Save the installed notice generator
+        if: always() && steps.cargo-about.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cargo/bin/cargo-about.exe
+          key: ${{ steps.cargo-about.outputs.cache-primary-key }}
       - name: Upload release candidates (no public release is created)
         uses: actions/upload-artifact@v4
         with:

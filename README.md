@@ -105,6 +105,12 @@ and uploads a portable ZIP, a corresponding-source archive and SHA-256 hashes.
 These are test candidates, not a public release or a clean-PC certification.
 The workflow has read-only repository permissions and never publishes a release.
 
+The current `zip 2.4.2` dependency fails to read the generated LZMA-compressed
+ZIP/CBZ fixtures (ZIP compression method 14). This is a known compatibility
+failure, recorded separately in each candidate's manifest; it is not counted
+as a passing test. Stored, Deflate and Bzip2 archives are the required smoke
+cases. Resolve and retest the LZMA failure before the first public release.
+
 For the same packaging locally, use PowerShell 7, Python 3.12+, Rust **1.99.1**
 MSVC and the C++ build tools described above. Commit the public source first:
 

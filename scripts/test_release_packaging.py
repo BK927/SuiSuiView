@@ -1,11 +1,32 @@
 import unittest
+import tempfile
 
 from pathlib import Path
-from package_windows import check_imports, license_report, verify_receipt
+from package_windows import TARGET, check_imports, license_report, sha256, verify_receipt
 from release_smoke import verify_report
 
 
 class PackagingGates(unittest.TestCase):
+    def test_modified_binary_invalidates_successful_build_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            filenames = [f'target/{TARGET}/release/suisuiview.exe',
+                         f'target/{TARGET}/release/suisuiview-cli.exe',
+                         'target/release-validation/cargo-test.txt',
+                         'target/release-validation/licenses.json',
+                         'target/release-validation/decoder-smoke/summary.json']
+            hashes = {}
+            for name in filenames:
+                file = root / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes(b'validated artifact')
+                hashes[name] = sha256(file)
+            receipt = {'commit': 'current', 'regression_tests': 'passed', 'files': hashes}
+            verify_receipt(receipt, 'current', root)
+            (root / filenames[0]).write_bytes(b'different executable')
+            with self.assertRaisesRegex(RuntimeError, 'Artifact changed'):
+                verify_receipt(receipt, 'current', root)
+
     def test_stale_or_incomplete_validation_cannot_be_packaged(self):
         for receipt in ({'commit': 'old', 'regression_tests': 'passed', 'files': {}},
                         {'commit': 'new', 'regression_tests': 'passed', 'files': {}},
