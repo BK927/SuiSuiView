@@ -240,7 +240,7 @@ impl SuiSuiViewApp {
             }
             self.execute_delete_plan(pending.mode, pending.plan);
         } else if cancel_clicked {
-            self.set_status("Delete cancelled.");
+            self.set_status(self.i18n().text("status.delete_cancelled"));
         } else {
             self.pending_delete_dialog = Some(pending);
         }

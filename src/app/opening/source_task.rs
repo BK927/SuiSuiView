@@ -47,6 +47,7 @@ impl SuiSuiViewApp {
             self.open_to_first_visible_trace =
                 Some(perf::OpenToFirstVisibleTrace::new("async_open"));
         }
+        let i18n = self.i18n();
         let store = self.store.fork_for_background();
         let settings = self.settings.clone();
         let seed_target_long_edge = open_seed_target_long_edge(self.target_long_edge);
@@ -94,7 +95,7 @@ impl SuiSuiViewApp {
                     };
                     if sibling_direction.is_some() && attempt < SIBLING_OPEN_RETRY_LIMIT {
                         if let Err(LoaderFailure::Source(error)) = &result {
-                            last_failure = Some(format!("Could not open {}: {error}", path.display()));
+                            last_failure = Some(i18n.with_vars("status.open_failed", &[("path", path.display().to_string()), ("error", error.clone())]));
                             continue;
                         }
                     }

@@ -10,6 +10,17 @@ if ($identity.Name -notmatch '\\SsvMsiTest[0-9a-f]+$' -or
     throw 'Installer tests require the dedicated non-administrator CI account.'
 }
 New-Item -ItemType Directory -Force -Path $Evidence | Out-Null
+# Start-Process -Credential loads the hive but inherits the caller's environment.
+# Resolve this account's profile by SID before expanding any known-folder paths
+# or starting msiexec; never grant the test account access to runneradmin's data.
+$profileKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $identity.User.Value
+$profilePath = [IO.Path]::GetFullPath((Get-ItemProperty -LiteralPath $profileKey).ProfileImagePath)
+if ((Split-Path $profilePath -Leaf) -notlike 'SsvMsiTest*') { throw 'Unexpected disposable user profile' }
+$env:USERPROFILE = $profilePath
+$env:APPDATA = Join-Path $profilePath 'AppData\Roaming'
+$env:LOCALAPPDATA = Join-Path $profilePath 'AppData\Local'
+$env:HOMEDRIVE = [IO.Path]::GetPathRoot($profilePath).TrimEnd('\')
+$env:HOMEPATH = $profilePath.Substring($env:HOMEDRIVE.Length)
 $installerRoot = 'HKCU:\Software\BK927\SuiSuiView\Installer'
 $associationRoot = 'HKCU:\Software\BK927\SuiSuiView\Associations\SuiSuiView.Installed'
 $manifest = Get-Content -LiteralPath (Join-Path $Artifacts 'msi-manifest.json') -Raw | ConvertFrom-Json
@@ -18,8 +29,8 @@ $fixtures = Join-Path $Artifacts 'fixtures'
 $zips = @(Get-ChildItem -LiteralPath $Artifacts -Filter '*-windows-x64.zip')
 if ($zips.Count -ne 1) { throw 'Expected exactly one validated ZIP' }
 $zip = $zips[0]
-$installDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Programs\SuiSuiView'
-$result = @{ non_admin = $true; clean_pc_tested = $false; gui_tested = $false; tests = @() }
+$installDir = Join-Path $env:LOCALAPPDATA 'Programs\SuiSuiView'
+$result = @{ non_admin = $true; profile = $profilePath; clean_pc_tested = $false; gui_tested = $false; tests = @() }
 
 function Invoke-Msi([string]$Name, [string[]]$Arguments, [bool]$ExpectFailure = $false) {
     $log = Join-Path $Evidence "$Name.log"
@@ -66,7 +77,7 @@ function Assert-Payload {
 
 try {
     if (Test-Path -LiteralPath $installerRoot) { throw 'Disposable account already contains an installation' }
-    $settings = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'SuiSuiView\msi-preservation-test.txt'
+    $settings = Join-Path $env:APPDATA 'SuiSuiView\msi-preservation-test.txt'
     New-Item -ItemType Directory -Force -Path (Split-Path $settings) | Out-Null
     Set-Content -LiteralPath $settings -Value 'preserve user settings and bookmarks'
     # A neighboring portable registration and another OpenWith value must survive.
@@ -97,7 +108,7 @@ try {
     if ($command -ne "`"$(Join-Path $installDir 'suisuiview.exe')`" `"%1`"") { throw 'File association command is not quoted correctly' }
     if (-not (Get-Item -LiteralPath $openWith).GetValueNames().Contains('SuiSuiView.Installed.png')) { throw 'OpenWith registration missing' }
     if (-not (Test-Path -LiteralPath "$zipClass\shell\open\command") -or -not (Get-Item -LiteralPath $zipOpenWith).GetValueNames().Contains('SuiSuiView.Installed.zip')) { throw 'Upgrade lost the selected ZIP association' }
-    $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'SuiSuiView\SuiSuiView.lnk'
+    $shortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\SuiSuiView\SuiSuiView.lnk'
     if (-not (Test-Path -LiteralPath $shortcut)) { throw 'Start menu shortcut missing' }
 
     Invoke-Msi 'block-downgrade' @('/i', "`"$(Join-Path $fixtures 'older.msi')`"") $true

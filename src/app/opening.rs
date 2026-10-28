@@ -355,10 +355,12 @@ impl SuiSuiViewApp {
                     self.sibling_book_visual_pending = false;
                     self.clear_pending_sibling_book_turns();
                     self.handle_open_failure(
-                        format!(
-                            "Could not open {}: {}",
-                            event.path.display(),
-                            failure.message()
+                        self.i18n().with_vars(
+                            "status.open_failed",
+                            &[
+                                ("path", event.path.display().to_string()),
+                                ("error", failure.message().to_string()),
+                            ],
                         ),
                         event.failure_action,
                     );

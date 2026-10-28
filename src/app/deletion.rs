@@ -81,11 +81,11 @@ impl DeleteOpenPlan {
 impl SuiSuiViewApp {
     pub(in crate::app) fn delete_current_file(&mut self, mode: DeleteMode) {
         if !can_begin_delete(self.loader_pending) {
-            self.notify("Another book is still opening, so deletion was cancelled.");
+            self.notify(self.i18n().text("status.delete_opening"));
             return;
         }
         let Some(plan) = self.current_delete_after_plan() else {
-            self.notify("No current file to delete.");
+            self.notify(self.i18n().text("status.delete_no_file"));
             return;
         };
 
@@ -103,11 +103,11 @@ impl SuiSuiViewApp {
 
     pub(in crate::app) fn execute_delete_plan(&mut self, mode: DeleteMode, plan: DeleteAfterPlan) {
         let Some(live_plan) = self.current_delete_after_plan() else {
-            self.notify("The delete target changed, so deletion was cancelled.");
+            self.notify(self.i18n().text("status.delete_target_changed"));
             return;
         };
         if !same_delete_subject(&plan, &live_plan) {
-            self.notify("The delete target changed, so deletion was cancelled.");
+            self.notify(self.i18n().text("status.delete_target_changed"));
             return;
         }
         // The target is unchanged, but sibling/successor state may have changed
@@ -119,15 +119,13 @@ impl SuiSuiViewApp {
             // ClearBook is still queued after a timeout. Restore the source
             // behind it so later SetPage commands can resume normal reading.
             self.reload_current_book_after_delete_failure();
-            self.notify(
-                "Background decode is still finishing; deletion was not attempted. Try again soon.",
-            );
+            self.notify(self.i18n().text("status.delete_busy"));
             return;
         }
 
         let view_fallback = self.open_view_fallback();
         let result = delete_file(mode, &plan.target);
-        let message = delete_result_message(mode, &plan.target, &result);
+        let message = delete_result_message(self.i18n(), mode, &plan.target, &result);
         match result {
             Ok(()) => {
                 if let Some(next) = plan.success {
@@ -352,13 +350,25 @@ fn delete_file(mode: DeleteMode, target: &Path) -> Result<(), String> {
     }
 }
 
-fn delete_result_message(mode: DeleteMode, target: &Path, result: &Result<(), String>) -> String {
+fn delete_result_message(
+    i18n: crate::core::i18n::I18n,
+    mode: DeleteMode,
+    target: &Path,
+    result: &Result<(), String>,
+) -> String {
+    let path = target.display().to_string();
     match result {
-        Ok(()) => match mode {
-            DeleteMode::Recycle => format!("Moved to Recycle Bin: {}", target.display()),
-            DeleteMode::Permanent => format!("Permanently deleted: {}", target.display()),
-        },
-        Err(error) => format!("Could not delete {}: {error}", target.display()),
+        Ok(()) => i18n.with_vars(
+            match mode {
+                DeleteMode::Recycle => "status.delete_recycled",
+                DeleteMode::Permanent => "status.delete_permanent",
+            },
+            &[("path", path)],
+        ),
+        Err(error) => i18n.with_vars(
+            "status.delete_failed",
+            &[("path", path), ("error", error.clone())],
+        ),
     }
 }
 
