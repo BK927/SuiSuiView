@@ -1,0 +1,7 @@
+Rust 1.99.1 standard-library license files, copied without modification from:
+https://raw.githubusercontent.com/rust-lang/rust/1.99.1/LICENSE-APACHE
+https://raw.githubusercontent.com/rust-lang/rust/1.99.1/LICENSE-MIT
+
+The Windows packager also copies COPYRIGHT.html and, when available,
+COPYRIGHT-library.html from the exact installed Rust toolchain. These retain
+the aggregated copyright and third-party notices omitted by Cargo reports.

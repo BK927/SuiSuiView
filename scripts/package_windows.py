@@ -170,9 +170,12 @@ def main() -> None:
         # Cargo reports exclude the standard library linked by rustc.
         rust_docs = Path(run('rustc', '--print', 'sysroot').strip()) / 'share/doc/rust'
         rust_licenses = bundle / 'licenses/rust-standard-library'
-        rust_licenses.mkdir(parents=True)
-        for filename in ('COPYRIGHT.html', 'LICENSE-APACHE', 'LICENSE-MIT'):
-            shutil.copyfile(rust_docs / filename, rust_licenses / filename)
+        # The minimal Windows toolchain includes aggregate copyright notices,
+        # but not standalone MIT/Apache files. Those are pinned in licenses/.
+        for filename in ('LICENSE-APACHE', 'LICENSE-MIT'):
+            if not (rust_licenses / filename).is_file():
+                raise RuntimeError(f'Missing pinned Rust license: {filename}')
+        shutil.copyfile(rust_docs / 'COPYRIGHT.html', rust_licenses / 'COPYRIGHT.html')
         if (rust_docs / 'COPYRIGHT-library.html').exists():
             shutil.copyfile(rust_docs / 'COPYRIGHT-library.html', rust_licenses / 'COPYRIGHT-library.html')
         shutil.copyfile(exe, bundle / 'suisuiview.exe')

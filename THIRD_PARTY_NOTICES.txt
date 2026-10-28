@@ -17,6 +17,11 @@ native library notices. These supplement this in-app summary. SOURCE.txt points
 to the matching source archive, which includes vendored dependencies and the
 pinned winit patch. Package these materials together with the executable.
 
+The linked Rust standard library is covered by its MIT/Apache-2.0 terms and
+third-party notices. Windows bundles include the pinned Rust 1.99.1 license
+texts and the installed toolchain's aggregated copyright notices under
+licenses/rust-standard-library/.
+
 Application
 -----------
 
