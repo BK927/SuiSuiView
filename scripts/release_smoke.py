@@ -49,10 +49,13 @@ def main() -> None:
         with zipfile.ZipFile(archive, 'w', compression=compression) as z:
             for file in sorted(book.iterdir()):
                 z.write(file, f'책/{file.name}')
-        sources.append((name, archive))
+        sources.append((name + '-cbz', archive))
+        zip_path = archive.with_suffix('.zip')
+        zip_path.write_bytes(archive.read_bytes())
+        sources.append((name + '-zip', zip_path))
     env = os.environ.copy()
     env['SUISUIVIEW_PROFILE_DIR'] = str(fixture / 'profile')
-    results, compatibility = [], []
+    results = []
     for strategy in ('auto', 'image-crate'):
         for name, source in sources:
             report_path = output / f'{name}-{strategy}.json'
@@ -62,21 +65,12 @@ def main() -> None:
                 check=True, env=env, timeout=120,
             )
             report = json.loads(report_path.read_text(encoding='utf-8'))
-            # zip 2.4.2 currently fails real ZIP method-14 LZMA streams.
-            # Preserve this diagnostic separately; never label it a passing
-            # supported-format test or let the package claim release readiness.
-            if name == 'lzma':
-                compatibility.append({'case': f'{name}-{strategy}',
-                                      'passed': report['failures'] == 0,
-                                      'failures': report['failures'],
-                                      'errors': [p['error'] for p in report['pages'] if p['error']]})
-                continue
             verify_report(report, 6)
             results.append({'case': f'{name}-{strategy}', 'pages': 6,
                             'backend_counts': report['backend_counts']})
     (output / 'summary.json').write_text(
         json.dumps({'required_smoke_passed': True, 'cases': results,
-                    'compatibility_probes': compatibility, 'gui_tested': False,
+                    'lzma_required': True, 'gui_tested': False,
                     'clean_pc_tested': False}, indent=2), encoding='utf-8',
     )
 

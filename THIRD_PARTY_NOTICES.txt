@@ -65,10 +65,6 @@ adler2 2.0.1
 License: 0BSD OR MIT OR Apache-2.0
 Source: https://github.com/oyvindln/adler2
 
-aes 0.8.4
-License: MIT OR Apache-2.0
-Source: https://github.com/RustCrypto/block-ciphers
-
 ahash 0.8.12
 License: MIT OR Apache-2.0
 Source: https://github.com/tkaitchuck/ahash
@@ -117,10 +113,6 @@ blake3 1.8.5
 License: CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception
 Source: https://github.com/BLAKE3-team/BLAKE3
 
-block-buffer 0.10.4
-License: MIT OR Apache-2.0
-Source: https://github.com/RustCrypto/utils
-
 bumpalo 3.20.2
 License: MIT OR Apache-2.0
 Source: https://github.com/fitzgen/bumpalo
@@ -141,14 +133,6 @@ byteorder-lite 0.1.0
 License: Unlicense OR MIT
 Source: https://github.com/image-rs/byteorder-lite
 
-bzip2 0.5.2
-License: MIT OR Apache-2.0
-Source: https://github.com/trifectatechfoundation/bzip2-rs
-
-bzip2-sys 0.1.13+1.0.8
-License: MIT OR Apache-2.0
-Source: https://github.com/alexcrichton/bzip2-rs
-
 cc 1.2.62
 License: MIT OR Apache-2.0
 Source: https://github.com/rust-lang/cc-rs
@@ -160,10 +144,6 @@ Source: https://github.com/katharostech/cfg_aliases
 cfg-if 1.0.4
 License: MIT OR Apache-2.0
 Source: https://github.com/rust-lang/cfg-if
-
-cipher 0.4.4
-License: MIT OR Apache-2.0
-Source: https://github.com/RustCrypto/traits
 
 clipboard-win 5.4.1
 License: BSL-1.0
@@ -177,29 +157,13 @@ color_quant 1.1.0
 License: MIT
 Source: https://github.com/image-rs/color_quant.git
 
-constant_time_eq 0.3.1
-License: CC0-1.0 OR MIT-0 OR Apache-2.0
-Source: https://github.com/cesarb/constant_time_eq
-
 constant_time_eq 0.4.2
 License: CC0-1.0 OR MIT-0 OR Apache-2.0
 Source: https://github.com/cesarb/constant_time_eq
 
-cpufeatures 0.2.17
-License: MIT OR Apache-2.0
-Source: https://github.com/RustCrypto/utils
-
 cpufeatures 0.3.0
 License: MIT OR Apache-2.0
 Source: https://github.com/RustCrypto/utils
-
-crc 3.4.0
-License: MIT OR Apache-2.0
-Source: https://github.com/mrhooray/crc-rs.git
-
-crc-catalog 2.5.0
-License: MIT OR Apache-2.0
-Source: https://github.com/akhilles/crc-catalog.git
 
 crc32fast 1.5.0
 License: MIT OR Apache-2.0
@@ -213,10 +177,6 @@ crossbeam-utils 0.8.21
 License: MIT OR Apache-2.0
 Source: https://github.com/crossbeam-rs/crossbeam
 
-crypto-common 0.1.7
-License: MIT OR Apache-2.0
-Source: https://github.com/RustCrypto/traits
-
 cursor-icon 1.2.0
 License: MIT OR Apache-2.0 OR Zlib
 Source: https://github.com/rust-windowing/cursor-icon
@@ -228,10 +188,6 @@ Source: https://github.com/anatawa12/deflate64-rs
 deranged 0.5.8
 License: MIT OR Apache-2.0
 Source: https://github.com/jhpratt/deranged
-
-digest 0.10.7
-License: MIT OR Apache-2.0
-Source: https://github.com/RustCrypto/traits
 
 directories 6.0.0
 License: MIT OR Apache-2.0
@@ -345,10 +301,6 @@ form_urlencoded 1.2.2
 License: MIT OR Apache-2.0
 Source: https://github.com/servo/rust-url
 
-generic-array 0.14.7
-License: MIT
-Source: https://github.com/fizyk20/generic-array.git
-
 getrandom 0.3.4
 License: MIT OR Apache-2.0
 Source: https://github.com/rust-random/getrandom
@@ -421,10 +373,6 @@ hexf-parse 0.2.1
 License: CC0-1.0
 Source: https://github.com/lifthrasiir/hexf
 
-hmac 0.12.1
-License: MIT OR Apache-2.0
-Source: https://github.com/RustCrypto/MACs
-
 icu_collections 2.2.0
 License: Unicode-3.0
 Source: https://github.com/unicode-org/icu4x
@@ -472,10 +420,6 @@ Source: https://github.com/image-rs/image-webp
 indexmap 2.14.0
 License: Apache-2.0 OR MIT
 Source: https://github.com/indexmap-rs/indexmap
-
-inout 0.1.4
-License: MIT OR Apache-2.0
-Source: https://github.com/RustCrypto/utils
 
 itoa 1.0.18
 License: MIT OR Apache-2.0
@@ -549,14 +493,6 @@ lru 0.12.5
 License: MIT
 Source: https://github.com/jeromefroe/lru-rs.git
 
-lzma-rs 0.3.0
-License: MIT
-Source: https://github.com/gendx/lzma-rs
-
-lzma-sys 0.1.20
-License: MIT OR Apache-2.0
-Source: https://github.com/alexcrichton/xz2-rs
-
 memchr 2.8.0
 License: Unlicense OR MIT
 Source: https://github.com/BurntSushi/memchr
@@ -620,10 +556,6 @@ Source: https://github.com/Amanieu/parking_lot
 parking_lot_core 0.9.12
 License: MIT OR Apache-2.0
 Source: https://github.com/Amanieu/parking_lot
-
-pbkdf2 0.12.2
-License: MIT OR Apache-2.0
-Source: https://github.com/RustCrypto/password-hashes/tree/master/pbkdf2
 
 percent-encoding 2.3.2
 License: MIT OR Apache-2.0
@@ -733,10 +665,6 @@ serde_spanned 1.1.1
 License: MIT OR Apache-2.0
 Source: https://github.com/toml-rs/toml
 
-sha1 0.10.6
-License: MIT OR Apache-2.0
-Source: https://github.com/RustCrypto/hashes
-
 shlex 1.3.0
 License: MIT OR Apache-2.0
 Source: https://github.com/comex/rust-shlex
@@ -772,10 +700,6 @@ Source: https://github.com/Peternator7/strum
 strum_macros 0.26.4
 License: MIT
 Source: https://github.com/Peternator7/strum
-
-subtle 2.6.1
-License: BSD-3-Clause
-Source: https://github.com/dalek-cryptography/subtle
 
 suisuiview 0.1.0
 License: GPL-3.0-only
@@ -1077,10 +1001,6 @@ xml-rs 0.8.28
 License: MIT
 Source: https://github.com/kornelski/xml-rs
 
-xz2 0.1.7
-License: MIT OR Apache-2.0
-Source: https://github.com/alexcrichton/xz2-rs
-
 yoke 0.8.2
 License: Unicode-3.0
 Source: https://github.com/unicode-org/icu4x
@@ -1109,10 +1029,6 @@ zeroize 1.8.2
 License: Apache-2.0 OR MIT
 Source: https://github.com/RustCrypto/utils
 
-zeroize_derive 1.4.3
-License: Apache-2.0 OR MIT
-Source: https://github.com/RustCrypto/utils/tree/master/zeroize/derive
-
 zerotrie 0.2.4
 License: Unicode-3.0
 Source: https://github.com/unicode-org/icu4x
@@ -1125,10 +1041,6 @@ zerovec-derive 0.11.3
 License: Unicode-3.0
 Source: https://github.com/unicode-org/icu4x
 
-zip 2.4.2
-License: MIT
-Source: https://github.com/zip-rs/zip2.git
-
 zmij 1.0.21
 License: MIT
 Source: https://github.com/dtolnay/zmij
@@ -1136,18 +1048,6 @@ Source: https://github.com/dtolnay/zmij
 zopfli 0.8.3
 License: Apache-2.0
 Source: https://github.com/zopfli-rs/zopfli
-
-zstd 0.13.3
-License: MIT
-Source: https://github.com/gyscos/zstd-rs
-
-zstd-safe 7.2.4
-License: MIT OR Apache-2.0
-Source: https://github.com/gyscos/zstd-rs
-
-zstd-sys 2.0.16+zstd.1.5.7
-License: MIT OR Apache-2.0
-Source: https://github.com/gyscos/zstd-rs
 
 zune-core 0.5.1
 License: MIT OR Apache-2.0 OR Zlib
@@ -1168,6 +1068,102 @@ Source: https://github.com/etemesi254/zune-image/tree/dev/zune-png
 zune-psd 0.5.1
 License: MIT OR Apache-2.0 OR Zlib
 Source: https://github.com/etemesi254/zune-image/tree/dev/crates/zune-psd
+
+aes 0.9.3
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/block-ciphers
+
+block-buffer 0.12.1
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/utils
+
+bzip2 0.6.1
+License: MIT OR Apache-2.0
+Source: https://github.com/trifectatechfoundation/bzip2-rs
+
+cipher 0.5.2
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/traits
+
+cmov 0.5.4
+License: Apache-2.0 OR MIT
+Source: https://github.com/RustCrypto/utils
+
+const-oid 0.10.2
+License: Apache-2.0 OR MIT
+Source: https://github.com/RustCrypto/formats
+
+constant_time_eq 0.6.1
+License: CC0-1.0 OR MIT-0 OR Apache-2.0
+Source: https://codeberg.org/cesarb/constant_time_eq
+
+cpubits 0.1.1
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/utils
+
+crypto-common 0.2.2
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/traits
+
+ctutils 0.4.6
+License: Apache-2.0 OR MIT
+Source: https://github.com/RustCrypto/utils
+
+digest 0.11.3
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/traits
+
+hmac 0.13.0
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/MACs
+
+hybrid-array 0.4.15
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/hybrid-array
+
+inout 0.2.5
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/utils
+
+libbz2-rs-sys 0.2.5
+License: bzip2-1.0.6
+Source: https://github.com/trifectatechfoundation/libbzip2-rs
+
+lzma-rust2 0.23.0
+License: Apache-2.0
+Source: https://github.com/hasenbanck/lzma-rust2/
+
+pbkdf2 0.13.0
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/password-hashes
+
+sha1 0.11.0
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/hashes
+
+sha2 0.11.1
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/hashes
+
+typed-path 0.13.0
+License: MIT OR Apache-2.0
+Source: https://github.com/chipsenkbeil/typed-path
+
+zip 9.1.0
+License: MIT
+Source: https://github.com/zip-rs/zip2
+
+zstd 0.14.3
+License: BSD-3-Clause
+Source: https://github.com/gyscos/zstd-rs
+
+zstd-safe 8.2.0
+License: BSD-3-Clause
+Source: https://github.com/gyscos/zstd-rs
+
+zstd-sys 2.1.2+zstd.1.5.7
+License: BSD-3-Clause
+Source: https://github.com/gyscos/zstd-rs
 
 Bundled Icon Fonts
 ------------------
@@ -1259,12 +1255,11 @@ Additional Default Native Libraries
 -----------------------------------
 
 Little CMS (lcms2-sys 4.0.6): MIT, Copyright (c) 2023 Marti Maria Saguer.
-libbzip2 1.0.8 (bzip2-sys 0.1.13+1.0.8): bzip2 redistribution terms,
-Copyright (C) 1996-2019 Julian R Seward.
-liblzma (lzma-sys 0.1.20, vendored xz-5.2 source): public-domain library code.
-This software includes code from XZ Utils <https://tukaani.org/xz/>. The xz
-command-line utilities and their separate licensing are not part of this EXE.
-Zstandard 1.5.7 (zstd-sys 2.0.16+zstd.1.5.7): distributed under its BSD option,
+LZMA/XZ now use lzma-rust2 0.23.0 (Apache-2.0); bzip2 uses libbz2-rs-sys
+0.2.5 (bzip2-1.0.6). The previous lzma-sys/xz2 and bzip2-sys native libraries
+are no longer linked. Their replacements and original license files are
+included in the generated package notices and corresponding source.
+Zstandard 1.5.7 (zstd-sys 2.1.2+zstd.1.5.7): distributed under its BSD option,
 Copyright (c) Meta Platforms, Inc. and affiliates.
 The exact upstream texts, including native vendor notices, are retained under
 licenses/ in Windows packages and in the corresponding-source archive.

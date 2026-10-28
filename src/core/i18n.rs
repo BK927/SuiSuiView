@@ -119,16 +119,23 @@ fn system_locale_name() -> Option<String> {
 
 #[cfg(target_os = "windows")]
 fn windows_locale_name() -> Option<String> {
-    use windows_sys::Win32::Globalization::GetUserDefaultLocaleName;
+    use windows_sys::Win32::Globalization::{GetUserPreferredUILanguages, MUI_LANGUAGE_NAME};
 
-    const LOCALE_NAME_MAX_LENGTH: usize = 85;
-    let mut buffer = [0_u16; LOCALE_NAME_MAX_LENGTH];
-    let len =
-        unsafe { GetUserDefaultLocaleName(buffer.as_mut_ptr(), LOCALE_NAME_MAX_LENGTH as i32) };
-    if len <= 1 {
+    // Regional formatting can differ from the Windows display language.
+    // The first preferred UI language is authoritative.
+    let mut count = 0;
+    let mut length = 0;
+    if unsafe { GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, std::ptr::null_mut(), &mut length) } == 0
+        || length == 0
+    {
         return None;
     }
-    Some(String::from_utf16_lossy(&buffer[..len as usize - 1]))
+    let mut buffer = vec![0_u16; length as usize];
+    if unsafe { GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, buffer.as_mut_ptr(), &mut length) } == 0 {
+        return None;
+    }
+    let end = buffer.iter().position(|&value| value == 0)?;
+    (end > 0).then(|| String::from_utf16_lossy(&buffer[..end]))
 }
 
 const CATALOG_KO_KR: &[(&str, &str)] = &[
@@ -1500,6 +1507,32 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(ko_keys, en_keys);
+    }
+
+    #[test]
+    fn catalogs_have_unique_nonempty_entries_and_matching_variables() {
+        fn variables(text: &str) -> std::collections::BTreeSet<&str> {
+            text.split('{').skip(1).filter_map(|tail| tail.split_once('}').map(|(name, _)| name)).collect()
+        }
+        for entries in [CATALOG_KO_KR, CATALOG_EN_US] {
+            let mut keys = std::collections::BTreeSet::new();
+            for &(key, value) in entries {
+                assert!(keys.insert(key), "duplicate translation: {key}");
+                assert!(!value.trim().is_empty(), "empty translation: {key}");
+            }
+        }
+        for &(key, ko) in CATALOG_KO_KR {
+            let en = catalog(ResolvedLanguage::EnUs)[key];
+            assert_eq!(variables(ko), variables(en), "translation variables: {key}");
+        }
+    }
+
+    #[test]
+    fn language_selection_handles_korean_locales_and_manual_overrides() {
+        for locale in ["ko", "ko-KR", "KO_kr", " ko-KP "] { assert!(locale_is_korean(locale)); }
+        for locale in ["en-US", "ja-JP", "", "kok-IN"] { assert!(!locale_is_korean(locale)); }
+        assert_eq!(Language::KoKr.resolve(), ResolvedLanguage::KoKr);
+        assert_eq!(Language::EnUs.resolve(), ResolvedLanguage::EnUs);
     }
 
     #[test]

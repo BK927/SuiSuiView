@@ -449,3 +449,13 @@ SuiSuiView is licensed under `GPL-3.0-only`. See [LICENSE](./LICENSE) and
 [third-party notices](./THIRD_PARTY_NOTICES.txt). The planned free GitHub and
 paid Microsoft Store editions use the same core open-source viewer; neither
 executable distribution is publicly available yet. See [Availability](#availability).
+
+### Windows candidate updates
+
+The Windows candidate validates LZMA ZIP/CBZ in both decode strategies, in addition
+to Stored, Deflate and Bzip2 archives. These checks are mandatory packaging gates.
+Compare starts off and its toolbar button is hidden for new profiles; enable the
+button in toolbar settings if needed. Explicit saved visibility is preserved.
+Automatic language selection follows the Windows display language (Korean or
+English fallback), independently of regional date/number formatting. Manual
+Korean/English selection overrides automatic detection.

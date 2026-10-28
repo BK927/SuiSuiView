@@ -104,11 +104,13 @@ def main() -> None:
     verify_receipt(receipt, commit, ROOT)
     licenses, covered = license_report(json.loads((validation / 'licenses.json').read_text(encoding='utf-8')))
     smoke = json.loads((validation / 'decoder-smoke/summary.json').read_text(encoding='utf-8'))
-    if smoke.get('required_smoke_passed') is not True or len(smoke.get('cases', [])) != 8:
+    if smoke.get('required_smoke_passed') is not True or len(smoke.get('cases', [])) != 18:
         raise RuntimeError('Decoder smoke evidence is incomplete')
-    compatibility = smoke.get('compatibility_probes', [])
-    if len(compatibility) != 2:
-        raise RuntimeError('LZMA compatibility probe evidence is missing')
+    expected_cases = {f'{name}-{extension}-{strategy}' for name in ('stored', 'deflate', 'bzip2', 'lzma')
+                      for extension in ('zip', 'cbz') for strategy in ('auto', 'image-crate')}
+    expected_cases.update(f'folder-{strategy}' for strategy in ('auto', 'image-crate'))
+    if not smoke.get('lzma_required') or {case['case'] for case in smoke['cases']} != expected_cases:
+        raise RuntimeError('Missing mandatory decoder/archive cases, including LZMA')
     exe = ROOT / 'target' / TARGET / 'release/suisuiview.exe'
     imports = check_imports(run(str(dumpbin()), '/DEPENDENTS', str(exe)))
     (validation / 'imports.json').write_text(json.dumps(imports, indent=2), encoding='utf-8')
@@ -206,8 +208,6 @@ def main() -> None:
             'This free build has no automatic updater. It is currently unsigned.\n'
             'Windows may show an unknown-publisher/SmartScreen warning. Do not disable protection.\n'
             'AVIF, PDFium/AI previews and external model weights are not included.\n'
-            'Known issue: LZMA-compressed ZIP/CBZ fails to decode in the current zip dependency.\n'
-            'Use Stored/Deflate/Bzip2 archives for this candidate. Public release is blocked.\n'
             'Settings are stored in the user AppData SuiSuiView directory.\n'
             'Build/test success does not certify a clean user PC or graphics compatibility.\n'
             'See release-manifest.json for the exact tested source and validation limits.\n',
@@ -224,10 +224,9 @@ def main() -> None:
             'source_archive': source_archive.name, 'source_sha256': sha256(source_archive),
             'ci_run': os.environ.get('GITHUB_RUN_ID'), 'signed': False,
             'release_ready': False,
-            'compatibility_probes': compatibility,
             'validation': {'regression_tests': 'passed (see cargo-test.txt for ignored cases)',
-                           'decoder_archive_smoke': '8 required cases / 48 decoded pages',
-                           'lzma_zip': 'See compatibility_probes; failures are NOT passes',
+                           'decoder_archive_smoke': '18 required cases / 108 decoded pages',
+                           'lzma_zip': 'passed in both required decode strategies',
                            'source_metadata_offline': True, 'gui': 'not certified by packaging',
                            'clean_user_pc': 'NOT TESTED', 'gpu_hardware_matrix': 'NOT TESTED'},
         }
