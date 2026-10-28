@@ -32,6 +32,16 @@ def sha256(path: Path) -> str:
         return hashlib.file_digest(f, 'sha256').hexdigest()
 
 
+def executable_file_version(path: Path) -> str:
+    # FileVersion's display string may be localized; read its four integer parts.
+    command = ("$v = [Diagnostics.FileVersionInfo]::GetVersionInfo($env:SUISUIVIEW_PACKAGE_EXE); "
+               "'{0}.{1}.{2}.{3}' -f $v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart")
+    return subprocess.check_output(
+        ['pwsh', '-NoProfile', '-Command', command], text=True,
+        env=os.environ | {'SUISUIVIEW_PACKAGE_EXE': str(path.resolve())},
+    ).strip()
+
+
 def verify_receipt(receipt: dict, commit: str, root: Path) -> None:
     if receipt.get('commit') != commit or receipt.get('regression_tests') != 'passed':
         raise RuntimeError('No successful build/test receipt for this source commit')
@@ -113,6 +123,9 @@ def main() -> None:
     if not smoke.get('lzma_required') or {case['case'] for case in smoke['cases']} != expected_cases:
         raise RuntimeError('Missing mandatory decoder/archive cases, including LZMA')
     exe = ROOT / 'target' / TARGET / 'release/suisuiview.exe'
+    file_version = executable_file_version(exe)
+    if file_version != version + '.0':
+        raise RuntimeError(f'Executable resource version {file_version} differs from package {version}')
     imports = check_imports(run(str(dumpbin()), '/DEPENDENTS', str(exe)))
     (validation / 'imports.json').write_text(json.dumps(imports, indent=2), encoding='utf-8')
     dist = ROOT / 'dist'
@@ -222,7 +235,7 @@ def main() -> None:
             'features': ['default', 'native-webp'], 'rustflags': os.environ['RUSTFLAGS'],
             'rustc': run('rustc', '-Vv').strip(), 'cargo': run('cargo', '-V').strip(),
             'cargo_lock_sha256': sha256(ROOT / 'Cargo.lock'),
-            'executable_sha256': sha256(exe), 'dll_imports': imports,
+            'executable_sha256': sha256(exe), 'executable_file_version': file_version, 'dll_imports': imports,
             'source_archive': source_archive.name, 'source_sha256': sha256(source_archive),
             'ci_run': os.environ.get('GITHUB_RUN_ID'), 'signed': False,
             'release_ready': False,

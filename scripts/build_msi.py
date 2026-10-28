@@ -77,6 +77,11 @@ def make_xml(payload: Path, manifest: dict, version: str, destination: Path, cle
     if major > 255 or minor > 255 or build > 65535:
         raise ValueError('Version exceeds Windows Installer limits')
     product_code = guid('product:' + version)
+    payload_manifest = payload / 'release-manifest.json'
+    payload_metadata = json.loads(payload_manifest.read_text(encoding='utf-8')) if payload_manifest.exists() else {'version': version}
+    executable_version = payload_metadata.get('executable_file_version', payload_metadata['version'] + '.0')
+    if not re.fullmatch(r'\d+\.\d+\.\d+\.\d+', executable_version):
+        raise ValueError('Invalid executable resource version')
     wix = ET.Element('Wix', xmlns='http://schemas.microsoft.com/wix/2006/wi')
     product = node(wix, 'Product', Id=product_code, Name='SuiSuiView', Language='1033',
                    Version=version, Manufacturer='BK927', UpgradeCode=UPGRADE_CODE)
@@ -109,7 +114,11 @@ def make_xml(payload: Path, manifest: dict, version: str, destination: Path, cle
         comp_id = identity('cmp', relative)
         component = node(directory('' if parent == '.' else parent), 'Component', Id=comp_id,
                          Guid=guid('file:' + relative), Win64='yes')
-        node(component, 'File', Id=identity('file', relative), Source=str(file), Name=file.name, KeyPath='yes')
+        # wixl does not harvest PE version resources. Without this, Windows sees
+        # the installed EXE as newer than the unversioned MSI row and omits it
+        # after removing the old product during a transactional upgrade.
+        version_attrs = {'DefaultVersion': executable_version} if relative == 'suisuiview.exe' else {}
+        node(component, 'File', Id=identity('file', relative), Source=str(file), Name=file.name, KeyPath='yes', **version_attrs)
         node(feature, 'ComponentRef', Id=comp_id)
     component = node(install, 'Component', Id='Registration', Guid=guid('registration'), Win64='yes')
     node(feature, 'ComponentRef', Id='Registration')

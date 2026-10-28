@@ -32,6 +32,7 @@ class InstallerAuthoring(unittest.TestCase):
             self.assertEqual(old.find(".//w:Property[@Id='SUI_OPTIONAL_EXTENSIONS']", ns).get('Value'), '.zip')
             self.assertFalse(any(e.get('Key').endswith('.zip\\shell\\open\\command') for e in registry))
             self.assertEqual(len(old.findall('.//w:File', ns)), 2)
+            self.assertEqual(old.find(".//w:File[@Name='suisuiview.exe']", ns).get('DefaultVersion'), '0.1.0.0')
 
     def test_invalid_version_or_extension_cannot_generate_installer(self):
         with tempfile.TemporaryDirectory() as temp:
