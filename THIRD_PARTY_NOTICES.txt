@@ -10,6 +10,13 @@ components that are not part of the default binary are called out separately
 below. Regenerate this file when dependencies, bundled assets, native binaries,
 or distribution targets change.
 
+Windows release packaging additionally generates THIRD_PARTY_LICENSES.txt from
+the exact locked default-feature dependency graph. The licenses/ directory
+preserves upstream LICENSE, COPYING, NOTICE, AUTHORS and PATENTS files, including
+native library notices. These supplement this in-app summary. SOURCE.txt points
+to the matching source archive, which includes vendored dependencies and the
+pinned winit patch. Package these materials together with the executable.
+
 Application
 -----------
 

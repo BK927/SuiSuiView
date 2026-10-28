@@ -1,5 +1,8 @@
 # Rust build output
 /target/
+/dist/
+/.internal/
+/AGENTS.md
 
 # Editor and IDE state
 /.idea/

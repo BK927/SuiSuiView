@@ -97,6 +97,42 @@ The default build includes still WebP decoding. Optional AVIF and
 PDF-compatible Illustrator previews need additional dependencies and are not
 enabled by this command. Use a release build when evaluating responsiveness.
 
+### Windows release candidates
+
+The **Windows release candidate** GitHub Actions workflow builds the default
+Windows x64 viewer, runs release-mode regression and decoder/archive checks,
+and uploads a portable ZIP, a corresponding-source archive and SHA-256 hashes.
+These are test candidates, not a public release or a clean-PC certification.
+The workflow has read-only repository permissions and never publishes a release.
+
+For the same packaging locally, use PowerShell 7, Python 3.12+, Rust **1.99.1**
+MSVC and the C++ build tools described above. Commit the public source first:
+
+```powershell
+rustup override set 1.99.1
+cargo install cargo-about --locked --version 0.9.2
+python -m pip install Pillow==11.3.0
+./scripts/build-windows.ps1
+```
+
+Output goes to `dist/`. The production executable is built at
+`target/x86_64-pc-windows-msvc/release/suisuiview.exe`. Packaging uses the static
+MSVC runtime and rejects unreviewed DLL imports. WebP, Little CMS and archive
+libraries are built from source; no downloaded codec DLLs or external model
+weights are included. The ZIP carries `LICENSE`, `THIRD_PARTY_NOTICES.txt`,
+generated `THIRD_PARTY_LICENSES.txt`, upstream notice files and build provenance.
+The source archive includes the locked dependencies and patched winit source.
+
+Before making a free GitHub Release public, test the exact ZIP on a Windows
+10/11 x64 user PC without development tools: extract as a standard user, launch
+offline, open JPEG/PNG/WebP and ZIP/CBZ in paths containing spaces and Korean
+characters, turn pages, switch reading modes, save/reopen settings and bookmarks,
+and exercise both the default renderer and GPU acceleration/restart. Check F1
+notices and record OS, graphics driver, ZIP hash and results. Hosted CI and a
+developer-machine launch do not replace these checks. Publish the matching source
+archive and `SHA256SUMS.txt` alongside the binary ZIP. Builds are unsigned, so
+Windows may show publisher/reputation warnings; do not disable Windows protection.
+
 Press `F2` / `Ctrl+O` to open an image or archive, or `F` to open a folder.
 To try GPU upscaling, open Settings with `F5`, enable GPU acceleration in
 Rendering, restart the app, then select an upscaler and a fit mode.

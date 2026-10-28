@@ -1,0 +1,72 @@
+name: Windows release candidate
+
+on:
+  pull_request:
+  push:
+    branches: [main, 'codex/windows-release-packaging']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install the release toolchain
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup override set 1.99.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-release-v1-${{ runner.os }}-1.99.1-${{ hashFiles('Cargo.lock', 'scripts/build-windows.ps1') }}
+      - name: Install notice generator and test image tools
+        run: |
+          cargo install cargo-about --locked --version 0.9.2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install Pillow==11.3.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check packaging and dependency policy
+        run: |
+          python -m unittest discover -s scripts -p 'test_release_*.py'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/native_dependency_scan.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/architecture_check.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build, test and package the default Windows x64 application
+        run: ./scripts/build-windows.ps1
+      - name: Preserve test evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-validation-${{ github.sha }}
+          path: target/release-validation/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Upload release candidates (no public release is created)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
