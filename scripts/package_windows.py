@@ -38,6 +38,7 @@ def verify_receipt(receipt: dict, commit: str, root: Path) -> None:
     required = {f'target/{TARGET}/release/suisuiview.exe',
                 f'target/{TARGET}/release/suisuiview-cli.exe',
                 'target/release-validation/cargo-test.txt',
+                'target/release-validation/build-artifacts.jsonl',
                 'target/release-validation/licenses.json',
                 'target/release-validation/decoder-smoke/summary.json'}
     if set(receipt.get('files', {})) != required:
@@ -130,14 +131,18 @@ def main() -> None:
         (source / '.cargo/config.toml').write_text(vendor_config, encoding='utf-8')
         metadata = json.loads(run('cargo', 'metadata', '--locked', '--offline',
                                   '--format-version', '1', '--filter-platform', TARGET, cwd=source))
-        nodes = {n['id']: n for n in metadata['resolve']['nodes']}
-        active, pending = set(), [metadata['resolve']['root']]
-        while pending:
-            current = pending.pop()
-            if current not in active:
-                active.add(current)
-                pending.extend(nodes[current]['dependencies'])
-        packages = [p for p in metadata['packages'] if p['id'] in active and p['name'] != 'suisuiview']
+        # Cargo metadata can retain optional dependencies activated only on other
+        # platforms. Compiler artifacts (including fresh cache hits) identify the
+        # exact runtime and build-time packages used by the validated binaries.
+        artifacts = [json.loads(line) for line in
+                     (validation / 'build-artifacts.jsonl').read_text(encoding='utf-8-sig').splitlines()]
+        active = {a['package_id'] for a in artifacts if a.get('reason') == 'compiler-artifact'
+                  and Path(a['manifest_path']).resolve() != ROOT / 'Cargo.toml'}
+        if not active or not any(a.get('reason') == 'build-finished' and a.get('success') for a in artifacts):
+            raise RuntimeError('Missing successful compiler artifact inventory')
+        packages = [p for p in metadata['packages'] if p['id'] in active]
+        if active != {p['id'] for p in packages}:
+            raise RuntimeError('Compiled dependencies are missing from vendored source metadata')
         missing = {(p['name'], p['version']) for p in packages} - covered
         if missing:
             raise RuntimeError(f'Packages missing from generated license report: {sorted(missing)}')

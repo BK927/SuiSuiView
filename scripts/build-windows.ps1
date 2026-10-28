@@ -28,7 +28,7 @@ try {
     New-Item -ItemType Directory -Force target/release-validation | Out-Null
     $receiptPath = Join-Path $repo 'target/release-validation/build-receipt.json'
     if (Test-Path -LiteralPath $receiptPath) { Remove-Item -LiteralPath $receiptPath }
-    cargo build --release --locked --target $target --bin suisuiview --bin suisuiview-cli
+    cargo build --release --locked --target $target --bin suisuiview --bin suisuiview-cli --message-format=json-render-diagnostics > target/release-validation/build-artifacts.jsonl
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
     cargo test --release --locked --target $target --lib --bin suisuiview --bin suisuiview-cli 2>&1 |
         Tee-Object target/release-validation/cargo-test.txt
@@ -45,6 +45,7 @@ try {
         "target/$target/release/suisuiview.exe",
         "target/$target/release/suisuiview-cli.exe",
         'target/release-validation/cargo-test.txt',
+        'target/release-validation/build-artifacts.jsonl',
         'target/release-validation/licenses.json',
         'target/release-validation/decoder-smoke/summary.json'
     )

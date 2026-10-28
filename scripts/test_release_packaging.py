@@ -13,6 +13,7 @@ class PackagingGates(unittest.TestCase):
             filenames = [f'target/{TARGET}/release/suisuiview.exe',
                          f'target/{TARGET}/release/suisuiview-cli.exe',
                          'target/release-validation/cargo-test.txt',
+                         'target/release-validation/build-artifacts.jsonl',
                          'target/release-validation/licenses.json',
                          'target/release-validation/decoder-smoke/summary.json']
             hashes = {}
