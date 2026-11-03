@@ -111,6 +111,187 @@ fn installed_and_multiple_portable_copies_preserve_each_other_and_user_choice() 
     assert_eq!(registry.values[&user_choice], Value::string("Other.App"));
 }
 
+const LEGACY_CAPABILITIES: &str = "Software\\SuiSuiView\\Capabilities";
+const PNG_USER_CHOICE: &str =
+    "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.png\\UserChoice";
+
+/// What builds before per-installation namespaces wrote on registration.
+fn seed_legacy_registration(registry: &mut MemoryRegistry, extensions: &[&str]) {
+    let mut set = |key: &str, name: &str, value: &str| {
+        registry
+            .values
+            .insert((key.into(), name.into()), Value::string(value));
+    };
+    set(LEGACY_CAPABILITIES, "ApplicationName", "SuiSuiView");
+    set(
+        LEGACY_CAPABILITIES,
+        "ApplicationDescription",
+        "Fast native image and comic viewer",
+    );
+    set(REGISTERED_APPS, "SuiSuiView", LEGACY_CAPABILITIES);
+    for extension in extensions {
+        let class = format!("Software\\Classes\\SuiSuiView.{extension}");
+        set(
+            &format!("{LEGACY_CAPABILITIES}\\FileAssociations"),
+            &format!(".{extension}"),
+            &format!("SuiSuiView.{extension}"),
+        );
+        set(&class, "", "SuiSuiView file");
+        set(&class, "FriendlyTypeName", "SuiSuiView file");
+        set(
+            &format!("{class}\\DefaultIcon"),
+            "",
+            "\"C:\\old\\suisuiview.exe\",0",
+        );
+        set(
+            &format!("{class}\\shell\\open\\command"),
+            "",
+            "\"C:\\old\\suisuiview.exe\" \"%1\"",
+        );
+    }
+}
+
+fn legacy_values(registry: &MemoryRegistry) -> Vec<(String, String)> {
+    registry
+        .values
+        .keys()
+        .filter(|(key, name)| {
+            key.starts_with("Software\\SuiSuiView\\")
+                || key.starts_with("Software\\Classes\\SuiSuiView.png")
+                || key.starts_with("Software\\Classes\\SuiSuiView.cbz")
+                || (key == REGISTERED_APPS && name == "SuiSuiView")
+        })
+        .cloned()
+        .collect()
+}
+
+const KNOWN: [&str; 2] = ["png", "cbz"];
+
+#[test]
+fn legacy_registration_is_removed_on_register_and_unregister() {
+    let context = Context::for_executable(Path::new("C:\\Viewer\\suisuiview.exe"), false).unwrap();
+    for selected in [&["png"][..], &[]] {
+        let mut registry = MemoryRegistry::default();
+        seed_legacy_registration(&mut registry, &KNOWN);
+
+        write_registration(&mut registry, &context, selected, &KNOWN).unwrap();
+
+        assert_eq!(legacy_values(&registry), Vec::<(String, String)>::new());
+        assert_eq!(
+            registry
+                .read(REGISTERED_APPS, &context.id)
+                .unwrap()
+                .is_some(),
+            !selected.is_empty()
+        );
+    }
+}
+
+#[test]
+fn legacy_prog_id_survives_while_it_may_be_the_users_default() {
+    let context = Context::for_executable(Path::new("C:\\Viewer\\suisuiview.exe"), false).unwrap();
+    let mut registry = MemoryRegistry::default();
+    seed_legacy_registration(&mut registry, &KNOWN);
+    registry.values.insert(
+        (PNG_USER_CHOICE.into(), "ProgId".into()),
+        Value::string("SuiSuiView.png"),
+    );
+
+    write_registration(&mut registry, &context, &["png"], &KNOWN).unwrap();
+
+    let command = "Software\\Classes\\SuiSuiView.png\\shell\\open\\command";
+    assert!(registry.read(command, "").unwrap().is_some());
+    assert!(registry
+        .read("Software\\Classes\\SuiSuiView.cbz", "")
+        .unwrap()
+        .is_none());
+    assert!(registry
+        .read(REGISTERED_APPS, "SuiSuiView")
+        .unwrap()
+        .is_none());
+    assert!(registry
+        .read(LEGACY_CAPABILITIES, "ApplicationName")
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn unreadable_user_choice_keeps_the_legacy_prog_id() {
+    struct DeniedUserChoice(MemoryRegistry);
+    impl Registry for DeniedUserChoice {
+        fn read(&self, key: &str, name: &str) -> Result<Option<Value>, String> {
+            if key.contains("\\UserChoice") {
+                return Err("access denied".into());
+            }
+            self.0.read(key, name)
+        }
+        fn write(&mut self, key: &str, name: &str, value: Option<&Value>) -> Result<(), String> {
+            self.0.write(key, name, value)
+        }
+    }
+    let context = Context::for_executable(Path::new("C:\\Viewer\\suisuiview.exe"), false).unwrap();
+    let mut registry = DeniedUserChoice(MemoryRegistry::default());
+    seed_legacy_registration(&mut registry.0, &["png"]);
+
+    write_registration(&mut registry, &context, &["png"], &KNOWN).unwrap();
+
+    assert!(registry
+        .read("Software\\Classes\\SuiSuiView.png", "")
+        .unwrap()
+        .is_some());
+    assert!(registry
+        .read(REGISTERED_APPS, "SuiSuiView")
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn a_failed_legacy_cleanup_never_undoes_the_new_registration() {
+    let context = Context::for_executable(Path::new("C:\\Viewer\\suisuiview.exe"), false).unwrap();
+    let mut seeded = MemoryRegistry::default();
+    seed_legacy_registration(&mut seeded, &KNOWN);
+    let registration = plan(&context, &["png"], &KNOWN).unwrap().len();
+    let cleanup = legacy::cleanup(&seeded, &KNOWN).len();
+    assert!(cleanup > 0);
+    for failure in 1..=registration + cleanup {
+        let mut registry = MemoryRegistry {
+            values: seeded.values.clone(),
+            fail_at: Some(failure),
+            ..MemoryRegistry::default()
+        };
+        let result = write_registration(&mut registry, &context, &["png"], &KNOWN);
+        if failure <= registration {
+            assert!(result.is_err());
+            assert_eq!(registry.values, seeded.values, "failed write {failure}");
+        } else {
+            result.unwrap();
+            assert!(registry
+                .read(REGISTERED_APPS, &context.id)
+                .unwrap()
+                .is_some());
+            let legacy = |r: &MemoryRegistry| {
+                legacy_values(r)
+                    .into_iter()
+                    .map(|key| r.values[&key].clone())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(legacy(&registry), legacy(&seeded), "failed write {failure}");
+        }
+    }
+}
+
+#[test]
+fn nothing_legacy_means_no_extra_writes_and_foreign_entries_stay() {
+    let mut registry = MemoryRegistry::default();
+    assert!(legacy::cleanup(&registry, &KNOWN).is_empty());
+
+    registry.values.insert(
+        (REGISTERED_APPS.into(), "SuiSuiView".into()),
+        Value::string("Software\\SomeoneElse\\Capabilities"),
+    );
+    assert!(legacy::cleanup(&registry, &KNOWN).is_empty());
+}
+
 #[test]
 fn windows_registry_round_trip_uses_only_a_unique_test_root() {
     use windows_sys::Win32::System::Registry::{RegDeleteKeyW, RegDeleteTreeW, HKEY_CURRENT_USER};

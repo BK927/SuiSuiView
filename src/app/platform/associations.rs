@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
 
+mod legacy;
 mod registry;
 use registry::{Registry, Value, WindowsRegistry};
 
@@ -183,14 +184,13 @@ fn apply(registry: &mut impl Registry, changes: &[Change]) -> Result<(), String>
     Ok(())
 }
 
-fn update(selected: &[&str], known: &[&str]) -> Result<(), String> {
-    // Invalid requests must fail before reading or changing registrations.
-    for extension in selected.iter().chain(known) {
-        normalize(extension)?;
-    }
-    let context = Context::current()?;
-    let changes = plan(&context, selected, known)?;
-    let mut registry = WindowsRegistry;
+fn write_registration(
+    registry: &mut impl Registry,
+    context: &Context,
+    selected: &[&str],
+    known: &[&str],
+) -> Result<(), String> {
+    let changes = plan(context, selected, known)?;
     if let Some(owner) = registry
         .read(&context.capabilities(), "OwnedExecutable")?
         .and_then(|v| v.as_string())
@@ -199,7 +199,21 @@ fn update(selected: &[&str], known: &[&str]) -> Result<(), String> {
             return Err("This file registration belongs to a different executable".into());
         }
     }
-    apply(&mut registry, &changes)?;
+    apply(registry, &changes)?;
+    // Separate and best effort: an older build's entry must not block or undo
+    // the user's registration; a failed cleanup rolls back only itself.
+    let legacy = legacy::cleanup(registry, known);
+    let _ = apply(registry, &legacy);
+    Ok(())
+}
+
+fn update(selected: &[&str], known: &[&str]) -> Result<(), String> {
+    // Invalid requests must fail before reading or changing registrations.
+    for extension in selected.iter().chain(known) {
+        normalize(extension)?;
+    }
+    let context = Context::current()?;
+    write_registration(&mut WindowsRegistry, &context, selected, known)?;
     unsafe {
         SHChangeNotify(
             SHCNE_ASSOCCHANGED as i32,
