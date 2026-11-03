@@ -57,3 +57,48 @@ fn folder_and_zip_methods_preserve_order_original_bytes_and_prefixes() {
         }
     }
 }
+
+/// Some archivers (macOS Finder among them) store UTF-8 names without the
+/// UTF-8 flag. Earlier builds keyed those books and bookmarks by the CP437
+/// reading, so it must not change under a newer zip crate.
+#[test]
+fn unflagged_utf8_entry_names_keep_their_cp437_identity() {
+    let dir = temp_test_dir("unflagged-utf8-names");
+    let name = "페이지-01.png";
+    let mut bytes = Vec::new();
+    {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+        writer
+            .start_file(
+                name,
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+        writer.write_all(b"page").unwrap();
+        writer.finish().unwrap();
+    }
+    let flagged = dir.join("flagged.cbz");
+    fs::write(&flagged, &bytes).unwrap();
+    clear_utf8_name_flags(&mut bytes);
+    let unflagged = dir.join("unflagged.cbz");
+    fs::write(&unflagged, &bytes).unwrap();
+
+    let flagged = ZipCbzSource::open(&flagged).unwrap();
+    let unflagged = ZipCbzSource::open(&unflagged).unwrap();
+
+    assert_eq!(flagged.page_name(0), Some(name));
+    assert_eq!(unflagged.page_name(0), Some("φÄÿ∞¥┤∞ºÇ-01.png"));
+    assert_ne!(flagged.book_id(), unflagged.book_id());
+}
+
+/// Clears general-purpose bit 11 in every local and central header.
+fn clear_utf8_name_flags(zip: &mut [u8]) {
+    for at in 0..zip.len().saturating_sub(4) {
+        let flags_high_byte = match &zip[at..at + 4] {
+            b"PK\x03\x04" => at + 7,
+            b"PK\x01\x02" => at + 9,
+            _ => continue,
+        };
+        zip[flags_high_byte] &= !0x08;
+    }
+}

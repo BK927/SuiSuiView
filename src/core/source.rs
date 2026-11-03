@@ -13,6 +13,7 @@ use std::sync::Mutex;
 use zip::ZipArchive;
 
 mod page_identity;
+mod zip_name;
 use page_identity::next_source_instance_id;
 pub use page_identity::{PageId, PageIdInterner};
 
@@ -604,7 +605,8 @@ impl ZipCbzSource {
             if file.is_dir() {
                 continue;
             }
-            let Some(name) = normalize_zip_name(&file.name()?) else {
+            let name = zip_name::decode_zip_entry_name(file.name_raw(), file.flags().as_u16());
+            let Some(name) = normalize_zip_name(&name) else {
                 continue;
             };
             if !is_supported_image_name(&name) {
