@@ -2101,7 +2101,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn explorer_select_args_keep_switch_and_path_separate() {
-        let path = Path::new(r"C:\Users\dead4\Pictures\folder with space\image.png");
+        let path = Path::new(r"C:\Users\guest\Pictures\folder with space\image.png");
         let args = platform::windows_explorer_select_arguments(path);
 
         assert_eq!(args[0], std::ffi::OsString::from("/select,"));

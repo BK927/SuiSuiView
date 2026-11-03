@@ -145,10 +145,10 @@ mod tests {
     fn recent_path_label_limit_keeps_common_windows_paths_readable() {
         assert_eq!(
             compact_start(
-                "C:/Users/dead4/Pictures/wallpaper/kanata03.png",
+                "C:/Users/guest/Pictures/wallpaper/sample01.png",
                 RECENT_PATH_LABEL_CHARS
             ),
-            "C:/Users/dead4/Pictures/wallpaper/kanata03.png"
+            "C:/Users/guest/Pictures/wallpaper/sample01.png"
         );
     }
 
@@ -156,10 +156,10 @@ mod tests {
     fn compact_start_for_two_lines_preserves_long_tail() {
         assert_eq!(
             compact_start_for_two_lines(
-                "C:/Users/dead4/Pictures/아주 긴 폴더 이름/wallpaper/kanata03.png",
+                "C:/Users/guest/Pictures/아주 긴 폴더 이름/wallpaper/sample01.png",
                 34,
             ),
-            "... 긴 폴더 이름/wallpaper/kanata03.png"
+            "... 긴 폴더 이름/wallpaper/sample01.png"
         );
     }
 
