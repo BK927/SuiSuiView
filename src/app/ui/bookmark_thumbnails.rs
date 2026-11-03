@@ -1,6 +1,7 @@
 use super::bookmark_thumbnail_worker::{run_thumbnail_worker, thumbnail_source, ThumbnailSource};
 use crate::core::perf_trace::{self, PerfField};
 use crate::core::source::SharedSource;
+use crate::core::state::{PageBookmarkEntry, StateStore};
 use crate::core::worker::DecodeOptions;
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use egui::{self, Color32, ColorImage, TextureHandle, TextureOptions, Vec2};
@@ -56,6 +57,12 @@ pub(super) enum BookmarkThumbnailCommand {
         key: BookmarkThumbnailKey,
         source: Option<ThumbnailSource>,
         decode: DecodeOptions,
+    },
+    /// Delete cached thumbnails of bookmarks missing from `store`. The worker
+    /// runs it once its queue is empty and keeps only the newest snapshot, so
+    /// thumbnail requests go first and a burst of deletions scans once.
+    ForgetRemoved {
+        store: StateStore,
     },
     Shutdown,
 }
@@ -206,6 +213,12 @@ impl BookmarkThumbnails {
         let _ = self.enqueue_request(key, source, decode);
     }
 
+    pub(in crate::app) fn forget_removed_bookmarks(&mut self, store: StateStore) {
+        let _ = self
+            .command_tx
+            .send(BookmarkThumbnailCommand::ForgetRemoved { store });
+    }
+
     fn enqueue_request(
         &mut self,
         key: BookmarkThumbnailKey,
@@ -293,6 +306,20 @@ pub(super) fn bookmark_thumbnail_cache_key(key: &BookmarkThumbnailKey) -> String
     hasher.update(&[0]);
     hash_thumbnail_identity(&mut hasher, key);
     hasher.finalize().to_hex().to_string()
+}
+
+/// Disk cache keys of the thumbnails the bookmark list can request for `entries`.
+pub(super) fn bookmark_entry_cache_keys(
+    entries: &[PageBookmarkEntry],
+) -> impl Iterator<Item = String> + '_ {
+    entries.iter().map(|entry| {
+        bookmark_thumbnail_cache_key(&BookmarkThumbnailKey::new(
+            &entry.book_id,
+            entry.known_path.as_deref(),
+            entry.bookmark.page,
+            entry.bookmark.page_name.as_deref(),
+        ))
+    })
 }
 
 fn hash_thumbnail_identity(hasher: &mut blake3::Hasher, key: &BookmarkThumbnailKey) {

@@ -1,15 +1,17 @@
 use super::bookmark_thumbnail_cache::{
-    read_cached_thumbnail, store_cached_thumbnail, BookmarkThumbnailDiskEntry,
+    read_cached_thumbnail, retain_cached_thumbnails, store_cached_thumbnail,
+    BookmarkThumbnailDiskEntry,
 };
 use super::bookmark_thumbnails::{
-    bookmark_thumbnail_cache_key, BookmarkThumbnailCommand, BookmarkThumbnailEvent,
-    BookmarkThumbnailFailure, BookmarkThumbnailKey,
+    bookmark_entry_cache_keys, bookmark_thumbnail_cache_key, BookmarkThumbnailCommand,
+    BookmarkThumbnailEvent, BookmarkThumbnailFailure, BookmarkThumbnailKey,
 };
 #[cfg(any(feature = "perf-dev", feature = "perf-diagnostics"))]
 use crate::core::perf_trace::{self, PerfField};
 use crate::core::source::{open_source_from_path, BookSource, SharedSource};
+use crate::core::state::StateStore;
 use crate::core::worker::{prepare_image_with_options, DecodeOptions, PREVIEW_TARGET_LONG_EDGE};
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use egui::{self, ColorImage, Vec2};
 use lru::LruCache;
 use std::num::NonZeroUsize;
@@ -38,9 +40,24 @@ pub(super) fn run_thumbnail_worker(
     shutdown_requested: Arc<AtomicBool>,
 ) {
     let mut worker = ThumbnailWorkerState::new();
+    let mut pending_forget: Option<StateStore> = None;
     while !shutdown_requested.load(Ordering::Acquire) {
-        let Ok(command) = command_rx.recv() else {
-            break;
+        let command = match pending_forget.take() {
+            Some(store) => match command_rx.try_recv() {
+                Ok(command) => {
+                    pending_forget = Some(store);
+                    command
+                }
+                Err(TryRecvError::Empty) => {
+                    forget_removed_thumbnails(&store);
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => break,
+            },
+            None => match command_rx.recv() {
+                Ok(command) => command,
+                Err(_) => break,
+            },
         };
         if shutdown_requested.load(Ordering::Acquire) {
             break;
@@ -77,8 +94,16 @@ pub(super) fn run_thumbnail_worker(
                 let _ = event_tx.send(event);
                 ctx.request_repaint();
             }
+            BookmarkThumbnailCommand::ForgetRemoved { store } => pending_forget = Some(store),
             BookmarkThumbnailCommand::Shutdown => break,
         }
+    }
+}
+
+fn forget_removed_thumbnails(store: &StateStore) {
+    // An unreadable library must not look like "no bookmarks left".
+    if let Ok(entries) = store.try_all_page_bookmarks() {
+        let _ = retain_cached_thumbnails(bookmark_entry_cache_keys(&entries));
     }
 }
 

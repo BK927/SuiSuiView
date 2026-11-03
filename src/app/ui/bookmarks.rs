@@ -212,6 +212,8 @@ impl SuiSuiViewApp {
                 page_name.as_deref(),
                 decode,
             );
+        } else {
+            self.forget_removed_bookmark_thumbnails();
         }
         self.bookmark_rows.clear();
         let message = match change {
@@ -595,6 +597,7 @@ impl SuiSuiViewApp {
                     self.notify_state_save_failed(&error);
                     return;
                 }
+                self.forget_removed_bookmark_thumbnails();
             }
             self.bookmark_rows.clear();
         } else if jump_to_page {
@@ -633,9 +636,8 @@ impl SuiSuiViewApp {
         if removed == 0 {
             self.notify(self.i18n().text("bookmark.no_delete_target"));
         } else {
-            if let Some(thumbnails) = self.bookmark_thumbnails.as_mut() {
-                thumbnails.clear();
-            }
+            self.forget_removed_bookmark_thumbnails();
+            self.ensure_bookmark_thumbnails().clear();
             let key = if scope == BookmarkFilter::ThisBook {
                 "bookmark.clear_done_this_book"
             } else {
@@ -647,6 +649,12 @@ impl SuiSuiViewApp {
             );
             self.bookmark_rows.clear();
         }
+    }
+
+    pub(in crate::app) fn forget_removed_bookmark_thumbnails(&mut self) {
+        let store = self.store.fork_for_background();
+        self.ensure_bookmark_thumbnails()
+            .forget_removed_bookmarks(store);
     }
 
     fn bookmark_delete_scope_count(&mut self) -> usize {

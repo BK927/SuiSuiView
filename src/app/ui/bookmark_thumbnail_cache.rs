@@ -1,6 +1,7 @@
 #[cfg(not(test))]
 use directories::ProjectDirs;
 use egui::ColorImage;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -141,6 +142,28 @@ fn prune_bookmark_thumbnail_cache() -> Result<(), String> {
     Ok(())
 }
 
+/// Thumbnails are page images, so a deleted bookmark must not leave one behind.
+pub(super) fn retain_cached_thumbnails(
+    keep_keys: impl IntoIterator<Item = String>,
+) -> Result<(), String> {
+    let keep = keep_keys
+        .into_iter()
+        .map(|key| BookmarkThumbnailDiskEntry::new(key).path)
+        .collect();
+    retain_thumbnail_cache_files(&bookmark_thumbnail_cache_dir(), &keep)
+}
+
+fn retain_thumbnail_cache_files(dir: &Path, keep: &HashSet<PathBuf>) -> Result<(), String> {
+    let mut files = Vec::new();
+    collect_thumbnail_cache_files(dir, &mut files)?;
+    for file in files {
+        if !keep.contains(&file.path) {
+            let _ = fs::remove_file(&file.path);
+        }
+    }
+    Ok(())
+}
+
 struct CacheFile {
     path: PathBuf,
     bytes: u64,
@@ -182,8 +205,12 @@ fn collect_thumbnail_cache_files(dir: &Path, files: &mut Vec<CacheFile>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::BookmarkThumbnailDiskEntry;
-    use super::{decode_thumbnail_png, encode_thumbnail_png, read_cached_thumbnail};
+    use super::{
+        decode_thumbnail_png, encode_thumbnail_png, read_cached_thumbnail,
+        retain_thumbnail_cache_files,
+    };
     use egui::{Color32, ColorImage};
+    use std::collections::HashSet;
     use std::fs;
 
     #[test]
@@ -223,6 +250,28 @@ mod tests {
 
         assert_eq!(cached.size, [1, 1]);
         assert_eq!(cached.pixels, vec![Color32::WHITE]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn retain_removes_thumbnails_of_deleted_bookmarks_only() {
+        let dir = std::env::temp_dir().join(format!(
+            "suisuiview-bookmark-thumbnail-retain-test-{}",
+            std::process::id()
+        ));
+        let kept = dir.join("ab").join("abkept.png");
+        let removed = dir.join("cd").join("cdremoved.png");
+        let unrelated = dir.join("ab").join("abkept.1.tmp");
+        for path in [&kept, &removed, &unrelated] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"png").unwrap();
+        }
+
+        retain_thumbnail_cache_files(&dir, &HashSet::from([kept.clone()])).unwrap();
+
+        assert!(kept.exists());
+        assert!(!removed.exists());
+        assert!(unrelated.exists(), "only cached PNG thumbnails are touched");
         let _ = fs::remove_dir_all(dir);
     }
 }

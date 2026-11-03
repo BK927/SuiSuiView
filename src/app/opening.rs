@@ -409,13 +409,17 @@ impl SuiSuiViewApp {
         let reading_position = prepared_book_state.reading_position.clone();
         if prepared_book_state.adoption == BookRecordAdoption::Adopted {
             self.bookmark_rows.clear();
+            self.forget_removed_bookmark_thumbnails();
         }
         if rebase_archive_page_bookmarks_on_open(origin) {
             match self
                 .store
                 .rebase_moved_archive_page_bookmarks(&book_id, &bookmark_path)
             {
-                Ok(PageBookmarkPathRebase::Rebased(_)) => self.bookmark_rows.clear(),
+                Ok(PageBookmarkPathRebase::Rebased(_)) => {
+                    self.bookmark_rows.clear();
+                    self.forget_removed_bookmark_thumbnails();
+                }
                 Ok(
                     PageBookmarkPathRebase::NotNeeded
                     | PageBookmarkPathRebase::Ambiguous
@@ -435,7 +439,10 @@ impl SuiSuiViewApp {
                 .remap_page_bookmarks(&book_id, &bookmark_path, |page_name| {
                     page_index_for_name(source.as_ref(), page_name)
                 }) {
-                Ok(true) => self.bookmark_rows.clear(),
+                Ok(true) => {
+                    self.bookmark_rows.clear();
+                    self.forget_removed_bookmark_thumbnails();
+                }
                 Ok(false) => {}
                 Err(error) => self.notify_state_save_failed(&error),
             }
