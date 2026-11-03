@@ -23,7 +23,7 @@ Rust Dependencies
 -----------------
 
 Generated target: x86_64-pc-windows-msvc
-Generated packages: 284
+Generated packages: 275
 
 ab_glyph 0.2.32
 License: Apache-2.0
@@ -32,22 +32,6 @@ Source: https://github.com/alexheretic/ab-glyph
 ab_glyph_rasterizer 0.1.10
 License: Apache-2.0
 Source: https://github.com/alexheretic/ab-glyph
-
-accesskit 0.19.0
-License: MIT OR Apache-2.0
-Source: https://github.com/AccessKit/accesskit
-
-accesskit_consumer 0.28.0
-License: MIT OR Apache-2.0
-Source: https://github.com/AccessKit/accesskit
-
-accesskit_windows 0.27.0
-License: MIT OR Apache-2.0
-Source: https://github.com/AccessKit/accesskit
-
-accesskit_winit 0.27.0
-License: Apache-2.0
-Source: https://github.com/AccessKit/accesskit
 
 adler2 2.0.1
 License: 0BSD OR MIT OR Apache-2.0
@@ -237,9 +221,10 @@ document-features 0.2.12
 License: MIT OR Apache-2.0
 Source: https://github.com/slint-ui/document-features
 
-dpi 0.1.2
-License: Apache-2.0 AND MIT
+dpi 0.1.1
+License: Apache-2.0
 Source: https://github.com/rust-windowing/winit
+Note: Built from the patched fork https://github.com/BK927/winit at commit 313e5c26b5c1a72661615b7aa2fda0a0d0a5fe96.
 
 dunce 1.0.5
 License: CC0-1.0 OR MIT-0 OR Apache-2.0
@@ -248,10 +233,6 @@ Source: https://gitlab.com/kornelski/dunce
 ecolor 0.32.3
 License: MIT OR Apache-2.0
 Source: https://github.com/emilk/egui
-
-eframe 0.32.3
-License: MIT OR Apache-2.0
-Source: https://github.com/emilk/egui/tree/main/crates/eframe
 
 egui 0.32.3
 License: MIT OR Apache-2.0
@@ -293,13 +274,13 @@ exr 1.74.0
 License: BSD-3-Clause
 Source: https://github.com/johannesvollmer/exrs
 
-fax 0.2.7
-License: MIT
-Source: https://github.com/pdf-rs/fax
-
 fast_image_resize 6.0.0
 License: MIT OR Apache-2.0
 Source: https://github.com/cykooz/fast_image_resize
+
+fax 0.2.7
+License: MIT
+Source: https://github.com/pdf-rs/fax
 
 fdeflate 0.3.7
 License: MIT OR Apache-2.0
@@ -349,6 +330,10 @@ gl_generator 0.14.0
 License: Apache-2.0
 Source: https://github.com/brendanzab/gl-rs/
 
+glob 0.3.3
+License: MIT OR Apache-2.0
+Source: https://github.com/rust-lang/glob
+
 glow 0.16.0
 License: MIT OR Apache-2.0 OR Zlib
 Source: https://github.com/grovesNL/glow
@@ -376,10 +361,6 @@ Source: https://github.com/zakarumych/gpu-alloc
 gpu-alloc-types 0.3.0
 License: MIT OR Apache-2.0
 Source: https://github.com/zakarumych/gpu-alloc
-
-gpu-allocator 0.27.0
-License: MIT OR Apache-2.0
-Source: https://github.com/Traverse-Research/gpu-allocator
 
 gpu-descriptor 0.3.2
 License: MIT OR Apache-2.0
@@ -641,10 +622,6 @@ powerfmt 0.2.0
 License: MIT OR Apache-2.0
 Source: https://github.com/jhpratt/powerfmt
 
-presser 0.3.1
-License: MIT OR Apache-2.0
-Source: https://github.com/EmbarkStudios/presser
-
 proc-macro2 1.0.106
 License: MIT OR Apache-2.0
 Source: https://github.com/dtolnay/proc-macro2
@@ -668,10 +645,6 @@ Source: http://github.com/tailhook/quick-error
 quote 1.0.45
 License: MIT OR Apache-2.0
 Source: https://github.com/dtolnay/quote
-
-range-alloc 0.1.5
-License: MIT OR Apache-2.0
-Source: https://github.com/gfx-rs/range-alloc
 
 raw-window-handle 0.6.2
 License: MIT OR Apache-2.0 OR Zlib
@@ -881,13 +854,13 @@ web-time 1.1.0
 License: MIT OR Apache-2.0
 Source: https://github.com/daxpedda/web-time
 
-webp 0.3.1
-License: MIT OR Apache-2.0
-Source: https://github.com/jaredforth/webp
-
 webbrowser 1.2.1
 License: MIT OR Apache-2.0
 Source: https://github.com/amodm/webbrowser-rs
+
+webp 0.3.1
+License: MIT OR Apache-2.0
+Source: https://github.com/jaredforth/webp
 
 weezl 0.1.12
 License: MIT OR Apache-2.0
@@ -1029,10 +1002,6 @@ windows-sys 0.60.2
 License: MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
 
-windows-sys 0.61.2
-License: MIT OR Apache-2.0
-Source: https://github.com/microsoft/windows-rs
-
 windows-targets 0.52.6
 License: MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
@@ -1048,6 +1017,7 @@ Source: https://github.com/microsoft/windows-rs
 winit 0.30.13
 License: Apache-2.0
 Source: https://github.com/rust-windowing/winit
+Note: Built from the patched fork https://github.com/BK927/winit at commit 313e5c26b5c1a72661615b7aa2fda0a0d0a5fe96.
 
 winnow 1.0.3
 License: MIT
@@ -1125,16 +1095,16 @@ zopfli 0.8.3
 License: Apache-2.0
 Source: https://github.com/zopfli-rs/zopfli
 
-zstd 0.13.3
-License: MIT
+zstd 0.13.4
+License: BSD-3-Clause
 Source: https://github.com/gyscos/zstd-rs
 
-zstd-safe 7.2.4
-License: MIT OR Apache-2.0
+zstd-safe 7.4.0
+License: BSD-3-Clause
 Source: https://github.com/gyscos/zstd-rs
 
-zstd-sys 2.0.16+zstd.1.5.7
-License: MIT OR Apache-2.0
+zstd-sys 2.1.2+zstd.1.5.7
+License: BSD-3-Clause
 Source: https://github.com/gyscos/zstd-rs
 
 zune-core 0.5.1
