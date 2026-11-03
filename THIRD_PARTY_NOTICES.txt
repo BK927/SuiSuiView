@@ -10,6 +10,18 @@ components that are not part of the default binary are called out separately
 below. Regenerate this file when dependencies, bundled assets, native binaries,
 or distribution targets change.
 
+Windows release packaging additionally generates THIRD_PARTY_LICENSES.txt from
+the exact locked default-feature dependency graph. The licenses/ directory
+preserves upstream LICENSE, COPYING, NOTICE, AUTHORS and PATENTS files, including
+native library notices. These supplement this in-app summary. SOURCE.txt points
+to the matching source archive, which includes vendored dependencies and the
+pinned winit patch. Package these materials together with the executable.
+
+The linked Rust standard library is covered by its MIT/Apache-2.0 terms and
+third-party notices. Windows bundles include the pinned Rust 1.99.1 license
+texts and the installed toolchain's aggregated copyright notices under
+licenses/rust-standard-library/.
+
 Application
 -----------
 
@@ -37,7 +49,7 @@ adler2 2.0.1
 License: 0BSD OR MIT OR Apache-2.0
 Source: https://github.com/oyvindln/adler2
 
-aes 0.8.4
+aes 0.9.3
 License: MIT OR Apache-2.0
 Source: https://github.com/RustCrypto/block-ciphers
 
@@ -89,7 +101,7 @@ blake3 1.8.5
 License: CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception
 Source: https://github.com/BLAKE3-team/BLAKE3
 
-block-buffer 0.10.4
+block-buffer 0.12.1
 License: MIT OR Apache-2.0
 Source: https://github.com/RustCrypto/utils
 
@@ -105,21 +117,13 @@ bytemuck_derive 1.10.2
 License: Zlib OR Apache-2.0 OR MIT
 Source: https://github.com/Lokathor/bytemuck
 
-byteorder 1.5.0
-License: Unlicense OR MIT
-Source: https://github.com/BurntSushi/byteorder
-
 byteorder-lite 0.1.0
 License: Unlicense OR MIT
 Source: https://github.com/image-rs/byteorder-lite
 
-bzip2 0.5.2
+bzip2 0.6.1
 License: MIT OR Apache-2.0
 Source: https://github.com/trifectatechfoundation/bzip2-rs
-
-bzip2-sys 0.1.13+1.0.8
-License: MIT OR Apache-2.0
-Source: https://github.com/alexcrichton/bzip2-rs
 
 cc 1.2.62
 License: MIT OR Apache-2.0
@@ -133,13 +137,17 @@ cfg-if 1.0.4
 License: MIT OR Apache-2.0
 Source: https://github.com/rust-lang/cfg-if
 
-cipher 0.4.4
+cipher 0.5.2
 License: MIT OR Apache-2.0
 Source: https://github.com/RustCrypto/traits
 
 clipboard-win 5.4.1
 License: BSL-1.0
 Source: https://github.com/DoumanAsh/clipboard-win
+
+cmov 0.5.4
+License: Apache-2.0 OR MIT
+Source: https://github.com/RustCrypto/utils
 
 codespan-reporting 0.12.0
 License: Apache-2.0
@@ -149,29 +157,25 @@ color_quant 1.1.0
 License: MIT
 Source: https://github.com/image-rs/color_quant.git
 
-constant_time_eq 0.3.1
-License: CC0-1.0 OR MIT-0 OR Apache-2.0
-Source: https://github.com/cesarb/constant_time_eq
+const-oid 0.10.2
+License: Apache-2.0 OR MIT
+Source: https://github.com/RustCrypto/formats
 
 constant_time_eq 0.4.2
 License: CC0-1.0 OR MIT-0 OR Apache-2.0
 Source: https://github.com/cesarb/constant_time_eq
 
-cpufeatures 0.2.17
+constant_time_eq 0.6.1
+License: CC0-1.0 OR MIT-0 OR Apache-2.0
+Source: https://codeberg.org/cesarb/constant_time_eq
+
+cpubits 0.1.1
 License: MIT OR Apache-2.0
 Source: https://github.com/RustCrypto/utils
 
 cpufeatures 0.3.0
 License: MIT OR Apache-2.0
 Source: https://github.com/RustCrypto/utils
-
-crc 3.4.0
-License: MIT OR Apache-2.0
-Source: https://github.com/mrhooray/crc-rs.git
-
-crc-catalog 2.5.0
-License: MIT OR Apache-2.0
-Source: https://github.com/akhilles/crc-catalog.git
 
 crc32fast 1.5.0
 License: MIT OR Apache-2.0
@@ -185,9 +189,13 @@ crossbeam-utils 0.8.21
 License: MIT OR Apache-2.0
 Source: https://github.com/crossbeam-rs/crossbeam
 
-crypto-common 0.1.7
+crypto-common 0.2.2
 License: MIT OR Apache-2.0
 Source: https://github.com/RustCrypto/traits
+
+ctutils 0.4.6
+License: Apache-2.0 OR MIT
+Source: https://github.com/RustCrypto/utils
 
 cursor-icon 1.2.0
 License: MIT OR Apache-2.0 OR Zlib
@@ -201,7 +209,7 @@ deranged 0.5.8
 License: MIT OR Apache-2.0
 Source: https://github.com/jhpratt/deranged
 
-digest 0.10.7
+digest 0.11.3
 License: MIT OR Apache-2.0
 Source: https://github.com/RustCrypto/traits
 
@@ -314,11 +322,11 @@ form_urlencoded 1.2.2
 License: MIT OR Apache-2.0
 Source: https://github.com/servo/rust-url
 
-generic-array 0.14.7
-License: MIT
-Source: https://github.com/fizyk20/generic-array.git
-
 getrandom 0.3.4
+License: MIT OR Apache-2.0
+Source: https://github.com/rust-random/getrandom
+
+getrandom 0.4.2
 License: MIT OR Apache-2.0
 Source: https://github.com/rust-random/getrandom
 
@@ -390,9 +398,13 @@ hexf-parse 0.2.1
 License: CC0-1.0
 Source: https://github.com/lifthrasiir/hexf
 
-hmac 0.12.1
+hmac 0.13.0
 License: MIT OR Apache-2.0
 Source: https://github.com/RustCrypto/MACs
+
+hybrid-array 0.4.15
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/hybrid-array
 
 icu_collections 2.2.0
 License: Unicode-3.0
@@ -442,7 +454,7 @@ indexmap 2.14.0
 License: Apache-2.0 OR MIT
 Source: https://github.com/indexmap-rs/indexmap
 
-inout 0.1.4
+inout 0.2.5
 License: MIT OR Apache-2.0
 Source: https://github.com/RustCrypto/utils
 
@@ -482,6 +494,10 @@ lebe 0.5.3
 License: BSD-3-Clause
 Source: https://github.com/johannesvollmer/lebe
 
+libbz2-rs-sys 0.2.5
+License: bzip2-1.0.6
+Source: https://github.com/trifectatechfoundation/libbzip2-rs
+
 libc 0.2.186
 License: MIT OR Apache-2.0
 Source: https://github.com/rust-lang/libc
@@ -518,13 +534,9 @@ lru 0.12.5
 License: MIT
 Source: https://github.com/jeromefroe/lru-rs.git
 
-lzma-rs 0.3.0
-License: MIT
-Source: https://github.com/gendx/lzma-rs
-
-lzma-sys 0.1.20
-License: MIT OR Apache-2.0
-Source: https://github.com/alexcrichton/xz2-rs
+lzma-rust2 0.23.0
+License: Apache-2.0
+Source: https://github.com/hasenbanck/lzma-rust2/
 
 memchr 2.8.0
 License: Unlicense OR MIT
@@ -590,9 +602,9 @@ parking_lot_core 0.9.12
 License: MIT OR Apache-2.0
 Source: https://github.com/Amanieu/parking_lot
 
-pbkdf2 0.12.2
+pbkdf2 0.13.0
 License: MIT OR Apache-2.0
-Source: https://github.com/RustCrypto/password-hashes/tree/master/pbkdf2
+Source: https://github.com/RustCrypto/password-hashes
 
 percent-encoding 2.3.2
 License: MIT OR Apache-2.0
@@ -694,7 +706,11 @@ serde_spanned 1.1.1
 License: MIT OR Apache-2.0
 Source: https://github.com/toml-rs/toml
 
-sha1 0.10.6
+sha1 0.11.0
+License: MIT OR Apache-2.0
+Source: https://github.com/RustCrypto/hashes
+
+sha2 0.11.1
 License: MIT OR Apache-2.0
 Source: https://github.com/RustCrypto/hashes
 
@@ -733,10 +749,6 @@ Source: https://github.com/Peternator7/strum
 strum_macros 0.26.4
 License: MIT
 Source: https://github.com/Peternator7/strum
-
-subtle 2.6.1
-License: BSD-3-Clause
-Source: https://github.com/dalek-cryptography/subtle
 
 suisuiview 0.1.0
 License: GPL-3.0-only
@@ -821,6 +833,10 @@ Source: https://github.com/harfbuzz/ttf-parser
 type-map 0.5.1
 License: MIT OR Apache-2.0
 Source: https://github.com/kardeiz/type-map
+
+typed-path 0.13.0
+License: MIT OR Apache-2.0
+Source: https://github.com/chipsenkbeil/typed-path
 
 typenum 1.20.0
 License: MIT OR Apache-2.0
@@ -1002,6 +1018,10 @@ windows-sys 0.60.2
 License: MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
 
+windows-sys 0.61.2
+License: MIT OR Apache-2.0
+Source: https://github.com/microsoft/windows-rs
+
 windows-targets 0.52.6
 License: MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
@@ -1035,10 +1055,6 @@ xml-rs 0.8.28
 License: MIT
 Source: https://github.com/kornelski/xml-rs
 
-xz2 0.1.7
-License: MIT OR Apache-2.0
-Source: https://github.com/alexcrichton/xz2-rs
-
 yoke 0.8.2
 License: Unicode-3.0
 Source: https://github.com/unicode-org/icu4x
@@ -1067,10 +1083,6 @@ zeroize 1.8.2
 License: Apache-2.0 OR MIT
 Source: https://github.com/RustCrypto/utils
 
-zeroize_derive 1.4.3
-License: Apache-2.0 OR MIT
-Source: https://github.com/RustCrypto/utils/tree/master/zeroize/derive
-
 zerotrie 0.2.4
 License: Unicode-3.0
 Source: https://github.com/unicode-org/icu4x
@@ -1083,9 +1095,9 @@ zerovec-derive 0.11.3
 License: Unicode-3.0
 Source: https://github.com/unicode-org/icu4x
 
-zip 2.4.2
+zip 9.1.0
 License: MIT
-Source: https://github.com/zip-rs/zip2.git
+Source: https://github.com/zip-rs/zip2
 
 zmij 1.0.21
 License: MIT
@@ -1095,11 +1107,11 @@ zopfli 0.8.3
 License: Apache-2.0
 Source: https://github.com/zopfli-rs/zopfli
 
-zstd 0.13.4
+zstd 0.14.3
 License: BSD-3-Clause
 Source: https://github.com/gyscos/zstd-rs
 
-zstd-safe 7.4.0
+zstd-safe 8.2.0
 License: BSD-3-Clause
 Source: https://github.com/gyscos/zstd-rs
 
@@ -1212,6 +1224,19 @@ constitute direct or contributory patent infringement, or inducement of
 patent infringement, then any patent rights granted to you under this License
 for these implementations of WebM shall terminate as of the date such
 litigation is filed.
+
+Additional Default Native Libraries
+-----------------------------------
+
+Little CMS (lcms2-sys 4.0.6): MIT, Copyright (c) 2023 Marti Maria Saguer.
+LZMA/XZ now use lzma-rust2 0.23.0 (Apache-2.0); bzip2 uses libbz2-rs-sys
+0.2.5 (bzip2-1.0.6). The previous lzma-sys/xz2 and bzip2-sys native libraries
+are no longer linked. Their replacements and original license files are
+included in the generated package notices and corresponding source.
+Zstandard 1.5.7 (zstd-sys 2.1.2+zstd.1.5.7): distributed under its BSD option,
+Copyright (c) Meta Platforms, Inc. and affiliates.
+The exact upstream texts, including native vendor notices, are retained under
+licenses/ in Windows packages and in the corresponding-source archive.
 
 Optional Native Codecs
 ----------------------
@@ -1346,6 +1371,7 @@ Source: https://github.com/funnyplanter/CuNNy
   `mpv/ds/CuNNy-8x32-DS.glsl`. SuiSuiView is GPL-3.0-only, so the
   GPL/LGPL-compatible source terms are accepted here. The corresponding
   generated WGSL source is included in the repository.
+  The LGPL version 3 text is also supplied in licenses/LGPL-3.0.txt.
 
 Bundled Application Assets
 --------------------------

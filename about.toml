@@ -16,3 +16,7 @@ accepted = [
 
 [suisuiview]
 accepted = ["GPL-3.0-only"]
+
+# Reviewed original libbzip2-rs license; preserve its copyright and full text.
+[libbz2-rs-sys]
+accepted = ["bzip2-1.0.6"]

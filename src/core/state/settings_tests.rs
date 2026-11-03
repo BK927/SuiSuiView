@@ -513,3 +513,16 @@ fn an_upscaler_this_build_dropped_costs_only_that_one_setting() {
         assert_eq!(settings.strip_wheel_scroll_pct, 42);
     }
 }
+
+#[test]
+fn compare_is_hidden_by_default_but_explicit_preferences_survive() {
+    assert!(!TopBarItems::default().compare);
+    let old: TopBarItems = serde_json::from_str("{}").unwrap();
+    assert!(!old.compare);
+    assert!(old.open && old.page && old.view && old.adjust && old.bookmarks);
+    for visible in [false, true] {
+        let saved = TopBarItems { compare: visible, ..TopBarItems::default() };
+        let restored: TopBarItems = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(restored.compare, visible);
+    }
+}

@@ -161,7 +161,7 @@ pub struct TopBarItems {
     pub view: bool,
     #[serde(default = "default_true")]
     pub adjust: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub compare: bool,
     #[serde(default = "default_true")]
     pub bookmarks: bool,
@@ -174,7 +174,7 @@ impl Default for TopBarItems {
             page: true,
             view: true,
             adjust: true,
-            compare: true,
+            compare: false,
             bookmarks: true,
         }
     }

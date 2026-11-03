@@ -113,9 +113,12 @@ impl SuiSuiViewApp {
                 } else {
                     self.finish_book_state_open_failure(
                         &context.path,
-                        format!(
-                            "Could not open {}: book history kept changing",
-                            context.path.display()
+                        self.i18n().with_vars(
+                            "status.open_failed",
+                            &[
+                                ("path", context.path.display().to_string()),
+                                ("error", self.i18n().text("status.history_changing")),
+                            ],
                         ),
                         context.failure_action,
                     );
@@ -125,7 +128,13 @@ impl SuiSuiViewApp {
             Err(PrepareBookForOpenError::Io(error)) => {
                 self.finish_book_state_open_failure(
                     &context.path,
-                    format!("Could not open {}: {}", context.path.display(), error),
+                    self.i18n().with_vars(
+                        "status.open_failed",
+                        &[
+                            ("path", context.path.display().to_string()),
+                            ("error", error.to_string()),
+                        ],
+                    ),
                     context.failure_action,
                 );
                 return;

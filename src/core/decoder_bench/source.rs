@@ -111,7 +111,7 @@ impl DecoderBenchSource {
             if file.is_dir() {
                 continue;
             }
-            let Some(name) = normalize_zip_name(file.name()) else {
+            let Some(name) = normalize_zip_name(&file.name().map_err(|error| error.to_string())?) else {
                 continue;
             };
             if !is_decoder_bench_file_name(Path::new(&name)) {

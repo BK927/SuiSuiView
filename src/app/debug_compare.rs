@@ -139,9 +139,12 @@ impl SuiSuiViewApp {
                     self.prune_decoded_cache();
                 }
                 Err(message) if self.debug_compare.enabled => {
-                    self.notify(format!(
-                        "비교 이미지 준비 실패 p.{}: {message}",
-                        event.page_index + 1
+                    self.notify(self.i18n().with_vars(
+                        "status.compare_failed",
+                        &[
+                            ("page", (event.page_index + 1).to_string()),
+                            ("error", message),
+                        ],
                     ));
                 }
                 Err(_) => {}
