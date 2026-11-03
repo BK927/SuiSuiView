@@ -171,16 +171,20 @@ impl PageWorker {
     }
 
     pub fn request_shutdown(&mut self) -> bool {
+        // Bounds how long app exit waits for the worker thread.
+        self.request_shutdown_within(Duration::from_millis(30))
+    }
+
+    /// Tests share the CPU with hundreds of parallel cases, so they wait
+    /// longer for the stop signal than app exit may.
+    fn request_shutdown_within(&mut self, wait: Duration) -> bool {
         if self.shutdown_requested.swap(true, Ordering::AcqRel) {
             return self.join.is_none();
         }
         let started = Instant::now();
         let sent = self.command_tx.send(WorkerCommand::Shutdown).is_ok();
         let had_thread = self.join.take().is_some();
-        let stopped = self
-            .stopped_rx
-            .recv_timeout(Duration::from_millis(30))
-            .is_ok();
+        let stopped = self.stopped_rx.recv_timeout(wait).is_ok();
         perf_trace::record_duration(
             "shutdown_request",
             started.elapsed(),

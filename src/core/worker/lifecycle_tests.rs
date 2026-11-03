@@ -169,7 +169,7 @@ fn promoting_prefetched_bytes_reads_once_with_either_prefetch_policy() {
         gate.release();
         receive_through(&worker, 1);
         assert_eq!(source.count(1), 1);
-        assert!(worker.request_shutdown());
+        assert!(worker.request_shutdown_within(TIMEOUT));
     }
 }
 
@@ -185,7 +185,7 @@ fn completed_encoded_read_survives_decode_and_target_changes() {
         matches!(events.last(), Some(WorkerEvent::PageReady { decode, page, .. }) if decode.apply_exif_orientation && page.target_long_edge == 2048)
     );
     assert_eq!(source.count(1), 1);
-    assert!(worker.request_shutdown());
+    assert!(worker.request_shutdown_within(TIMEOUT));
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn source_switch_and_snapshot_refresh_reject_old_completed_bytes() {
         );
         assert_eq!(old_source.count(1), 1);
         assert_eq!(next.count(1), 1);
-        assert!(worker.request_shutdown());
+        assert!(worker.request_shutdown_within(TIMEOUT));
     }
 }
 
@@ -224,7 +224,7 @@ fn target_change_reuses_offscreen_bytes_without_duplicate_overlap() {
         matches!(events.last(), Some(WorkerEvent::PageReady { page, .. }) if page.target_long_edge == 2048)
     );
     assert_eq!(source.count(1), 1);
-    assert!(worker.request_shutdown());
+    assert!(worker.request_shutdown_within(TIMEOUT));
 }
 
 #[test]
@@ -246,7 +246,7 @@ fn dropped_publications_are_prefetched_again_after_worker_lru_eviction() {
         .iter()
         .any(|event| matches!(event, WorkerEvent::PageReady { page_id, .. } if page_id.0 == 1)));
     assert_eq!(source.count(1), 2);
-    assert!(worker.request_shutdown());
+    assert!(worker.request_shutdown_within(TIMEOUT));
 }
 
 #[test]
@@ -290,7 +290,7 @@ fn expired_app_cache_observation_cannot_hide_a_visible_request() {
         );
         receive_through(&worker, 0);
         assert_eq!(source.count(0), if clear_worker_cache { 2 } else { 1 });
-        assert!(worker.request_shutdown());
+        assert!(worker.request_shutdown_within(TIMEOUT));
     }
 }
 
@@ -323,5 +323,5 @@ fn deferred_results_keep_their_budget_and_full_queue_accepts_clear() {
     drop(deferred);
     while worker.try_recv().is_some() {}
     assert_eq!(worker.pending_result_bytes(), 0);
-    assert!(worker.request_shutdown());
+    assert!(worker.request_shutdown_within(TIMEOUT));
 }
