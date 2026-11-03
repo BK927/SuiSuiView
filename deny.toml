@@ -21,6 +21,11 @@ name = "epaint_default_fonts"
 allow = ["GPL-3.0-only"]
 name = "suisuiview"
 
+# Matches the reviewed acceptance in about.toml.
+[[licenses.exceptions]]
+allow = ["bzip2-1.0.6"]
+name = "libbz2-rs-sys"
+
 [advisories]
 ignore = []
 
