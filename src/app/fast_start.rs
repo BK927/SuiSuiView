@@ -246,9 +246,13 @@ impl SuiSuiViewApp {
 }
 
 pub(in crate::app) fn report_text(notice: &FastStartFailureNotice, i18n: I18n) -> String {
+    // The report is meant to be pasted into public issues: name the file only,
+    // never the profile directory (it contains the Windows user name).
     let diagnostic_path = notice
         .diagnostic_path
         .as_deref()
+        .and_then(|path| Path::new(path).file_name())
+        .and_then(|name| name.to_str())
         .unwrap_or("diagnostic file was not created");
     format!(
         "SuiSuiView WGPU fast-start failure report\n\
@@ -347,10 +351,11 @@ struct GpuDiagnostic<'a> {
     device_type: Option<&'a str>,
 }
 
+/// Shape of the startup source only: the file name is a book title and stays
+/// out of diagnostics users may share.
 #[derive(Serialize)]
 struct StartupSourceDiagnostic {
     source_kind: &'static str,
-    file_name: Option<String>,
     extension: Option<String>,
     size_bytes: Option<u64>,
 }
@@ -358,10 +363,6 @@ struct StartupSourceDiagnostic {
 fn source_diagnostic(path: &Path) -> StartupSourceDiagnostic {
     StartupSourceDiagnostic {
         source_kind: source_kind_label(classify_path(path)),
-        file_name: path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(ToOwned::to_owned),
         extension: path
             .extension()
             .and_then(|extension| extension.to_str())
@@ -453,4 +454,36 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
     let month = mp + if mp < 10 { 3 } else { -9 };
     let year = year + i64::from(month <= 2);
     (year as i32, month as u32, day as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::i18n::ResolvedLanguage;
+
+    #[test]
+    fn copied_report_names_the_diagnostic_file_without_its_directory() {
+        let notice = FastStartFailureNotice {
+            diagnostic_path: Some(
+                r"C:\Users\example\AppData\Roaming\SuiSuiView\diagnostics\fast-start-1.json"
+                    .to_owned(),
+            ),
+            ..FastStartFailureNotice::default()
+        };
+
+        let report = report_text(&notice, I18n::resolved(ResolvedLanguage::EnUs));
+
+        assert!(report.ends_with("Diagnostic file: fast-start-1.json"));
+        assert!(!report.contains("example"));
+    }
+
+    #[test]
+    fn startup_source_diagnostic_omits_the_file_name() {
+        let path = Path::new(r"C:\Books\Private Title Vol 1.cbz");
+
+        let json = serde_json::to_string(&source_diagnostic(path)).unwrap();
+
+        assert!(json.contains(r#""extension":"cbz""#));
+        assert!(!json.contains("Private Title"));
+    }
 }
