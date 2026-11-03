@@ -113,7 +113,7 @@ fn installed_and_multiple_portable_copies_preserve_each_other_and_user_choice() 
 
 #[test]
 fn windows_registry_round_trip_uses_only_a_unique_test_root() {
-    use windows_sys::Win32::System::Registry::{RegDeleteTreeW, HKEY_CURRENT_USER};
+    use windows_sys::Win32::System::Registry::{RegDeleteKeyW, RegDeleteTreeW, HKEY_CURRENT_USER};
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -123,8 +123,15 @@ fn windows_registry_round_trip_uses_only_a_unique_test_root() {
     impl Drop for Cleanup {
         fn drop(&mut self) {
             let wide: Vec<_> = self.0.encode_utf16().chain([0]).collect();
+            // The shared parent goes too; RegDeleteKeyW refuses while another
+            // run still has a subkey there.
+            let parent: Vec<_> = "Software\\SuiSuiViewTests"
+                .encode_utf16()
+                .chain([0])
+                .collect();
             unsafe {
                 RegDeleteTreeW(HKEY_CURRENT_USER, wide.as_ptr());
+                RegDeleteKeyW(HKEY_CURRENT_USER, parent.as_ptr());
             }
         }
     }
